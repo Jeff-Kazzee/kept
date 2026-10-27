@@ -70,9 +70,11 @@ tier. Read-only MCP is the floor.
 
 - [ ] Confirm or change the decisions marked "proposed, pending Jeff" in
   `docs/decisions/0002-slot-states.md` (D-a to D-h and W1 to W33).
-- [ ] Sprint 3 work: the unknown-order change question reads "The change to
+- [x] Sprint 3 work: the unknown-order change question reads "The change to
   Thursday 11/12 10:30 AM is still proposed". Thursday is the slot being moved
-  away from, so the wording should name the change from that slot.
+  away from, so the wording should name the change from that slot. Sprint 3
+  changed it to "A change away from Thursday 11/12 10:30 AM is still
+  proposed".
 - [ ] Look at the conflict view in a browser. Sprint 2 checked it over HTTP
   only.
 

@@ -129,10 +129,11 @@ Column: what the next claim says.
   claim's message arrived before the later claim's known time, since an
   event happens no later than its message arrives. When the order of a
   proposal and a hold is not certain, the change is shown as proposed and an
-  `unknown_order` conflict asks whether it is still proposed. "Still
-  proposed" changes nothing. "Stands with no change proposed" records a
-  user-reported confirmation, which comes after every proposal and so
-  withdraws them.
+  `unknown_order` conflict asks whether it is still proposed. The choice
+  names the slot the change moves away from: "A change away from Thursday
+  11/12 10:30 AM is still proposed". It changes nothing. "Stands with no
+  change proposed" records a user-reported confirmation, which comes after
+  every proposal and so withdraws them.
 - W14. An offer made before the confirmation proposes nothing. In S1,
   Tuesday stays offered and Thursday is confirmed.
 - W15. A move with no other claim on the slot still shows it as held with a

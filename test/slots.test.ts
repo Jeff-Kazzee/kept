@@ -357,8 +357,9 @@ describe("review round 2: unknown-time claims", () => {
     expect(p.slots.map((x) => x.stateLabel)).toEqual(["Confirmed · office message, change proposed"]);
     const conflict = disagreements(p).find((c) => c.kind === "unknown_order")!;
     expect([conflict.id, conflict.evidenceIds]).toEqual(["unknown-order-20261112-1030-change", ["c1", "c2", "mv"]]);
+    expect(conflict.fixedQuestion).toBe("Is a change away from Thursday 11/12 10:30 AM still proposed?");
     expect(conflict.choices.map((c) => c.label)).toEqual([
-      "The change to Thursday 11/12 10:30 AM is still proposed",
+      "A change away from Thursday 11/12 10:30 AM is still proposed",
       "Thursday 11/12 10:30 AM stands with no change proposed",
       "Not sure yet",
     ]);

@@ -521,9 +521,9 @@ function changeOrderConflict(s: Folded, unsure: EvidenceView[]): Conflict {
     summary:
       `${label(s)} is held. A proposal to change it may have come before or after a confirmation, because a time is unknown. ` +
       "The change is shown as proposed until you answer.",
-    fixedQuestion: `Is the change to ${label(s)} still proposed?`,
+    fixedQuestion: `Is a change away from ${label(s)} still proposed?`,
     choices: [
-      { id: "change:proposed", label: `The change to ${label(s)} is still proposed`, effects: [], settles: [] },
+      { id: "change:proposed", label: `A change away from ${label(s)} is still proposed`, effects: [], settles: [] },
       { id: "change:withdrawn", label: `${label(s)} stands with no change proposed`, effects: [effect("confirm", s)], settles: [] },
       UNSURE,
     ],
