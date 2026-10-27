@@ -63,12 +63,13 @@ describe("local API", () => {
     expect((added.body as { id: string }).id).toMatch(/^pasted-/);
     expect((await api({ method: "POST", path: "/api/messages", body: { ...pasted, received_at: "yesterday" } })).status).toBe(400);
     expect((await api({ method: "POST", path: "/api/messages", body: { ...pasted, extra: 1 } })).status).toBe(400);
-    const manual = await api({
-      method: "POST",
-      path: `/api/messages/${(added.body as { id: string }).id}/manual`,
-      body: { claim_type: "offer", date: "2026-11-10", time: "14:00", location: null, quote: "made up words", request_item: null },
-    });
-    expect(manual.status).toBe(422);
+    const manualPath = `/api/messages/${(added.body as { id: string }).id}/manual`;
+    const claim = { claim_type: "offer", date: "2026-11-10", time: "14:00", location: null, quote: null, request_item: null };
+    const madeUp = await api({ method: "POST", path: manualPath, body: { expectedVersion: 1, claim: { ...claim, quote: "made up words" } } });
+    expect(madeUp.status).toBe(422);
+    expect((await api({ method: "POST", path: manualPath, body: claim })).status).toBe(400);
+    expect((await api({ method: "POST", path: manualPath, body: { expectedVersion: 1, claim } })).status).toBe(200);
+    expect((await api({ method: "POST", path: manualPath, body: { expectedVersion: 1, claim } })).status).toBe(409);
     expect((await api({ method: "GET", path: "/api/nothing", body: undefined })).status).toBe(404);
     expect((await api({ method: "GET", path: "/api/messages", body: undefined })).status).toBe(405);
   });

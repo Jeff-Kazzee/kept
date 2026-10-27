@@ -11,7 +11,7 @@ import {
   type Message,
 } from "../domain/claim.ts";
 import { checkSlotValues, type SlotIssue } from "../domain/datetime.ts";
-import { quoteAppearsIn } from "../domain/quote.ts";
+import { phraseAppearsIn, quoteAppearsIn, wordsAppearIn } from "../domain/quote.ts";
 import { ModelCallError, type ModelClient } from "../model/client.ts";
 import {
   MODEL,
@@ -25,7 +25,12 @@ import {
 
 export const MAX_ATTEMPTS = 2;
 
-export type ClaimProblem = "quote_not_in_source" | "missing_request_item" | SlotIssue;
+export type ClaimProblem =
+  | "quote_not_in_source"
+  | "location_not_in_source"
+  | "missing_request_item"
+  | "request_item_not_in_quote"
+  | SlotIssue;
 export type AttemptProblem = "call_failed" | "not_json" | "schema_mismatch" | "claim_checks_failed";
 
 export type CheckedClaim = { claim: ModelClaim; problems: ClaimProblem[] };
@@ -57,11 +62,28 @@ export type ExtractionResult = {
   latencyMs: number;
 };
 
+// Every value the model gives must be supported by the source message:
+// the quote word for word, the date and time by the same mention in the
+// quote, the location as a run of words in the message, and the request
+// item by words in the quote. sender_kind is a judgment the text cannot
+// prove, so it is shown to the user for review instead of checked here.
 export function checkClaim(claim: ModelClaim, message: Message): ClaimProblem[] {
   const problems: ClaimProblem[] = [];
   if (!quoteAppearsIn(claim.quote, message.text)) problems.push("quote_not_in_source");
-  problems.push(...checkSlotValues({ date: claim.date, time: claim.time, event_time: claim.event_time, quote: claim.quote }));
-  if (claim.claim_type === "office_request" && !claim.request_item?.trim()) problems.push("missing_request_item");
+  problems.push(
+    ...checkSlotValues({
+      date: claim.date,
+      time: claim.time,
+      event_time: claim.event_time,
+      quote: claim.quote,
+      receivedAt: message.received_at,
+    }),
+  );
+  if (claim.location !== null && !phraseAppearsIn(claim.location, message.text)) problems.push("location_not_in_source");
+  if (claim.claim_type === "office_request") {
+    if (!claim.request_item?.trim()) problems.push("missing_request_item");
+    else if (!wordsAppearIn(claim.request_item, claim.quote)) problems.push("request_item_not_in_quote");
+  }
   return problems;
 }
 

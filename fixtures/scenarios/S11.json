@@ -12,6 +12,6 @@
     }
   ],
   "later": [
-    { "deliverable": "unassigned", "expect": "The app declines and states that it only handles appointment times, places, confirmations and office requests." }
+    { "deliverable": "product", "expect": "The app declines and states that it only handles appointment times, places, confirmations and office requests." }
   ]
 }

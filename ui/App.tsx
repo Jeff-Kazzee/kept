@@ -314,7 +314,7 @@ function MessageCard({ view, run }: { view: MessageView; run: (a: () => Promise<
 
       {view.status === "manual_entry_needed" && <p>Extraction failed after one retry. Enter the claims by hand.</p>}
       {(view.status === "manual_entry_needed" || manualOpen) && (
-        <ManualEntryForm messageId={view.id} run={run} onDone={() => setManualOpen(false)} />
+        <ManualEntryForm messageId={view.id} version={view.version} run={run} onDone={() => setManualOpen(false)} />
       )}
       {view.status !== "manual_entry_needed" && !manualOpen && (
         <button onClick={() => setManualOpen(true)}>Add a claim by hand</button>
@@ -338,10 +338,12 @@ function statusText(status: MessageView["status"]): string {
 
 function ManualEntryForm({
   messageId,
+  version,
   run,
   onDone,
 }: {
   messageId: string;
+  version: number;
   run: (a: () => Promise<unknown>) => Promise<void>;
   onDone: () => void;
 }) {
@@ -356,7 +358,7 @@ function ManualEntryForm({
     e.preventDefault();
     const orNull = (s: string) => (s.trim() ? s.trim() : null);
     void run(async () => {
-      await api.manual(messageId, {
+      await api.manual(messageId, version, {
         claim_type: claimType,
         date: orNull(date),
         time: orNull(time),
@@ -426,7 +428,9 @@ function EvidenceCard({
       </div>
       {c.quote && <pre>“{c.quote}”</pre>}
       <div>
-        Source: {c.source_type.replaceAll("_", " ")} · sender {c.sender_kind} · from {source?.message.from ?? item.messageId}{" "}
+        Source: {c.source_type.replaceAll("_", " ")} ·{" "}
+        <strong>sender kind: {c.sender_kind}</strong>
+        {item.origin === "model" && " (model judgment, not checked by code)"} · from {source?.message.from ?? item.messageId}{" "}
         · evidence time {c.evidence_time}
         {c.event_time && ` · event time ${c.event_time}`}
       </div>

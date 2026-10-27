@@ -22,6 +22,7 @@ const PastedMessage = z
 
 const ExtractBody = z.object({ effort: Effort.default("low"), expectedVersion: z.number().int().nonnegative() }).strict();
 const ReviewBody = z.object({ expectedVersion: z.number().int().nonnegative() }).strict();
+const ManualBody = z.object({ expectedVersion: z.number().int().nonnegative(), claim: ManualClaimInput }).strict();
 
 export type ApiOptions = { mode: "recorded" | "live" };
 
@@ -51,9 +52,10 @@ export function createApi(service: IntakeService, options: ApiOptions) {
       const { effort, expectedVersion } = ExtractBody.parse(body);
       return service.extract(decodeURIComponent(m[1]!), { effort, expectedVersion });
     }],
-    ["POST", /^\/api\/messages\/([^/]+)\/manual$/, (m, body) =>
-      service.enterManually(decodeURIComponent(m[1]!), ManualClaimInput.parse(body)),
-    ],
+    ["POST", /^\/api\/messages\/([^/]+)\/manual$/, (m, body) => {
+      const { expectedVersion, claim } = ManualBody.parse(body);
+      return service.enterManually(decodeURIComponent(m[1]!), expectedVersion, claim);
+    }],
     ["POST", /^\/api\/evidence\/([^/]+)\/accept$/, (m, body) =>
       service.accept(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
     ],

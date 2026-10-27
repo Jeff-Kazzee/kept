@@ -4,6 +4,6 @@
   "calendar": "calendar/dana.ics",
   "messages": [{ "ref": "m2" }, { "ref": "m3" }],
   "later": [
-    { "deliverable": "unassigned", "expect": "A reply choosing Monday 2026-11-16 13:00 is drafted. The app closes before approval. Reopening restores the exact slot states and the draft." }
+    { "deliverable": "D4", "expect": "A reply choosing Monday 2026-11-16 13:00 is drafted. The app closes before approval. Reopening restores the exact slot states and the draft." }
   ]
 }

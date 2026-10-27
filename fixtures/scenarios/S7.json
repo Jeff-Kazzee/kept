@@ -16,6 +16,6 @@
   ],
   "later": [
     { "deliverable": "D2", "expect": "The slot is incomplete. The app asks for the missing time and location." },
-    { "deliverable": "unassigned", "expect": "The app offers no reply template that needs the missing time or location." }
+    { "deliverable": "D3", "expect": "The app offers no reply template that needs the missing time or location." }
   ]
 }

@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { quoteAppearsIn } from "../src/domain/quote.ts";
-import { checkSlotValues, isValidDate, isValidEventTime, isValidTime, mentionsIn } from "../src/domain/datetime.ts";
+import { phraseAppearsIn, quoteAppearsIn, wordsAppearIn } from "../src/domain/quote.ts";
+import { checkSlotValues, isValidDate, isValidEventTime, isValidTime, parseMentions } from "../src/domain/datetime.ts";
 import { parseIcs, IcsParseError } from "../src/domain/ics.ts";
 import { fromPackage } from "../src/paths.ts";
+
+const M1_TEXT =
+  "Lantern Hill Clinic: Hi Dana, we can see you Tuesday, November 10 at 2:00 PM or Thursday, November 12 at 10:30 AM at our Elm Street office. Reply 1 or 2.";
+const M1_RECEIVED = "2026-10-30T15:04:00-06:00";
+const check = (date: string | null, time: string | null, quote: string, event_time: string | null = null) =>
+  checkSlotValues({ date, time, event_time, quote, receivedAt: M1_RECEIVED });
 
 describe("quote check", () => {
   const source = "Hi Dana,\n\nThis confirms your appointment on Thursday,  November 12 at 10:30 AM.";
@@ -11,6 +17,7 @@ describe("quote check", () => {
   it("accepts a verbatim quote and normalizes only whitespace", () => {
     expect(quoteAppearsIn("Thursday, November 12 at 10:30 AM", source)).toBe(true);
     expect(quoteAppearsIn("Hi Dana, This confirms", source)).toBe(true);
+    expect(quoteAppearsIn("10:30 AM.", source)).toBe(true);
   });
 
   it("rejects changed case, punctuation, words and empty quotes", () => {
@@ -19,6 +26,20 @@ describe("quote check", () => {
     expect(quoteAppearsIn("Thursday, November 12 at 10:30 am", source)).toBe(false);
     expect(quoteAppearsIn("Thursday, November 12 at 10:30 AM at our office", source)).toBe(false);
     expect(quoteAppearsIn("   ", source)).toBe(false);
+  });
+
+  it("rejects fragments that do not start and end on word boundaries", () => {
+    expect(quoteAppearsIn("uesda", M1_TEXT)).toBe(false);
+    expect(quoteAppearsIn("Tuesday, November 1", M1_TEXT)).toBe(false);
+    expect(quoteAppearsIn("Tuesday", M1_TEXT)).toBe(true);
+  });
+
+  it("matches locations as whole runs of words and request items by their words", () => {
+    expect(phraseAppearsIn("Elm Street office", M1_TEXT)).toBe(true);
+    expect(phraseAppearsIn("Oak Avenue clinic", M1_TEXT)).toBe(false);
+    expect(phraseAppearsIn("Elm Street offic", M1_TEXT)).toBe(false);
+    expect(wordsAppearIn("Bring new insurance card", "Please bring your new insurance card")).toBe(true);
+    expect(wordsAppearIn("bring a passport", "Please bring your new insurance card")).toBe(false);
   });
 });
 
@@ -38,42 +59,76 @@ describe("date and time values", () => {
     expect(isValidEventTime("yesterday")).toBe(false);
   });
 
-  it("reads dates, weekdays and times from a quote", () => {
-    const m = mentionsIn("Can you do Friday 11/13 at 9:15 AM or Monday 11/16 at 1:00 PM instead?");
-    expect([...m.monthDays]).toEqual(["11-13", "11-16"]);
-    expect([...m.weekdays].sort()).toEqual([1, 5]);
-    expect([...m.times]).toEqual(["09:15", "13:00"]);
-    expect(mentionsIn("at noon on Nov. 3rd, 2026").times.has("12:00")).toBe(true);
-    expect(mentionsIn("at noon on Nov. 3rd, 2026").years.has(2026)).toBe(true);
+  it("groups each date with its own weekday and time", () => {
+    expect(parseMentions("Can you do Friday 11/13 at 9:15 AM or Monday 11/16 at 1:00 PM instead?")).toEqual([
+      { monthDay: "11-13", year: null, weekday: 5, time: "09:15", ambiguousTimes: [] },
+      { monthDay: "11-16", year: null, weekday: 1, time: "13:00", ambiguousTimes: [] },
+    ]);
+    expect(parseMentions("at noon on Nov. 3rd, 2026")).toEqual([
+      { monthDay: "11-03", year: 2026, weekday: null, time: "12:00", ambiguousTimes: [] },
+    ]);
+    expect(parseMentions("They moved me to Monday")).toEqual([
+      { monthDay: null, year: null, weekday: 1, time: null, ambiguousTimes: [] },
+    ]);
   });
 
-  it("passes values that match the quote", () => {
-    expect(
-      checkSlotValues({ date: "2026-11-10", time: "14:00", event_time: null, quote: "Tuesday, November 10 at 2:00 PM" }),
-    ).toEqual([]);
-    expect(checkSlotValues({ date: null, time: null, event_time: null, quote: "Please bring your new insurance card" })).toEqual([]);
+  it("passes values that match one mention in the quote", () => {
+    expect(check("2026-11-10", "14:00", "Tuesday, November 10 at 2:00 PM")).toEqual([]);
+    expect(check("2026-11-12", "10:30", M1_TEXT)).toEqual([]);
+    expect(check(null, null, "Please bring your new insurance card")).toEqual([]);
   });
 
   it("rejects values that contradict the quote", () => {
     const quote = "Tuesday, November 10 at 2:00 PM";
-    expect(checkSlotValues({ date: "2026-11-11", time: "14:00", event_time: null, quote })).toContain("date_not_in_quote");
-    expect(checkSlotValues({ date: "2026-11-10", time: "02:00", event_time: null, quote })).toEqual(["time_not_in_quote"]);
-    expect(checkSlotValues({ date: "2027-11-10", time: "14:00", event_time: null, quote })).toEqual(["weekday_mismatch"]);
+    expect(check("2026-11-11", "14:00", quote)).toContain("date_not_in_quote");
+    expect(check("2026-11-10", "02:00", quote)).toEqual(["time_not_in_quote"]);
+    expect(check("2027-11-10", "14:00", quote)).toEqual(["weekday_mismatch"]);
+    expect(check("2028-11-10", "14:00", "November 10 at 2:00 PM")).toEqual(["date_year_mismatch"]);
+  });
+
+  it("finding 1: rejects a date or time the quote does not state", () => {
+    expect(check("2026-11-17", "09:00", "Tuesday")).toEqual(["date_outside_window", "time_not_in_quote"]);
+    expect(check("2026-11-10", null, "Please bring your new insurance card")).toEqual(["date_not_in_quote"]);
+    expect(check(null, "14:00", "Please bring your new insurance card")).toEqual(["time_not_in_quote"]);
+  });
+
+  it("resolves a weekday alone only within the window after arrival", () => {
+    const received = "2026-11-05T12:10:00-07:00";
+    const quote = "They moved me to Monday";
+    expect(checkSlotValues({ date: "2026-11-16", time: null, event_time: null, quote, receivedAt: received })).toEqual([]);
+    expect(checkSlotValues({ date: "2026-11-23", time: null, event_time: null, quote, receivedAt: received })).toEqual([
+      "date_outside_window",
+    ]);
+    expect(checkSlotValues({ date: "2026-11-02", time: null, event_time: null, quote, receivedAt: received })).toEqual([
+      "date_outside_window",
+    ]);
+    expect(checkSlotValues({ date: "2026-11-17", time: null, event_time: null, quote, receivedAt: received })).toEqual([
+      "date_not_in_quote",
+    ]);
+  });
+
+  it("finding 2: rejects a date and time taken from two different mentions", () => {
+    expect(check("2026-11-10", "10:30", M1_TEXT)).toEqual(["time_not_in_quote"]);
+    expect(check("2026-11-12", "14:00", M1_TEXT)).toEqual(["time_not_in_quote"]);
+  });
+
+  it("finding 3: rejects an event time the quote does not state", () => {
+    expect(check(null, null, "Tuesday, November 10 at 2:00 PM", "2026-11-03T09:00:00-07:00")).toEqual([
+      "event_time_not_in_quote",
+    ]);
+    expect(check(null, null, "Tuesday, November 10 at 2:00 PM", "2026-11-10T14:00:00-07:00")).toEqual([]);
+    expect(check(null, null, "Tuesday, November 10 at 2:00 PM", "2026-11-10T15:00:00-07:00")).toEqual([
+      "event_time_not_in_quote",
+    ]);
   });
 
   it("rejects a time read from a bare clock value without AM or PM", () => {
-    expect(checkSlotValues({ date: null, time: "14:00", event_time: null, quote: "come in at 2:00 on Tuesday" })).toEqual([
-      "ambiguous_time",
-    ]);
-    expect(checkSlotValues({ date: null, time: "14:00", event_time: null, quote: "come in at 14:00" })).toEqual([]);
+    expect(check(null, "14:00", "come in at 2:00 on Tuesday")).toEqual(["ambiguous_time"]);
+    expect(check(null, "14:00", "come in at 14:00")).toEqual([]);
   });
 
   it("rejects invalid formats instead of repairing them", () => {
-    expect(checkSlotValues({ date: "Nov 10", time: "2pm", event_time: "last week", quote: "x" })).toEqual([
-      "invalid_date",
-      "invalid_time",
-      "invalid_event_time",
-    ]);
+    expect(check("Nov 10", "2pm", "x", "last week")).toEqual(["invalid_date", "invalid_time", "invalid_event_time"]);
   });
 });
 

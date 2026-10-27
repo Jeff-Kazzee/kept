@@ -119,7 +119,7 @@ describe("S8 and the one-retry rule", () => {
     expect(first!.attempt).toBe(1);
     expect(second!.attempt).toBe(2);
     expect(first!.body.instructions).not.toContain("previous answer");
-    expect(second!.body.instructions).toContain("rejected for: quote_not_in_source.");
+    expect(second!.body.instructions).toContain("rejected for: quote_not_in_source, location_not_in_source.");
     expect(second!.body.input).toBe(first!.body.input);
   });
 
@@ -130,11 +130,58 @@ describe("S8 and the one-retry rule", () => {
     const result = await extractClaims(byId("m1"), client, { effort: "low" });
     expect(result.rejected.map((r) => r.problems)).toEqual([
       ["time_not_in_quote"],
-      ["date_not_in_quote", "weekday_mismatch"],
+      ["date_not_in_quote"],
       ["time_not_in_quote"],
-      ["date_not_in_quote", "weekday_mismatch"],
+      ["date_not_in_quote"],
     ]);
     expect(result.passed).toEqual([]);
+  });
+});
+
+describe("review round 1 findings", () => {
+  const claims = () => (validM1.output as { claims: Array<Record<string, unknown>> }).claims;
+  const run = async (messageId: string, output: unknown) => {
+    const client = faultClient(messageId, [{ output, usage, latency_ms: 5 }]);
+    return extractClaims(byId(messageId), client, { effort: "low" });
+  };
+
+  it("finding 1: rejects a partial quote that supports an invented date and time", async () => {
+    const result = await run("m1", { claims: [{ ...claims()[0], quote: "Tuesday", date: "2026-11-17", time: "09:00" }] });
+    expect(result.rejected[0]!.problems).toEqual(["date_outside_window", "time_not_in_quote"]);
+    const fragment = await run("m1", { claims: [{ ...claims()[0], quote: "uesda", date: null, time: null }] });
+    expect(fragment.rejected[0]!.problems).toEqual(["quote_not_in_source"]);
+  });
+
+  it("finding 2: rejects a date and time taken from different offers in one quote", async () => {
+    const whole = byId("m1").text;
+    const result = await run("m1", { claims: [{ ...claims()[0], quote: whole, date: "2026-11-10", time: "10:30" }] });
+    expect(result.rejected[0]!.problems).toEqual(["time_not_in_quote"]);
+    const good = await run("m1", { claims: [{ ...claims()[0], quote: whole, date: "2026-11-10", time: "14:00" }] });
+    expect(good.rejected).toEqual([]);
+  });
+
+  it("finding 3: rejects an unsupported location, request item and event time", async () => {
+    const location = await run("m1", { claims: [{ ...claims()[0], location: "Oak Avenue clinic" }] });
+    expect(location.rejected[0]!.problems).toEqual(["location_not_in_source"]);
+    const m2 = recorded.lookup("m2", "low")!.attempts[0]!.output as { claims: Array<Record<string, unknown>> };
+    const item = await run("m2", { claims: [{ ...m2.claims[1], request_item: "bring a passport" }] });
+    expect(item.rejected[0]!.problems).toEqual(["request_item_not_in_quote"]);
+    const event = await run("m1", { claims: [{ ...claims()[0], event_time: "2026-11-03T09:00:00-07:00" }] });
+    expect(event.rejected[0]!.problems).toEqual(["event_time_not_in_quote"]);
+  });
+
+  it("finding 3: keeps sender_kind as an unchecked model judgment for review", async () => {
+    const result = await run("m1", { claims: [{ ...claims()[0], sender_kind: "automated" }] });
+    expect(result.rejected).toEqual([]);
+    expect(result.passed[0]!.sender_kind).toBe("automated");
+  });
+
+  it("finding 8: treats unknown fields in model output as invalid output", async () => {
+    const extraOnClaim = await run("m1", { claims: [{ ...claims()[0], approved: true }] });
+    expect(extraOnClaim.attempts.map((a) => a.problem)).toEqual(["schema_mismatch", "schema_mismatch"]);
+    expect(extraOnClaim.needsManualEntry).toBe(true);
+    const extraOnRoot = await run("m1", { claims: claims(), note: "x" });
+    expect(extraOnRoot.attempts[0]!.problem).toBe("schema_mismatch");
   });
 });
 

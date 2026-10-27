@@ -31,7 +31,8 @@ export type MessageEvent =
   | {
       type: "extraction_finished";
       data: { effort: Effort; outcome: ExtractionOutcome; evidence_ids: string[] };
-    };
+    }
+  | { type: "manual_entry_recorded"; data: { evidence_id: string } };
 
 export type ExtractionOutcome = "claims_pending" | "no_claims" | "manual_entry_needed";
 
@@ -50,6 +51,7 @@ export type MessageView = {
   attempts: Array<Extract<MessageEvent, { type: "extraction_attempted" }>["data"]>;
   rejections: Array<Extract<MessageEvent, { type: "claim_rejected" }>["data"]>;
   evidenceIds: string[];
+  manualEvidenceIds: string[];
 };
 
 export type ReviewStatus = "pending" | "accepted" | "rejected";
@@ -85,6 +87,7 @@ export function projectMessages(events: StoredEvent[]): Map<string, MessageView>
         attempts: [],
         rejections: [],
         evidenceIds: [],
+        manualEvidenceIds: [],
       });
       continue;
     }
@@ -96,6 +99,8 @@ export function projectMessages(events: StoredEvent[]): Map<string, MessageView>
     else if (event.type === "extraction_finished") {
       view.status = event.data.outcome;
       view.evidenceIds.push(...event.data.evidence_ids);
+    } else if (event.type === "manual_entry_recorded") {
+      view.manualEvidenceIds.push(event.data.evidence_id);
     }
   }
   return views;

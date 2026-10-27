@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ClaimType, Effort, Message, sourceTypeForChannel, type EvidenceClaim } from "../domain/claim.ts";
-import { checkSlotValues } from "../domain/datetime.ts";
+import { checkSlotFormats } from "../domain/datetime.ts";
 import { quoteAppearsIn } from "../domain/quote.ts";
 import { extractClaims, type ExtractionResult } from "../extract/extract.ts";
 import type { ModelClient } from "../model/client.ts";
@@ -184,14 +184,21 @@ export class IntakeService {
   // The user enters a claim by hand, for example after extraction fell to
   // manual entry. It is recorded as reported by the user and waits in the
   // review queue like every other claim.
-  enterManually(messageId: string, input: ManualClaimInput): EvidenceView {
+  //
+  // The write states the message's expected version and appends a
+  // manual_entry_recorded event to the message stream in the same
+  // transaction, so a repeated or concurrent submit is a stale edit and
+  // cannot add a duplicate claim.
+  enterManually(messageId: string, expectedVersion: number, input: ManualClaimInput): EvidenceView {
     const claimInput = ManualClaimInput.parse(input);
+    this.#store.assertVersion(messageStream(messageId), expectedVersion, this.#describeMessage);
     const source = this.message(messageId).message;
     const quote = claimInput.quote?.trim() ? claimInput.quote : null;
     if (quote !== null && !quoteAppearsIn(quote, source.text)) {
       throw new InvalidRequestError("The quote does not appear in the message.");
     }
-    const issues = checkSlotValues({ date: claimInput.date, time: claimInput.time, event_time: null, quote: quote ?? "" });
+    // The user is the source of a manual entry, so only formats are checked.
+    const issues = checkSlotFormats({ date: claimInput.date, time: claimInput.time, event_time: null });
     if (issues.length > 0) throw new InvalidRequestError(`Invalid claim: ${issues.join(", ")}.`);
     if (claimInput.claim_type === "office_request" && !claimInput.request_item) {
       throw new InvalidRequestError("An office request needs the item to bring or the task to do.");
@@ -208,8 +215,15 @@ export class IntakeService {
       request_item: claimInput.claim_type === "office_request" ? claimInput.request_item : null,
     };
     const id = this.#newId();
-    const event: EvidenceEvent = { type: "claim_entered_manually", data: { message_id: messageId, claim } };
-    this.#store.append(evidenceStream(id), 0, [asEvent(event)], this.#describeEvidence);
+    const evidenceEvent: EvidenceEvent = { type: "claim_entered_manually", data: { message_id: messageId, claim } };
+    const messageEvent: MessageEvent = { type: "manual_entry_recorded", data: { evidence_id: id } };
+    this.#store.appendMany(
+      [
+        { streamId: messageStream(messageId), expectedVersion, events: [asEvent(messageEvent)] },
+        { streamId: evidenceStream(id), expectedVersion: 0, events: [asEvent(evidenceEvent)] },
+      ],
+      (streamId, events) => (streamId.startsWith("message:") ? this.#describeMessage(streamId, events) : null),
+    );
     return this.evidenceItem(id);
   }
 }

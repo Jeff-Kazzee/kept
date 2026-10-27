@@ -48,6 +48,9 @@ export const INSTRUCTIONS = [
   "and a separate offer claim for each replacement time.",
   "If the message says a move already happened, use confirm for the new time and cancel for the old time.",
   "The quote must be copied exactly from the message text, word for word.",
+  "The quote must contain the date and time you give for the claim.",
+  "Copy the location exactly as the message words it. request_item must use words from the quote.",
+  "Give event_time only when the quote states that date.",
   "Resolve dates using the message's received_at year. Do not guess missing values: use null.",
   "If the message holds no appointment facts, return an empty claims list.",
   "Do not give medical or clinical content. Extract only what the message says.",
@@ -152,7 +155,9 @@ export function parseResponseBody(body: unknown): { outputText: string; usage: T
 }
 
 // One claim as the model returns it, before any code checks.
-export const ModelClaim = z.object({
+// Strict, as the JSON schema sets additionalProperties to false. An unknown
+// field makes the output invalid.
+export const ModelClaim = z.strictObject({
   claim_type: ClaimType,
   date: z.string().nullable(),
   time: z.string().nullable(),
@@ -164,4 +169,4 @@ export const ModelClaim = z.object({
 });
 export type ModelClaim = z.infer<typeof ModelClaim>;
 
-export const ModelOutput = z.object({ claims: z.array(ModelClaim) });
+export const ModelOutput = z.strictObject({ claims: z.array(ModelClaim) });

@@ -99,7 +99,8 @@ describe("review queue", () => {
     expect(message.status).toBe("manual_entry_needed");
     expect(evidence).toEqual([]);
     expect(message.attempts.map((a) => a.problem)).toEqual(["claim_checks_failed", "claim_checks_failed"]);
-    expect(message.rejections.map((r) => r.problems)).toEqual([["quote_not_in_source"], ["quote_not_in_source"]]);
+    expect(message.rejections.every((r) => r.problems.includes("quote_not_in_source"))).toBe(true);
+    expect(message.rejections).toHaveLength(2);
     expect(store.readStream("message:s8-offer").map((e) => e.type)).toEqual([
       "message_imported",
       "extraction_attempted",
@@ -110,7 +111,7 @@ describe("review queue", () => {
     ]);
     expect(service.reviewQueue()).toEqual([]);
 
-    const manual = service.enterManually("s8-offer", {
+    const manual = service.enterManually("s8-offer", message.version, {
       claim_type: "offer",
       date: "2026-11-18",
       time: "11:00",
@@ -132,12 +133,32 @@ describe("review queue", () => {
     const { service } = setup();
     service.importMessage(fixture("s8-offer"));
     const base = { claim_type: "offer" as const, date: "2026-11-18", time: "11:00", location: null, request_item: null };
-    expect(() => service.enterManually("s8-offer", { ...base, quote: "We have an opening" })).toThrow(/does not appear/);
-    expect(() => service.enterManually("s8-offer", { ...base, quote: null, time: "11 AM" })).toThrow(/invalid_time/);
-    expect(() => service.enterManually("s8-offer", { ...base, quote: null, claim_type: "office_request" })).toThrow(
+    expect(() => service.enterManually("s8-offer", 1, { ...base, quote: "We have an opening" })).toThrow(/does not appear/);
+    expect(() => service.enterManually("s8-offer", 1, { ...base, quote: null, time: "11 AM" })).toThrow(/invalid_time/);
+    expect(() => service.enterManually("s8-offer", 1, { ...base, quote: null, claim_type: "office_request" })).toThrow(
       /office request/,
     );
     expect(service.evidence()).toEqual([]);
+  });
+
+  it("finding 4: a repeated manual entry is a stale edit and adds no duplicate", () => {
+    const { service, store } = setup();
+    service.importMessage(fixture("s8-offer"));
+    const claim = { claim_type: "offer" as const, date: "2026-11-18", time: "11:00", location: null, quote: null, request_item: null };
+    const first = service.enterManually("s8-offer", 1, claim);
+    const count = store.readAll().length;
+    const err = (() => {
+      try {
+        service.enterManually("s8-offer", 1, claim);
+      } catch (e) {
+        return e;
+      }
+    })() as StaleEditError;
+    expect(err).toBeInstanceOf(StaleEditError);
+    expect(err.current).toMatchObject({ id: "s8-offer", version: 2, manualEvidenceIds: [first.id] });
+    expect(store.readAll()).toHaveLength(count);
+    expect(service.evidence()).toHaveLength(1);
+    expect(store.readStream("message:s8-offer").map((e) => e.type)).toEqual(["message_imported", "manual_entry_recorded"]);
   });
 
   it("treats instructions inside a message as data", async () => {

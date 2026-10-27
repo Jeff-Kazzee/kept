@@ -26,6 +26,7 @@ export type MessageView = {
   attempts: Attempt[];
   rejections: Rejection[];
   evidenceIds: string[];
+  manualEvidenceIds: string[];
 };
 
 export type EvidenceView = {
@@ -74,7 +75,8 @@ export const api = {
   addMessage: (m: Omit<Message, "id"> & { id?: string }) => request<MessageView>("POST", "/api/messages", m),
   extract: (id: string, effort: Effort, expectedVersion: number) =>
     request("POST", `/api/messages/${encodeURIComponent(id)}/extract`, { effort, expectedVersion }),
-  manual: (id: string, claim: unknown) => request<EvidenceView>("POST", `/api/messages/${encodeURIComponent(id)}/manual`, claim),
+  manual: (id: string, expectedVersion: number, claim: unknown) =>
+    request<EvidenceView>("POST", `/api/messages/${encodeURIComponent(id)}/manual`, { expectedVersion, claim }),
   accept: (id: string, expectedVersion: number) =>
     request<EvidenceView>("POST", `/api/evidence/${encodeURIComponent(id)}/accept`, { expectedVersion }),
   reject: (id: string, expectedVersion: number) =>

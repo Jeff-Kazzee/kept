@@ -4,6 +4,6 @@
   "calendar": "calendar/dana.ics",
   "messages": [{ "ref": "m3" }],
   "later": [
-    { "deliverable": "unassigned", "expect": "Dana approves the reply MON. This step adds no new message. The UI shows the simulated-send label. No network request leaves the app." }
+    { "deliverable": "D3", "expect": "Dana approves the reply MON. This step adds no new message. The UI shows the simulated-send label. No network request leaves the app." }
   ]
 }

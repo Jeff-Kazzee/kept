@@ -30,15 +30,34 @@ describe("fixtures", () => {
       for (const e of m.expected) {
         if (e.date) expect(isValidDate(e.date), `${m.id} ${e.date}`).toBe(true);
         if (e.time) expect(isValidTime(e.time), `${m.id} ${e.time}`).toBe(true);
-        const issues = checkSlotValues({ date: e.date ?? null, time: e.time ?? null, event_time: null, quote: m.text });
-        expect(issues.filter((i) => i !== "date_not_in_quote" || !e.date), `${m.id}`).toEqual([]);
+        const issues = checkSlotValues({
+          date: e.date ?? null,
+          time: e.time ?? null,
+          event_time: null,
+          quote: m.text,
+          receivedAt: m.received_at,
+        });
+        expect(issues, `${m.id}`).toEqual([]);
       }
     }
   });
 
-  it("keeps D2 and later expectations in stub fields", () => {
-    for (const s of scenarios) for (const l of s.later) expect(l.deliverable).not.toBe("D1");
-    expect(scenarios.find((s) => s.id === "S1")!.later[0]!.deliverable).toBe("D2");
+  it("assigns every later expectation to its deliverable", () => {
+    const owners = Object.fromEntries(scenarios.map((s) => [s.id, s.later.map((l) => l.deliverable)]));
+    expect(owners).toEqual({
+      S1: ["D2"],
+      S2: ["D2"],
+      S3: ["D2", "D2"],
+      S4: ["D2"],
+      S5: ["D2"],
+      S6: ["D2"],
+      S7: ["D2", "D3"],
+      S8: [],
+      S9: ["D3"],
+      S10: ["D4"],
+      S11: ["product"],
+      S12: ["D3"],
+    });
   });
 
   it("ships the S8 fabricated recording and the calendar", () => {
