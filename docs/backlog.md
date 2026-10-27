@@ -102,16 +102,21 @@ tier. Read-only MCP is the floor.
 
 - [ ] Confirm or change the decisions marked "proposed, pending Jeff" in
   `docs/decisions/0004-mcp-core.md` (M-a to M-w and the review changes).
-- [ ] Decide whether notes and proposal statements written by an agent go
-  through the clinical-content check. They do not now.
-- [ ] Decide whether Delete case (sprint 5) also removes the case's access log
-  and rate counters. Grants are app settings, not case data.
+- [x] Decide whether notes and proposal statements written by an agent go
+  through the clinical-content check. Sprint 5 adds the check (O-e in
+  `docs/decisions/0005-saved-outcome.md`), for notes, tags and proposal
+  text from any writer.
+- [x] Decide whether Delete case (sprint 5) also removes the case's access log
+  and rate counters. Grants are app settings, not case data. Sprint 5 erases
+  both and keeps grants (O-a in `docs/decisions/0005-saved-outcome.md`).
 - [ ] Sprint 6 work: a reply can still be drafted for an archived
   appointment. Decide whether archive hides it from the reply panel.
 - [ ] Sprint 5 or 7 work: extraction at effort `minimal` missed m2's
   "arrive 15 minutes early" office request in one of three runs, twice
   across the live runs so far. The checklist in the demo depends on it.
   Tune the prompt for office requests or extract at `low`, then measure.
+  Sprint 5 changed the extraction instructions to ask for one office request
+  per instruction (O-g). The live measurement is still open.
 
 ## Sprint 2: slot states and conflict resolution (D2)
 
@@ -261,15 +266,15 @@ Acceptance:
 
 Tasks:
 
-- [ ] SP5.1 S10: closing the app after a draft and before approval, then
+- [x] SP5.1 S10: closing the app after a draft and before approval, then
   reopening, restores the exact states and the draft.
-- [ ] SP5.2 A late office reply goes through extraction and review like any
+- [x] SP5.2 A late office reply goes through extraction and review like any
   other message. Demo path: Monday becomes confirmed, Thursday canceled.
-- [ ] SP5.3 Checklist from accepted office requests, each item with its
+- [x] SP5.3 Checklist from accepted office requests, each item with its
   quote and source.
-- [ ] SP5.4 Delete case: app only, its own confirmation, erases the case and
+- [x] SP5.4 Delete case: app only, its own confirmation, erases the case and
   its event log. A test proves the data is gone. No MCP tool.
-- [ ] SP5.5 Case history view: events in order, including undo.
+- [x] SP5.5 Case history view: events in order, including undo.
 
 ## Sprint 6: MCP in the app and connect test (D5, part 2)
 

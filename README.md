@@ -51,6 +51,32 @@ in this repo is synthetic.
 - Each scenario in `fixtures/scenarios/` states its D3 checkpoints, and
   `test/scenarios.test.ts` runs them.
 
+## D4: saved outcome, checklist and Delete case
+
+- The case lives in the event log, so closing and reopening the app
+  restores it exactly: slot states, conflicts and the open question,
+  explanations, the open reply draft with any edit, and the checklist.
+  Readback ticks are not saved. After a reopen you read each field again.
+- A late reply from the office goes through extraction and review like
+  any other message. Its claims change nothing until you accept them. A
+  reply draft it overtakes says "The office replied. This draft no longer
+  fits." and cannot be approved.
+- The checklist lists what the office asked you to bring or do. It is
+  built by code from the office requests you accepted, and each item shows
+  its quote and its source: "office message", "reported by you" or
+  "reported by you through <grant name>". Requests in the same words are
+  one item with every source.
+- The case history lists every event of the case in order, including undo,
+  with labels built by code.
+- Delete case is the only permanent deletion. It runs only from the app,
+  after you type DELETE. It erases every message, claim, review, slot,
+  question, explanation, reply, note, tag and proposal of the case, the log
+  of agent calls and the rate-limit counters. It then rewrites the database
+  file and empties its WAL, so the removed text is gone from disk, not only
+  hidden. Grants stay, because they are app settings. Revoke them with
+  `pnpm grant revoke`. An MCP server that has the file open keeps running
+  and finds no case. No MCP tool can delete a case.
+
 ## D5: records and the MCP server
 
 - `src/records/` is the one domain service for appointment records: notes,
@@ -62,7 +88,9 @@ in this repo is synthetic.
 See `docs/decisions/0001-stack.md` for the stack and dependency checks,
 `docs/decisions/0002-slot-states.md` for the slot rules,
 `docs/decisions/0003-reply-templates.md` for the reply rules, and
-`docs/decisions/0004-mcp-core.md` for records, grants and the MCP server.
+`docs/decisions/0004-mcp-core.md` for records, grants and the MCP server,
+and `docs/decisions/0005-saved-outcome.md` for the saved case, the
+checklist and Delete case.
 
 ## Commands
 
@@ -172,7 +200,9 @@ you create a grant.
 What an agent can never do, under any tier: confirm, cancel or change an
 appointment's state, date, time or place directly, contact an office, send
 or approve a reply, confirm its own proposals, delete the case, or manage
-grants. A proposed change waits in your review queue until you confirm it
+grants. Notes, tags and proposals hold administrative content only. A
+clinical one is refused with the tool error `out_of_scope` and nothing is
+written. A proposed change waits in your review queue until you confirm it
 in the app. A confirmed change shows "reported by you through" the grant's
 name. Every call is logged in the case history with the grant name, the
 tool and the result.
