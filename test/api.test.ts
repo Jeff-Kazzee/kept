@@ -5,10 +5,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createApi } from "../server/api.ts";
+import { CaseService } from "../src/case/service.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
+import { fixtureMessage } from "./helpers.ts";
 
 const M1 = {
   id: "m1",
@@ -19,8 +21,10 @@ const M1 = {
 };
 
 function setup() {
-  const service = new IntakeService(new EventStore(), RecordedModelClient.fromDirectory());
-  return createApi(service, { mode: "recorded" });
+  const store = new EventStore();
+  const client = RecordedModelClient.fromDirectory();
+  const service = new IntakeService(store, client);
+  return createApi(service, new CaseService(store, service, client), { mode: "recorded" });
 }
 
 describe("local API", () => {
@@ -72,6 +76,62 @@ describe("local API", () => {
     expect((await api({ method: "POST", path: manualPath, body: { expectedVersion: 1, claim } })).status).toBe(409);
     expect((await api({ method: "GET", path: "/api/nothing", body: undefined })).status).toBe(404);
     expect((await api({ method: "GET", path: "/api/messages", body: undefined })).status).toBe(405);
+  });
+});
+
+describe("local API for slot states", () => {
+  type State = {
+    evidence: Array<{ id: string; version: number; status: string }>;
+    case: {
+      slots: Array<{ key: string; stateLabel: string; clashes: Array<{ summary: string }> | null }>;
+      conflicts: Array<{ id: string; version: number; explanation: { outcome: string; citedEvidenceIds: string[] } | null }>;
+      question: { id: string; text: string; choices: Array<{ id: string; label: string }> } | null;
+      questionsVersion: number;
+      calendarVersion: number;
+    };
+  };
+
+  it("runs the demo story: calendar, explanation, one question and an answer", async () => {
+    const api = setup();
+    const call = async (method: string, path: string, body?: unknown) => api({ method, path, body });
+    const state = async () => (await call("GET", "/api/state")).body as State;
+    for (const id of ["m1", "m2", "m3"]) {
+      await call("POST", "/api/messages", fixtureMessage(id));
+      await call("POST", `/api/messages/${id}/extract`, { effort: "low", expectedVersion: 1 });
+    }
+    for (const e of (await state()).evidence) await call("POST", `/api/evidence/${e.id}/accept`, { expectedVersion: e.version });
+
+    const cal = (await call("GET", "/api/fixtures/calendar")).body as { name: string; text: string };
+    expect((await call("POST", "/api/calendar", { ...cal, expectedVersion: 0 })).status).toBe(200);
+    expect((await call("POST", "/api/calendar", { ...cal, expectedVersion: 0 })).status).toBe(409);
+    expect((await call("POST", "/api/calendar", { name: "x.ics", text: "nope", expectedVersion: 1 })).status).toBe(422);
+    let s = await state();
+    expect(s.case.slots.map((x) => [x.key, x.stateLabel, x.clashes?.map((c) => c.summary)])).toEqual([
+      ["2026-11-10T14:00", "Offered · office message", []],
+      ["2026-11-12T10:30", "Confirmed · office message, change proposed", []],
+      ["2026-11-13T09:15", "Offered · office message", ["Team meeting"]],
+      ["2026-11-16T13:00", "Offered · office message", []],
+    ]);
+
+    const conflict = s.case.conflicts[0]!;
+    const explained = await call("POST", `/api/conflicts/${conflict.id}/explain`, { expectedVersion: conflict.version });
+    expect(explained.body).toMatchObject({ explanation: { outcome: "valid", citedEvidenceIds: ["m2-e1", "m3-e1", "m3-e2", "m3-e3"] } });
+    expect((await call("POST", `/api/conflicts/${conflict.id}/explain`, { expectedVersion: 0 })).status).toBe(409);
+
+    expect((await call("POST", "/api/questions/next", { expectedVersion: 0 })).status).toBe(200);
+    expect((await call("POST", "/api/questions/next", { expectedVersion: 1 })).status).toBe(422);
+    s = await state();
+    expect(s.case.question!.text).toBe("The office needs to move your Thursday 11/12 10:30 AM visit. Which new time do you want to request?");
+    const answerPath = `/api/questions/${s.case.question!.id}/answer`;
+    expect((await call("POST", answerPath, { expectedVersion: 1, choiceId: "nope" })).status).toBe(422);
+    expect((await call("POST", answerPath, { expectedVersion: 0, choiceId: "unsure" })).status).toBe(409);
+    expect((await call("POST", answerPath, { expectedVersion: 1 })).status).toBe(400);
+    const answered = await call("POST", answerPath, { expectedVersion: 1, choiceId: "request:2026-11-16T13:00" });
+    expect(answered.status).toBe(200);
+    s = await state();
+    expect(s.case.slots.find((x) => x.key === "2026-11-16T13:00")!.stateLabel).toBe("Requested · reported by you");
+    expect(s.case.question).toBeNull();
+    expect(s.evidence.find((e) => e.id === "answer-q1-1")).toMatchObject({ status: "accepted" });
   });
 });
 

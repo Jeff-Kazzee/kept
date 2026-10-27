@@ -1,4 +1,4 @@
-// Local server for the D1 UI. Binds to 127.0.0.1 only and serves the UI
+// Local server for the UI. Binds to 127.0.0.1 only and serves the UI
 // through Vite in middleware mode. Uses recorded model responses unless
 // APP_LIVE_MODEL=1 is set, which also needs MODEL_API_KEY.
 //
@@ -10,6 +10,7 @@ import { mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { createServer as createVite } from "vite";
+import { CaseService } from "../src/case/service.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { MetaResponsesClient, type ModelClient } from "../src/model/client.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
@@ -37,7 +38,8 @@ if (live) {
 const dbPath = path.resolve(PACKAGE_ROOT, process.env.APP_DB ?? "data/app.sqlite");
 mkdirSync(path.dirname(dbPath), { recursive: true });
 const store = new EventStore(dbPath);
-const api = createApi(new IntakeService(store, client), { mode: live ? "live" : "recorded" });
+const intake = new IntakeService(store, client);
+const api = createApi(intake, new CaseService(store, intake, client), { mode: live ? "live" : "recorded" });
 
 const allowedHosts = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]);
 
@@ -98,7 +100,7 @@ server.on("request", async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`D1 evidence intake on http://${HOST}:${PORT} (model: ${live ? "live" : "recorded responses"})`);
+  console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? "live" : "recorded responses"})`);
 });
 
 const shutdown = async () => {

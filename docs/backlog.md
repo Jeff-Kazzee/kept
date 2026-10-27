@@ -113,7 +113,7 @@ Tasks:
 - [x] SP2.13 Model call: propose the next clarifying question. Code
   validates it against the open conflicts and asks it through the question
   queue. One retry, then a fixed wording for that conflict (proposed).
-- [ ] SP2.14 Conflict view in the UI: both sources, their quotes, the state
+- [x] SP2.14 Conflict view in the UI: both sources, their quotes, the state
   with its source, calendar clashes, the explanation labeled as model
   output, and the current question.
 - [x] SP2.15 Recorded responses for the new calls, and fixture stubs marked

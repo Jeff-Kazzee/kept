@@ -2,6 +2,7 @@
 // The browser never sees the API key: the model client lives here.
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { CaseService } from "../src/case/service.ts";
 import { Channel, Effort } from "../src/domain/claim.ts";
 import { loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
 import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } from "../src/intake/service.ts";
@@ -23,10 +24,14 @@ const PastedMessage = z
 const ExtractBody = z.object({ effort: Effort.default("low"), expectedVersion: z.number().int().nonnegative() }).strict();
 const ReviewBody = z.object({ expectedVersion: z.number().int().nonnegative() }).strict();
 const ManualBody = z.object({ expectedVersion: z.number().int().nonnegative(), claim: ManualClaimInput }).strict();
+const CalendarBody = z
+  .object({ name: z.string().trim().min(1).max(200), text: z.string().min(1), expectedVersion: z.number().int().nonnegative() })
+  .strict();
+const AnswerBody = z.object({ expectedVersion: z.number().int().nonnegative(), choiceId: z.string().min(1).max(200) }).strict();
 
 export type ApiOptions = { mode: "recorded" | "live" };
 
-export function createApi(service: IntakeService, options: ApiOptions) {
+export function createApi(service: IntakeService, kase: CaseService, options: ApiOptions) {
   const scenarios = loadScenarios();
 
   const routes: Array<[string, RegExp, (m: RegExpExecArray, body: unknown) => Promise<unknown> | unknown]> = [
@@ -35,6 +40,7 @@ export function createApi(service: IntakeService, options: ApiOptions) {
       modelClient: service.modelLabel,
       messages: service.messages(),
       evidence: service.evidence(),
+      case: kase.view(),
     })],
     ["GET", /^\/api\/fixtures$/, () =>
       scenarios.map((s) => ({
@@ -62,6 +68,18 @@ export function createApi(service: IntakeService, options: ApiOptions) {
     ["POST", /^\/api\/evidence\/([^/]+)\/reject$/, (m, body) =>
       service.reject(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
     ],
+    ["POST", /^\/api\/calendar$/, (_m, body) => {
+      const { name, text, expectedVersion } = CalendarBody.parse(body);
+      return kase.loadCalendar(name, text, expectedVersion);
+    }],
+    ["POST", /^\/api\/conflicts\/([^/]+)\/explain$/, (m, body) =>
+      kase.explain(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+    ],
+    ["POST", /^\/api\/questions\/next$/, (_m, body) => kase.askNext(ReviewBody.parse(body).expectedVersion)],
+    ["POST", /^\/api\/questions\/([^/]+)\/answer$/, (m, body) => {
+      const { expectedVersion, choiceId } = AnswerBody.parse(body);
+      return kase.answer(decodeURIComponent(m[1]!), choiceId, expectedVersion);
+    }],
   ];
 
   return async function handle(req: ApiRequest): Promise<ApiResponse> {

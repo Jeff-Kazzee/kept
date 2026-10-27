@@ -1,5 +1,8 @@
 // Browser side of the local API. Types mirror the server projections.
+import type { CaseView, ConflictView } from "../src/case/types.ts";
 import type { Channel, Effort, EvidenceClaim, Message, SourceType } from "../src/domain/claim.ts";
+
+export type { CaseView, ConflictView };
 
 export type Attempt = {
   attempt: number;
@@ -32,14 +35,21 @@ export type MessageView = {
 export type EvidenceView = {
   id: string;
   version: number;
-  messageId: string;
+  messageId: string | null;
   claim: EvidenceClaim;
-  origin: "model" | "manual";
+  origin: "model" | "manual" | "answer";
   status: "pending" | "accepted" | "rejected";
   decidedAt: string | null;
+  answer: { question_id: string; conflict_id: string; choice_id: string; clarifies: string | null; after: string } | null;
 };
 
-export type AppState = { mode: "recorded" | "live"; modelClient: string; messages: MessageView[]; evidence: EvidenceView[] };
+export type AppState = {
+  mode: "recorded" | "live";
+  modelClient: string;
+  messages: MessageView[];
+  evidence: EvidenceView[];
+  case: CaseView;
+};
 
 export type FixtureScenario = {
   id: string;
@@ -81,4 +91,11 @@ export const api = {
     request<EvidenceView>("POST", `/api/evidence/${encodeURIComponent(id)}/accept`, { expectedVersion }),
   reject: (id: string, expectedVersion: number) =>
     request<EvidenceView>("POST", `/api/evidence/${encodeURIComponent(id)}/reject`, { expectedVersion }),
+  loadCalendar: (name: string, text: string, expectedVersion: number) =>
+    request<CaseView>("POST", "/api/calendar", { name, text, expectedVersion }),
+  explain: (conflictId: string, expectedVersion: number) =>
+    request<ConflictView>("POST", `/api/conflicts/${encodeURIComponent(conflictId)}/explain`, { expectedVersion }),
+  nextQuestion: (expectedVersion: number) => request<CaseView>("POST", "/api/questions/next", { expectedVersion }),
+  answer: (questionId: string, choiceId: string, expectedVersion: number) =>
+    request<CaseView>("POST", `/api/questions/${encodeURIComponent(questionId)}/answer`, { expectedVersion, choiceId }),
 };

@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { CLAIM_TYPES, type Channel, type ClaimType, type Effort } from "../src/domain/claim.ts";
-import { parseIcs, type IcsEvent } from "../src/domain/ics.ts";
-import { ApiError, api, type AppState, type EvidenceView, type FixtureScenario, type MessageView } from "./api.ts";
+import type { IcsTime } from "../src/domain/ics.ts";
+import type { ConflictKind } from "../src/slots/types.ts";
+import {
+  ApiError,
+  api,
+  type AppState,
+  type CaseView,
+  type ConflictView,
+  type EvidenceView,
+  type FixtureScenario,
+  type MessageView,
+} from "./api.ts";
+
+type Run = (action: () => Promise<unknown>) => Promise<void>;
 
 const CHANNELS: Channel[] = ["sms", "email", "portal", "voicemail_transcript", "user_report"];
 
@@ -43,10 +55,11 @@ export function App() {
   if (!state) return <p>Loading…</p>;
   const pending = state.evidence.filter((e) => e.status === "pending");
   const decided = state.evidence.filter((e) => e.status !== "pending");
+  const kase = state.case;
 
   return (
     <>
-      <h1>Appointment evidence intake</h1>
+      <h1>Appointment change assistant</h1>
       <p>
         Administrative facts only: times, places, confirmations and what the office asked you to bring or do. No inbox
         access. All data here is synthetic. Model: <strong>{state.mode === "live" ? "live model" : "recorded responses"}</strong>.
@@ -66,7 +79,7 @@ export function App() {
 
       <section>
         <h2>2. Calendar</h2>
-        <CalendarPanel />
+        <CalendarPanel kase={kase} run={run} />
       </section>
 
       <section>
@@ -87,7 +100,26 @@ export function App() {
       </section>
 
       <section>
-        <h2>5. Reviewed claims</h2>
+        <h2>5. Appointment slots</h2>
+        <p>Built by code from accepted evidence only. Model output never changes a slot.</p>
+        <SlotsPanel kase={kase} />
+      </section>
+
+      <section>
+        <h2>6. Question</h2>
+        <QuestionPanel state={state} run={run} />
+      </section>
+
+      <section>
+        <h2>7. Conflicts ({kase.conflicts.length})</h2>
+        {kase.conflicts.length === 0 && <p>No conflicts.</p>}
+        {kase.conflicts.map((c) => (
+          <ConflictCard key={c.id} conflict={c} state={state} run={run} />
+        ))}
+      </section>
+
+      <section>
+        <h2>8. Reviewed claims and your answers</h2>
         {decided.length === 0 && <p>None yet.</p>}
         {decided.map((e) => (
           <EvidenceCard key={e.id} item={e} state={state} run={run} />
@@ -191,21 +223,14 @@ function FixturePicker({ imported, onAdd }: { imported: Set<string>; onAdd: (m: 
   );
 }
 
-function CalendarPanel() {
-  const [events, setEvents] = useState<IcsEvent[] | null>(null);
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
+function icsTimeText(t: IcsTime | null): string {
+  if (!t) return "";
+  return `${t.time ?? "all day"} ${t.utc ? "UTC" : (t.tzid ?? "")}`.trim();
+}
 
-  const load = (fileName: string, text: string) => {
-    try {
-      setEvents(parseIcs(text));
-      setName(fileName);
-      setError(null);
-    } catch (e) {
-      setEvents(null);
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
+function CalendarPanel({ kase, run }: { kase: CaseView; run: Run }) {
+  const cal = kase.calendar;
+  const load = (name: string, text: string) => run(() => api.loadCalendar(name, text, kase.calendarVersion));
 
   return (
     <div className="card">
@@ -216,21 +241,26 @@ function CalendarPanel() {
           accept=".ics,text/calendar"
           onChange={async (e) => {
             const file = e.target.files?.[0];
-            if (file) load(file.name, await file.text());
+            if (file) await load(file.name, await file.text());
           }}
         />
       </label>
-      <button onClick={async () => {
-        const cal = await api.calendar();
-        load(cal.name, cal.text);
-      }}>
+      <button
+        onClick={() =>
+          run(async () => {
+            const demo = await api.calendar();
+            await api.loadCalendar(demo.name, demo.text, kase.calendarVersion);
+          })
+        }
+      >
         Load demo calendar (dana.ics)
       </button>
-      {error && <p className="error">{error}</p>}
-      {events && (
+      {!cal && <p>No calendar loaded. Clashes are not checked.</p>}
+      {cal && (
         <>
           <p>
-            {name}: {events.length} events
+            {cal.name}: {cal.events.length} events. Times are {cal.timeZone}. For clash checks an appointment is assumed to last{" "}
+            {cal.assumedSlotMinutes} minutes, because messages do not state an end time.
           </p>
           <table>
             <thead>
@@ -242,13 +272,11 @@ function CalendarPanel() {
               </tr>
             </thead>
             <tbody>
-              {events.map((ev, i) => (
+              {cal.events.map((ev, i) => (
                 <tr key={ev.uid ?? i}>
                   <td>{ev.start.date}</td>
-                  <td>
-                    {ev.start.time ?? "all day"} {ev.start.utc ? "UTC" : (ev.start.tzid ?? "")}
-                  </td>
-                  <td>{ev.end?.time ?? ""}</td>
+                  <td>{icsTimeText(ev.start)}</td>
+                  <td>{icsTimeText(ev.end)}</td>
                   <td>
                     {ev.summary}
                     {ev.recurring && " (repeats, first instance shown)"}
@@ -263,7 +291,172 @@ function CalendarPanel() {
   );
 }
 
-function MessageCard({ view, run }: { view: MessageView; run: (a: () => Promise<unknown>) => Promise<void> }) {
+function SlotsPanel({ kase }: { kase: CaseView }) {
+  if (kase.slots.length === 0) return <p>No slots yet. Accept claims in the review queue.</p>;
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Slot</th>
+          <th>State</th>
+          <th>Place</th>
+          <th>Calendar</th>
+          <th>Evidence</th>
+        </tr>
+      </thead>
+      <tbody>
+        {kase.slots.map((s) => (
+          <tr key={s.key}>
+            <td>{s.label}</td>
+            <td>
+              <strong>{s.stateLabel}</strong>
+              {s.missing.length > 0 && <div className="warn">Incomplete: no {s.missing.map((m) => (m === "time" ? "time" : "place")).join(", no ")}</div>}
+              {s.staleEvidenceIds.length > 0 && <div className="warn">Possibly stale reminder: {s.staleEvidenceIds.join(", ")}</div>}
+            </td>
+            <td>{s.locationDisputed ? <span className="warn">Sources disagree</span> : (s.location ?? "not stated")}</td>
+            <td>
+              {s.clashes === null
+                ? s.time === null || !kase.calendar
+                  ? "not checked"
+                  : "not checked (closed)"
+                : s.clashes.length === 0
+                  ? "no clash"
+                  : s.clashes.map((c, i) => (
+                      <div key={i} className="warn">
+                        Clashes with {c.summary} ({icsTimeText(c.start)}
+                        {c.end ? ` to ${icsTimeText(c.end)}` : ""})
+                      </div>
+                    ))}
+            </td>
+            <td>{s.evidenceIds.join(", ")}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// One evidence item as a source: its id, where it came from and its quote.
+function SourceQuote({ id, state }: { id: string; state: AppState }) {
+  const item = state.evidence.find((e) => e.id === id);
+  if (!item) return <div className="card">Evidence {id} is not in the case.</div>;
+  const c = item.claim;
+  const message = state.messages.find((m) => m.id === item.messageId);
+  const source = item.origin === "answer" ? "your answer" : c.source_type === "office_message" ? "office message" : "reported by you";
+  return (
+    <div className="card source">
+      <div className="label">
+        {id} · {source}
+        {message && ` · ${message.message.from} · ${message.message.received_at}`}
+        {state.case.staleEvidenceIds.includes(id) && " · possibly stale"}
+      </div>
+      <div>
+        {c.claim_type} · {slotText(c.slot)} · sender kind {c.sender_kind}
+      </div>
+      {c.quote ? <pre>“{c.quote}”</pre> : <div>No quote.</div>}
+    </div>
+  );
+}
+
+const KIND_TITLES: Record<ConflictKind, string> = {
+  both_held: "Two slots are held",
+  change_proposed: "Change proposed",
+  unknown_order: "Order unknown",
+  ambiguous_date: "Date or slot is ambiguous",
+  possibly_stale: "Possibly stale reminder",
+  location_mismatch: "Places disagree",
+  incomplete_slot: "Missing detail",
+};
+
+function QuestionPanel({ state, run }: { state: AppState; run: Run }) {
+  const kase = state.case;
+  const q = kase.question;
+  if (!q) {
+    if (kase.waiting === 0) return <p>No question waits.</p>;
+    return (
+      <div className="card">
+        <p>
+          {kase.waiting} conflict{kase.waiting > 1 ? "s wait" : " waits"} for a question. The app asks one at a time.
+        </p>
+        <button onClick={() => run(() => api.nextQuestion(kase.questionsVersion))}>Ask the next question</button>
+      </div>
+    );
+  }
+  return (
+    <div className={`card ${q.origin === "model" ? "model" : ""}`}>
+      <div className="label">
+        {q.origin === "model"
+          ? "Model output: proposed question, passed the code checks"
+          : "Fixed wording: the model's question failed the code checks twice"}{" "}
+        · {KIND_TITLES[q.conflictKind]}
+      </div>
+      <div className="split">
+        <div>
+          <p>
+            <strong>{q.text}</strong>
+          </p>
+          <div className="label">Your answer (choices built by code, recorded as reported by you)</div>
+          {q.choices.map((c) => (
+            <button key={c.id} onClick={() => run(() => api.answer(q.id, c.id, kase.questionsVersion))}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+        <div>
+          <div className="label">Cited quotes</div>
+          {q.citedEvidenceIds.map((id) => (
+            <SourceQuote key={id} id={id} state={state} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConflictCard({ conflict, state, run }: { conflict: ConflictView; state: AppState; run: Run }) {
+  const x = conflict.explanation;
+  return (
+    <div className="card">
+      <div className="label">
+        {KIND_TITLES[conflict.kind]} · {conflict.status}
+        {conflict.answer && `: ${conflict.answer.label}`}
+      </div>
+      <p>{conflict.summary}</p>
+      <div className="label">Sources ({conflict.evidenceIds.length})</div>
+      <div className="sources">
+        {conflict.evidenceIds.map((id) => (
+          <SourceQuote key={id} id={id} state={state} />
+        ))}
+      </div>
+      {!x && (
+        <button onClick={() => run(() => api.explain(conflict.id, conflict.version))}>Explain with the model</button>
+      )}
+      {x?.outcome === "valid" && (
+        <div className="card model">
+          <div className="label">Model output: explanation ({x.model}, effort {x.effort}), passed the code checks</div>
+          <div className="split">
+            <p>{x.text}</p>
+            <div>
+              <div className="label">Cited quotes</div>
+              {x.citedEvidenceIds.map((id) => (
+                <SourceQuote key={id} id={id} state={state} />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      {x?.outcome === "unavailable" && (
+        <div className="card rejected">
+          <div className="label">Explanation unavailable</div>
+          The model's explanation failed the code checks twice ({x.attempts.map((a) => a.problems.join(", ")).join("; ")}). The
+          sources above are shown without it.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MessageCard({ view, run }: { view: MessageView; run: Run }) {
   const [effort, setEffort] = useState<Effort>("low");
   const [manualOpen, setManualOpen] = useState(false);
   const m = view.message;
@@ -344,7 +537,7 @@ function ManualEntryForm({
 }: {
   messageId: string;
   version: number;
-  run: (a: () => Promise<unknown>) => Promise<void>;
+  run: Run;
   onDone: () => void;
 }) {
   const [claimType, setClaimType] = useState<ClaimType>("offer");
@@ -413,14 +606,17 @@ function EvidenceCard({
 }: {
   item: EvidenceView;
   state: AppState;
-  run: (a: () => Promise<unknown>) => Promise<void>;
+  run: Run;
 }) {
   const c = item.claim;
   const source = state.messages.find((m) => m.id === item.messageId);
+  const origin =
+    item.origin === "model" ? "Model output, passed the quote check" : item.origin === "answer" ? "Your answer to a question" : "Entered by you";
   return (
     <div className={`card ${item.origin === "model" ? "model" : ""}`}>
       <div className="label">
-        {item.origin === "model" ? "Model output, passed the quote check" : "Entered by you"} · {item.status}
+        {item.id} · {origin} · {item.status}
+        {state.case.staleEvidenceIds.includes(item.id) && " · possibly stale"}
       </div>
       <div>
         <strong>{c.claim_type}</strong> · {slotText(c.slot)}
@@ -430,7 +626,7 @@ function EvidenceCard({
       <div>
         Source: {c.source_type.replaceAll("_", " ")} ·{" "}
         <strong>sender kind: {c.sender_kind}</strong>
-        {item.origin === "model" && " (model judgment, not checked by code)"} · from {source?.message.from ?? item.messageId}{" "}
+        {item.origin === "model" && " (model judgment, not checked by code)"} · from {source?.message.from ?? item.messageId ?? "your answer"}{" "}
         · evidence time {c.evidence_time}
         {c.event_time && ` · event time ${c.event_time}`}
       </div>
