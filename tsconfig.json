@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["es2024"],
+    "types": ["node"]
+  },
+  "include": ["src", "server", "scripts/**/*.ts", "test", "vitest.config.ts"]
+}
