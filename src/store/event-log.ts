@@ -77,7 +77,10 @@ export class EventStore {
   constructor(location: string = ":memory:", clock: () => string = () => new Date().toISOString()) {
     this.#db = new DatabaseSync(location);
     this.#clock = clock;
-    if (location !== ":memory:") this.#db.exec("PRAGMA journal_mode = WAL;");
+    // The app and the MCP server open the same file. WAL lets one read while
+    // the other writes, and the busy timeout makes a writer wait for the
+    // other's lock instead of failing at once.
+    if (location !== ":memory:") this.#db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.#db.exec(SCHEMA);
   }
 
@@ -92,6 +95,14 @@ export class EventStore {
     const rows = this.#db
       .prepare("SELECT * FROM events WHERE stream_id = ? ORDER BY version")
       .all(streamId) as unknown as Row[];
+    return rows.map(toEvent);
+  }
+
+  // Every event of every stream whose id starts with `prefix`, in seq order.
+  readPrefix(prefix: string): StoredEvent[] {
+    const rows = this.#db
+      .prepare("SELECT * FROM events WHERE substr(stream_id, 1, ?) = ? ORDER BY seq")
+      .all(prefix.length, prefix) as unknown as Row[];
     return rows.map(toEvent);
   }
 
@@ -133,6 +144,26 @@ export class EventStore {
           written.push(toEvent(row));
         });
       }
+      this.#db.exec("COMMIT");
+      return written;
+    } catch (err) {
+      this.#db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  // Appends system events, such as access log entries, at the stream's next
+  // version. No user or agent edits these streams, so the write states no
+  // expected version. Every record write still uses append or appendMany.
+  appendSystem(streamId: string, events: NewEvent[]): StoredEvent[] {
+    const insert = this.#db.prepare(
+      "INSERT INTO events (stream_id, version, type, data, recorded_at) VALUES (?, ?, ?, ?, ?) RETURNING *",
+    );
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.streamVersion(streamId);
+      const at = this.#clock();
+      const written = events.map((e, i) => toEvent(insert.get(streamId, current + i + 1, e.type, JSON.stringify(e.data), at) as unknown as Row));
       this.#db.exec("COMMIT");
       return written;
     } catch (err) {

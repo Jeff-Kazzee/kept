@@ -204,11 +204,11 @@ grants checked on every call.
 
 Tasks:
 
-- [ ] SP4.1 Domain events for notes, tags, archive, and undo as a reversing
+- [x] SP4.1 Domain events for notes, tags, archive, and undo as a reversing
   event. Every write states its expected version.
-- [ ] SP4.2 S14: a stale expected version returns a stale-edit error with the
+- [x] SP4.2 S14: a stale expected version returns a stale-edit error with the
   current record and writes nothing.
-- [ ] SP4.3 S17: archive removes a record from the default list, keeps it in
+- [x] SP4.3 S17: archive removes a record from the default list, keeps it in
   history, and undo brings it back.
 - [ ] SP4.4 Grant store: create, name, revoke, and tiers (read, annotate,
   propose). Off by default. Tokens stored hashed (proposed).

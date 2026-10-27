@@ -76,8 +76,8 @@ export const EvidenceClaim = z.object({
   // When the described event happened, if the message says so.
   event_time: z.string().nullable(),
   request_item: z.string().nullable(),
-  // The grant name for reported_by_user_via_agent. Grants arrive in a later
-  // sprint. Absent for every other source.
+  // The grant name for reported_by_user_via_agent, taken from the grant and
+  // never from the name the client reports. Absent for every other source.
   agent_name: z.string().min(1).max(100).nullable().optional(),
 });
 export type EvidenceClaim = z.infer<typeof EvidenceClaim>;

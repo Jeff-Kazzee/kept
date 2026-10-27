@@ -4,8 +4,10 @@
 // version of that one item. An answer to a question also creates evidence
 // items. The user's tap on the answer is their review, so an answer item is
 // accepted when it is recorded. An approved reply creates evidence items the
-// same way, because the approval is the user's review. Unknown event kinds are skipped, which leaves
-// room for later kinds such as notes, tags, archive and undo.
+// same way, because the approval is the user's review. A change an agent
+// proposed becomes an evidence item only when the user confirms it in the
+// app, so that item is also accepted when it is recorded. Unknown event
+// kinds are skipped.
 import type { Effort, EvidenceClaim, Message, SourceType } from "../domain/claim.ts";
 import type { AttemptProblem, ClaimProblem } from "../extract/extract.ts";
 import type { ModelClaim, TokenUsage } from "../model/request.ts";
@@ -45,7 +47,8 @@ export type EvidenceEvent =
   | { type: "claim_accepted"; data: Record<string, never> }
   | { type: "claim_rejected_by_user"; data: Record<string, never> }
   | { type: "answer_recorded"; data: { claim: EvidenceClaim } & AnswerMeta }
-  | { type: "reply_recorded"; data: { claim: EvidenceClaim } & ReplyMeta };
+  | { type: "reply_recorded"; data: { claim: EvidenceClaim } & ReplyMeta }
+  | { type: "agent_report_confirmed"; data: { proposal_id: string; grant_id: string; claim: EvidenceClaim } };
 
 // Where an answer item came from. `clarifies` names the evidence item whose
 // date or time the answer resolves. `after` is the latest evidence time in
@@ -86,11 +89,13 @@ export type ReviewStatus = "pending" | "accepted" | "rejected";
 export type EvidenceView = {
   id: string;
   version: number;
-  // Null for an answer item, which comes from no message.
+  // Null for an answer item, a reply item or a confirmed agent report, which
+  // come from no message.
   messageId: string | null;
   claim: EvidenceClaim;
-  // "model" means model output that passed the code checks.
-  origin: "model" | "manual" | "answer" | "reply";
+  // "model" means model output that passed the code checks. "agent" means a
+  // change an agent proposed and the user confirmed.
+  origin: "model" | "manual" | "answer" | "reply" | "agent";
   status: ReviewStatus;
   decidedAt: string | null;
   answer: AnswerMeta | null;
@@ -182,6 +187,19 @@ export function projectEvidence(events: StoredEvent[]): Map<string, EvidenceView
         decidedAt: e.recordedAt,
         answer: null,
         reply,
+      });
+      continue;
+    }
+    if (event.type === "agent_report_confirmed") {
+      views.set(id, {
+        id,
+        version: e.version,
+        messageId: null,
+        claim: event.data.claim,
+        origin: "agent",
+        status: "accepted",
+        decidedAt: e.recordedAt,
+        answer: null,
       });
       continue;
     }
