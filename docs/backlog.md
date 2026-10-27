@@ -42,8 +42,8 @@ Rules:
 | 1 | Evidence intake | D1 | Oct 27 | Done (`09042eb`) |
 | 2 | Slot states and conflict resolution | D2 | Oct 27 | Done (`46e5917`) |
 | 3 | Reviewed reply | D3 | Oct 27 | Done (`af00de3`) |
-| 4 | MCP core: domain events, grants, tools | D5, part 1 | Oct 31 to Nov 1, beside sprint 3 | Planned |
-| 5 | Saved outcome and checklist | D4 | Nov 1 to 2 | Planned |
+| 4 | MCP core: domain events, grants, tools | D5, part 1 | Oct 27 | Done (`49f9c45`) |
+| 5 | Saved outcome and checklist | D4 | Nov 1 to 2 | Next |
 | 6 | MCP in the app and connect test | D5, part 2 | Nov 2 | Planned |
 | 7 | Failure testing | All | Nov 2 to 3 | Planned |
 | 8 | Submission build | All | Nov 3 to 4 | Planned |
@@ -97,6 +97,21 @@ tier. Read-only MCP is the floor.
   step. Tune the prompt or try effort minimal, then measure again.
 - [ ] Look at the reply panel in a browser. Sprint 3 checked it over HTTP
   and with server-rendered markup only.
+
+## Carried over from sprint 4
+
+- [ ] Confirm or change the decisions marked "proposed, pending Jeff" in
+  `docs/decisions/0004-mcp-core.md` (M-a to M-w and the review changes).
+- [ ] Decide whether notes and proposal statements written by an agent go
+  through the clinical-content check. They do not now.
+- [ ] Decide whether Delete case (sprint 5) also removes the case's access log
+  and rate counters. Grants are app settings, not case data.
+- [ ] Sprint 6 work: a reply can still be drafted for an archived
+  appointment. Decide whether archive hides it from the reply panel.
+- [ ] Sprint 5 or 7 work: extraction at effort `minimal` missed m2's
+  "arrive 15 minutes early" office request in one of three runs, twice
+  across the live runs so far. The checklist in the demo depends on it.
+  Tune the prompt for office requests or extract at `low`, then measure.
 
 ## Sprint 2: slot states and conflict resolution (D2)
 
