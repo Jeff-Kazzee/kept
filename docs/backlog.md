@@ -212,7 +212,7 @@ Tasks:
   history, and undo brings it back.
 - [ ] SP4.4 Grant store: create, name, revoke, and tiers (read, annotate,
   propose). Off by default. Tokens stored hashed (proposed).
-- [ ] SP4.5 Choose the MCP server library. Record license, install scripts,
+- [x] SP4.5 Choose the MCP server library. Record license, install scripts,
   and publish age in a decision doc.
 - [ ] SP4.6 stdio server that reads the same store as the app and checks the
   current grant on every call, with no cache across calls.
