@@ -63,8 +63,10 @@ are shown when the case has them and left out of the text otherwise.
   Monday 11/16 1:00 PM", unticked. Only when the user ticks it does approval
   record the template's claims. Otherwise approval records the draft and the
   simulated send only, and the sent reply says no slot change was recorded.
-  A text equal to the code render, also one restored after an edit, needs
-  no statement. The ask-whether-it-stands template records no claim, so it
+  A text that says the same as the code render, also one restored after an
+  edit, needs no statement. Line endings and trailing spaces on a line or at
+  the end do not count as a change for this. The edit label still follows
+  any change. The ask-whether-it-stands template records no claim, so it
   shows none. Set in review round 1.
 
 ## Choices made while building
@@ -116,7 +118,12 @@ are shown when the case has them and left out of the text otherwise.
   It carries no place, so it never changes a slot's place. Its quote is a
   code label such as "Approved reply: I accept Monday 11/16 1:00 PM".
 - T11. The clinical check covers a pasted report on the `user_report`
-  channel, the note for the model call and every draft edit. A clinical report is refused at
+  channel, the note for the model call and every draft edit. It reads the
+  text after NFKC normalization with format characters (such as zero-width
+  spaces and soft hyphens) removed, and also with accents removed. A word
+  that mixes Latin letters with letters of another script fails closed and
+  gets the fixed decline. The same check applies to model text (W28), where
+  a false match costs a retry. A clinical report is refused at
   import, so its text is never stored. Office messages are imported as data
   and are not checked, because the office may name things to bring.
 - T12. Edited text must not be empty, must differ from the current text and
@@ -129,8 +136,9 @@ are shown when the case has them and left out of the text otherwise.
   match apart from case and spacing. A null value proposes nothing.
 - T15. The template call defaults to effort `low`, like the other D2 calls.
 - T16. Evidence writes do not move the reply stream, so a model call can
-  return after the case changed. The pick is checked again against the case
-  as it is when the call returns. A pick that no longer fits is recorded as
+  return after the case changed. Every check, field values included, runs
+  again on the model's final output against the case as it is when the call
+  returns. A pick that no longer fits is recorded as
   a fallback to manual entry with the problems, and no draft opens.
 - T17. The evaluation scores the model's own final pick apart from the
   system outcome. When no template fits, the code fallback meets the

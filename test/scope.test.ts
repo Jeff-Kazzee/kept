@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { createApi } from "../server/api.ts";
 import { CaseService } from "../src/case/service.ts";
-import { OutOfScopeError, SCOPE_DECLINE, hasClinicalContent } from "../src/domain/scope.ts";
+import { OutOfScopeError, SCOPE_DECLINE, hasClinicalContent, mixesScripts, normalizeForScope } from "../src/domain/scope.ts";
 import { loadScenarios } from "../src/fixtures/load.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { ReplyService } from "../src/reply/service.ts";
@@ -105,5 +105,51 @@ describe("SP3.9 S11: a clinical question gets the fixed decline", () => {
     await api({ method: "POST", path: "/api/reply/drafts", body: { expectedVersion: 0, template: "accept_offer", slotKey: "2026-11-10T14:00" } });
     const edit = await api({ method: "POST", path: "/api/reply/drafts/d1/edit", body: { expectedVersion: 1, text: S11_TEXT } });
     expect(edit).toEqual({ status: 422, body: { error: "out_of_scope", message: SCOPE_DECLINE } });
+  });
+});
+
+describe("review round 2, B1: the scope check reads normalized text", () => {
+  const CYRILLIC = "Before the visit, can you tell me what my sуmptoms mean?";
+  const ZERO_WIDTH = "Before the visit, can you tell me what my symp​toms mean?";
+  const FULLWIDTH = "Before the visit, can you tell me what my ｓｙｍｐｔｏｍｓ mean?";
+
+  it("catches a Cyrillic letter, a zero-width character, fullwidth letters, a soft hyphen and an accent", () => {
+    expect(hasClinicalContent("sуmptoms")).toBe(true);
+    expect(mixesScripts("sуmptoms")).toBe(true);
+    for (const text of [CYRILLIC, ZERO_WIDTH, FULLWIDTH, "my symp­toms", "my sýmptoms", "my sýmptoms", "‍treatment"]) {
+      expect(hasClinicalContent(text), JSON.stringify(text)).toBe(true);
+    }
+    expect(normalizeForScope(FULLWIDTH)).toContain("symptoms");
+    expect(normalizeForScope(ZERO_WIDTH)).toContain("symptoms");
+  });
+
+  it("fails closed on any word that mixes Latin with another script, and passes words in one script", () => {
+    expect(hasClinicalContent("Is my Thursdаy visit still on?")).toBe(true);
+    expect(hasClinicalContent("Is my Thursday visit still on?")).toBe(false);
+    expect(hasClinicalContent("Merci, le café au 400 Elm Street convient.")).toBe(false);
+    expect(hasClinicalContent("Спасибо, Thursday works.")).toBe(false);
+  });
+
+  it("refuses each case as a draft edit, and refuses a stored one at approval", async () => {
+    const { reply, store, kase } = await setup(["m2", "m3"]);
+    reply.start("ask_still_stands", "2026-11-12T10:30", 0);
+    const count = store.readAll().length;
+    for (const text of [CYRILLIC, ZERO_WIDTH, FULLWIDTH]) {
+      expect(() => reply.edit("d1", text, 1), JSON.stringify(text)).toThrow(SCOPE_DECLINE);
+    }
+    expect(store.readAll()).toHaveLength(count);
+    store.append("reply", 1, [{ type: "reply_edited", data: { draft_id: "d1", text: CYRILLIC } }]);
+    expect(() => reply.approve("d1", kase.view().reply.draft!.fields.map((f) => f.name), 2)).toThrow(SCOPE_DECLINE);
+  });
+
+  it("refuses each case as a pasted report and as a note, before any model call", async () => {
+    const { intake: service, reply, client } = await setup(["m1"]);
+    const calls = client.calls.length;
+    for (const [i, text] of [CYRILLIC, ZERO_WIDTH, FULLWIDTH].entries()) {
+      const report = { id: `u${i}`, channel: "user_report" as const, from: "Dana Reyes", received_at: "2026-11-06T19:30:00-07:00", text };
+      expect(() => service.importMessage(report)).toThrow(OutOfScopeError);
+      await expect(reply.suggest(text, 0)).rejects.toBeInstanceOf(OutOfScopeError);
+    }
+    expect(client.calls).toHaveLength(calls);
   });
 });

@@ -29,11 +29,25 @@ export function draftClaims(draft: DraftRecord): Array<{ type: "request" | "decl
   }
 }
 
+// Line endings and trailing spaces do not change what a reply says. Used
+// only to decide whether the claim needs confirming. The edit label still
+// follows any change to the text.
+export function sameWords(a: string, b: string): boolean {
+  const norm = (s: string) =>
+    s
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .join("\n")
+      .trimEnd();
+  return norm(a) === norm(b);
+}
+
 // When the text was edited away from the code render, approval records the
 // template's claims only if the user ticks this statement. Null when the
-// text is the code render or the template records no claim.
+// text says the same as the code render or the template records no claim.
 export function claimConfirmation(draft: DraftRecord): string | null {
-  if (draft.text === draft.renderedText || draftClaims(draft).length === 0) return null;
+  if (sameWords(draft.text, draft.renderedText) || draftClaims(draft).length === 0) return null;
   const declined = draft.fields.find((f) => f.name === "declined_slots")?.display;
   switch (TEMPLATES[draft.template].records) {
     case "request":

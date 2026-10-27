@@ -4,7 +4,9 @@
 // or the fixed wording, while a missed clinical word reaches the user.
 // Each term matches its singular and plural forms. Words that are also
 // ordinary administrative words ("result", "lab", the verb "treat") are
-// listed only inside clinical phrases. Runs in the browser and in Node.
+// listed only inside clinical phrases. Text is normalized first, and a word
+// that mixes Latin with another script fails closed. Runs in the browser
+// and in Node.
 
 const TERMS = [
   "diagnos\\w*",
@@ -54,8 +56,32 @@ const TERMS = [
 
 const CLINICAL = new RegExp(`\\b(?:${TERMS.join("|")})\\b`, "i");
 
+// Letters of a script other than Latin. Digits, marks and punctuation are
+// not letters, so they never count.
+const NON_LATIN_LETTER = /(?!\p{Script=Latin})\p{L}/u;
+const LATIN_LETTER = /\p{Script=Latin}/u;
+const WORD = /[\p{L}\p{M}]+/gu;
+
+// Text as the check reads it: compatibility forms folded (fullwidth letters
+// become ASCII), format characters such as zero-width spaces and soft
+// hyphens removed.
+export function normalizeForScope(text: string): string {
+  return text.normalize("NFKC").replace(/\p{Cf}/gu, "");
+}
+
+// True when one word mixes Latin letters with letters of another script,
+// as in "symptoms" written with a Cyrillic у. Such a word is treated as out
+// of scope, because the list cannot match it.
+export function mixesScripts(text: string): boolean {
+  return (text.match(WORD) ?? []).some((w) => LATIN_LETTER.test(w) && NON_LATIN_LETTER.test(w));
+}
+
 export function hasClinicalContent(text: string): boolean {
-  return CLINICAL.test(text);
+  const normalized = normalizeForScope(text);
+  if (mixesScripts(normalized)) return true;
+  // Accents are matched as their base letters too, so "sýmptoms" matches.
+  const unaccented = normalized.normalize("NFKD").replace(/\p{M}/gu, "");
+  return CLINICAL.test(normalized) || CLINICAL.test(unaccented);
 }
 
 // S11: the fixed decline for text the user types that asks for clinical

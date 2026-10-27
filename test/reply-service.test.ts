@@ -8,7 +8,7 @@ import { SCOPE_DECLINE } from "../src/domain/scope.ts";
 import type { ModelClient } from "../src/model/client.ts";
 import { RecordedModelClient, readRecording, type Recording } from "../src/model/recorded.ts";
 import { fromPackage } from "../src/paths.ts";
-import { checkReply } from "../src/reply/suggest.ts";
+import { checkReply, replyInput, replyKey } from "../src/reply/suggest.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { draftValidity } from "../src/reply/view.ts";
 import { EventStore, StaleEditError } from "../src/store/event-log.ts";
@@ -447,5 +447,74 @@ describe("review round 1", () => {
       caseChanged: ["template_not_valid_for_state"],
     });
     expect(replyEvents(store)).toEqual(["reply_suggested"]);
+  });
+});
+
+describe("review round 2", () => {
+  it("B2: a pick whose place no longer matches the case after the model call falls back", async () => {
+    const store = new EventStore();
+    const service = intake(store);
+    await acceptMessages(service, ["m1"]);
+    const probe = new CaseService(store, service, RecordedModelClient.withOverrides([]), { userName: "Dana Reyes" });
+    const note = "Accept Tuesday.";
+    // The model names Tuesday's place as the case states it before the call.
+    const recording: Recording = {
+      message_id: replyKey(replyInput(note, probe.replyState().context)),
+      effort: "any",
+      attempts: [
+        {
+          output: { template: "accept_offer", slot_id: "2026-11-10T14:00", fields: { date: "2026-11-10", time: "14:00", location: "Elm Street office" } },
+          usage: { input: 1, cached_input: 0, output: 1, reasoning: 0 },
+          latency_ms: 1,
+        },
+      ],
+    };
+    const recorded = RecordedModelClient.withOverrides([recording]);
+    // During the call the user reports a fuller place for Tuesday. Tuesday
+    // stays offered, so the template still fits, but the place changes.
+    const client: ModelClient = {
+      label: "slow",
+      async call(request) {
+        const report = service.importMessage({
+          id: "call-1",
+          channel: "user_report",
+          from: "Dana Reyes",
+          received_at: "2026-10-31T10:00:00-06:00",
+          text: "The clinic said Tuesday is at 400 Elm Street, Suite 2.",
+        });
+        const item = service.enterManually("call-1", report.version, {
+          claim_type: "offer", date: "2026-11-10", time: "14:00", location: "400 Elm Street, Suite 2", quote: null, request_item: null,
+        });
+        service.accept(item.id, item.version);
+        return recorded.call(request);
+      },
+    };
+    const kase = new CaseService(store, service, client, { now: () => NOW, userName: "Dana Reyes" });
+    const reply = new ReplyService(store, kase, client, { now: () => NOW });
+    const view = await reply.suggest(note, 0);
+    const tuesday = view.slots.find((s) => s.key === "2026-11-10T14:00")!;
+    expect([tuesday.state, tuesday.location]).toEqual(["offered", "400 Elm Street, Suite 2"]);
+    expect(view.reply.draft).toBeNull();
+    expect(view.reply.suggestion).toMatchObject({ outcome: "manual_needed", attempts: [{ outcome: "valid" }], caseChanged: ["field_mismatch"] });
+  });
+
+  it("B3: a render saved with a trailing newline or CRLF line ends needs no confirmation and records the request", async () => {
+    for (const change of [(t: string) => `${t}\n`, (t: string) => t.replace(/\n/g, "\r\n"), (t: string) => t.replace("Please confirm it.", "Please confirm it.  ")]) {
+      const { reply } = await setup(["m3"]);
+      const rendered = reply.start("accept_offer", "2026-11-16T13:00", 0).reply.draft!.text;
+      const edited = reply.edit("d1", change(rendered), 1);
+      // The edit label rule is unchanged.
+      expect(edited.reply.draft).toMatchObject({ edited: true, claimConfirmation: null });
+      const view = reply.approve("d1", allFields(edited), 2);
+      expect(view.reply.sent[0]).toMatchObject({ claims: "recorded" });
+      expect(view.slots.find((s) => s.key === "2026-11-16T13:00")!.stateLabel).toBe("Requested · reported by you");
+    }
+  });
+
+  it("B3: a change to the words still needs the confirmation", async () => {
+    const { reply } = await setup(["m3"]);
+    const rendered = reply.start("accept_offer", "2026-11-16T13:00", 0).reply.draft!.text;
+    const edited = reply.edit("d1", `${rendered.replace("Monday", "Tuesday")}\n`, 1);
+    expect(edited.reply.draft!.claimConfirmation).toBe("This reply still requests Monday 11/16 1:00 PM");
   });
 });

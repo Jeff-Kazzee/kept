@@ -17,7 +17,7 @@ import type { EventStore, StoredEvent, StreamWrite } from "../store/event-log.ts
 import { buildDraft } from "./draft.ts";
 import { REPLY_STREAM, draftEvents, openDraft, projectReplies, type ApprovalClaims, type DraftRecord, type ReplyEvent } from "./events.ts";
 import { TEMPLATES, TEMPLATE_IDS, type TemplateId } from "./templates.ts";
-import { MAX_INTENT_CHARS, suggestReply } from "./suggest.ts";
+import { MAX_INTENT_CHARS, checkReply, suggestReply } from "./suggest.ts";
 import { claimConfirmation, draftClaims, draftValidity } from "./view.ts";
 
 export const MAX_REPLY_CHARS = 2000;
@@ -92,11 +92,13 @@ export class ReplyService {
     this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
     const result = await suggestReply(note, this.#kase.replyState().context, this.#client, { effort: this.#effort, model: this.#model });
     // Evidence may have changed during the model call, and evidence writes do
-    // not move the reply stream. Read the case again and check the pick
-    // against it. A pick that no longer fits falls back to manual entry.
+    // not move the reply stream. Read the case again and run every check on
+    // the model's final output against it, field values included. A pick
+    // that no longer passes falls back to manual entry.
     const { context, log } = this.#kase.replyState();
-    const built = result.outcome === "valid" ? buildDraft(result.template!, result.slotKey!, context) : null;
-    const caseChanged = built && !built.ok ? built.problems : [];
+    const final = result.outcome === "valid" ? result.attempts.at(-1)!.output! : null;
+    const caseChanged = final ? checkReply(final, context) : [];
+    const built = final && caseChanged.length === 0 ? buildDraft(final.template, final.slot_id, context) : null;
     const suggestionId = `s${log.suggestions.length + 1}`;
     const events: ReplyEvent[] = [
       {
