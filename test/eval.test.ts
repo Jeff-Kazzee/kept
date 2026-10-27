@@ -120,10 +120,10 @@ describe("eval:live logic against the recorded client", () => {
       },
     });
     const low = report.perEffort.find((e) => e.effort === "low")!;
-    expect(low.runs.map((r) => r.matched)).toEqual([17, 17, 16]);
-    expect(low.totals.accuracy).toBeCloseTo(50 / 51);
+    expect(low.runs.map((r) => r.matched)).toEqual([18, 18, 17]);
+    expect(low.totals.accuracy).toBeCloseTo(53 / 54);
     expect(low.meetsTarget).toBe(true);
-    expect(low.minRunAccuracy).toBeCloseTo(16 / 17);
+    expect(low.minRunAccuracy).toBeCloseTo(17 / 18);
     expect(low.everyRunMeetsTarget).toBe(false);
     expect(report.perEffort.find((e) => e.effort === "minimal")!.everyRunMeetsTarget).toBe(true);
   });
@@ -148,8 +148,8 @@ describe("eval:live logic against the recorded client", () => {
       expect(e.latencyMs.p95).toBeGreaterThanOrEqual(e.latencyMs.p50!);
       expect(e.costUsd).toBeCloseTo(estimateUsd(e.usage));
     }
-    expect(report.corpus).toEqual({ messages: 11, expectedClaims: 17 });
-    expect(report.calls).toHaveLength(66);
+    expect(report.corpus).toEqual({ messages: 12, expectedClaims: 18 });
+    expect(report.calls).toHaveLength(72);
     expect(report.quoteCheck.rejectionsTotal).toBe(0);
     expect(report.s8).toMatchObject({ fabricatedClaims: 2, rejected: 2, rejectionRate: 1, manualEntry: true, passed: true });
     expect(report.usageTotal.input).toBe(report.perEffort[0]!.usage.input + report.perEffort[1]!.usage.input);

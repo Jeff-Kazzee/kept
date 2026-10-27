@@ -37,7 +37,7 @@ describe("local API", () => {
       id: string;
       messages: object[];
     }>;
-    expect(fixtures).toHaveLength(12);
+    expect(fixtures).toHaveLength(19);
     expect(fixtures[0]!.messages[0]).not.toHaveProperty("expected");
     const cal = (await api({ method: "GET", path: "/api/fixtures/calendar", body: undefined })).body as { text: string };
     expect(cal.text).toContain("Team meeting");

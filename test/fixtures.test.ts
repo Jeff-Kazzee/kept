@@ -10,8 +10,8 @@ import { fromPackage } from "../src/paths.ts";
 const scenarios = loadScenarios();
 
 describe("fixtures", () => {
-  it("has scenarios S1 to S12 in order", () => {
-    expect(scenarios.map((s) => s.id)).toEqual(Array.from({ length: 12 }, (_, i) => `S${i + 1}`));
+  it("has scenarios S1 to S19 in order", () => {
+    expect(scenarios.map((s) => s.id)).toEqual(Array.from({ length: 19 }, (_, i) => `S${i + 1}`));
   });
 
   it("gives every message an explicit expected claim list", () => {
@@ -60,6 +60,13 @@ describe("fixtures", () => {
       S10: ["D4"],
       S11: [],
       S12: [],
+      S13: [],
+      S14: [],
+      S15: [],
+      S16: [],
+      S17: [],
+      S18: [],
+      S19: [],
     });
   });
 

@@ -141,6 +141,19 @@ export const D3Checkpoint = z
   .strict();
 export type D3Checkpoint = z.infer<typeof D3Checkpoint>;
 
+// MCP expectations (D5). The test seeds the case with the scenario's
+// messages through recorded extraction and the review queue, creates the
+// grant, and drives the real MCP server. `slots_after` gives slot state
+// labels after the scenario's last step.
+export const McpCheck = z
+  .object({
+    expect: z.string().min(1),
+    grant: z.object({ name: z.string().min(1), tier: z.enum(["read", "annotate", "propose"]) }).strict(),
+    slots_after: z.record(z.string(), z.string()).optional(),
+  })
+  .strict();
+export type McpCheck = z.infer<typeof McpCheck>;
+
 export const Scenario = z
   .object({
     id: z.string().regex(/^S\d+$/),
@@ -157,6 +170,7 @@ export const Scenario = z
       .optional(),
     d2: z.array(D2Checkpoint).optional(),
     d3: z.array(D3Checkpoint).optional(),
+    mcp: McpCheck.optional(),
     later: z.array(LaterStub),
   })
   .strict();

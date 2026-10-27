@@ -1,0 +1,10 @@
+{
+  "id": "S13",
+  "title": "User revokes a grant between two agent calls",
+  "messages": [{ "ref": "m2" }],
+  "mcp": {
+    "expect": "The first call succeeds. After the user revokes the grant, the second call fails with a permission error, and tools/list no longer shows the revoked tools.",
+    "grant": { "name": "Laptop assistant", "tier": "annotate" }
+  },
+  "later": []
+}

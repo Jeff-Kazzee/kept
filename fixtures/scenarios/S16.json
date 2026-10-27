@@ -1,0 +1,16 @@
+{
+  "id": "S16",
+  "title": "An agent reports that the office confirmed Monday by phone",
+  "calendar": "calendar/dana.ics",
+  "messages": [{ "ref": "m2" }, { "ref": "m3" }],
+  "mcp": {
+    "expect": "A proposal appears in the review queue. No slot changes until the user confirms it in the app. Afterward Monday shows Confirmed · reported by you through the grant's name.",
+    "grant": { "name": "Laptop assistant", "tier": "propose" },
+    "slots_after": {
+      "2026-11-12T10:30": "Confirmed · office message, change proposed",
+      "2026-11-13T09:15": "Offered · office message",
+      "2026-11-16T13:00": "Confirmed · reported by you through Laptop assistant"
+    }
+  },
+  "later": []
+}

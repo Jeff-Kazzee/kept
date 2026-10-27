@@ -214,21 +214,22 @@ Tasks:
   propose). Off by default. Tokens stored hashed (proposed).
 - [x] SP4.5 Choose the MCP server library. Record license, install scripts,
   and publish age in a decision doc.
-- [ ] SP4.6 stdio server that reads the same store as the app and checks the
+- [x] SP4.6 stdio server that reads the same store as the app and checks the
   current grant on every call, with no cache across calls.
-- [ ] SP4.7 Tools: `list_appointments`, `get_appointment`,
+- [x] SP4.7 Tools: `list_appointments`, `get_appointment`,
   `list_open_questions`, `add_note`, `set_tags`, `propose_change`. Each has an
   `outputSchema` and returns `structuredContent` plus the JSON text.
-- [ ] SP4.8 `tools/list` returns only the tools the grant allows. S18: no
+- [x] SP4.8 `tools/list` returns only the tools the grant allows. S18: no
   tool for grants, delete case, sending, or confirming a proposal exists.
-- [ ] SP4.9 S13 and S19: revoked or lower-tier grants fail at call time even
+- [x] SP4.9 S13 and S19: revoked or lower-tier grants fail at call time even
   if the client lists the tool.
-- [ ] SP4.10 S16 and rule 8: `propose_change` enters the review queue and
+- [x] SP4.10 S16 and rule 8: `propose_change` enters the review queue and
   changes no state until the user confirms in the app.
-- [ ] SP4.11 S15: imported text addressed to an assistant stays data. Quotes
+- [x] SP4.11 S15: imported text addressed to an assistant stays data. Quotes
   appear only in labeled fields, and full message bodies only from a separate
-  tool. Tool descriptions say quoted text is untrusted.
-- [ ] SP4.12 Input validation with the app's rules, a rate limit, and a log
+  tool. Tool descriptions say quoted text is untrusted. No tool returns a
+  message body in this sprint (M-c in `docs/decisions/0004-mcp-core.md`).
+- [x] SP4.12 Input validation with the app's rules, a rate limit, and a log
   entry in the case history for every call with grant name, tool, and result.
 
 ## Sprint 5: saved outcome and checklist (D4)

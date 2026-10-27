@@ -1,0 +1,10 @@
+{
+  "id": "S19",
+  "title": "An agent with only the read grant calls add_note",
+  "messages": [{ "ref": "m2" }],
+  "mcp": {
+    "expect": "The server rejects the call with a permission error, even if the client still lists the tool. Nothing is written.",
+    "grant": { "name": "Laptop assistant", "tier": "read" }
+  },
+  "later": []
+}

@@ -1,0 +1,10 @@
+{
+  "id": "S17",
+  "title": "An agent proposes archiving an appointment, and the user confirms",
+  "messages": [{ "ref": "m1" }],
+  "mcp": {
+    "expect": "The record leaves the default list, stays in history, and comes back with undo.",
+    "grant": { "name": "Laptop assistant", "tier": "propose" }
+  },
+  "later": []
+}
