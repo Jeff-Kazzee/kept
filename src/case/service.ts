@@ -10,7 +10,7 @@ import { IcsParseError, parseIcs } from "../domain/ics.ts";
 import { explainConflict } from "../conflicts/explain.ts";
 import { proposeQuestion } from "../conflicts/question.ts";
 import type { CallAttempt } from "../conflicts/call.ts";
-import { evidenceStream, type AnswerMeta, type EvidenceEvent } from "../intake/events.ts";
+import { evidenceStream, type AnswerMeta, type EvidenceEvent, type EvidenceView } from "../intake/events.ts";
 import { InvalidRequestError, NotFoundError, type IntakeService } from "../intake/service.ts";
 import type { ModelClient } from "../model/client.ts";
 import { MODEL } from "../model/request.ts";
@@ -24,6 +24,8 @@ import { ACCESS_LOG_STREAM } from "../records/events.ts";
 import { buildDraft, type ReplyContext } from "../reply/draft.ts";
 import { REPLY_STREAM, draftEvents, projectReplies, type ReplyLog } from "../reply/events.ts";
 import { replyView } from "../reply/view.ts";
+import { buildChecklist } from "./checklist.ts";
+import { caseHistory, type HistoryEntry } from "./history.ts";
 import {
   CALENDAR_STREAM,
   QUESTIONS_STREAM,
@@ -118,6 +120,11 @@ export class CaseService {
     return this.#build().view;
   }
 
+  // Every event of the case in order, with labels built by code.
+  history(): HistoryEntry[] {
+    return caseHistory(this.#store.readAll());
+  }
+
   // The version Delete case states: the latest event of the case. Access log
   // entries do not move it, so an agent reading the case does not make the
   // user's confirmation stale.
@@ -155,7 +162,13 @@ export class CaseService {
         : null;
 
     const conflicts: ConflictView[] = projection.conflicts.map((c) => this.#conflictView(c, queue.questions, current));
-    const replyContext: ReplyContext = { slots: projection.slots, evidence, messages: this.#intake.messages(), userName: this.#userName };
+    const replyContext: ReplyContext = {
+      slots: projection.slots,
+      evidence,
+      messages: this.#intake.messages(),
+      userName: this.#userName,
+      officeAcceptedSeqs: this.#officeAcceptedSeqs(evidence),
+    };
     const replies = projectReplies(this.#store.readStream(REPLY_STREAM));
     const view: CaseView = {
       slots: projection.slots,
@@ -167,8 +180,20 @@ export class CaseService {
       calendar: calendar && events ? { name: calendar.name, events, timeZone: CASE_TIME_ZONE, assumedSlotMinutes: ASSUMED_SLOT_MINUTES } : null,
       calendarVersion: calendar?.version ?? 0,
       reply: replyView(replies, replyContext),
+      checklist: buildChecklist(evidence),
     };
     return { view, evidence, conflicts: projection.conflicts, queue, open, current, replyContext, replies };
+  }
+
+  // When the user accepted each claim from an office message, as event seq
+  // numbers. A draft made before one of them is out of date because the
+  // office replied.
+  #officeAcceptedSeqs(evidence: EvidenceView[]): number[] {
+    const office = new Set(evidence.filter((e) => e.claim.source_type === "office_message").map((e) => e.id));
+    return this.#store
+      .readPrefix("evidence:")
+      .filter((e) => e.type === "claim_accepted" && office.has(e.streamId.slice("evidence:".length)))
+      .map((e) => e.seq);
   }
 
   // The case as the reply commands need it.

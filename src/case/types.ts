@@ -2,6 +2,7 @@
 // so this file must not import Node modules.
 import type { IcsEvent } from "../domain/ics.ts";
 import type { ReplyView } from "../reply/types.ts";
+import type { ChecklistItem } from "./checklist.ts";
 import type { Choice, Conflict, ConflictKind, SlotView } from "../slots/types.ts";
 
 export type AttemptSummary = {
@@ -68,4 +69,6 @@ export type CaseView = {
   calendarVersion: number;
   // Reply templates, the open draft and simulated sends.
   reply: ReplyView;
+  // What the office asked the user to bring or do, from accepted evidence.
+  checklist: ChecklistItem[];
 };

@@ -8,7 +8,7 @@ import { OutOfScopeError } from "../src/domain/scope.ts";
 import { loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
 import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } from "../src/intake/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
-import { StaleEditError } from "../src/store/event-log.ts";
+import { CompactionError, StaleEditError } from "../src/store/event-log.ts";
 
 export type ApiRequest = { method: string; path: string; body: unknown };
 export type ApiResponse = { status: number; body: unknown };
@@ -36,6 +36,7 @@ const AnswerBody = z
 const StartDraftBody = z.object({ expectedVersion: Version, template: z.string().min(1).max(50), slotKey: z.string().min(1).max(50) }).strict();
 const EditDraftBody = z.object({ expectedVersion: Version, text: z.string().max(5000) }).strict();
 const SuggestBody = z.object({ expectedVersion: Version, intent: z.string().max(2000).nullable() }).strict();
+const DeleteCaseBody = z.object({ expectedVersion: Version, confirmation: z.string().max(20) }).strict();
 const ApproveBody = z
   .object({ expectedVersion: Version, confirmedFields: z.array(z.string().max(50)).max(20), confirmClaim: z.boolean().optional() })
   .strict();
@@ -52,6 +53,8 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       messages: service.messages(),
       evidence: service.evidence(),
       case: kase.view(),
+      caseVersion: kase.caseVersion(),
+      history: kase.history(),
     })],
     ["GET", /^\/api\/fixtures$/, () =>
       scenarios.map((s) => ({
@@ -90,6 +93,12 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     ["POST", /^\/api\/questions\/([^/]+)\/answer$/, (m, body) => {
       const { expectedVersion, choiceId, replyVersion } = AnswerBody.parse(body);
       return kase.answer(decodeURIComponent(m[1]!), choiceId, expectedVersion, replyVersion);
+    }],
+    // Delete case. App only, with its own typed confirmation. No MCP tool
+    // reaches it.
+    ["POST", /^\/api\/case\/delete$/, (_m, body) => {
+      const { expectedVersion, confirmation } = DeleteCaseBody.parse(body);
+      return kase.deleteCase(expectedVersion, confirmation);
     }],
     ["POST", /^\/api\/reply\/suggest$/, (_m, body) => {
       const { expectedVersion, intent } = SuggestBody.parse(body);
@@ -133,6 +142,7 @@ function toErrorResponse(err: unknown): ApiResponse {
   }
   if (err instanceof OutOfScopeError) return { status: 422, body: { error: "out_of_scope", message: err.message } };
   if (err instanceof NotFoundError) return { status: 404, body: { error: "not_found", message: err.message } };
+  if (err instanceof CompactionError) return { status: 503, body: { error: "compaction_incomplete", message: err.message } };
   if (err instanceof InvalidRequestError) return { status: 422, body: { error: "invalid_request", message: err.message } };
   if (err instanceof z.ZodError) {
     return { status: 400, body: { error: "invalid_body", issues: err.issues.map((i) => ({ path: i.path.join("."), message: i.message })) } };
