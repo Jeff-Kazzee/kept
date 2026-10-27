@@ -9,6 +9,11 @@ import type { SlotState } from "../domain/claim.ts";
 export const TEMPLATE_IDS = ["accept_offer", "decline_offer", "ask_still_stands", "keep_original"] as const;
 export type TemplateId = (typeof TEMPLATE_IDS)[number];
 
+// Labels the UI shows. Kept here so the server, the UI and the tests use
+// the same words.
+export const EDITED_LABEL = "Edited by you. Not checked.";
+export const SIMULATED_SEND_LABEL = "Simulated. Nothing was sent.";
+
 export const FIELD_NAMES = ["office_name", "date", "time", "location", "declined_slots", "user_name"] as const;
 export type FieldName = (typeof FIELD_NAMES)[number];
 
