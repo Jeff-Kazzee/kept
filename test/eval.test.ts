@@ -296,8 +296,21 @@ describe("SP3.10 eval:live for the reply template call", () => {
     // notes no template fits, and S12.
     expect(report).toMatchObject({ effort: "low", runs: 3, stoppedBySpendGuard: false, corpus: { inputs: 8, withExpectedPick: 8 } });
     expect(report.validTemplateRate).toBeCloseTo(15 / 24);
-    // The S7 and S9 notes expect no pick, which the fallback meets.
-    expect(report.correctPickRate).toBe(1);
+    // The model picks as expected wherever a template fits.
+    expect(report.modelPickRate).toBe(1);
+    // The S7 and S9 notes expect no pick. The system outcome meets it through
+    // the code fallback, but the model still proposed a pick every time.
+    expect(report.expectedOutcomeRate).toBe(1);
+    expect(report.noFit).toEqual({ results: 9, modelProposedPick: 9 });
+    const s9 = report.runResults[0]!.items.find((i) => i.source === "S9.1")!;
+    expect(s9).toMatchObject({
+      outcome: "manual_needed",
+      pick: null,
+      modelPick: { template: "accept_offer", slot: "2026-11-11T15:00" },
+      expected: null,
+      outcomeMatches: true,
+      modelPickMatches: null,
+    });
     expect(report).toMatchObject({ fallbacks: 9, calls: 33, rejections: { missing_field: 6, template_not_valid_for_state: 6, unknown_slot: 6 } });
     expect(report.latencyMs.p50).toBeGreaterThan(0);
     expect(report.latencyMs.p95).toBeGreaterThanOrEqual(report.latencyMs.p50!);
@@ -305,7 +318,10 @@ describe("SP3.10 eval:live for the reply template call", () => {
     expect(report.callLog.every((c) => c.key.startsWith("reply-") && c.effort === "low")).toBe(true);
     expect(report.runResults.map((r) => r.complete)).toEqual([true, true, true]);
     const printed = lines.join("\n");
-    expect(printed).toContain("[template] valid templates 62.5%, expected picks 100.0%, fallbacks 9, calls 33");
+    expect(printed).toContain(
+      "[template] valid templates 62.5%, model picks as expected 100.0%, system outcomes as expected 100.0%, fallbacks 9, calls 33",
+    );
+    expect(printed).toContain("no template fits: 9 results, the model still proposed a pick that code blocked in 9");
     expect(printed).toContain("rejections by reason: missing_field 6, unknown_slot 6, template_not_valid_for_state 6");
     expect(printed).not.toContain("[low] accuracy");
     expect(printed).not.toContain(KEY);
@@ -338,7 +354,10 @@ describe("SP3.10 eval:live for the reply template call", () => {
     expect(await main(["--d3-only", "--out", out], { MODEL_API_KEY: KEY }, { createClient: () => faults, log: () => {} })).toBe(0);
     const report = JSON.parse(readFileSync(out, "utf8")) as ReplyEvalReport;
     expect(report).toMatchObject({ fallbacks: 12, calls: 36, rejections: { field_mismatch: 6 } });
-    expect(report.correctPickRate).toBeCloseTo(21 / 24);
+    // The model named the right template and slot with a wrong field value,
+    // so its pick still matches while the system outcome does not.
+    expect(report.modelPickRate).toBe(1);
+    expect(report.expectedOutcomeRate).toBeCloseTo(21 / 24);
   });
 
   it("stops the template call at the spend limit and refuses a bad effort", async () => {

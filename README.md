@@ -88,9 +88,11 @@ Add `--d3` to also run the reply template call over the suggest steps in
 the D3 fixtures, three runs at effort `low` (`--d3-effort` sets it).
 `--d3-only` runs only that call, and with `--d2-only` it runs the D2 and D3
 calls with no extraction. The case states are built with recorded
-extraction. The report gives the valid-template rate, the rate of expected
-picks, rejections by reason, fallbacks to manual entry, latency p50 and
-p95, tokens and estimated cost.
+extraction. The report gives the valid-template rate, the rate at which the
+model's own final pick matches the expected one, the rate at which the
+system outcome does, how often the model proposed a pick where no template
+fits, rejections by reason, fallbacks to manual entry, latency p50 and p95,
+tokens and estimated cost.
 
 The pass criterion for each effort level is pooled accuracy across its three
 runs of at least 95%, because the criterion is stated over three runs. The

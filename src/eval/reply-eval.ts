@@ -40,7 +40,24 @@ export async function replyItems(scenarios: ResolvedScenario[]): Promise<ReplyIt
 export type ReplyRunResult = {
   run: number;
   complete: boolean;
-  items: Array<{ key: string; source: string; outcome: string; pick: Pick; expected: Pick | null; correct: boolean | null; attempts: number; problems: OutputProblem[][] }>;
+  items: Array<{
+    key: string;
+    source: string;
+    outcome: string;
+    // The draft code opened, or null after the fallback.
+    pick: Pick;
+    // The template and slot in the model's final parsed output, valid or
+    // not. Null when the final output did not parse.
+    modelPick: Pick;
+    expected: Pick | null;
+    // The system outcome matches the expected pick: a draft for an expected
+    // pick, the fallback for an expected null.
+    outcomeMatches: boolean | null;
+    // The model's own final pick equals a non-null expected pick.
+    modelPickMatches: boolean | null;
+    attempts: number;
+    problems: OutputProblem[][];
+  }>;
 };
 
 export type ReplyEvalReport = {
@@ -57,9 +74,16 @@ export type ReplyEvalReport = {
   corpus: { inputs: number; withExpectedPick: number };
   // Final results that passed every code check, out of all results.
   validTemplateRate: number | null;
-  // Final results equal to the expected pick, out of results with one. An
-  // expected null pick is met when the result falls back to manual entry.
-  correctPickRate: number | null;
+  // The model's final pick, valid or not, equal to the expected pick, out of
+  // results with a non-null expected pick. Scores the model alone.
+  modelPickRate: number | null;
+  // System outcomes that match the expected pick, out of results with one.
+  // An expected null is met by the fallback to manual entry, which is the
+  // code check working, not the model.
+  expectedOutcomeRate: number | null;
+  // Results where no template fits (expected null), and how many of them
+  // the model still answered with a pick that code had to block.
+  noFit: { results: number; modelProposedPick: number };
   // Results that fell back to manual entry.
   fallbacks: number;
   rejections: Partial<Record<OutputProblem, number>>;
@@ -105,13 +129,17 @@ export async function runReplyEval(options: ReplyEvalOptions): Promise<ReplyEval
         const r = await suggestReply(item.intent, item.context, guarded, { effort, model: options.model });
         attempts.push(...r.attempts);
         const pick: Pick = r.outcome === "valid" ? { template: r.template!, slot: r.slotKey! } : null;
+        const raw = r.attempts.at(-1)?.output ?? null;
+        const modelPick: Pick = raw ? { template: raw.template, slot: raw.slot_id } : null;
         result.items.push({
           key: item.key,
           source: item.source,
           outcome: r.outcome,
           pick,
+          modelPick,
           expected: item.expect ?? null,
-          correct: item.expect === undefined ? null : samePick(pick, item.expect),
+          outcomeMatches: item.expect === undefined ? null : samePick(pick, item.expect),
+          modelPickMatches: item.expect ? samePick(modelPick, item.expect) : null,
           attempts: r.attempts.length,
           problems: r.attempts.map((a) => a.problems),
         });
@@ -125,7 +153,9 @@ export async function runReplyEval(options: ReplyEvalOptions): Promise<ReplyEval
   }
 
   const finals = runResults.flatMap((r) => r.items);
-  const scored = finals.filter((f) => f.correct !== null);
+  const scored = finals.filter((f) => f.outcomeMatches !== null);
+  const modelScored = finals.filter((f) => f.modelPickMatches !== null);
+  const noFit = finals.filter((f) => f.outcomeMatches !== null && f.expected === null);
   const rejections: Partial<Record<OutputProblem, number>> = {};
   for (const a of attempts) for (const p of a.problems) rejections[p] = (rejections[p] ?? 0) + 1;
   const ok = guarded.log.filter((c) => c.ok).map((c) => c.latencyMs);
@@ -143,7 +173,9 @@ export async function runReplyEval(options: ReplyEvalOptions): Promise<ReplyEval
     prices: PRICES_PER_MILLION,
     corpus: { inputs: items.length, withExpectedPick: items.filter((i) => i.expect !== undefined).length },
     validTemplateRate: finals.length === 0 ? null : finals.filter((f) => f.outcome === "valid").length / finals.length,
-    correctPickRate: scored.length === 0 ? null : scored.filter((f) => f.correct).length / scored.length,
+    modelPickRate: modelScored.length === 0 ? null : modelScored.filter((f) => f.modelPickMatches).length / modelScored.length,
+    expectedOutcomeRate: scored.length === 0 ? null : scored.filter((f) => f.outcomeMatches).length / scored.length,
+    noFit: { results: noFit.length, modelProposedPick: noFit.filter((f) => f.modelPick !== null).length },
     fallbacks: finals.filter((f) => f.outcome === "manual_needed").length,
     rejections,
     calls: guarded.log.length,
@@ -161,7 +193,9 @@ export function formatReplySummary(r: ReplyEvalReport): string {
   const rejections = Object.entries(r.rejections).map(([k, v]) => `${k} ${v}`).join(", ") || "none";
   const lines = [
     `D3 eval: model ${r.model}, effort ${r.effort}, client ${r.client}, ${r.runs} runs, ${r.corpus.inputs} template inputs`,
-    `[template] valid templates ${pct(r.validTemplateRate)}, expected picks ${pct(r.correctPickRate)}, fallbacks ${r.fallbacks}, calls ${r.calls}`,
+    `[template] valid templates ${pct(r.validTemplateRate)}, model picks as expected ${pct(r.modelPickRate)}, ` +
+      `system outcomes as expected ${pct(r.expectedOutcomeRate)}, fallbacks ${r.fallbacks}, calls ${r.calls}`,
+    `  no template fits: ${r.noFit.results} results, the model still proposed a pick that code blocked in ${r.noFit.modelProposedPick}`,
     `  rejections by reason: ${rejections}`,
     `  latency p50 ${r.latencyMs.p50 ?? "n/a"} ms, p95 ${r.latencyMs.p95 ?? "n/a"} ms`,
     `  tokens: input ${r.usage.input}, cached ${r.usage.cachedInput}, output ${r.usage.output}, reasoning ${r.usage.reasoning}. ` +
