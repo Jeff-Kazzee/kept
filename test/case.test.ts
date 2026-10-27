@@ -224,8 +224,8 @@ describe("SP2.11 question queue", () => {
       origin: "fixed",
       text: "The office proposed to move Thursday 11/12 10:30 AM. Which time do you want instead?",
       attempts: [
-        { attempt: 1, outcome: "invalid", problems: ["conflict_not_open"] },
-        { attempt: 2, outcome: "invalid", problems: ["conflict_not_open"] },
+        { attempt: 1, outcome: "invalid", problems: ["conflict_not_open", "evidence_not_in_conflict"] },
+        { attempt: 2, outcome: "invalid", problems: ["conflict_not_open", "evidence_not_in_conflict"] },
       ],
     });
     expect(view.question!.choices.map((c) => c.id)).toEqual(["request:2026-11-13T09:15", "request:2026-11-16T13:00", "unsure"]);

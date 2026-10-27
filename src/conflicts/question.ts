@@ -65,9 +65,10 @@ export function questionKey(candidates: Conflict[]): string {
 }
 
 export function checkQuestion(output: QuestionOutput, candidates: Conflict[], evidence: EvidenceView[]): OutputProblem[] {
-  const conflict = candidates.find((c) => c.id === output.conflict_id);
-  if (!conflict) return ["conflict_not_open"];
   const caseIds = new Set(evidence.map((e) => e.id));
+  const conflict = candidates.find((c) => c.id === output.conflict_id);
+  // With no open conflict named, no citation can belong to it.
+  if (!conflict) return ["conflict_not_open", ...checkCitations(output.evidence_ids, caseIds, new Set())];
   const problems = checkCitations(output.evidence_ids, caseIds, new Set(conflict.evidenceIds));
   const cited = evidence.filter((e) => output.evidence_ids.includes(e.id) && conflict.evidenceIds.includes(e.id));
   if (!datesAndTimesSupported(output.question, cited)) problems.push("invented_date_or_time");

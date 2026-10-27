@@ -254,6 +254,18 @@ describe("SP2.16 eval:live for the explanation and question calls", () => {
     expect(report.question.validCitationRate).toBe(1);
   });
 
+  it("review R1-5: does not count a question that names a closed conflict as citation-valid", async () => {
+    const faults = RecordedModelClient.withOverrides(
+      [readRecording(fromPackage("fixtures/recordings/faults/question-unknown-conflict.json"))],
+      RecordedModelClient.fromDirectory(),
+    );
+    const out = path.join(tempDir(), "closed.json");
+    expect(await main(["--d2-only", "--out", out], { MODEL_API_KEY: KEY }, { createClient: () => faults, log: () => {} })).toBe(0);
+    const report = JSON.parse(readFileSync(out, "utf8")) as ConflictEvalReport;
+    expect(report.question).toMatchObject({ calls: 21, fallbacks: 3, rejections: { conflict_not_open: 6, evidence_not_in_conflict: 6 } });
+    expect(report.question.validCitationRate).toBeCloseTo(15 / 21);
+  });
+
   it("stops the D2 calls at the spend limit and refuses a bad effort", async () => {
     const out = path.join(tempDir(), "guard.json");
     const code = await main(["--d2-only", "--max-usd", "0.001", "--out", out], { MODEL_API_KEY: KEY }, {

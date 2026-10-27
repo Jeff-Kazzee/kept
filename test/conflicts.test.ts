@@ -153,7 +153,10 @@ describe("SP2.13 next-question call", () => {
     const client = RecordedModelClient.withOverrides([fault("question-unknown-conflict")]);
     const result = await proposeQuestion(conflicts, evidence, client);
     expect(client.calls).toHaveLength(2);
-    expect(result.attempts.map((a) => a.problems)).toEqual([["conflict_not_open"], ["conflict_not_open"]]);
+    expect(result.attempts.map((a) => a.problems)).toEqual([
+      ["conflict_not_open", "evidence_not_in_conflict"],
+      ["conflict_not_open", "evidence_not_in_conflict"],
+    ]);
     expect(result).toMatchObject({
       origin: "fixed",
       conflictId: "change-proposed-20261112-1030",
