@@ -4,8 +4,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { main } from "../src/eval/cli.ts";
-import { claimMatches, estimateUsd, percentile, scoreMessage, type EvalReport } from "../src/eval/eval.ts";
-import { RecordedModelClient } from "../src/model/recorded.ts";
+import { claimMatches, estimateUsd, percentile, runEval, scoreMessage, type EvalReport } from "../src/eval/eval.ts";
+import { corpusMessages, loadScenarios } from "../src/fixtures/load.ts";
+import type { ModelCall, ModelClient } from "../src/model/client.ts";
+import { MODEL } from "../src/model/request.ts";
+import { RecordedModelClient, readRecording } from "../src/model/recorded.ts";
 import { fromPackage } from "../src/paths.ts";
 import type { EvidenceClaim } from "../src/domain/claim.ts";
 
@@ -20,12 +23,14 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-const claim = (over: Partial<EvidenceClaim["slot"]> & { claim_type?: EvidenceClaim["claim_type"] } = {}): EvidenceClaim => ({
+const claim = (
+  over: Partial<EvidenceClaim["slot"]> & { claim_type?: EvidenceClaim["claim_type"]; sender_kind?: EvidenceClaim["sender_kind"] } = {},
+): EvidenceClaim => ({
   claim_type: over.claim_type ?? "offer",
   slot: { date: over.date ?? "2026-11-10", time: over.time ?? "14:00", location: over.location ?? null },
   quote: "q",
   source_type: "office_message",
-  sender_kind: "person",
+  sender_kind: over.sender_kind ?? "person",
   evidence_time: "2026-10-30T15:04:00-06:00",
   event_time: null,
   request_item: null,
@@ -40,6 +45,25 @@ describe("scoring", () => {
     expect(claimMatches({ claim_type: "offer", location: "Elm Street office" }, claim({ location: "Oak Avenue" }))).toBe(false);
     expect(claimMatches({ claim_type: "offer", location: null }, claim({ location: "Elm Street" }))).toBe(false);
     expect(claimMatches({ claim_type: "offer", time: null }, claim())).toBe(false);
+  });
+
+  it("finding 5: compares sender kind when the fixture states it", () => {
+    const expected = { claim_type: "reminder" as const, date: "2026-11-12", time: "10:30", sender_kind: "automated" as const };
+    const reminder = { claim_type: "reminder" as const, date: "2026-11-12", time: "10:30" };
+    expect(claimMatches(expected, claim({ ...reminder, sender_kind: "person" }))).toBe(false);
+    expect(claimMatches(expected, claim({ ...reminder, sender_kind: "automated" }))).toBe(true);
+  });
+
+  it("finding 6: needs the whole expected location, not one shared word", () => {
+    expect(claimMatches({ claim_type: "offer", location: "Elm Street office" }, claim({ location: "Elm" }))).toBe(false);
+    expect(claimMatches({ claim_type: "offer", location: "Elm Street office" }, claim({ location: "Street" }))).toBe(false);
+    expect(claimMatches({ claim_type: "offer", location: "400 Elm Street, Suite 2" }, claim({ location: "Elm Street" }))).toBe(false);
+    expect(
+      claimMatches(
+        { claim_type: "offer", location: "400 Elm Street, Suite 2" },
+        claim({ location: "Lantern Hill Clinic, 400 Elm Street, Suite 2" }),
+      ),
+    ).toBe(true);
   });
 
   it("counts matched, missed and extra claims", () => {
@@ -66,6 +90,42 @@ describe("scoring", () => {
 });
 
 describe("eval:live logic against the recorded client", () => {
+  it("finding 7: reports the lowest run beside the pooled criterion", async () => {
+    // Drops one m1 claim on the third run at effort low.
+    const recorded = RecordedModelClient.fromDirectory();
+    let m1Calls = 0;
+    const client: ModelClient = {
+      label: "degraded",
+      async call(request: ModelCall) {
+        const reply = await recorded.call(request);
+        if (request.messageId === "m1" && request.effort === "low" && ++m1Calls === 3) {
+          const out = JSON.parse(reply.outputText) as { claims: unknown[] };
+          return { ...reply, outputText: JSON.stringify({ claims: out.claims.slice(0, 1) }) };
+        }
+        return reply;
+      },
+    };
+    const scenarios = loadScenarios();
+    const messages = corpusMessages(scenarios);
+    const report = await runEval({
+      client,
+      messages,
+      maxUsd: 5,
+      model: MODEL,
+      fabricated: {
+        message: messages.find((m) => m.id === "s8-offer")!,
+        recording: readRecording(fromPackage("fixtures/recordings/faults/s8-offer-fabricated.json")),
+      },
+    });
+    const low = report.perEffort[0]!;
+    expect(low.runs.map((r) => r.matched)).toEqual([17, 17, 16]);
+    expect(low.totals.accuracy).toBeCloseTo(50 / 51);
+    expect(low.meetsTarget).toBe(true);
+    expect(low.minRunAccuracy).toBeCloseTo(16 / 17);
+    expect(low.everyRunMeetsTarget).toBe(false);
+    expect(report.perEffort[1]!.everyRunMeetsTarget).toBe(true);
+  });
+
   it("runs both effort levels three times and writes a full report", async () => {
     const out = path.join(tempDir(), "report.json");
     const lines: string[] = [];

@@ -42,9 +42,17 @@ pnpm eval:live --max-usd 5 --out eval-results/run.json
 ```
 
 It runs every fixture message three times at reasoning effort `low` and
-three times at `minimal`, and writes a JSON report. A relative `--out` path
-resolves from the package root. `--recorded` replays the recorded responses
-instead, for a smoke test with no key.
+three times at `minimal`, and writes a JSON report.
+
+The pass criterion for each effort level is pooled accuracy across its three
+runs of at least 95%, because the criterion is stated over three runs. The
+report also gives the lowest single-run accuracy and flags any run below 95%,
+so one weak run is not hidden by the pool. Accuracy is matched / (matched +
+missed + extra). A claim matches when claim type, date and time match, and
+location and sender kind match where the fixture states them.
+
+A relative `--out` path resolves from the package root. `--recorded` replays
+the recorded responses instead, for a smoke test with no key.
 
 Stored case data stays on the host in `data/` (ignored by git). There are no
 analytics.

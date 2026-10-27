@@ -2,6 +2,7 @@
 // with the live client (pnpm eval:live) and with the recorded client in
 // tests.
 import type { Effort, EvidenceClaim, Message } from "../domain/claim.ts";
+import { phraseAppearsIn } from "../domain/quote.ts";
 import { extractClaims } from "../extract/extract.ts";
 import type { ExpectedClaim, FixtureMessage } from "../fixtures/schema.ts";
 import { ModelCallError, type ModelCall, type ModelClient, type ModelReply } from "../model/client.ts";
@@ -73,18 +74,11 @@ export class GuardedClient implements ModelClient {
   }
 }
 
-const normalizePlace = (s: string) =>
-  s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-
-// A location matches when one normalized value contains the other, so
-// "our Elm Street office" matches "Elm Street office".
+// A location matches when the actual value holds the whole expected value
+// as a run of words, ignoring case and punctuation. "our Elm Street office"
+// matches "Elm Street office". "Elm" or "Elm Street" does not.
 export function locationMatches(expected: string, actual: string): boolean {
-  const e = normalizePlace(expected);
-  const a = normalizePlace(actual);
-  return e.length > 0 && a.length > 0 && (a.includes(e) || e.includes(a));
+  return phraseAppearsIn(expected, actual);
 }
 
 export function claimMatches(expected: ExpectedClaim, actual: EvidenceClaim): boolean {
@@ -95,11 +89,12 @@ export function claimMatches(expected: ExpectedClaim, actual: EvidenceClaim): bo
     if (expected.location === null) return actual.slot.location === null;
     if (actual.slot.location === null || !locationMatches(expected.location, actual.slot.location)) return false;
   }
+  if (expected.sender_kind !== undefined && expected.sender_kind !== actual.sender_kind) return false;
   return true;
 }
 
 const specificity = (e: ExpectedClaim) =>
-  [e.date, e.time, e.location].filter((v) => v !== undefined).length;
+  [e.date, e.time, e.location, e.sender_kind].filter((v) => v !== undefined).length;
 
 export type MessageScore = {
   matched: number;
@@ -176,7 +171,11 @@ export type EffortReport = {
   effort: Effort;
   runs: RunResult[];
   totals: Counts & ReturnType<typeof rates>;
+  // The criterion: pooled accuracy across the runs reaches the target.
   meetsTarget: boolean;
+  // Reported beside the criterion so one weak run stays visible.
+  minRunAccuracy: number | null;
+  everyRunMeetsTarget: boolean;
   quoteRejections: number;
   calls: number;
   latencyMs: { p50: number | null; p95: number | null };
@@ -317,6 +316,8 @@ export async function runEval(options: EvalOptions): Promise<EvalReport> {
       runs: effortRuns,
       totals,
       meetsTarget: effortRuns.length === runs && effortRuns.every((r) => r.complete) && totals.accuracy >= TARGET_ACCURACY,
+      minRunAccuracy: effortRuns.length === 0 ? null : Math.min(...effortRuns.map((r) => r.accuracy)),
+      everyRunMeetsTarget: effortRuns.length === runs && effortRuns.every((r) => r.complete && r.accuracy >= TARGET_ACCURACY),
       quoteRejections: effortRuns.reduce((n, r) => n + r.quoteRejections, 0),
       calls: calls.length,
       latencyMs: {
@@ -366,6 +367,10 @@ export function formatSummary(report: EvalReport): string {
     lines.push(
       `[${e.effort}] accuracy ${pct(e.totals.accuracy)} (recall ${pct(e.totals.recall)}, precision ${pct(e.totals.precision)}) ` +
         `target ${pct(report.targetAccuracy)}: ${e.meetsTarget ? "met" : "NOT met"}`,
+    );
+    lines.push(
+      `  lowest run accuracy ${e.minRunAccuracy === null ? "n/a" : pct(e.minRunAccuracy)}` +
+        (e.everyRunMeetsTarget ? "" : ": at least one run is below the target"),
     );
     for (const r of e.runs) {
       lines.push(
