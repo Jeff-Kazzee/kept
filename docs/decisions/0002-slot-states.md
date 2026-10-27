@@ -143,8 +143,11 @@ Column: what the next claim says.
   alternative that is still offered. When the office only offered another
   time (no move), it also offers "Keep <original>", which declines the
   alternatives. When the office asked to move the slot, keeping is not
-  offered. Choosing a replacement records a request on it and leaves the
-  original unchanged (rule 2). Other alternatives stay offered.
+  offered. Choosing a replacement opens a draft of the accept reply for it
+  and changes no slot (W30). Approving that reply records a request on it
+  and leaves the original unchanged (rule 2). Choosing "Keep <original>"
+  opens a draft of the keep-the-original reply, and its approval declines
+  the alternatives. Other alternatives stay offered.
 
 ## Held slots (rule 3)
 
@@ -215,11 +218,13 @@ Column: what the next claim says.
   reminder is asked about once.
 - W27. A conflict where no choice would change anything (a move with no open
   alternative) is shown but not asked.
-- W30. The PRD defines requested as "the user approved a request for the
-  slot and sent it". Sending arrives with reply templates in sprint 3. In
-  this sprint the request is recorded when the user taps "Request <slot>",
-  as the S3 fixture stub states. Sprint 3 may move this step to the approval
-  of the reply.
+- W30 (changed by Jeff 2026-10-27). The PRD defines requested as "the user
+  approved a request for the slot and sent it". A slot becomes requested
+  only when the user approves an accept reply. Tapping "Request <slot>"
+  answers the question and opens a draft of the accept template in the same
+  write. It changes no slot. Approving the reply records a user-reported
+  request, and the slot shows "Requested · reported by you". Sprint 2
+  recorded the request on the tap. See 0003 for the reply rules.
 
 ## Model calls
 

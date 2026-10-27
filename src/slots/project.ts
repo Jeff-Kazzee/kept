@@ -451,7 +451,7 @@ type LocationResult = {
 function resolveLocation(f: Folded, answer: EvidenceView | null): LocationResult {
   const stale = new Set(f.stale.map((e) => e.id));
   let candidates = f.items
-    .filter((e) => e.claim.slot.location !== null && !stale.has(e.id) && e.origin !== "answer")
+    .filter((e) => e.claim.slot.location !== null && !stale.has(e.id) && e.origin !== "answer" && e.origin !== "reply")
     .sort(byArrival)
     .map((ev) => ({ location: ev.claim.slot.location!, ev }));
   if (answer) {
@@ -572,9 +572,15 @@ function changeConflict(s: Folded, evidence: EvidenceView[], open: Folded[]): Co
   const hasMove = evidence.some((e) => e.claim.claim_type === "move");
   const choices: Choice[] = open
     .filter((t) => t.status === "offered")
-    .map((t) => ({ id: `request:${t.key}`, label: `Request ${label(t)}`, effects: [effect("request", t)], settles: [] }));
+    .map((t) => ({
+      id: `request:${t.key}`,
+      label: `Request ${label(t)}`,
+      effects: [],
+      settles: [],
+      draft: { template: "accept_offer" as const, slotKey: t.key },
+    }));
   if (!hasMove && open.length > 0) {
-    choices.push({ id: "keep", label: `Keep ${label(s)}`, effects: open.map((t) => effect("decline", t)), settles: [] });
+    choices.push({ id: "keep", label: `Keep ${label(s)}`, effects: [], settles: [], draft: { template: "keep_original", slotKey: s.key } });
   }
   choices.push(UNSURE);
   const offered = open.map(label);

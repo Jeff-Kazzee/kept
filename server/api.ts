@@ -6,6 +6,7 @@ import { CaseService } from "../src/case/service.ts";
 import { Channel, DEFAULT_EXTRACTION_EFFORT, Effort } from "../src/domain/claim.ts";
 import { loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
 import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } from "../src/intake/service.ts";
+import { ReplyService } from "../src/reply/service.ts";
 import { StaleEditError } from "../src/store/event-log.ts";
 
 export type ApiRequest = { method: string; path: string; body: unknown };
@@ -27,11 +28,17 @@ const ManualBody = z.object({ expectedVersion: z.number().int().nonnegative(), c
 const CalendarBody = z
   .object({ name: z.string().trim().min(1).max(200), text: z.string().min(1), expectedVersion: z.number().int().nonnegative() })
   .strict();
-const AnswerBody = z.object({ expectedVersion: z.number().int().nonnegative(), choiceId: z.string().min(1).max(200) }).strict();
+const Version = z.number().int().nonnegative();
+const AnswerBody = z
+  .object({ expectedVersion: Version, choiceId: z.string().min(1).max(200), replyVersion: Version.optional() })
+  .strict();
+const StartDraftBody = z.object({ expectedVersion: Version, template: z.string().min(1).max(50), slotKey: z.string().min(1).max(50) }).strict();
+const EditDraftBody = z.object({ expectedVersion: Version, text: z.string().max(5000) }).strict();
+const ApproveBody = z.object({ expectedVersion: Version, confirmedFields: z.array(z.string().max(50)).max(20) }).strict();
 
 export type ApiOptions = { mode: "recorded" | "live" };
 
-export function createApi(service: IntakeService, kase: CaseService, options: ApiOptions) {
+export function createApi(service: IntakeService, kase: CaseService, options: ApiOptions, reply: ReplyService) {
   const scenarios = loadScenarios();
 
   const routes: Array<[string, RegExp, (m: RegExpExecArray, body: unknown) => Promise<unknown> | unknown]> = [
@@ -77,8 +84,23 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     ],
     ["POST", /^\/api\/questions\/next$/, (_m, body) => kase.askNext(ReviewBody.parse(body).expectedVersion)],
     ["POST", /^\/api\/questions\/([^/]+)\/answer$/, (m, body) => {
-      const { expectedVersion, choiceId } = AnswerBody.parse(body);
-      return kase.answer(decodeURIComponent(m[1]!), choiceId, expectedVersion);
+      const { expectedVersion, choiceId, replyVersion } = AnswerBody.parse(body);
+      return kase.answer(decodeURIComponent(m[1]!), choiceId, expectedVersion, replyVersion);
+    }],
+    ["POST", /^\/api\/reply\/drafts$/, (_m, body) => {
+      const { expectedVersion, template, slotKey } = StartDraftBody.parse(body);
+      return reply.start(template, slotKey, expectedVersion);
+    }],
+    ["POST", /^\/api\/reply\/drafts\/([^/]+)\/edit$/, (m, body) => {
+      const { expectedVersion, text } = EditDraftBody.parse(body);
+      return reply.edit(decodeURIComponent(m[1]!), text, expectedVersion);
+    }],
+    ["POST", /^\/api\/reply\/drafts\/([^/]+)\/discard$/, (m, body) =>
+      reply.discard(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+    ],
+    ["POST", /^\/api\/reply\/drafts\/([^/]+)\/approve$/, (m, body) => {
+      const { expectedVersion, confirmedFields } = ApproveBody.parse(body);
+      return reply.approve(decodeURIComponent(m[1]!), confirmedFields, expectedVersion);
     }],
   ];
 

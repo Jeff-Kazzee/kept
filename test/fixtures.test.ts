@@ -65,7 +65,7 @@ describe("fixtures", () => {
 
   it("turns every D2 stub into checkpoints for S1 to S7", () => {
     const counts = Object.fromEntries(scenarios.filter((s) => s.d2).map((s) => [s.id, s.d2!.length]));
-    expect(counts).toEqual({ S1: 1, S2: 1, S3: 3, S4: 1, S5: 1, S6: 2, S7: 1 });
+    expect(counts).toEqual({ S1: 1, S2: 1, S3: 4, S4: 1, S5: 1, S6: 2, S7: 1 });
   });
 
   it("refuses a D2 step that names a message outside the scenario", () => {

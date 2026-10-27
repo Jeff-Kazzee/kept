@@ -166,7 +166,7 @@ Tasks:
 - [ ] SP3.5 Field readback in the UI before approval.
 - [ ] SP3.6 User edit of the rendered text, labeled "Edited by you. Not
   checked."
-- [ ] SP3.7 Approval records a request event. An accepted slot becomes
+- [x] SP3.7 Approval records a request event. An accepted slot becomes
   requested.
 - [ ] SP3.8 S12: simulated send labeled "Simulated. Nothing was sent." A
   test proves no network request leaves the app.

@@ -1,6 +1,7 @@
 // Shapes of the case view sent to the UI. Shared by the server and the UI,
 // so this file must not import Node modules.
 import type { IcsEvent } from "../domain/ics.ts";
+import type { ReplyView } from "../reply/types.ts";
 import type { Choice, Conflict, ConflictKind, SlotView } from "../slots/types.ts";
 
 export type AttemptSummary = {
@@ -65,4 +66,6 @@ export type CaseView = {
   questionsVersion: number;
   calendar: CalendarView | null;
   calendarVersion: number;
+  // Reply templates, the open draft and simulated sends.
+  reply: ReplyView;
 };

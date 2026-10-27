@@ -2,7 +2,9 @@
 // the next question and record an answer. Model output never changes a
 // slot: an explanation and a proposed question are stored for display only,
 // and the choices the user taps are built by code. An answer is recorded as
-// user-reported evidence. Every write states an expected version.
+// user-reported evidence. A choice that starts a reply opens a draft in the
+// same write and records no claim (W30). Every write states an expected
+// version.
 import type { EvidenceClaim, Effort } from "../domain/claim.ts";
 import { IcsParseError, parseIcs } from "../domain/ics.ts";
 import { explainConflict } from "../conflicts/explain.ts";
@@ -17,6 +19,9 @@ import { projectSlots } from "../slots/project.ts";
 import { arrivalTime } from "../slots/time.ts";
 import type { Conflict } from "../slots/types.ts";
 import type { EventStore, StoredEvent, StreamWrite } from "../store/event-log.ts";
+import { buildDraft, type ReplyContext } from "../reply/draft.ts";
+import { REPLY_STREAM, draftEvents, projectReplies, type ReplyLog } from "../reply/events.ts";
+import { replyView } from "../reply/view.ts";
 import {
   CALENDAR_STREAM,
   QUESTIONS_STREAM,
@@ -57,7 +62,8 @@ const summary = (a: AttemptData): AttemptSummary => ({
   latency_ms: a.latency_ms,
 });
 
-export type CaseOptions = { now?: () => string; effort?: Effort; model?: string };
+// `userName` comes from the case profile and signs replies.
+export type CaseOptions = { now?: () => string; effort?: Effort; model?: string; userName?: string | null };
 
 export class CaseService {
   readonly #store: EventStore;
@@ -66,6 +72,7 @@ export class CaseService {
   readonly #now: () => string;
   readonly #effort: Effort | undefined;
   readonly #model: string;
+  readonly #userName: string | null;
 
   // `client` serves the explanation and question calls. Extraction keeps
   // its own client inside `intake`.
@@ -76,6 +83,7 @@ export class CaseService {
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#effort = options.effort;
     this.#model = options.model ?? MODEL;
+    this.#userName = options.userName ?? null;
   }
 
   #describeQueue = (_streamId: string, events: StoredEvent[]) => {
@@ -118,6 +126,8 @@ export class CaseService {
         : null;
 
     const conflicts: ConflictView[] = projection.conflicts.map((c) => this.#conflictView(c, queue.questions, current));
+    const replyContext: ReplyContext = { slots: projection.slots, evidence, messages: this.#intake.messages(), userName: this.#userName };
+    const replies = projectReplies(this.#store.readStream(REPLY_STREAM));
     const view: CaseView = {
       slots: projection.slots,
       conflicts,
@@ -127,8 +137,15 @@ export class CaseService {
       questionsVersion: queue.version,
       calendar: calendar && events ? { name: calendar.name, events, timeZone: CASE_TIME_ZONE, assumedSlotMinutes: ASSUMED_SLOT_MINUTES } : null,
       calendarVersion: calendar?.version ?? 0,
+      reply: replyView(replies, replyContext),
     };
-    return { view, evidence, conflicts: projection.conflicts, queue, open, current };
+    return { view, evidence, conflicts: projection.conflicts, queue, open, current, replyContext, replies };
+  }
+
+  // The case as the reply commands need it.
+  replyState(): { view: CaseView; context: ReplyContext; log: ReplyLog } {
+    const built = this.#build();
+    return { view: built.view, context: built.replyContext, log: built.replies };
   }
 
   #conflictView(c: Conflict, questions: QuestionRecord[], current: QuestionRecord | null): ConflictView {
@@ -220,10 +237,12 @@ export class CaseService {
 
   // Records the user's tap on a choice. The tap is the review: each effect
   // of the choice becomes an accepted, user-reported evidence item, written
-  // in one transaction with the answer.
-  answer(questionId: string, choiceId: string, expectedVersion: number): CaseView {
+  // in one transaction with the answer. A choice that starts a reply opens
+  // its draft in the same transaction, so it also states the expected
+  // version of the reply stream.
+  answer(questionId: string, choiceId: string, expectedVersion: number, replyVersion?: number): CaseView {
     this.#store.assertVersion(QUESTIONS_STREAM, expectedVersion, this.#describeQueue);
-    const { evidence, current } = this.#build();
+    const { evidence, current, replyContext, replies } = this.#build();
     if (!current || current.id !== questionId) throw new InvalidRequestError(`Question ${questionId} is not open.`);
     const choice = current.choices.find((c) => c.id === choiceId);
     if (!choice) throw new InvalidRequestError(`Question ${questionId} has no choice ${choiceId}.`);
@@ -263,6 +282,25 @@ export class CaseService {
         settled_evidence_ids: choice.settles,
       },
     };
+    if (choice.draft) {
+      if (replyVersion === undefined) throw new InvalidRequestError("This choice starts a reply. State the expected version of the reply stream.");
+      // The choice exists only for a slot the template allows, so a draft
+      // that code cannot build means the case changed under the question.
+      const built = buildDraft(choice.draft.template, choice.draft.slotKey, replyContext);
+      if (!built.ok) throw new InvalidRequestError(`The reply for this choice cannot be built: ${built.problems.join(", ")}.`);
+      const events = draftEvents(replies, {
+        template: built.content.template,
+        slot_key: built.content.slot.key,
+        slot_label: built.content.slot.label,
+        origin: "choice",
+        question_id: questionId,
+        suggestion_id: null,
+        fields: built.content.fields,
+        declines: built.content.declines,
+        text: built.content.text,
+      });
+      writes.push({ streamId: REPLY_STREAM, expectedVersion: replyVersion, events: events.map((e) => ({ type: e.type, data: e.data })) });
+    }
     this.#store.appendMany(
       [{ streamId: QUESTIONS_STREAM, expectedVersion, events: [asEvent(answered)] }, ...writes],
       (streamId, events) => (streamId === QUESTIONS_STREAM ? this.#describeQueue(streamId, events) : null),

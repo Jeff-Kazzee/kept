@@ -8,6 +8,8 @@ import { createApi } from "../server/api.ts";
 import { CaseService } from "../src/case/service.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
+import { ReplyService } from "../src/reply/service.ts";
+import type { ReplyView } from "../src/reply/types.ts";
 import { fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { fixtureMessage } from "./helpers.ts";
@@ -24,7 +26,8 @@ function setup() {
   const store = new EventStore();
   const client = RecordedModelClient.fromDirectory();
   const service = new IntakeService(store, client);
-  return createApi(service, new CaseService(store, service, client), { mode: "recorded" });
+  const kase = new CaseService(store, service, client, { userName: "Dana Reyes" });
+  return createApi(service, kase, { mode: "recorded" }, new ReplyService(store, kase));
 }
 
 describe("local API", () => {
@@ -95,6 +98,7 @@ describe("local API for slot states", () => {
       question: { id: string; text: string; choices: Array<{ id: string; label: string }> } | null;
       questionsVersion: number;
       calendarVersion: number;
+      reply: ReplyView;
     };
   };
 
@@ -133,12 +137,29 @@ describe("local API for slot states", () => {
     expect((await call("POST", answerPath, { expectedVersion: 1, choiceId: "nope" })).status).toBe(422);
     expect((await call("POST", answerPath, { expectedVersion: 0, choiceId: "unsure" })).status).toBe(409);
     expect((await call("POST", answerPath, { expectedVersion: 1 })).status).toBe(400);
-    const answered = await call("POST", answerPath, { expectedVersion: 1, choiceId: "request:2026-11-16T13:00" });
+    expect((await call("POST", answerPath, { expectedVersion: 1, choiceId: "request:2026-11-16T13:00" })).status).toBe(422);
+    const answered = await call("POST", answerPath, { expectedVersion: 1, choiceId: "request:2026-11-16T13:00", replyVersion: 0 });
     expect(answered.status).toBe(200);
     s = await state();
-    expect(s.case.slots.find((x) => x.key === "2026-11-16T13:00")!.stateLabel).toBe("Requested · reported by you");
+    // W30: the tap opens a draft. Monday becomes requested only on approval.
+    expect(s.case.slots.find((x) => x.key === "2026-11-16T13:00")!.stateLabel).toBe("Offered · office message");
     expect(s.case.question).toBeNull();
-    expect(s.evidence.find((e) => e.id === "answer-q1-1")).toMatchObject({ status: "accepted" });
+    const draft = s.case.reply.draft!;
+    expect(draft).toMatchObject({ template: "accept_offer", slotKey: "2026-11-16T13:00", edited: false });
+    const approvePath = `/api/reply/drafts/${draft.id}/approve`;
+    expect((await call("POST", approvePath, { expectedVersion: 1, confirmedFields: ["date"] })).status).toBe(422);
+    expect((await call("POST", approvePath, { expectedVersion: 0, confirmedFields: draft.fields.map((f) => f.name) })).status).toBe(409);
+    const approved = await call("POST", approvePath, { expectedVersion: 1, confirmedFields: draft.fields.map((f) => f.name) });
+    expect(approved.status).toBe(200);
+    s = await state();
+    expect(s.case.slots.map((x) => [x.key, x.stateLabel])).toEqual([
+      ["2026-11-10T14:00", "Offered · office message"],
+      ["2026-11-12T10:30", "Confirmed · office message, change proposed"],
+      ["2026-11-13T09:15", "Offered · office message"],
+      ["2026-11-16T13:00", "Requested · reported by you"],
+    ]);
+    expect(s.case.reply).toMatchObject({ draft: null, sent: [{ draftId: draft.id, simulated: true }] });
+    expect(s.evidence.find((e) => e.id === `reply-${draft.id}-1`)).toMatchObject({ status: "accepted" });
   });
 });
 

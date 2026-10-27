@@ -72,28 +72,22 @@ describe("SP2.11 question queue", () => {
     expect(client.calls).toHaveLength(0);
   });
 
-  it("S3: choosing a replacement records a request and leaves the original unchanged", async () => {
+  it("S3 (W30): choosing a replacement opens an accept draft and changes no slot", async () => {
     const { kase, intake: service, store } = await setup(["m2", "m3"]);
     await kase.askNext(0);
-    const thursday = kase.view().slots.find((s) => s.key === "2026-11-12T10:30");
-    const view = kase.answer("q1", "request:2026-11-16T13:00", 1);
-    expect(view.slots.find((s) => s.key === "2026-11-16T13:00")!.stateLabel).toBe("Requested · reported by you");
-    expect(view.slots.find((s) => s.key === "2026-11-12T10:30")).toEqual(thursday);
-    expect(view.slots.find((s) => s.key === "2026-11-13T09:15")!.stateLabel).toBe("Offered · office message");
+    const before = kase.view().slots;
+    expect(() => kase.answer("q1", "request:2026-11-16T13:00", 1)).toThrow(/expected version of the reply stream/);
+    const view = kase.answer("q1", "request:2026-11-16T13:00", 1, 0);
+    expect(view.slots).toEqual(before);
     expect(view).toMatchObject({ question: null, waiting: 0, questionsVersion: 2 });
     expect(view.conflicts.map((c) => [c.id, c.status, c.answer?.label])).toEqual([
       ["change-proposed-20261112-1030", "answered", "Request Monday 11/16 1:00 PM"],
     ]);
-    // The answer is accepted, user-reported evidence that quotes the tapped choice.
-    expect(service.evidenceItem("answer-q1-1")).toMatchObject({
-      origin: "answer",
-      status: "accepted",
-      messageId: null,
-      claim: { claim_type: "request", source_type: "reported_by_user", quote: "Request Monday 11/16 1:00 PM", evidence_time: NOW },
-      answer: { question_id: "q1", conflict_id: "change-proposed-20261112-1030", choice_id: "request:2026-11-16T13:00", after: "2026-11-04T18:40:00.000Z" },
-    });
-    expect(service.reviewQueue()).toEqual([]);
+    expect(view.reply.draft).toMatchObject({ id: "d1", template: "accept_offer", slotKey: "2026-11-16T13:00", origin: "choice", questionId: "q1", valid: true });
+    // The tap records no evidence. The request waits for the approval of the reply.
+    expect(service.evidence().filter((e) => e.origin === "answer")).toEqual([]);
     expect(store.readStream("questions").map((e) => e.type)).toEqual(["question_asked", "question_answered"]);
+    expect(store.readStream("reply").map((e) => e.type)).toEqual(["reply_drafted"]);
     await expect(kase.askNext(2)).rejects.toThrow(/No conflict waits/);
 
     await acceptMessages(service, ["m4"]);

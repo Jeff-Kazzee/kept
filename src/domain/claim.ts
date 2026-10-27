@@ -20,9 +20,10 @@ export type Effort = z.infer<typeof Effort>;
 // fast. Effort low stays available by option.
 export const DEFAULT_EXTRACTION_EFFORT: Effort = "minimal";
 
-// Claim types that only a user answer creates. The model can never return
-// them, because the extraction schema lists CLAIM_TYPES only.
-//   request  the user chose this slot (rule 2)
+// Claim types that only a user answer or an approved reply creates. The
+// model can never return them, because the extraction schema lists
+// CLAIM_TYPES only.
+//   request  the user approved a reply that accepts this slot (rule 2)
 //   decline  the user declined an offered slot
 //   clarify  the user said which date, time or place a claim means
 export const ANSWER_CLAIM_TYPES = ["request", "decline", "clarify"] as const;

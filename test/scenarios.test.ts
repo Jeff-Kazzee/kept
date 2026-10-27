@@ -29,8 +29,11 @@ describe("D2 checkpoints in the fixtures", () => {
       it(`${s.id}.${i + 1}: ${checkpoint.expect}`, async () => {
         const { kase } = await replayCheckpoint(s, checkpoint);
         const view = kase.view();
-        const { question, expect: _text, steps: _steps, ...expected } = checkpoint;
+        const { question, draft, expect: _text, steps: _steps, ...expected } = checkpoint;
         expect(observed(view)).toEqual(expected);
+        if (draft !== undefined) {
+          expect(view.reply.draft && { template: view.reply.draft.template, slot: view.reply.draft.slotKey }).toEqual(draft);
+        }
         if (question === null) {
           expect(view).toMatchObject({ question: null, waiting: 0 });
           return;

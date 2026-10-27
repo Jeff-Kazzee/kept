@@ -3,8 +3,8 @@
 //
 // - A stated event time with a clock time is used as is. A date alone is
 //   too coarse to order events within a day, so it counts as unknown.
-// - An answer is ordered just after the latest evidence the user had in
-//   view, or at the time of the answer if that is later.
+// - An answer or an approved reply is ordered just after the latest
+//   evidence the user had in view, or at its own time if that is later.
 // - An automated sender may send stale content, so its time is unknown.
 // - A user report, or a message a person at the office sent, describes the
 //   state when it was sent, so its time is the evidence time.
@@ -17,7 +17,8 @@ export function effectiveTime(e: EvidenceView): number | null {
   if (c.event_time !== null) return null;
   // Effects of one answer are ordered by their index, so a run such as a
   // cancel and then an offer applies in that order.
-  if (e.answer) return Math.max(Date.parse(c.evidence_time), Date.parse(e.answer.after) + 1) + (e.answer.index ?? 0);
+  const order = e.answer ?? e.reply;
+  if (order) return Math.max(Date.parse(c.evidence_time), Date.parse(order.after) + 1) + (order.index ?? 0);
   if (c.sender_kind === "automated") return null;
   if (c.source_type !== "office_message") return Date.parse(c.evidence_time);
   return c.sender_kind === "person" ? Date.parse(c.evidence_time) : null;

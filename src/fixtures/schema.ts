@@ -4,6 +4,7 @@
 // an empty list.
 import { z } from "zod";
 import { ClaimType, Message, SenderKind } from "../domain/claim.ts";
+import { TEMPLATE_IDS } from "../reply/templates.ts";
 
 // A field that is absent is not compared. A field set to null must come
 // back null.
@@ -38,7 +39,9 @@ export const LaterStub = z
 // checkpoint starts from an empty case and runs its steps in order. A
 // message step imports the message, extracts it with the recorded client
 // and accepts every claim. An answer step asks the next question, which
-// must be of the given kind, and taps the choice with the given label.
+// must be of the given kind, and taps the choice with the given label. An
+// approve step approves the open reply draft, which must use the given
+// template and slot, after reading back every field.
 const ConflictKind = z.enum([
   "both_held",
   "change_proposed",
@@ -49,9 +52,13 @@ const ConflictKind = z.enum([
   "incomplete_slot",
 ]);
 
+const TemplateId = z.enum(TEMPLATE_IDS);
+const TemplateSlot = z.object({ template: TemplateId, slot: z.string().min(1) }).strict();
+
 export const D2Step = z.union([
   z.object({ message: z.string().min(1) }).strict(),
   z.object({ answer: z.object({ kind: ConflictKind, choice: z.string().min(1) }).strict() }).strict(),
+  z.object({ approve_reply: TemplateSlot }).strict(),
 ]);
 export type D2Step = z.infer<typeof D2Step>;
 
@@ -78,6 +85,8 @@ export const D2Checkpoint = z
     ),
     // The next question the app asks, or null when none waits.
     question: z.object({ kind: ConflictKind, choices: z.array(z.string()) }).strict().nullable(),
+    // The open reply draft, or null. Not checked when absent.
+    draft: TemplateSlot.nullable().optional(),
   })
   .strict();
 export type D2Checkpoint = z.infer<typeof D2Checkpoint>;
@@ -105,3 +114,6 @@ export type Scenario = z.infer<typeof Scenario>;
 export type ResolvedScenario = Omit<Scenario, "messages"> & { messages: FixtureMessage[] };
 
 export const BaseMessages = z.array(FixtureMessage);
+
+export const CaseProfile = z.object({ user_name: z.string().trim().min(1).max(100) }).strict();
+export type CaseProfile = z.infer<typeof CaseProfile>;

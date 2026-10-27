@@ -11,7 +11,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { createServer as createVite } from "vite";
 import { CaseService } from "../src/case/service.ts";
+import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { IntakeService } from "../src/intake/service.ts";
+import { ReplyService } from "../src/reply/service.ts";
 import { MetaResponsesClient, type ModelClient } from "../src/model/client.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { PACKAGE_ROOT, fromPackage } from "../src/paths.ts";
@@ -39,7 +41,8 @@ const dbPath = path.resolve(PACKAGE_ROOT, process.env.APP_DB ?? "data/app.sqlite
 mkdirSync(path.dirname(dbPath), { recursive: true });
 const store = new EventStore(dbPath);
 const intake = new IntakeService(store, client);
-const api = createApi(intake, new CaseService(store, intake, client), { mode: live ? "live" : "recorded" });
+const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
+const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, new ReplyService(store, kase));
 
 const allowedHosts = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]);
 

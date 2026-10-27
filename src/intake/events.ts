@@ -3,7 +3,8 @@
 // Each evidence item has its own stream, so a review decision states the
 // version of that one item. An answer to a question also creates evidence
 // items. The user's tap on the answer is their review, so an answer item is
-// accepted when it is recorded. Unknown event kinds are skipped, which leaves
+// accepted when it is recorded. An approved reply creates evidence items the
+// same way, because the approval is the user's review. Unknown event kinds are skipped, which leaves
 // room for later kinds such as notes, tags, archive and undo.
 import type { Effort, EvidenceClaim, Message, SourceType } from "../domain/claim.ts";
 import type { AttemptProblem, ClaimProblem } from "../extract/extract.ts";
@@ -43,7 +44,8 @@ export type EvidenceEvent =
   | { type: "claim_entered_manually"; data: { message_id: string; claim: EvidenceClaim } }
   | { type: "claim_accepted"; data: Record<string, never> }
   | { type: "claim_rejected_by_user"; data: Record<string, never> }
-  | { type: "answer_recorded"; data: { claim: EvidenceClaim } & AnswerMeta };
+  | { type: "answer_recorded"; data: { claim: EvidenceClaim } & AnswerMeta }
+  | { type: "reply_recorded"; data: { claim: EvidenceClaim } & ReplyMeta };
 
 // Where an answer item came from. `clarifies` names the evidence item whose
 // date or time the answer resolves. `after` is the latest evidence time in
@@ -57,6 +59,14 @@ export type AnswerMeta = {
   after: string;
   // Position among the effects of one answer, from 0.
   index?: number;
+};
+
+// Where a reply item came from. `after` works as for an answer: the item is
+// ordered after the latest evidence the user had in view when approving.
+export type ReplyMeta = {
+  draft_id: string;
+  after: string;
+  index: number;
 };
 
 export type MessageView = {
@@ -80,10 +90,12 @@ export type EvidenceView = {
   messageId: string | null;
   claim: EvidenceClaim;
   // "model" means model output that passed the code checks.
-  origin: "model" | "manual" | "answer";
+  origin: "model" | "manual" | "answer" | "reply";
   status: ReviewStatus;
   decidedAt: string | null;
   answer: AnswerMeta | null;
+  // Set for an item an approved reply recorded.
+  reply?: ReplyMeta | null;
 };
 
 function streamKey(streamId: string, prefix: string): string | null {
@@ -155,6 +167,21 @@ export function projectEvidence(events: StoredEvent[]): Map<string, EvidenceView
         status: "accepted",
         decidedAt: e.recordedAt,
         answer,
+      });
+      continue;
+    }
+    if (event.type === "reply_recorded") {
+      const { claim, ...reply } = event.data;
+      views.set(id, {
+        id,
+        version: e.version,
+        messageId: null,
+        claim,
+        origin: "reply",
+        status: "accepted",
+        decidedAt: e.recordedAt,
+        answer: null,
+        reply,
       });
       continue;
     }

@@ -2,6 +2,7 @@
 // file must not import Node modules.
 import type { SlotState, SourceType } from "../domain/claim.ts";
 import type { IcsTime } from "../domain/ics.ts";
+import type { TemplateId } from "../reply/templates.ts";
 
 // What one accepted evidence item says about a slot. A reminder says the
 // slot is held, so it asserts confirmed.
@@ -76,12 +77,15 @@ export type ChoiceEffect = {
 
 // An answer choice. Code builds every choice from the conflict. `settles`
 // lists evidence with an unknown event time that the answer replaces, so it
-// no longer raises a conflict.
+// no longer raises a conflict. `draft` names the reply the choice starts.
+// A choice that starts a reply records no claim, because the slot changes
+// only when the user approves the reply (W30).
 export type Choice = {
   id: string;
   label: string;
   effects: ChoiceEffect[];
   settles: string[];
+  draft?: { template: TemplateId; slotKey: string };
 };
 
 export type Conflict = {

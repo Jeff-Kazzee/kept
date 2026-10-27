@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { FIXTURES_DIR } from "../paths.ts";
-import { BaseMessages, Scenario, type FixtureMessage, type ResolvedScenario } from "./schema.ts";
+import { BaseMessages, CaseProfile, Scenario, type FixtureMessage, type ResolvedScenario } from "./schema.ts";
 
 function readJson(file: string): unknown {
   return JSON.parse(readFileSync(file, "utf8"));
@@ -60,4 +60,9 @@ export function readFixtureText(relativePath: string, fixturesDir: string = FIXT
     throw new Error("Fixture path leaves the fixtures directory.");
   }
   return readFileSync(resolved, "utf8");
+}
+
+// The synthetic case profile: the name that signs replies.
+export function loadCaseProfile(fixturesDir: string = FIXTURES_DIR): CaseProfile {
+  return CaseProfile.parse(readJson(path.join(fixturesDir, "case.json")));
 }

@@ -1,0 +1,155 @@
+// Reply commands: start a draft, let the model suggest one, edit, discard
+// and approve. Code builds every draft from the case. Approval records the
+// claims the template asserts as user-reported evidence and a simulated
+// send. Nothing leaves the app. Every write states the expected version of
+// the reply stream.
+import type { CaseService } from "../case/service.ts";
+import type { CaseView } from "../case/types.ts";
+import type { EvidenceClaim } from "../domain/claim.ts";
+import { evidenceStream, type EvidenceEvent, type ReplyMeta } from "../intake/events.ts";
+import { InvalidRequestError } from "../intake/service.ts";
+import { arrivalTime } from "../slots/time.ts";
+import type { EventStore, StoredEvent, StreamWrite } from "../store/event-log.ts";
+import { buildDraft } from "./draft.ts";
+import { REPLY_STREAM, draftEvents, openDraft, projectReplies, type DraftRecord, type ReplyEvent } from "./events.ts";
+import { TEMPLATES, TEMPLATE_IDS, type TemplateId } from "./templates.ts";
+import { draftValidity } from "./view.ts";
+
+export const MAX_REPLY_CHARS = 2000;
+
+const asEvent = (e: ReplyEvent | EvidenceEvent) => ({ type: e.type, data: e.data });
+
+export type ReplyOptions = { now?: () => string };
+
+export class ReplyService {
+  readonly #store: EventStore;
+  readonly #kase: CaseService;
+  readonly #now: () => string;
+
+  constructor(store: EventStore, kase: CaseService, options: ReplyOptions = {}) {
+    this.#store = store;
+    this.#kase = kase;
+    this.#now = options.now ?? (() => new Date().toISOString());
+  }
+
+  #describe = (_streamId: string, events: StoredEvent[]) => {
+    const log = projectReplies(events);
+    return { version: log.version, openDraft: openDraft(log)?.id ?? null };
+  };
+
+  #open(draftId: string): DraftRecord {
+    const draft = openDraft(this.#kase.replyState().log);
+    if (!draft || draft.id !== draftId) throw new InvalidRequestError(`Draft ${draftId} is not open.`);
+    return draft;
+  }
+
+  // The user picks a template and a slot. Code blocks a template that the
+  // slot's state does not allow (S9) or that needs a field the slot lacks
+  // (S7).
+  start(template: string, slotKey: string, expectedVersion: number): CaseView {
+    this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
+    if (!(TEMPLATE_IDS as readonly string[]).includes(template)) throw new InvalidRequestError(`No reply template ${template}.`);
+    const { context, log } = this.#kase.replyState();
+    const built = buildDraft(template as TemplateId, slotKey, context);
+    if (!built.ok) throw new InvalidRequestError(`Code blocked this reply: ${built.problems.join(", ")}.`);
+    const events = draftEvents(log, {
+      template: built.content.template,
+      slot_key: built.content.slot.key,
+      slot_label: built.content.slot.label,
+      origin: "manual",
+      question_id: null,
+      suggestion_id: null,
+      fields: built.content.fields,
+      declines: built.content.declines,
+      text: built.content.text,
+    });
+    this.#store.append(REPLY_STREAM, expectedVersion, events.map(asEvent), this.#describe);
+    return this.#kase.view();
+  }
+
+  // Edited text is never checked again (R-e). The draft keeps the label
+  // "Edited by you. Not checked." until it is discarded.
+  edit(draftId: string, text: string, expectedVersion: number): CaseView {
+    this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
+    const draft = this.#open(draftId);
+    if (text.trim().length === 0) throw new InvalidRequestError("The reply text is empty.");
+    if (text.length > MAX_REPLY_CHARS) throw new InvalidRequestError(`The reply text is longer than ${MAX_REPLY_CHARS} characters.`);
+    if (text === draft.text) throw new InvalidRequestError("The text did not change.");
+    const event: ReplyEvent = { type: "reply_edited", data: { draft_id: draftId, text } };
+    this.#store.append(REPLY_STREAM, expectedVersion, [asEvent(event)], this.#describe);
+    return this.#kase.view();
+  }
+
+  discard(draftId: string, expectedVersion: number): CaseView {
+    this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
+    this.#open(draftId);
+    const event: ReplyEvent = { type: "reply_discarded", data: { draft_id: draftId, reason: "by_user" } };
+    this.#store.append(REPLY_STREAM, expectedVersion, [asEvent(event)], this.#describe);
+    return this.#kase.view();
+  }
+
+  // Approval needs the name of every field the user read back. The draft
+  // must still match the case. It records the claims the template asserts
+  // (R-a), the approval and the simulated send in one transaction. The send
+  // is only the local event: no network call is made (S12).
+  approve(draftId: string, confirmedFields: string[], expectedVersion: number): CaseView {
+    this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
+    const { context, view } = this.#kase.replyState();
+    const draft = this.#open(draftId);
+    const validity = draftValidity(draft, context);
+    if (!validity.valid) {
+      throw new InvalidRequestError(`The case changed since draft ${draftId} was made (${validity.problems.join(", ")}). Discard it and start a new one.`);
+    }
+    const names = draft.fields.map((f) => f.name);
+    if (new Set(confirmedFields).size !== names.length || !names.every((n) => confirmedFields.includes(n))) {
+      throw new InvalidRequestError(`Read back every field before approval: ${names.join(", ")}.`);
+    }
+
+    const records = TEMPLATES[draft.template].records;
+    const targets: Array<{ type: "request" | "decline"; slotKey: string }> =
+      records === "request"
+        ? [{ type: "request", slotKey: draft.slotKey }]
+        : records === "decline"
+          ? [{ type: "decline", slotKey: draft.slotKey }]
+          : records === "decline_alternatives"
+            ? draft.declines.map((slotKey) => ({ type: "decline" as const, slotKey }))
+            : [];
+    const now = this.#now();
+    const accepted = context.evidence.filter((e) => e.status === "accepted");
+    const latest = accepted.reduce((max, e) => Math.max(max, arrivalTime(e)), Number.NEGATIVE_INFINITY);
+    const after = Number.isFinite(latest) ? new Date(latest).toISOString() : now;
+    const writes: StreamWrite[] = targets.map((t, i) => {
+      const slot = view.slots.find((s) => s.key === t.slotKey)!;
+      const claim: EvidenceClaim = {
+        claim_type: t.type,
+        slot: { date: slot.date, time: slot.time, location: null },
+        quote: `Approved reply: ${t.type === "request" ? "I accept" : "I decline"} ${slot.label}`,
+        source_type: "reported_by_user",
+        sender_kind: "person",
+        evidence_time: now,
+        event_time: null,
+        request_item: null,
+      };
+      const meta: ReplyMeta = { draft_id: draftId, after, index: i };
+      const event: EvidenceEvent = { type: "reply_recorded", data: { claim, ...meta } };
+      return { streamId: evidenceStream(`reply-${draftId}-${i + 1}`), expectedVersion: 0, events: [asEvent(event)] };
+    });
+    const events: ReplyEvent[] = [
+      {
+        type: "reply_approved",
+        data: {
+          draft_id: draftId,
+          confirmed_fields: names,
+          text: draft.text,
+          edited: draft.edited,
+          evidence_ids: writes.map((w) => w.streamId.slice("evidence:".length)),
+        },
+      },
+      { type: "reply_send_simulated", data: { draft_id: draftId } },
+    ];
+    this.#store.appendMany([{ streamId: REPLY_STREAM, expectedVersion, events: events.map(asEvent) }, ...writes], (streamId, evs) =>
+      streamId === REPLY_STREAM ? this.#describe(streamId, evs) : null,
+    );
+    return this.#kase.view();
+  }
+}
