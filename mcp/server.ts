@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { ProtocolError, ProtocolErrorCode, Server } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { tierAllows, type GrantStore, type GrantView } from "../src/grants/grants.ts";
+import { OutOfScopeError } from "../src/domain/scope.ts";
 import { InvalidRequestError, NotFoundError } from "../src/intake/service.ts";
 import { UNKNOWN_TOOL, rateSummaryEvents, type AccessEvent, type AccessResult } from "../src/records/events.ts";
 import { AppointmentId } from "../src/records/inputs.ts";
@@ -248,6 +249,7 @@ function failure(deps: McpDeps, err: unknown, appointmentId: string | null): [Ca
     ];
   }
   if (err instanceof NotFoundError) return [errorResult({ error: "not_found", message: err.message }), "not_found"];
+  if (err instanceof OutOfScopeError) return [errorResult({ error: "out_of_scope", message: err.message }), "out_of_scope"];
   if (err instanceof InvalidRequestError) return [errorResult({ error: "invalid_input", message: err.message }), "invalid_input"];
   return [errorResult({ error: "error", message: "The server could not complete the call." }), "error"];
 }

@@ -13,6 +13,7 @@
 import { randomBytes } from "node:crypto";
 import type { z } from "zod";
 import type { EvidenceClaim } from "../domain/claim.ts";
+import { OutOfScopeError, RECORD_SCOPE_DECLINE, hasClinicalContent } from "../domain/scope.ts";
 import type { CaseService } from "../case/service.ts";
 import type { ConflictView, QuestionView } from "../case/types.ts";
 import { evidenceStream, type EvidenceEvent, type EvidenceView } from "../intake/events.ts";
@@ -73,6 +74,12 @@ function parse<T>(schema: z.ZodType<T>, value: unknown, what: string): T {
   const issue = result.error.issues[0]!;
   const where = issue.path.length > 0 ? ` (${issue.path.map(String).join(".")})` : "";
   throw new InvalidRequestError(`Invalid ${what}${where}: ${issue.message}`);
+}
+
+// O-e: every free-text value a user or an agent writes into a record or a
+// proposal goes through the clinical-content check, on normalized text.
+function assertAdministrative(texts: Array<string | null | undefined>): void {
+  if (texts.some((t) => typeof t === "string" && hasClinicalContent(t))) throw new OutOfScopeError(RECORD_SCOPE_DECLINE);
 }
 
 export type RecordsOptions = { newId?: () => string };
@@ -167,6 +174,7 @@ export class RecordsService {
   addNote(id: string, text: string, expectedVersion: number, by: Actor): RecordView {
     const slot = this.#slot(id);
     const note = parse(NoteText, text, "note");
+    assertAdministrative([note]);
     const version = parse(ExpectedVersion, expectedVersion, "expected version");
     const event: RecordEvent = { type: "note_added", data: { note_id: `n${version + 1}`, text: note, by } };
     this.#store.append(recordStream(slot.key), version, [asEvent(event)], this.#describeRecord);
@@ -176,6 +184,7 @@ export class RecordsService {
   setTags(id: string, tags: string[], expectedVersion: number, by: Actor): RecordView {
     const slot = this.#slot(id);
     const parsed = parse(Tags, tags, "tags");
+    assertAdministrative(parsed);
     const version = parse(ExpectedVersion, expectedVersion, "expected version");
     const event: RecordEvent = { type: "tags_set", data: { tags: parsed, by } };
     this.#store.append(recordStream(slot.key), version, [asEvent(event)], this.#describeRecord);
@@ -222,6 +231,11 @@ export class RecordsService {
   // transaction with the write.
   propose(input: unknown, grant: ProposingGrant): ProposalView {
     const change = parse(ProposedChangeInput, input, "proposal");
+    assertAdministrative([
+      change.statement,
+      "location" in change ? change.location : null,
+      "request_item" in change ? change.request_item : null,
+    ]);
     let stored: ProposedChange;
     let target: string | null = null;
     let recordVersion: number | null = null;

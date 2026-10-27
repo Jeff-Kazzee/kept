@@ -191,6 +191,7 @@ export type AccessResult =
   | "invalid_input"
   | "not_found"
   | "stale_edit"
+  | "out_of_scope"
   | "rate_limited"
   | "busy"
   | "error";

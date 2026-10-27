@@ -923,3 +923,54 @@ describe("sprint 3 replies and sprint 4 records", () => {
     expect(records.record(THU)).toMatchObject({ version: 2, tags: ["replied"] });
   });
 });
+
+describe("O-e: agent text goes through the clinical-content check", () => {
+  const OUT_OF_SCOPE = /administrative content only.*nothing was written/;
+
+  it("refuses a clinical note or tag with a clear tool error and writes nothing", async () => {
+    const { client, records, store } = await setup(scenario("S14"), "annotate");
+    const before = store.readAll().filter((e) => e.streamId !== "access_log").length;
+    // Plain, fullwidth, zero-width and mixed-script spellings are all caught,
+    // because the check reads normalized text.
+    for (const text of ["Ask about the biopsy results.", "Ｂｉｏｐｓｙ next week", "bring the dia\u00ADgnosis", "Bring the mеdication list"]) {
+      const err = errorOf(await client.callTool({ name: "add_note", arguments: { appointment_id: THU, text, expected_version: 0 } }));
+      expect(err.error, text).toBe("out_of_scope");
+      expect(err.message).toMatch(OUT_OF_SCOPE);
+    }
+    // A zero-width space is refused before the check, as a control character.
+    const hidden = errorOf(await client.callTool({ name: "add_note", arguments: { appointment_id: THU, text: "bring the dia\u200Bgnosis", expected_version: 0 } }));
+    expect(hidden.error).toBe("invalid_input");
+    const tags = errorOf(await client.callTool({ name: "set_tags", arguments: { appointment_id: THU, tags: ["moved", "chemo"], expected_version: 0 } }));
+    expect(tags.error).toBe("out_of_scope");
+    expect(store.readAll().filter((e) => e.streamId !== "access_log")).toHaveLength(before);
+    expect(records.record(THU)).toMatchObject({ version: 0, notes: [], tags: [] });
+    expect(records.accessLog().map((e) => e.result)).toEqual(["out_of_scope", "out_of_scope", "out_of_scope", "out_of_scope", "invalid_input", "out_of_scope"]);
+    // An administrative note still goes through.
+    ok(await client.callTool({ name: "add_note", arguments: { appointment_id: THU, text: "Parking is on Elm Street.", expected_version: 0 } }));
+  });
+
+  it("refuses a clinical proposal statement, place or item, and nothing enters the review queue", async () => {
+    const { client, records } = await setup(scenario("S16"), "propose");
+    const report = { kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00" };
+    const changes = [
+      { ...report, statement: "Dana says the doctor wants to discuss her symptoms on Monday." },
+      { ...report, location: "Radiation wing, 400 Elm Street", statement: "Dana confirmed Monday by phone." },
+      { kind: "user_report", claim_type: "office_request", date: null, request_item: "Stop the medication two days before", statement: "The office called Dana." },
+    ];
+    for (const change of changes) {
+      const err = errorOf(await client.callTool({ name: "propose_change", arguments: { change } }));
+      expect(err.error).toBe("out_of_scope");
+      expect(err.message).toMatch(OUT_OF_SCOPE);
+    }
+    expect(records.proposals()).toEqual([]);
+    expect(records.reviewQueue().proposals).toEqual([]);
+    ok(await client.callTool({ name: "propose_change", arguments: { change: { ...report, statement: "Dana confirmed Monday by phone." } } }));
+    expect(records.proposals()).toHaveLength(1);
+  });
+
+  it("applies the same check to notes the user writes in the app", async () => {
+    const { records } = await setup(scenario("S14"));
+    expect(() => records.addNote(THU, "Ask about the test results.", 0, USER)).toThrow(OUT_OF_SCOPE);
+    expect(records.record(THU).version).toBe(0);
+  });
+});
