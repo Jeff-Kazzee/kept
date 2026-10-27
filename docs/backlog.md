@@ -116,7 +116,7 @@ Tasks:
 - [ ] SP2.14 Conflict view in the UI: both sources, their quotes, the state
   with its source, calendar clashes, the explanation labeled as model
   output, and the current question.
-- [ ] SP2.15 Recorded responses for the new calls, and fixture stubs marked
+- [x] SP2.15 Recorded responses for the new calls, and fixture stubs marked
   D2 turned into real expectations.
 - [ ] SP2.16 Live evaluation: add explanation and question calls. Report the
   rate of valid citations and the rejection count.

@@ -3,7 +3,17 @@
   "title": "Offer, then office confirmation",
   "calendar": "calendar/dana.ics",
   "messages": [{ "ref": "m1" }, { "ref": "m2" }],
-  "later": [
-    { "deliverable": "D2", "expect": "Thursday 2026-11-12 10:30 is Confirmed · office message. Tuesday 2026-11-10 14:00 stays offered." }
-  ]
+  "d2": [
+    {
+      "expect": "Thursday 2026-11-12 10:30 is Confirmed · office message. Tuesday 2026-11-10 14:00 stays offered.",
+      "steps": [{ "message": "m1" }, { "message": "m2" }],
+      "slots": { "2026-11-10T14:00": "Offered · office message", "2026-11-12T10:30": "Confirmed · office message" },
+      "clashes": {},
+      "missing": {},
+      "stale": [],
+      "conflicts": [],
+      "question": null
+    }
+  ],
+  "later": []
 }

@@ -11,12 +11,48 @@
       "from": "Lantern Hill Clinic Reminders",
       "received_at": "2026-11-10T08:00:00-07:00",
       "text": "Automated reminder: Dana, you have an appointment at Lantern Hill Clinic on Thu 11/12 at 10:30 AM. Reply C to confirm. This number does not accept calls.",
-      "expected": [
-        { "claim_type": "reminder", "date": "2026-11-12", "time": "10:30", "sender_kind": "automated" }
-      ]
+      "expected": [{ "claim_type": "reminder", "date": "2026-11-12", "time": "10:30", "sender_kind": "automated" }]
     }
   ],
-  "later": [
-    { "deliverable": "D2", "expect": "The reminder is marked possibly stale. The app asks once. Slot states do not change." }
-  ]
+  "d2": [
+    {
+      "expect": "The reminder is marked possibly stale. The app asks about it first. Slot states do not change.",
+      "steps": [{ "message": "m2" }, { "message": "s5-report" }, { "message": "s6-reminder" }],
+      "slots": { "2026-11-12T10:30": "Canceled · reported by you", "2026-11-16T13:00": "Confirmed · reported by you" },
+      "clashes": {},
+      "missing": { "2026-11-16T13:00": ["location"] },
+      "stale": ["s6-reminder-e1"],
+      "conflicts": [
+        { "kind": "possibly_stale", "slots": ["2026-11-12T10:30"], "evidence": ["s6-reminder-e1", "s5-report-e2"], "status": "open" },
+        { "kind": "incomplete_slot", "slots": ["2026-11-16T13:00"], "evidence": ["s5-report-e1"], "status": "open" }
+      ],
+      "question": {
+        "kind": "possibly_stale",
+        "choices": [
+          "The reminder is out of date. Thursday 11/12 10:30 AM stays canceled.",
+          "Thursday 11/12 10:30 AM still stands",
+          "Not sure yet"
+        ]
+      }
+    },
+    {
+      "expect": "The app asks about the reminder once. After an answer it moves on and slot states still do not change.",
+      "steps": [
+        { "message": "m2" },
+        { "message": "s5-report" },
+        { "message": "s6-reminder" },
+        { "answer": { "kind": "possibly_stale", "choice": "Not sure yet" } }
+      ],
+      "slots": { "2026-11-12T10:30": "Canceled · reported by you", "2026-11-16T13:00": "Confirmed · reported by you" },
+      "clashes": {},
+      "missing": { "2026-11-16T13:00": ["location"] },
+      "stale": ["s6-reminder-e1"],
+      "conflicts": [
+        { "kind": "possibly_stale", "slots": ["2026-11-12T10:30"], "evidence": ["s6-reminder-e1", "s5-report-e2"], "status": "answered" },
+        { "kind": "incomplete_slot", "slots": ["2026-11-16T13:00"], "evidence": ["s5-report-e1"], "status": "open" }
+      ],
+      "question": { "kind": "incomplete_slot", "choices": ["I will add it from a message or a report", "Not sure yet"] }
+    }
+  ],
+  "later": []
 }

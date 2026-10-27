@@ -38,6 +38,11 @@ export function loadScenarios(fixturesDir: string = FIXTURES_DIR): ResolvedScena
     if (s.model_fault && !messages.some((m) => m.id === s.model_fault!.message)) {
       throw new Error(`${s.id} model_fault names a message that is not in the scenario.`);
     }
+    for (const step of (s.d2 ?? []).flatMap((c) => c.steps)) {
+      if ("message" in step && !messages.some((m) => m.id === step.message)) {
+        throw new Error(`${s.id} d2 step names message ${step.message}, which is not in the scenario.`);
+      }
+    }
     return { ...s, messages };
   });
 }

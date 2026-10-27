@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { corpusMessages, loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
 import { checkSlotValues, isValidDate, isValidTime } from "../src/domain/datetime.ts";
 import { fromPackage } from "../src/paths.ts";
@@ -45,19 +47,38 @@ describe("fixtures", () => {
   it("assigns every later expectation to its deliverable", () => {
     const owners = Object.fromEntries(scenarios.map((s) => [s.id, s.later.map((l) => l.deliverable)]));
     expect(owners).toEqual({
-      S1: ["D2"],
-      S2: ["D2"],
-      S3: ["D2", "D2"],
-      S4: ["D2"],
-      S5: ["D2"],
-      S6: ["D2"],
-      S7: ["D2", "D3"],
+      S1: [],
+      S2: [],
+      S3: [],
+      S4: [],
+      S5: [],
+      S6: [],
+      S7: ["D3"],
       S8: [],
       S9: ["D3"],
       S10: ["D4"],
       S11: ["product"],
       S12: ["D3"],
     });
+  });
+
+  it("turns every D2 stub into checkpoints for S1 to S7", () => {
+    const counts = Object.fromEntries(scenarios.filter((s) => s.d2).map((s) => [s.id, s.d2!.length]));
+    expect(counts).toEqual({ S1: 1, S2: 1, S3: 3, S4: 1, S5: 1, S6: 2, S7: 1 });
+  });
+
+  it("refuses a D2 step that names a message outside the scenario", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "d2-fixture-"));
+    try {
+      cpSync(fromPackage("fixtures"), dir, { recursive: true });
+      const file = path.join(dir, "scenarios", "S1.json");
+      const s1 = JSON.parse(readFileSync(file, "utf8"));
+      s1.d2[0].steps.push({ message: "m4" });
+      writeFileSync(file, JSON.stringify(s1));
+      expect(() => loadScenarios(dir)).toThrow(/S1 d2 step names message m4/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("ships the S8 fabricated recording and the calendar", () => {

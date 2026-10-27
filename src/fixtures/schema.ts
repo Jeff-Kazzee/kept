@@ -34,6 +34,54 @@ export const LaterStub = z
   })
   .strict();
 
+// D2 expectations over slot states, conflicts and the next question. Each
+// checkpoint starts from an empty case and runs its steps in order. A
+// message step imports the message, extracts it with the recorded client
+// and accepts every claim. An answer step asks the next question, which
+// must be of the given kind, and taps the choice with the given label.
+const ConflictKind = z.enum([
+  "both_held",
+  "change_proposed",
+  "unknown_order",
+  "ambiguous_date",
+  "possibly_stale",
+  "location_mismatch",
+  "incomplete_slot",
+]);
+
+export const D2Step = z.union([
+  z.object({ message: z.string().min(1) }).strict(),
+  z.object({ answer: z.object({ kind: ConflictKind, choice: z.string().min(1) }).strict() }).strict(),
+]);
+export type D2Step = z.infer<typeof D2Step>;
+
+export const D2Checkpoint = z
+  .object({
+    expect: z.string().min(1),
+    steps: z.array(D2Step).min(1),
+    // Every slot by key, with its state label.
+    slots: z.record(z.string(), z.string()),
+    // Slots with calendar clashes, by key. Every other slot has none.
+    clashes: z.record(z.string(), z.array(z.string())),
+    // Held slots that lack a detail, by key. Every other slot lacks none.
+    missing: z.record(z.string(), z.array(z.enum(["time", "location"]))),
+    stale: z.array(z.string()),
+    conflicts: z.array(
+      z
+        .object({
+          kind: ConflictKind,
+          slots: z.array(z.string()),
+          evidence: z.array(z.string()),
+          status: z.enum(["open", "asked", "answered"]),
+        })
+        .strict(),
+    ),
+    // The next question the app asks, or null when none waits.
+    question: z.object({ kind: ConflictKind, choices: z.array(z.string()) }).strict().nullable(),
+  })
+  .strict();
+export type D2Checkpoint = z.infer<typeof D2Checkpoint>;
+
 export const Scenario = z
   .object({
     id: z.string().regex(/^S\d+$/),
@@ -48,6 +96,7 @@ export const Scenario = z
       })
       .strict()
       .optional(),
+    d2: z.array(D2Checkpoint).optional(),
     later: z.array(LaterStub),
   })
   .strict();

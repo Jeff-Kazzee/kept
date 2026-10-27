@@ -17,8 +17,72 @@
       ]
     }
   ],
-  "later": [
-    { "deliverable": "D2", "expect": "Friday 2026-11-13 09:15 clashes with the Team meeting in dana.ics. Dana chooses Monday 2026-11-16 13:00. Monday is requested. Thursday 2026-11-12 10:30 is unchanged." },
-    { "deliverable": "D2", "expect": "After m4, Monday 2026-11-16 13:00 is Confirmed · office message and Thursday 2026-11-12 10:30 is Canceled · office message." }
-  ]
+  "d2": [
+    {
+      "expect": "Friday 2026-11-13 09:15 clashes with the Team meeting in dana.ics. Thursday is change proposed and the app asks which new time Dana wants.",
+      "steps": [{ "message": "m2" }, { "message": "m3" }],
+      "slots": {
+        "2026-11-12T10:30": "Confirmed · office message, change proposed",
+        "2026-11-13T09:15": "Offered · office message",
+        "2026-11-16T13:00": "Offered · office message"
+      },
+      "clashes": { "2026-11-13T09:15": ["Team meeting"] },
+      "missing": {},
+      "stale": [],
+      "conflicts": [
+        {
+          "kind": "change_proposed",
+          "slots": ["2026-11-12T10:30", "2026-11-13T09:15", "2026-11-16T13:00"],
+          "evidence": ["m2-e1", "m3-e1", "m3-e2", "m3-e3"],
+          "status": "open"
+        }
+      ],
+      "question": { "kind": "change_proposed", "choices": ["Request Friday 11/13 9:15 AM", "Request Monday 11/16 1:00 PM", "Not sure yet"] }
+    },
+    {
+      "expect": "Dana chooses Monday 2026-11-16 13:00. Monday is requested. Thursday 2026-11-12 10:30 is unchanged.",
+      "steps": [
+        { "message": "m2" },
+        { "message": "m3" },
+        { "answer": { "kind": "change_proposed", "choice": "Request Monday 11/16 1:00 PM" } }
+      ],
+      "slots": {
+        "2026-11-12T10:30": "Confirmed · office message, change proposed",
+        "2026-11-13T09:15": "Offered · office message",
+        "2026-11-16T13:00": "Requested · reported by you"
+      },
+      "clashes": { "2026-11-13T09:15": ["Team meeting"] },
+      "missing": {},
+      "stale": [],
+      "conflicts": [
+        {
+          "kind": "change_proposed",
+          "slots": ["2026-11-12T10:30", "2026-11-13T09:15", "2026-11-16T13:00"],
+          "evidence": ["m2-e1", "m3-e1", "m3-e2", "m3-e3"],
+          "status": "answered"
+        }
+      ],
+      "question": null
+    },
+    {
+      "expect": "After m4, Monday 2026-11-16 13:00 is Confirmed · office message and Thursday 2026-11-12 10:30 is Canceled · office message.",
+      "steps": [
+        { "message": "m2" },
+        { "message": "m3" },
+        { "answer": { "kind": "change_proposed", "choice": "Request Monday 11/16 1:00 PM" } },
+        { "message": "m4" }
+      ],
+      "slots": {
+        "2026-11-12T10:30": "Canceled · office message",
+        "2026-11-13T09:15": "Offered · office message",
+        "2026-11-16T13:00": "Confirmed · office message"
+      },
+      "clashes": { "2026-11-13T09:15": ["Team meeting"] },
+      "missing": {},
+      "stale": [],
+      "conflicts": [],
+      "question": null
+    }
+  ],
+  "later": []
 }

@@ -10,12 +10,30 @@
       "from": "Lantern Hill Clinic",
       "received_at": "2026-11-02T08:30:00-07:00",
       "text": "Lantern Hill Clinic: An earlier time opened up on Wednesday, November 11 at 3:00 PM at our Elm Street office. Reply YES to take it.",
-      "expected": [
-        { "claim_type": "offer", "date": "2026-11-11", "time": "15:00", "location": "Elm Street office" }
-      ]
+      "expected": [{ "claim_type": "offer", "date": "2026-11-11", "time": "15:00", "location": "Elm Street office" }]
     }
   ],
-  "later": [
-    { "deliverable": "D2", "expect": "Thursday 2026-11-12 10:30 is change proposed. Wednesday 2026-11-11 15:00 is offered." }
-  ]
+  "d2": [
+    {
+      "expect": "Thursday 2026-11-12 10:30 is change proposed. Wednesday 2026-11-11 15:00 is offered.",
+      "steps": [{ "message": "m2" }, { "message": "s2-offer" }],
+      "slots": { "2026-11-11T15:00": "Offered · office message", "2026-11-12T10:30": "Confirmed · office message, change proposed" },
+      "clashes": {},
+      "missing": {},
+      "stale": [],
+      "conflicts": [
+        {
+          "kind": "change_proposed",
+          "slots": ["2026-11-12T10:30", "2026-11-11T15:00"],
+          "evidence": ["m2-e1", "s2-offer-e1"],
+          "status": "open"
+        }
+      ],
+      "question": {
+        "kind": "change_proposed",
+        "choices": ["Request Wednesday 11/11 3:00 PM", "Keep Thursday 11/12 10:30 AM", "Not sure yet"]
+      }
+    }
+  ],
+  "later": []
 }

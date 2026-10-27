@@ -11,12 +11,26 @@
       "from": "Lantern Hill Clinic",
       "received_at": "2026-11-05T09:20:00-07:00",
       "text": "Lantern Hill Clinic: You're confirmed for Monday 11/16 at 1:00 PM at 400 Elm Street, Suite 2. See you then.",
-      "expected": [
-        { "claim_type": "confirm", "date": "2026-11-16", "time": "13:00", "location": "400 Elm Street, Suite 2" }
-      ]
+      "expected": [{ "claim_type": "confirm", "date": "2026-11-16", "time": "13:00", "location": "400 Elm Street, Suite 2" }]
     }
   ],
-  "later": [
-    { "deliverable": "D2", "expect": "Thursday 2026-11-12 10:30 and Monday 2026-11-16 13:00 both stay held. The app asks which one stands." }
-  ]
+  "d2": [
+    {
+      "expect": "Thursday 2026-11-12 10:30 and Monday 2026-11-16 13:00 both stay held. The app asks which one stands.",
+      "steps": [{ "message": "m2" }, { "message": "m3" }, { "message": "s4-confirm" }],
+      "slots": {
+        "2026-11-12T10:30": "Confirmed · office message, change proposed",
+        "2026-11-13T09:15": "Offered · office message",
+        "2026-11-16T13:00": "Confirmed · office message"
+      },
+      "clashes": { "2026-11-13T09:15": ["Team meeting"] },
+      "missing": {},
+      "stale": [],
+      "conflicts": [
+        { "kind": "both_held", "slots": ["2026-11-12T10:30", "2026-11-16T13:00"], "evidence": ["m2-e1", "s4-confirm-e1"], "status": "open" }
+      ],
+      "question": { "kind": "both_held", "choices": ["Thursday 11/12 10:30 AM stands", "Monday 11/16 1:00 PM stands", "Not sure yet"] }
+    }
+  ],
+  "later": []
 }

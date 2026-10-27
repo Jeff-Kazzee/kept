@@ -16,7 +16,17 @@
       ]
     }
   ],
-  "later": [
-    { "deliverable": "D2", "expect": "Monday 2026-11-16 13:00 is Confirmed · reported by you. Thursday 2026-11-12 10:30 is Canceled · reported by you." }
-  ]
+  "d2": [
+    {
+      "expect": "Monday 2026-11-16 13:00 is Confirmed · reported by you. Thursday 2026-11-12 10:30 is Canceled · reported by you. The report gives no place for Monday, so the app asks for it.",
+      "steps": [{ "message": "m2" }, { "message": "s5-report" }],
+      "slots": { "2026-11-12T10:30": "Canceled · reported by you", "2026-11-16T13:00": "Confirmed · reported by you" },
+      "clashes": {},
+      "missing": { "2026-11-16T13:00": ["location"] },
+      "stale": [],
+      "conflicts": [{ "kind": "incomplete_slot", "slots": ["2026-11-16T13:00"], "evidence": ["s5-report-e1"], "status": "open" }],
+      "question": { "kind": "incomplete_slot", "choices": ["I will add it from a message or a report", "Not sure yet"] }
+    }
+  ],
+  "later": []
 }

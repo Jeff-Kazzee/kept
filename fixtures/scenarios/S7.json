@@ -9,13 +9,20 @@
       "from": "Front Desk, Lantern Hill Clinic",
       "received_at": "2026-11-06T14:00:00-07:00",
       "text": "Hi Dana,\n\nYour visit on November 16 is confirmed. We will send the details soon.\n\nFront Desk\nLantern Hill Clinic",
-      "expected": [
-        { "claim_type": "confirm", "date": "2026-11-16", "time": null, "location": null }
-      ]
+      "expected": [{ "claim_type": "confirm", "date": "2026-11-16", "time": null, "location": null }]
     }
   ],
-  "later": [
-    { "deliverable": "D2", "expect": "The slot is incomplete. The app asks for the missing time and location." },
-    { "deliverable": "D3", "expect": "The app offers no reply template that needs the missing time or location." }
-  ]
+  "d2": [
+    {
+      "expect": "The slot is incomplete. The app asks for the missing time and location.",
+      "steps": [{ "message": "s7-confirm" }],
+      "slots": { "2026-11-16": "Confirmed · office message" },
+      "clashes": {},
+      "missing": { "2026-11-16": ["time", "location"] },
+      "stale": [],
+      "conflicts": [{ "kind": "incomplete_slot", "slots": ["2026-11-16"], "evidence": ["s7-confirm-e1"], "status": "open" }],
+      "question": { "kind": "incomplete_slot", "choices": ["I will add it from a message or a report", "Not sure yet"] }
+    }
+  ],
+  "later": [{ "deliverable": "D3", "expect": "The app offers no reply template that needs the missing time or location." }]
 }
