@@ -1,8 +1,12 @@
 // Browser side of the local API. Types mirror the server projections.
 import type { CaseView, ConflictView } from "../src/case/types.ts";
+import type { ChecklistItem } from "../src/case/checklist.ts";
 import type { Channel, Effort, EvidenceClaim, Message, SourceType } from "../src/domain/claim.ts";
 
-export type { CaseView, ConflictView };
+export type { CaseView, ChecklistItem, ConflictView };
+
+// One case event as the history shows it. Labels are built by code.
+export type HistoryEntry = { seq: number; at: string; streamId: string; label: string; undone: boolean };
 
 export type Attempt = {
   attempt: number;
@@ -52,6 +56,9 @@ export type AppState = {
   messages: MessageView[];
   evidence: EvidenceView[];
   case: CaseView;
+  // The version Delete case states.
+  caseVersion: number;
+  history: HistoryEntry[];
 };
 
 export type FixtureScenario = {
@@ -108,6 +115,8 @@ export const api = {
     request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/edit`, { expectedVersion, text }),
   discardDraft: (id: string, expectedVersion: number) =>
     request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/discard`, { expectedVersion }),
+  deleteCase: (expectedVersion: number, confirmation: string) =>
+    request<{ erased: number }>("POST", "/api/case/delete", { expectedVersion, confirmation }),
   approveDraft: (id: string, confirmedFields: string[], expectedVersion: number, confirmClaim: boolean) =>
     request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/approve`, { expectedVersion, confirmedFields, confirmClaim }),
 };

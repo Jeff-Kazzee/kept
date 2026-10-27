@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { DELETE_CONFIRMATION } from "../src/case/constants.ts";
 import { CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT, type Channel, type ClaimType, type Effort } from "../src/domain/claim.ts";
 import type { IcsTime } from "../src/domain/ics.ts";
 import { sourceLabel } from "../src/slots/labels.ts";
@@ -8,9 +9,11 @@ import {
   api,
   type AppState,
   type CaseView,
+  type ChecklistItem,
   type ConflictView,
   type EvidenceView,
   type FixtureScenario,
+  type HistoryEntry,
   type MessageView,
 } from "./api.ts";
 import { ReplyPanel, shortTime } from "./ReplyPanel.tsx";
@@ -133,21 +136,26 @@ export function App() {
       <section>
         <h2>5. Appointment slots</h2>
         <p>Built by code from accepted evidence only. Model output never changes a slot.</p>
-        <SlotsPanel kase={kase} />
+        <SlotsPanel state={state} />
       </section>
 
       <section>
-        <h2>6. Question</h2>
+        <h2>6. What the office asked you to bring or do ({kase.checklist.length})</h2>
+        <ChecklistPanel items={kase.checklist} />
+      </section>
+
+      <section>
+        <h2>7. Question</h2>
         <QuestionPanel state={state} run={run} />
       </section>
 
       <section>
-        <h2>7. Reply to the office</h2>
+        <h2>8. Reply to the office</h2>
         <ReplyPanel reply={kase.reply} run={run} />
       </section>
 
       <section>
-        <h2>8. Conflicts ({kase.conflicts.length})</h2>
+        <h2>9. Conflicts ({kase.conflicts.length})</h2>
         {kase.conflicts.length === 0 && <p>No conflicts.</p>}
         {kase.conflicts.map((c) => (
           <ConflictCard key={c.id} conflict={c} state={state} run={run} />
@@ -155,11 +163,21 @@ export function App() {
       </section>
 
       <section>
-        <h2>9. Reviewed claims, your answers and your replies</h2>
+        <h2>10. Reviewed claims, your answers and your replies</h2>
         {decided.length === 0 && <p>None yet.</p>}
         {decided.map((e) => (
           <EvidenceCard key={e.id} item={e} state={state} run={run} />
         ))}
+      </section>
+
+      <section>
+        <h2>11. Case history ({state.history.length})</h2>
+        <HistoryPanel entries={state.history} />
+      </section>
+
+      <section>
+        <h2>12. Delete case</h2>
+        <DeleteCasePanel version={state.caseVersion} run={run} />
       </section>
     </>
   );
@@ -327,7 +345,8 @@ function CalendarPanel({ kase, run }: { kase: CaseView; run: Run }) {
   );
 }
 
-function SlotsPanel({ kase }: { kase: CaseView }) {
+function SlotsPanel({ state }: { state: AppState }) {
+  const kase = state.case;
   if (kase.slots.length === 0) return <p>No slots yet. Accept claims in the review queue.</p>;
   return (
     <table>
@@ -346,6 +365,7 @@ function SlotsPanel({ kase }: { kase: CaseView }) {
             <td>{s.label}</td>
             <td>
               <strong>{s.stateLabel}</strong>
+              <StateQuote id={s.stateEvidenceId} state={state} />
               {s.missing.length > 0 && <div className="warn">Incomplete: no {s.missing.map((m) => (m === "time" ? "time" : "place")).join(", no ")}</div>}
               {s.staleEvidenceIds.length > 0 && <div className="warn">Possibly stale reminder: {s.staleEvidenceIds.join(", ")}</div>}
             </td>
@@ -369,6 +389,102 @@ function SlotsPanel({ kase }: { kase: CaseView }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+// The quote of the evidence that set a slot's state, so the state and its
+// words are on screen together.
+function StateQuote({ id, state }: { id: string | null; state: AppState }) {
+  const quote = id ? state.evidence.find((e) => e.id === id)?.claim.quote : null;
+  if (!id || !quote) return null;
+  return (
+    <div className="quote">
+      “{quote}” <code>{id}</code>
+    </div>
+  );
+}
+
+// SP5.3: the office's requests, each with its quote and source. Built by
+// code from accepted evidence, so these are not model output.
+export function ChecklistPanel({ items }: { items: ChecklistItem[] }) {
+  if (items.length === 0) return <p>Nothing yet. Office requests you accept in review show here.</p>;
+  return (
+    <>
+      <p>From the office requests you accepted in review. Each item shows its quote and where it came from.</p>
+      <ul>
+        {items.map((item) => (
+          <li key={item.text}>
+            <strong>{item.text}</strong>
+            {item.sources.map((s) => (
+              <div key={s.evidenceId} className="quote">
+                {s.quote ? `“${s.quote}”` : "No quote."} · {s.sourceLabel} · <code>{s.evidenceId}</code>
+              </div>
+            ))}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+// SP5.5: every event of the case in order.
+export function HistoryPanel({ entries }: { entries: HistoryEntry[] }) {
+  if (entries.length === 0) return <p>No events yet.</p>;
+  return (
+    <details>
+      <summary>Show all {entries.length} events, oldest first</summary>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>When</th>
+            <th>Event</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((h) => (
+            <tr key={h.seq}>
+              <td>{h.seq}</td>
+              <td className="nowrap">{shortTime(h.at)}</td>
+              <td className={h.undone ? "undone" : undefined}>
+                {h.label}
+                {h.undone && " (undone)"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
+  );
+}
+
+// SP5.4: Delete case. The only permanent deletion, with its own typed
+// confirmation. No agent can reach it.
+export function DeleteCasePanel({ version, run }: { version: number; run: Run }) {
+  const [typed, setTyped] = useState("");
+  return (
+    <div className="card danger">
+      <p>
+        Delete case erases every message, claim, review, slot, question, explanation, reply, note, tag and proposal of this
+        case, and the log of agent calls. It also clears them from the database file. Grants stay, because they are app
+        settings. Revoke a grant separately. This cannot be undone.
+      </p>
+      <label>
+        Type {DELETE_CONFIRMATION} to confirm{" "}
+        <input value={typed} onChange={(e) => setTyped(e.target.value)} aria-label={`Type ${DELETE_CONFIRMATION} to confirm`} />
+      </label>
+      <button
+        disabled={typed !== DELETE_CONFIRMATION}
+        onClick={() =>
+          run(async () => {
+            await api.deleteCase(version, typed);
+            setTyped("");
+          })
+        }
+      >
+        Delete this case and all its data permanently. This cannot be undone.
+      </button>
+    </div>
   );
 }
 

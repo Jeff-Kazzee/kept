@@ -25,6 +25,7 @@ import { buildDraft, type ReplyContext } from "../reply/draft.ts";
 import { REPLY_STREAM, draftEvents, projectReplies, type ReplyLog } from "../reply/events.ts";
 import { replyView } from "../reply/view.ts";
 import { buildChecklist } from "./checklist.ts";
+import { DELETE_CONFIRMATION } from "./constants.ts";
 import { caseHistory, type HistoryEntry } from "./history.ts";
 import {
   CALENDAR_STREAM,
@@ -45,8 +46,7 @@ export const MAX_CALENDAR_CHARS = 60_000;
 // file is case data and is erased.
 export const KEPT_ON_DELETE = [GRANT_PREFIX] as const;
 
-// The words the user types to confirm Delete case.
-export const DELETE_CONFIRMATION = "DELETE";
+export { DELETE_CONFIRMATION };
 
 const asEvent = (e: CaseEvent | EvidenceEvent) => ({ type: e.type, data: e.data });
 const signature = (ids: string[]) => [...ids].sort().join(",");
