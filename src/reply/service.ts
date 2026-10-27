@@ -15,10 +15,10 @@ import { InvalidRequestError } from "../intake/service.ts";
 import { arrivalTime } from "../slots/time.ts";
 import type { EventStore, StoredEvent, StreamWrite } from "../store/event-log.ts";
 import { buildDraft } from "./draft.ts";
-import { REPLY_STREAM, draftEvents, openDraft, projectReplies, type DraftRecord, type ReplyEvent } from "./events.ts";
+import { REPLY_STREAM, draftEvents, openDraft, projectReplies, type ApprovalClaims, type DraftRecord, type ReplyEvent } from "./events.ts";
 import { TEMPLATES, TEMPLATE_IDS, type TemplateId } from "./templates.ts";
 import { MAX_INTENT_CHARS, suggestReply } from "./suggest.ts";
-import { draftValidity } from "./view.ts";
+import { claimConfirmation, draftClaims, draftValidity } from "./view.ts";
 
 export const MAX_REPLY_CHARS = 2000;
 
@@ -90,9 +90,13 @@ export class ReplyService {
     if (note !== null && hasClinicalContent(note)) throw new OutOfScopeError();
     // Check before spending a model call. The append below checks again.
     this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
+    const result = await suggestReply(note, this.#kase.replyState().context, this.#client, { effort: this.#effort, model: this.#model });
+    // Evidence may have changed during the model call, and evidence writes do
+    // not move the reply stream. Read the case again and check the pick
+    // against it. A pick that no longer fits falls back to manual entry.
     const { context, log } = this.#kase.replyState();
-    const result = await suggestReply(note, context, this.#client, { effort: this.#effort, model: this.#model });
     const built = result.outcome === "valid" ? buildDraft(result.template!, result.slotKey!, context) : null;
+    const caseChanged = built && !built.ok ? built.problems : [];
     const suggestionId = `s${log.suggestions.length + 1}`;
     const events: ReplyEvent[] = [
       {
@@ -105,6 +109,7 @@ export class ReplyService {
           template: built?.ok ? result.template : null,
           slot_key: built?.ok ? result.slotKey : null,
           attempts: result.attempts.map(attemptData),
+          case_changed: caseChanged,
         },
       },
     ];
@@ -127,13 +132,16 @@ export class ReplyService {
     return this.#kase.view();
   }
 
-  // Edited text is never checked again (R-e). The draft keeps the label
-  // "Edited by you. Not checked." until it is discarded.
+  // Edited text is never checked against the case again (R-e). The draft
+  // keeps the label "Edited by you. Not checked." until it is discarded.
+  // The scope check still applies (R-f): an edit that asks for clinical
+  // content gets the fixed decline and nothing is recorded.
   edit(draftId: string, text: string, expectedVersion: number): CaseView {
     this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
     const draft = this.#open(draftId);
     if (text.trim().length === 0) throw new InvalidRequestError("The reply text is empty.");
     if (text.length > MAX_REPLY_CHARS) throw new InvalidRequestError(`The reply text is longer than ${MAX_REPLY_CHARS} characters.`);
+    if (hasClinicalContent(text)) throw new OutOfScopeError();
     if (text === draft.text) throw new InvalidRequestError("The text did not change.");
     const event: ReplyEvent = { type: "reply_edited", data: { draft_id: draftId, text } };
     this.#store.append(REPLY_STREAM, expectedVersion, [asEvent(event)], this.#describe);
@@ -148,11 +156,15 @@ export class ReplyService {
     return this.#kase.view();
   }
 
-  // Approval needs the name of every field the user read back. The draft
+  // Approval needs the name of every field the user read back, at the
+  // reply-stream version the readback was done at. Any edit moves the
+  // version, so a readback from before an edit is a stale edit. The draft
   // must still match the case. It records the claims the template asserts
-  // (R-a), the approval and the simulated send in one transaction. The send
-  // is only the local event: no network call is made (S12).
-  approve(draftId: string, confirmedFields: string[], expectedVersion: number): CaseView {
+  // (R-a), the approval and the simulated send in one transaction. When the
+  // text was edited away from the code render, the claims are recorded only
+  // if the user confirms the statement code builds from the template
+  // (R-h). The send is only the local event: no network call is made (S12).
+  approve(draftId: string, confirmedFields: string[], expectedVersion: number, options: { confirmClaim?: boolean } = {}): CaseView {
     this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
     const { context, view } = this.#kase.replyState();
     const draft = this.#open(draftId);
@@ -164,16 +176,14 @@ export class ReplyService {
     if (new Set(confirmedFields).size !== names.length || !names.every((n) => confirmedFields.includes(n))) {
       throw new InvalidRequestError(`Read back every field before approval: ${names.join(", ")}.`);
     }
+    // The edit was checked when it was saved. Check again, in case the
+    // stored text came from before the check existed.
+    if (draft.text !== draft.renderedText && hasClinicalContent(draft.text)) throw new OutOfScopeError();
 
-    const records = TEMPLATES[draft.template].records;
-    const targets: Array<{ type: "request" | "decline"; slotKey: string }> =
-      records === "request"
-        ? [{ type: "request", slotKey: draft.slotKey }]
-        : records === "decline"
-          ? [{ type: "decline", slotKey: draft.slotKey }]
-          : records === "decline_alternatives"
-            ? draft.declines.map((slotKey) => ({ type: "decline" as const, slotKey }))
-            : [];
+    const claims = draftClaims(draft);
+    const needsConfirmation = claimConfirmation(draft) !== null;
+    const targets = needsConfirmation && options.confirmClaim !== true ? [] : claims;
+    const outcome: ApprovalClaims = claims.length === 0 ? "none" : targets.length === 0 ? "not_confirmed" : "recorded";
     const now = this.#now();
     const accepted = context.evidence.filter((e) => e.status === "accepted");
     const latest = accepted.reduce((max, e) => Math.max(max, arrivalTime(e)), Number.NEGATIVE_INFINITY);
@@ -203,6 +213,7 @@ export class ReplyService {
           text: draft.text,
           edited: draft.edited,
           evidence_ids: writes.map((w) => w.streamId.slice("evidence:".length)),
+          claims: outcome,
         },
       },
       { type: "reply_send_simulated", data: { draft_id: draftId } },

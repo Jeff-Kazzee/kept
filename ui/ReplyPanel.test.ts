@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ReplyView } from "../src/reply/types.ts";
-import { ReplyPanel } from "./ReplyPanel.tsx";
+import { ReplyPanel, readbackDone } from "./ReplyPanel.tsx";
 
 const draft = {
   id: "d1",
@@ -23,6 +23,7 @@ const draft = {
   renderedText: "Hello,\n\nI accept the appointment on Monday 11/16 at 1:00 PM. Please confirm it.\n\nThank you.",
   text: "Hello,\n\nI accept the appointment on Monday 11/16 at 1:00 PM. Please confirm it.\n\nThank you.",
   edited: false,
+  claimConfirmation: null,
   valid: true,
   problems: [],
   createdAt: "2026-11-05T09:00:00.000Z",
@@ -50,7 +51,7 @@ describe("reply panel", () => {
     const html = render({
       ...base,
       draft: null,
-      sent: [{ draftId: "d1", template: "accept_offer", title: draft.title, slotKey: draft.slotKey, slotLabel: draft.slotLabel, text: draft.text, edited: false, evidenceIds: ["reply-d1-1"], approvedAt: "2026-11-05T09:00:00.000Z", simulated: true }],
+      sent: [{ draftId: "d1", template: "accept_offer", title: draft.title, slotKey: draft.slotKey, slotLabel: draft.slotLabel, text: draft.text, edited: false, evidenceIds: ["reply-d1-1"], claims: "recorded", approvedAt: "2026-11-05T09:00:00.000Z", simulated: true }],
     });
     expect(html).toContain('<div class="simulated" role="status">Simulated. Nothing was sent.</div>');
     expect(html).toContain("approved <span class=\"nowrap\">2026-11-05 09:00 UTC</span>");
@@ -63,5 +64,27 @@ describe("reply panel", () => {
       withheld: [{ template: "ask_still_stands", title: "Ask whether a slot still stands", slotKey: "2026-11-16", slotLabel: "Monday 11/16, no time", missing: ["time"] }],
     });
     expect(html).toContain("Not offered: Ask whether a slot still stands for Monday 11/16, no time. The slot has no time.");
+  });
+});
+
+describe("review round 1", () => {
+  it("finding 3: ticks made before a saved edit do not count", () => {
+    const names = new Set(draft.fields.map((f) => f.name));
+    // Every field ticked at version 1. Saving an edit moved the stream to 2.
+    expect(readbackDone({ at: 1, names }, draft, 1)).toBe(true);
+    expect(readbackDone({ at: 1, names }, draft, 2)).toBe(false);
+    expect(readbackDone({ at: 2, names: new Set(["date"]) }, draft, 2)).toBe(false);
+  });
+
+  it("finding 1: an edited draft shows the unticked claim statement, and a sent reply says no claim was recorded", () => {
+    const edited = render({ ...base, draft: { ...draft, edited: true, text: "I can't take it.", claimConfirmation: "This reply still requests Monday 11/16 1:00 PM" } });
+    expect(edited).toContain('<input type="checkbox"/> This reply still requests Monday 11/16 1:00 PM');
+    expect(edited).toContain("If you leave it unticked, approval records no slot change.");
+    const sent = render({
+      ...base,
+      draft: null,
+      sent: [{ draftId: "d1", template: "accept_offer", title: draft.title, slotKey: draft.slotKey, slotLabel: draft.slotLabel, text: "I can't take it.", edited: true, evidenceIds: [], claims: "not_confirmed", approvedAt: "2026-11-05T09:00:00.000Z", simulated: true }],
+    });
+    expect(sent).toContain("No slot change was recorded. You edited the text and did not confirm what it asserts.");
   });
 });

@@ -163,6 +163,23 @@ describe("local API for slot states", () => {
   });
 });
 
+describe("local API for replies", () => {
+  it("review round 1, finding 1: passes the claim confirmation of an edited draft to approval", async () => {
+    const api = setup();
+    const call = async (method: string, path: string, body?: unknown) => api({ method, path, body });
+    await call("POST", "/api/messages", fixtureMessage("m3"));
+    await call("POST", "/api/messages/m3/extract", { expectedVersion: 1 });
+    const evidence = ((await call("GET", "/api/state")).body as { evidence: Array<{ id: string; version: number }> }).evidence;
+    for (const e of evidence) await call("POST", `/api/evidence/${e.id}/accept`, { expectedVersion: e.version });
+    await call("POST", "/api/reply/drafts", { expectedVersion: 0, template: "accept_offer", slotKey: "2026-11-16T13:00" });
+    const edited = (await call("POST", "/api/reply/drafts/d1/edit", { expectedVersion: 1, text: "Monday works." })).body as { reply: ReplyView };
+    const fields = edited.reply.draft!.fields.map((f) => f.name);
+    expect((await call("POST", "/api/reply/drafts/d1/approve", { expectedVersion: 2, confirmedFields: fields, confirmClaim: "yes" })).status).toBe(400);
+    const approved = await call("POST", "/api/reply/drafts/d1/approve", { expectedVersion: 2, confirmedFields: fields, confirmClaim: true });
+    expect(approved.body).toMatchObject({ reply: { sent: [{ claims: "recorded" }] } });
+  });
+});
+
 describe("dev server", () => {
   let child: ChildProcess | undefined;
   const dir = mkdtempSync(path.join(tmpdir(), "d1-server-"));

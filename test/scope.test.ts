@@ -101,5 +101,9 @@ describe("SP3.9 S11: a clinical question gets the fixed decline", () => {
     expect(pasted).toEqual({ status: 422, body: { error: "out_of_scope", message: SCOPE_DECLINE } });
     const note = await api({ method: "POST", path: "/api/reply/suggest", body: { expectedVersion: 0, intent: S11_TEXT } });
     expect(note).toEqual({ status: 422, body: { error: "out_of_scope", message: SCOPE_DECLINE } });
+    // Review round 1, finding 2: the same text typed into a draft edit.
+    await api({ method: "POST", path: "/api/reply/drafts", body: { expectedVersion: 0, template: "accept_offer", slotKey: "2026-11-10T14:00" } });
+    const edit = await api({ method: "POST", path: "/api/reply/drafts/d1/edit", body: { expectedVersion: 1, text: S11_TEXT } });
+    expect(edit).toEqual({ status: 422, body: { error: "out_of_scope", message: SCOPE_DECLINE } });
   });
 });

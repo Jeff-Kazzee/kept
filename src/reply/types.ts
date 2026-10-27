@@ -45,6 +45,10 @@ export type DraftView = {
   // True once the user edited the text. It stays true until the draft is
   // discarded, even if the text is changed back.
   edited: boolean;
+  // Set when the text differs from the code render and the template records
+  // a claim. Approval records the claim only if the user confirms this
+  // statement. Null otherwise.
+  claimConfirmation: string | null;
   // False when the case changed so that the template or a field no longer
   // matches. Approval is refused until a new draft is made.
   valid: boolean;
@@ -65,6 +69,9 @@ export type SuggestionView = {
   // The parsed model output of each attempt, kept for display even when it
   // failed. Null when the output was not JSON or did not match the schema.
   outputs: unknown[];
+  // Set when the model's pick passed the checks but the case changed during
+  // the call so that it no longer fits. The problems against the new case.
+  caseChanged: string[];
   recordedAt: string;
 };
 
@@ -78,6 +85,9 @@ export type SentView = {
   edited: boolean;
   // Evidence items the approval recorded.
   evidenceIds: string[];
+  // recorded, none (the template records no claim), or not_confirmed (the
+  // text was edited and the user did not confirm what it asserts).
+  claims: "recorded" | "none" | "not_confirmed";
   approvedAt: string;
   // Always true. Nothing leaves the app.
   simulated: true;

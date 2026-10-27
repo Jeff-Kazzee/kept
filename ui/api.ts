@@ -106,6 +106,6 @@ export const api = {
     request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/edit`, { expectedVersion, text }),
   discardDraft: (id: string, expectedVersion: number) =>
     request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/discard`, { expectedVersion }),
-  approveDraft: (id: string, confirmedFields: string[], expectedVersion: number) =>
-    request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/approve`, { expectedVersion, confirmedFields }),
+  approveDraft: (id: string, confirmedFields: string[], expectedVersion: number, confirmClaim: boolean) =>
+    request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/approve`, { expectedVersion, confirmedFields, confirmClaim }),
 };

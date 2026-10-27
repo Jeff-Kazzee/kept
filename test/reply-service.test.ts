@@ -4,6 +4,8 @@
 import { describe, expect, it } from "vitest";
 import { CaseService } from "../src/case/service.ts";
 import type { CaseView } from "../src/case/types.ts";
+import { SCOPE_DECLINE } from "../src/domain/scope.ts";
+import type { ModelClient } from "../src/model/client.ts";
 import { RecordedModelClient, readRecording, type Recording } from "../src/model/recorded.ts";
 import { fromPackage } from "../src/paths.ts";
 import { checkReply } from "../src/reply/suggest.ts";
@@ -341,5 +343,109 @@ describe("SP3.4 the model picks a template and a slot, and code checks it", () =
     expect(checkReply(out, ctx)).toEqual([]);
     expect(checkReply({ ...out, fields: { ...out.fields, location: "Elm Street office" } }, ctx)).toEqual(["field_mismatch"]);
     expect(checkReply({ ...out, fields: { date: null, time: null, location: null } }, ctx)).toEqual([]);
+  });
+});
+
+describe("review round 1", () => {
+  const REFUSAL = "I can't take this appointment. Please offer another time.";
+
+  it("finding 1: an accept draft edited into a refusal records no request unless the user confirms it", async () => {
+    const { reply, store, intake: service } = await setup(["m1", "m2", "m3"]);
+    reply.start("accept_offer", "2026-11-16T13:00", 0);
+    const edited = reply.edit("d1", REFUSAL, 1);
+    expect(edited.reply.draft!.claimConfirmation).toBe("This reply still requests Monday 11/16 1:00 PM");
+    const view = reply.approve("d1", allFields(edited), 2);
+    expect(view.slots.find((s) => s.key === "2026-11-16T13:00")!.stateLabel).toBe("Offered · office message");
+    expect(view.reply.sent).toMatchObject([{ text: REFUSAL, edited: true, claims: "not_confirmed", evidenceIds: [] }]);
+    expect(service.evidence().filter((e) => e.origin === "reply")).toEqual([]);
+    expect(replyEvents(store)).toEqual(["reply_drafted", "reply_edited", "reply_approved", "reply_send_simulated"]);
+  });
+
+  it("finding 1: the ticked confirmation records the template's request", async () => {
+    const { reply } = await setup(["m1", "m2", "m3"]);
+    reply.start("accept_offer", "2026-11-16T13:00", 0);
+    const text = "Hello,\n\nMonday 11/16 at 1:00 PM works for me. Please confirm it.\n\nDana Reyes";
+    const edited = reply.edit("d1", text, 1);
+    const view = reply.approve("d1", allFields(edited), 2, { confirmClaim: true });
+    expect(view.slots.find((s) => s.key === "2026-11-16T13:00")!.stateLabel).toBe("Requested · reported by you");
+    expect(view.reply.sent).toMatchObject([{ claims: "recorded", evidenceIds: ["reply-d1-1"] }]);
+  });
+
+  it("finding 1: a restored code render needs no confirmation, and each template builds its own statement", async () => {
+    const { reply } = await setup(["m2", "m3"]);
+    const started = reply.start("accept_offer", "2026-11-16T13:00", 0);
+    const rendered = started.reply.draft!.text;
+    reply.edit("d1", REFUSAL, 1);
+    const back = reply.edit("d1", rendered, 2);
+    expect(back.reply.draft).toMatchObject({ edited: true, claimConfirmation: null });
+    expect(reply.approve("d1", allFields(back), 3).reply.sent[0]).toMatchObject({ claims: "recorded" });
+
+    const decline = reply.start("decline_offer", "2026-11-13T09:15", 5);
+    expect(reply.edit(decline.reply.draft!.id, "Friday is fine.", 6).reply.draft!.claimConfirmation).toBe("This reply still declines Friday 11/13 9:15 AM");
+    const keep = reply.start("keep_original", "2026-11-12T10:30", 7);
+    // Monday was requested by the first approval, so it is an open
+    // alternative that keeping Thursday declines too (T5).
+    expect(reply.edit(keep.reply.draft!.id, "Changed.", 9).reply.draft!.claimConfirmation).toBe(
+      "This reply still keeps Thursday 11/12 10:30 AM and declines Friday 11/13 9:15 AM and Monday 11/16 1:00 PM",
+    );
+    const ask = reply.start("ask_still_stands", "2026-11-12T10:30", 10);
+    const askEdited = reply.edit(ask.reply.draft!.id, "Is it still on?", 12);
+    expect(askEdited.reply.draft!.claimConfirmation).toBeNull();
+    expect(reply.approve(askEdited.reply.draft!.id, allFields(askEdited), 13).reply.sent.at(-1)).toMatchObject({ claims: "none" });
+  });
+
+  it("finding 2: an edit that asks a clinical question gets the fixed decline and nothing is recorded", async () => {
+    const { reply, store } = await setup(["m2", "m3"]);
+    reply.start("ask_still_stands", "2026-11-12T10:30", 0);
+    const count = store.readAll().length;
+    expect(() => reply.edit("d1", "Before the visit, can you tell me what my symptoms mean?", 1)).toThrow(SCOPE_DECLINE);
+    expect(store.readAll()).toHaveLength(count);
+  });
+
+  it("finding 2: approval checks a stored edit again", async () => {
+    const { reply, store, kase } = await setup(["m2", "m3"]);
+    reply.start("ask_still_stands", "2026-11-12T10:30", 0);
+    // An edit stored before the check existed.
+    store.append("reply", 1, [{ type: "reply_edited", data: { draft_id: "d1", text: "Before the visit, can you tell me what my symptoms mean?" } }]);
+    const count = store.readAll().length;
+    expect(() => reply.approve("d1", allFields(kase.view()), 2)).toThrow(SCOPE_DECLINE);
+    expect(store.readAll()).toHaveLength(count);
+  });
+
+  it("finding 3: a readback made before a saved edit is refused", async () => {
+    const { reply, store } = await setup(["m1"]);
+    const started = reply.start("accept_offer", "2026-11-10T14:00", 0);
+    // The user ticked every field at version 1, then saved an edit.
+    reply.edit("d1", REFUSAL, 1);
+    const count = store.readAll().length;
+    expect(() => reply.approve("d1", allFields(started), 1)).toThrow(StaleEditError);
+    expect(store.readAll()).toHaveLength(count);
+  });
+
+  it("finding 4: a pick that no longer fits after the model call falls back to manual entry", async () => {
+    const store = new EventStore();
+    const service = intake(store);
+    await acceptMessages(service, ["m1", "m2", "m3"]);
+    const recorded = RecordedModelClient.fromDirectory();
+    // While the model call is in flight, m4 confirms Monday.
+    const client: ModelClient = {
+      label: "slow",
+      async call(request) {
+        await acceptMessages(service, ["m4"]);
+        return recorded.call(request);
+      },
+    };
+    const kase = new CaseService(store, service, client, { now: () => NOW, userName: "Dana Reyes" });
+    const reply = new ReplyService(store, kase, client, { now: () => NOW });
+    const view = await reply.suggest("I want Monday.", 0);
+    expect(view.slots.find((s) => s.key === "2026-11-16T13:00")!.stateLabel).toBe("Confirmed · office message");
+    expect(view.reply.draft).toBeNull();
+    expect(view.reply.suggestion).toMatchObject({
+      outcome: "manual_needed",
+      template: null,
+      attempts: [{ outcome: "valid" }],
+      caseChanged: ["template_not_valid_for_state"],
+    });
+    expect(replyEvents(store)).toEqual(["reply_suggested"]);
   });
 });

@@ -65,6 +65,9 @@ export function ReplyPanel({ reply, run }: { reply: ReplyView; run: Run }) {
                 {s.evidenceIds.length > 0 && ` · recorded as ${s.evidenceIds.join(", ")}`}
               </div>
               {s.edited && <div className="warn">{EDITED_LABEL}</div>}
+              {s.claims === "not_confirmed" && (
+                <div className="warn">No slot change was recorded. You edited the text and did not confirm what it asserts.</div>
+              )}
               <pre>{s.text}</pre>
             </div>
           ))}
@@ -74,25 +77,41 @@ export function ReplyPanel({ reply, run }: { reply: ReplyView; run: Run }) {
   );
 }
 
+// The fields the user ticked and the reply-stream version they were ticked
+// at. Approval states that version, so the server refuses a readback made
+// before a later edit.
+export type Readback = { at: number; names: ReadonlySet<string> };
+
+// True when every field was ticked at the current version. A saved edit or
+// any other change to the draft moves the version, so old ticks no longer
+// count.
+export function readbackDone(read: Readback, draft: DraftView, version: number): boolean {
+  return read.at === version && draft.fields.every((f) => read.names.has(f.name));
+}
+
 function DraftCard({ draft, version, run }: { draft: DraftView; version: number; run: Run }) {
   const [text, setText] = useState(draft.text);
-  const [read, setRead] = useState<Set<string>>(new Set());
-  // A new draft or a saved edit resets the local copy and the readback.
+  const [read, setRead] = useState<Readback>({ at: version, names: new Set() });
+  const [confirmClaim, setConfirmClaim] = useState(false);
+  const fieldKey = JSON.stringify(draft.fields.map((f) => [f.name, f.value]));
+  // A new draft, a saved edit or any new version resets the local copy, the
+  // readback and the claim confirmation.
   useEffect(() => {
     setText(draft.text);
   }, [draft.id, draft.text]);
   useEffect(() => {
-    setRead(new Set());
-  }, [draft.id]);
+    setRead({ at: version, names: new Set() });
+    setConfirmClaim(false);
+  }, [draft.id, draft.text, version, fieldKey]);
 
   const unsaved = text !== draft.text;
-  const allRead = draft.fields.every((f) => read.has(f.name));
+  const allRead = readbackDone(read, draft, version);
   const toggle = (name: string) =>
     setRead((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
+      const names = new Set(prev.at === version ? prev.names : []);
+      if (names.has(name)) names.delete(name);
+      else names.add(name);
+      return { at: version, names };
     });
 
   return (
@@ -123,7 +142,12 @@ function DraftCard({ draft, version, run }: { draft: DraftView; version: number;
           {draft.fields.map((f) => (
             <tr key={f.name}>
               <td>
-                <input type="checkbox" aria-label={`I read ${f.label}`} checked={read.has(f.name)} onChange={() => toggle(f.name)} />
+                <input
+                  type="checkbox"
+                  aria-label={`I read ${f.label}`}
+                  checked={read.at === version && read.names.has(f.name)}
+                  onChange={() => toggle(f.name)}
+                />
               </td>
               <td>{f.label}</td>
               <td>{f.display ?? <em>Not in any accepted evidence. Left out of the reply.</em>}</td>
@@ -144,11 +168,19 @@ function DraftCard({ draft, version, run }: { draft: DraftView; version: number;
       <div className="label">Reply text</div>
       {draft.edited && <div className="warn">{EDITED_LABEL}</div>}
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={8} cols={80} maxLength={2000} />
+      {draft.claimConfirmation && !unsaved && (
+        <div className="card">
+          <label>
+            <input type="checkbox" checked={confirmClaim} onChange={(e) => setConfirmClaim(e.target.checked)} /> {draft.claimConfirmation}
+          </label>
+          <div>You edited the text. Tick this only if your text still says it. If you leave it unticked, approval records no slot change.</div>
+        </div>
+      )}
       <div>
         {unsaved && <button onClick={() => run(() => api.editDraft(draft.id, text, version))}>Save edit</button>}
         <button
           disabled={!allRead || !draft.valid || unsaved}
-          onClick={() => run(() => api.approveDraft(draft.id, draft.fields.map((f) => f.name), version))}
+          onClick={() => run(() => api.approveDraft(draft.id, draft.fields.map((f) => f.name), read.at, confirmClaim))}
         >
           Approve and send (simulated)
         </button>
@@ -166,7 +198,9 @@ function SuggestionCard({ suggestion }: { suggestion: SuggestionView }) {
       <div className="label">
         {suggestion.outcome === "valid"
           ? `Model output (${suggestion.model}, effort ${suggestion.effort}), passed the code checks`
-          : "Model output failed the code checks twice. Pick a template yourself below."}
+          : suggestion.caseChanged.length > 0
+            ? `The case changed during the model call, so its pick no longer fits (${suggestion.caseChanged.join(", ")}). Pick a template yourself below.`
+            : "Model output failed the code checks twice. Pick a template yourself below."}
       </div>
       {suggestion.intent && <div>Your note: “{suggestion.intent}”</div>}
       <ul>

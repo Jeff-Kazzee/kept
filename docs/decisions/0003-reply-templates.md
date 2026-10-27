@@ -3,7 +3,8 @@
 Status: proposed, pending Jeff, 2026-10-27
 
 This records how the user replies to the office in sprint 3 (D3). R-a to
-R-g were set by the coordinator for this sprint. T items were chosen while
+R-h were set by the coordinator for this sprint. T1 was accepted by the
+coordinator on 2026-10-27 and waits for Jeff. T items were chosen while
 building it where the rules left a case open. Jeff's decisions of
 2026-10-27 on W30 and the extraction effort are recorded in 0002.
 
@@ -46,17 +47,30 @@ are shown when the case has them and left out of the text otherwise.
   evidence or slot it came from.
 - R-d. A template that needs a field the slot lacks is not offered (S7).
   T1 narrows this for the place.
-- R-e. Edited text is never checked again and never shown as checked. The
-  label "Edited by you. Not checked." stays until the draft is discarded,
-  even when the text is changed back.
+- R-e. Edited text is never checked against the case again and never shown
+  as checked. The label "Edited by you. Not checked." stays until the draft
+  is discarded, even when the text is changed back. The scope check of R-f
+  still applies to it.
 - R-f. Text the user types is checked with the clinical-content check before
-  any model call (S11). See T11.
+  any model call or write (S11). This covers a pasted report, a note for the
+  model call and an edit of a draft. Approval checks an edited text again.
+  See T11.
 - R-g. The simulated send writes only local events. A test counts fetch,
   socket, TLS, HTTP, HTTPS and DNS calls during approval and finds none.
+- R-h. When the text was edited away from the code render, approval
+  records no claim by default. The approve step shows one more statement
+  built by code from the template, for example "This reply still requests
+  Monday 11/16 1:00 PM", unticked. Only when the user ticks it does approval
+  record the template's claims. Otherwise approval records the draft and the
+  simulated send only, and the sent reply says no slot change was recorded.
+  A text equal to the code render, also one restored after an edit, needs
+  no statement. The ask-whether-it-stands template records no claim, so it
+  shows none. Set in review round 1.
 
 ## Choices made while building
 
-- T1. The place is optional for every template, including accept. R-d
+- T1 (accepted by the coordinator 2026-10-27). The place is optional for
+  every template, including accept. R-d
   asked that accept need a place. In the demo, m3 offers Monday 11/16 1:00
   PM without a place, so that rule would withhold the accept template from
   the demo beat "Dana picks Monday. The accept template renders." The reply
@@ -87,7 +101,10 @@ are shown when the case has them and left out of the text otherwise.
   uses no model call: code takes the template from the tap, so the model
   cannot change what the user chose.
 - T8. Approval needs the name of every field the user read back, and the UI
-  keeps the button disabled until each field is ticked. Approval refuses a
+  keeps the button disabled until each field is ticked. Approval states the
+  reply-stream version the ticks were made at. A saved edit moves the
+  version, so the UI clears the ticks and the server refuses a readback
+  from before the edit. Approval refuses a
   draft whose template no longer fits the slot or whose fields no longer
   equal what code builds (`case_changed`). The user discards it and starts
   again.
@@ -99,7 +116,7 @@ are shown when the case has them and left out of the text otherwise.
   It carries no place, so it never changes a slot's place. Its quote is a
   code label such as "Approved reply: I accept Monday 11/16 1:00 PM".
 - T11. The clinical check covers a pasted report on the `user_report`
-  channel and the note for the model call. A clinical report is refused at
+  channel, the note for the model call and every draft edit. A clinical report is refused at
   import, so its text is never stored. Office messages are imported as data
   and are not checked, because the office may name things to bring.
 - T12. Edited text must not be empty, must differ from the current text and
@@ -111,3 +128,11 @@ are shown when the case has them and left out of the text otherwise.
 - T14. A proposed date and time must match exactly. A proposed place must
   match apart from case and spacing. A null value proposes nothing.
 - T15. The template call defaults to effort `low`, like the other D2 calls.
+- T16. Evidence writes do not move the reply stream, so a model call can
+  return after the case changed. The pick is checked again against the case
+  as it is when the call returns. A pick that no longer fits is recorded as
+  a fallback to manual entry with the problems, and no draft opens.
+- T17. The evaluation scores the model's own final pick apart from the
+  system outcome. When no template fits, the code fallback meets the
+  expected outcome, and the report counts how often the model still
+  proposed a pick that code blocked.

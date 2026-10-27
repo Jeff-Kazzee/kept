@@ -36,7 +36,9 @@ const AnswerBody = z
 const StartDraftBody = z.object({ expectedVersion: Version, template: z.string().min(1).max(50), slotKey: z.string().min(1).max(50) }).strict();
 const EditDraftBody = z.object({ expectedVersion: Version, text: z.string().max(5000) }).strict();
 const SuggestBody = z.object({ expectedVersion: Version, intent: z.string().max(2000).nullable() }).strict();
-const ApproveBody = z.object({ expectedVersion: Version, confirmedFields: z.array(z.string().max(50)).max(20) }).strict();
+const ApproveBody = z
+  .object({ expectedVersion: Version, confirmedFields: z.array(z.string().max(50)).max(20), confirmClaim: z.boolean().optional() })
+  .strict();
 
 export type ApiOptions = { mode: "recorded" | "live" };
 
@@ -105,8 +107,8 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       reply.discard(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
     ],
     ["POST", /^\/api\/reply\/drafts\/([^/]+)\/approve$/, (m, body) => {
-      const { expectedVersion, confirmedFields } = ApproveBody.parse(body);
-      return reply.approve(decodeURIComponent(m[1]!), confirmedFields, expectedVersion);
+      const { expectedVersion, confirmedFields, confirmClaim } = ApproveBody.parse(body);
+      return reply.approve(decodeURIComponent(m[1]!), confirmedFields, expectedVersion, { confirmClaim });
     }],
   ];
 

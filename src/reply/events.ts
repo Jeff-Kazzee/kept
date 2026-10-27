@@ -21,6 +21,9 @@ export type ReplyEvent =
         template: TemplateId | null;
         slot_key: string | null;
         attempts: AttemptData[];
+        // Problems with a valid pick once the case changed during the model
+        // call. The suggestion then falls back to manual entry.
+        case_changed?: string[];
       };
     }
   | {
@@ -50,10 +53,17 @@ export type ReplyEvent =
         text: string;
         edited: boolean;
         evidence_ids: string[];
+        // recorded: the template's claims were recorded. none: the template
+        // records no claim. not_confirmed: the text was edited away from the
+        // code render and the user did not confirm what it still asserts,
+        // so no claim was recorded.
+        claims: ApprovalClaims;
       };
     }
   // Nothing leaves the app. This event is the whole send.
   | { type: "reply_send_simulated"; data: { draft_id: string } };
+
+export type ApprovalClaims = "recorded" | "none" | "not_confirmed";
 
 export type DraftRecord = {
   id: string;
@@ -70,7 +80,7 @@ export type DraftRecord = {
   edited: boolean;
   status: "open" | "discarded" | "approved";
   createdAt: string;
-  approval: { text: string; edited: boolean; evidenceIds: string[]; approvedAt: string; sent: boolean } | null;
+  approval: { text: string; edited: boolean; evidenceIds: string[]; claims: ApprovalClaims; approvedAt: string; sent: boolean } | null;
 };
 
 export type SuggestionRecord = Extract<ReplyEvent, { type: "reply_suggested" }>["data"] & { recordedAt: string };
@@ -117,7 +127,14 @@ export function projectReplies(events: StoredEvent[]): ReplyLog {
       draft.status = "discarded";
     } else if (event.type === "reply_approved") {
       draft.status = "approved";
-      draft.approval = { text: event.data.text, edited: event.data.edited, evidenceIds: event.data.evidence_ids, approvedAt: e.recordedAt, sent: false };
+      draft.approval = {
+        text: event.data.text,
+        edited: event.data.edited,
+        evidenceIds: event.data.evidence_ids,
+        claims: event.data.claims,
+        approvedAt: e.recordedAt,
+        sent: false,
+      };
     } else if (event.type === "reply_send_simulated" && draft.approval) {
       draft.approval.sent = true;
     }
