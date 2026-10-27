@@ -54,6 +54,13 @@ CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+CREATE TABLE IF NOT EXISTS rate_windows (
+  key TEXT NOT NULL,
+  window_start INTEGER NOT NULL,
+  calls INTEGER NOT NULL DEFAULT 0,
+  denied INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (key, window_start)
+);
 `;
 
 type Row = { seq: number; stream_id: string; version: number; type: string; data: string; recorded_at: string };
@@ -69,9 +76,12 @@ const toEvent = (r: Row): StoredEvent => ({
 
 const defaultDescribe: Describe = (_streamId, events) => ({ version: events.at(-1)?.version ?? 0, events });
 
+export type RateWindow = { windowStart: number; calls: number; denied: number };
+
 export class EventStore {
   readonly #db: DatabaseSync;
   readonly #clock: () => string;
+  #depth = 0;
 
   // `location` is a file path or ":memory:".
   constructor(location: string = ":memory:", clock: () => string = () => new Date().toISOString()) {
@@ -123,14 +133,35 @@ export class EventStore {
     return this.appendMany([{ streamId, expectedVersion, events }], describe);
   }
 
+  // Runs `fn` as one unit of work. The outermost call takes the write lock
+  // at once (BEGIN IMMEDIATE), so a check and the writes that depend on it
+  // see the same state, and another process waits until it commits. A
+  // nested call is a savepoint: its failure undoes only its own writes.
+  // `fn` must be synchronous.
+  transaction<T>(fn: () => T): T {
+    const savepoint = `sp${this.#depth}`;
+    this.#db.exec(this.#depth === 0 ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
+    this.#depth++;
+    try {
+      const result = fn();
+      if (result instanceof Promise) throw new Error("A transaction must be synchronous.");
+      this.#depth--;
+      this.#db.exec(this.#depth === 0 ? "COMMIT" : `RELEASE ${savepoint}`);
+      return result;
+    } catch (err) {
+      this.#depth--;
+      this.#db.exec(this.#depth === 0 ? "ROLLBACK" : `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`);
+      throw err;
+    }
+  }
+
   // Writes to several streams in one transaction. Every stream must be at its
   // expected version, or nothing is written.
   appendMany(writes: StreamWrite[], describe: Describe = defaultDescribe): StoredEvent[] {
     const insert = this.#db.prepare(
       "INSERT INTO events (stream_id, version, type, data, recorded_at) VALUES (?, ?, ?, ?, ?) RETURNING *",
     );
-    this.#db.exec("BEGIN IMMEDIATE");
-    try {
+    return this.transaction(() => {
       const written: StoredEvent[] = [];
       const seen = new Set<string>();
       for (const w of writes) {
@@ -144,12 +175,8 @@ export class EventStore {
           written.push(toEvent(row));
         });
       }
-      this.#db.exec("COMMIT");
       return written;
-    } catch (err) {
-      this.#db.exec("ROLLBACK");
-      throw err;
-    }
+    });
   }
 
   // Appends system events, such as access log entries, at the stream's next
@@ -159,17 +186,40 @@ export class EventStore {
     const insert = this.#db.prepare(
       "INSERT INTO events (stream_id, version, type, data, recorded_at) VALUES (?, ?, ?, ?, ?) RETURNING *",
     );
-    this.#db.exec("BEGIN IMMEDIATE");
-    try {
+    return this.transaction(() => {
       const current = this.streamVersion(streamId);
       const at = this.#clock();
-      const written = events.map((e, i) => toEvent(insert.get(streamId, current + i + 1, e.type, JSON.stringify(e.data), at) as unknown as Row));
-      this.#db.exec("COMMIT");
-      return written;
-    } catch (err) {
-      this.#db.exec("ROLLBACK");
-      throw err;
-    }
+      return events.map((e, i) => toEvent(insert.get(streamId, current + i + 1, e.type, JSON.stringify(e.data), at) as unknown as Row));
+    });
+  }
+
+  // Call counts in fixed time windows, for limits that every process on this
+  // file shares. These rows are counters, not history, so they are updated
+  // and removed. Use them inside transaction(), so a read and the update
+  // that depends on it are one step.
+  rateWindow(key: string, windowStart: number): RateWindow {
+    const row = this.#db.prepare("SELECT calls, denied FROM rate_windows WHERE key = ? AND window_start = ?").get(key, windowStart) as
+      | { calls: number; denied: number }
+      | undefined;
+    return { windowStart, calls: row?.calls ?? 0, denied: row?.denied ?? 0 };
+  }
+
+  bumpRateWindow(key: string, windowStart: number, field: "calls" | "denied"): RateWindow {
+    this.#db
+      .prepare(
+        `INSERT INTO rate_windows (key, window_start, ${field}) VALUES (?, ?, 1)
+         ON CONFLICT (key, window_start) DO UPDATE SET ${field} = ${field} + 1`,
+      )
+      .run(key, windowStart);
+    return this.rateWindow(key, windowStart);
+  }
+
+  // Removes and returns the key's windows that started before `before`.
+  closeRateWindows(key: string, before: number): RateWindow[] {
+    const rows = this.#db
+      .prepare("DELETE FROM rate_windows WHERE key = ? AND window_start < ? RETURNING window_start, calls, denied")
+      .all(key, before) as Array<{ window_start: number; calls: number; denied: number }>;
+    return rows.map((r) => ({ windowStart: r.window_start, calls: r.calls, denied: r.denied })).sort((a, b) => a.windowStart - b.windowStart);
   }
 
   // Exposed for tests that prove the triggers block edits.

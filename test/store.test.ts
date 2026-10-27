@@ -72,4 +72,25 @@ describe("event log", () => {
     expect(second.readStream("a")).toMatchObject([{ version: 1, type: "x", data: { kept: true } }]);
     second.close();
   });
+
+  it("runs a nested transaction as a savepoint that rolls back alone", () => {
+    const store = new EventStore();
+    store.transaction(() => {
+      store.append("a", 0, [{ type: "x", data: {} }]);
+      expect(() => store.transaction(() => {
+        store.append("b", 0, [{ type: "y", data: {} }]);
+        throw new Error("inner failure");
+      })).toThrow("inner failure");
+      // A stale append inside the outer transaction undoes only itself.
+      expect(() => store.append("a", 0, [{ type: "z", data: {} }])).toThrow(StaleEditError);
+      store.append("a", 1, [{ type: "w", data: {} }]);
+    });
+    expect(store.readAll().map((e) => `${e.streamId}:${e.type}`)).toEqual(["a:x", "a:w"]);
+    expect(() => store.transaction(() => {
+      store.append("c", 0, [{ type: "x", data: {} }]);
+      throw new Error("outer failure");
+    })).toThrow("outer failure");
+    expect(store.readStream("c")).toEqual([]);
+    expect(() => store.transaction(() => Promise.resolve(1))).toThrow(/synchronous/);
+  });
 });

@@ -1,7 +1,8 @@
 // Input rules for record writes and proposals. The app and the MCP server
 // both validate with these schemas, so an agent gets no looser rules than
-// the user. Date, time and event time use the same format checks as a
-// manual entry.
+// the user. Date and time use the same format checks as a manual entry. An
+// agent report has no event time, the same as a manual entry, so slot order
+// falls back to when the agent reported it.
 import { z } from "zod";
 import { ClaimType } from "../domain/claim.ts";
 import { checkSlotFormats, isValidDate, isValidTime } from "../domain/datetime.ts";
@@ -66,9 +67,6 @@ const Place = z.string().trim().min(1).max(300).refine(noHidden, "The place cont
 const Item = z.string().trim().min(1).max(300).refine(noHidden, "The item contains control characters.");
 const DateString = z.string().refine((s) => checkSlotFormats({ date: s, time: null, event_time: null }).length === 0, "Use YYYY-MM-DD.");
 const TimeString = z.string().refine((s) => checkSlotFormats({ date: null, time: s, event_time: null }).length === 0, "Use 24-hour HH:MM.");
-const EventTime = z
-  .string()
-  .refine((s) => checkSlotFormats({ date: null, time: null, event_time: s }).length === 0, "Use YYYY-MM-DD or an ISO date-time with an offset.");
 
 export const ProposedChangeInput = z.discriminatedUnion("kind", [
   z
@@ -89,7 +87,6 @@ export const ProposedChangeInput = z.discriminatedUnion("kind", [
       time: TimeString.nullable().default(null),
       location: Place.nullable().default(null),
       request_item: Item.nullable().default(null),
-      event_time: EventTime.nullable().default(null),
       statement: Statement,
     })
     .strict()

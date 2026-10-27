@@ -1,12 +1,15 @@
 // SP4.1 to SP4.3 and SP4.10 at the domain level: notes, tags, archive and
 // undo on appointment records, and agent proposals that wait for the user.
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { CaseService } from "../src/case/service.ts";
 import { InvalidRequestError, NotFoundError } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { USER, type Actor } from "../src/records/events.ts";
 import { RecordsService } from "../src/records/service.ts";
-import { EventStore, StaleEditError } from "../src/store/event-log.ts";
+import { EventStore, StaleEditError, type Describe } from "../src/store/event-log.ts";
 import { acceptMessages, intake } from "./helpers.ts";
 
 const THU = "2026-11-12T10:30";
@@ -195,7 +198,7 @@ describe("SP4.10 proposals wait for the user (rule 8)", () => {
     records.propose({ kind: "detail_edit", appointment_id: THU, expected_version: 0, location: "Lantern Hill Clinic, 400 Elm Street, Suite 3", statement: "Suite 3, not 2." }, GRANT);
     expect(kase.view().slots.map((s) => s.key)).toEqual([THU]);
     records.confirmProposal("p-1", 1);
-    records.confirmProposal("p-2", 1);
+    records.confirmProposal("p-2", 1, { recordVersion: 0 });
     const slots = kase.view().slots;
     expect(slots.map((s) => [s.key, s.stateLabel])).toEqual([
       [THU, "Confirmed · office message"],
@@ -244,5 +247,107 @@ describe("access log stream", () => {
       ["Laptop assistant", "list_appointments", "ok"],
       [null, "add_note", "permission_denied"],
     ]);
+  });
+});
+
+describe("review round 1", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("finding 2: a place edit is confirmed only at the record version the user saw", async () => {
+    const { records, kase } = await setup(["m2"]);
+    records.addNote(THU, "app note", 0, USER);
+    const p = records.propose({ kind: "detail_edit", appointment_id: THU, expected_version: 1, location: "Suite 9", statement: "Suite 9." }, GRANT);
+    expect(p.recordVersion).toBe(1);
+    // The app adds a note before the user confirms.
+    records.addNote(THU, "another app note", 1, USER);
+    expect(() => records.confirmProposal(p.id, 1)).toThrow(/place edit needs the record version/);
+    expect(stale(() => records.confirmProposal(p.id, 1, { recordVersion: 1 })).currentVersion).toBe(2);
+    expect(records.proposal(p.id).status).toBe("pending");
+    expect(kase.view().slots[0]!.location).toBe("Lantern Hill Clinic, 400 Elm Street, Suite 2");
+    records.confirmProposal(p.id, 1, { recordVersion: 2 });
+    expect(kase.view().slots[0]!.location).toBe("Suite 9");
+  });
+
+  it("finding 2: no write from another process lands between the version check and the proposal write", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "records-race-"));
+    dirs.push(dir);
+    const file = path.join(dir, "app.sqlite");
+    // The app's connection fails at once on a held lock instead of waiting.
+    const app = new EventStore(file, CLOCK);
+    app.unsafeExecForTest("PRAGMA busy_timeout = 0");
+    const appIntake = intake(app);
+    await acceptMessages(appIntake, ["m2"]);
+    const appRecords = new RecordsService(app, appIntake, new CaseService(app, appIntake, RecordedModelClient.fromDirectory()));
+
+    // The agent's connection. Right after its version check passes, the app
+    // tries to add a note to the same record.
+    let gapWrite: unknown = "not tried";
+    class GapStore extends EventStore {
+      override assertVersion(streamId: string, expectedVersion: number, describe?: Describe): void {
+        super.assertVersion(streamId, expectedVersion, describe);
+        if (streamId === `record:${THU}` && gapWrite === "not tried") {
+          try {
+            appRecords.addNote(THU, "written in the gap", 0, USER);
+            gapWrite = "written";
+          } catch (err) {
+            gapWrite = err;
+          }
+        }
+      }
+    }
+    const agent = new GapStore(file, CLOCK);
+    const agentIntake = intake(agent);
+    const agentRecords = new RecordsService(agent, agentIntake, new CaseService(agent, agentIntake, RecordedModelClient.fromDirectory()));
+    try {
+      const p = agentRecords.propose({ kind: "archive", appointment_id: THU, expected_version: 0, statement: "Old." }, GRANT);
+      expect(String(gapWrite)).toMatch(/locked|busy/i);
+      expect(p).toMatchObject({ status: "pending", recordVersion: 0 });
+      expect(appRecords.record(THU).version).toBe(0);
+    } finally {
+      agent.close();
+      app.close();
+    }
+  });
+
+  it("finding 6: an agent report has no event time, so a later office message outranks it", async () => {
+    let now = "2026-11-06T12:00:00.000Z";
+    const store = new EventStore(":memory:", () => now);
+    const service = intake(store);
+    await acceptMessages(service, ["m2"]);
+    const kase = new CaseService(store, service, RecordedModelClient.fromDirectory());
+    const records = new RecordsService(store, service, kase, { newId: () => "p-1" });
+
+    // The failing case: an invented event time far in the future.
+    expect(() =>
+      records.propose(
+        { kind: "user_report", claim_type: "cancel", date: "2026-11-12", time: "10:30", event_time: "2030-01-01T00:00:00Z", statement: "Canceled." },
+        GRANT,
+      ),
+    ).toThrow(InvalidRequestError);
+
+    records.propose({ kind: "user_report", claim_type: "cancel", date: "2026-11-12", time: "10:30", statement: "Canceled." }, GRANT);
+    records.confirmProposal("p-1", 1);
+    expect(service.evidenceItem("p-1-1").claim).toMatchObject({ event_time: null, evidence_time: "2026-11-06T12:00:00.000Z" });
+    expect(labels(kase)[THU]).toBe("Canceled · reported by you through Laptop assistant");
+
+    // The office's reminder arrives four hours after the agent's report.
+    now = "2026-11-06T18:00:00.000Z";
+    await acceptMessages(service, ["s15-injection"]);
+    expect(labels(kase)[THU]).toBe("Confirmed · office message");
+  });
+
+  it("finding 7: only the latest tag change still in effect can be undone", async () => {
+    const { records, store } = await setup(["m2"]);
+    records.setTags(THU, ["a"], 0, USER);
+    records.setTags(THU, ["b"], 1, USER);
+    const before = store.readStream(`record:${THU}`).length;
+    expect(() => records.undo(THU, 1, 2)).toThrow(/Only the latest tag change can be undone\. That is the one at version 2\./);
+    expect(store.readStream(`record:${THU}`)).toHaveLength(before);
+    expect(records.undo(THU, 2, 2).tags).toEqual(["a"]);
+    // Now version 1 is the latest tag change in effect.
+    expect(records.undo(THU, 1, 3).tags).toEqual([]);
   });
 });

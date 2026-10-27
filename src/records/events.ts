@@ -116,7 +116,6 @@ export type ProposedChange =
       time: string | null;
       location: string | null;
       request_item: string | null;
-      event_time: string | null;
       statement: string;
     }
   | { kind: "detail_edit"; appointment_id: string; location: string; statement: string }
@@ -185,9 +184,20 @@ export function projectProposals(events: StoredEvent[]): Map<string, ProposalVie
   return views;
 }
 
-export type AccessResult = "ok" | "permission_denied" | "invalid_input" | "not_found" | "stale_edit" | "rate_limited" | "error";
+export type AccessResult =
+  | "ok"
+  | "permission_denied"
+  | "unknown_tool"
+  | "invalid_input"
+  | "not_found"
+  | "stale_edit"
+  | "rate_limited"
+  | "error";
 
 // One MCP tool call. Never holds the token, its hash or the call's input.
+// The first call a rate limit denies in a window is logged on its own. The
+// later denials of that window are logged as one summary entry with tool
+// "*" and `count`, when the grant's next call arrives after the window.
 export type AccessEvent = {
   type: "tool_called";
   data: {
@@ -196,6 +206,7 @@ export type AccessEvent = {
     tool: string;
     result: AccessResult;
     appointment_id: string | null;
+    count?: number;
   };
 };
 
