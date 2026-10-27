@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { ClaimType, Effort, Message, sourceTypeForChannel, type EvidenceClaim } from "../domain/claim.ts";
 import { checkSlotFormats } from "../domain/datetime.ts";
+import { OutOfScopeError, hasClinicalContent } from "../domain/scope.ts";
 import { quoteAppearsIn } from "../domain/quote.ts";
 import { extractClaims, type ExtractionResult } from "../extract/extract.ts";
 import type { ModelClient } from "../model/client.ts";
@@ -100,9 +101,12 @@ export class IntakeService {
   }
 
   // A new message stream starts at version 0. Importing an id twice is a
-  // stale edit.
+  // stale edit. A report the user typed is checked for clinical content
+  // first (S11). A clinical report gets the fixed decline, and nothing is
+  // recorded, so no model call can follow.
   importMessage(input: Message): MessageView {
     const message = Message.parse(input);
+    if (message.channel === "user_report" && hasClinicalContent(message.text)) throw new OutOfScopeError();
     const event: MessageEvent = {
       type: "message_imported",
       data: { message, source_type: sourceTypeForChannel(message.channel) },

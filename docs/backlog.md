@@ -170,7 +170,7 @@ Tasks:
   requested.
 - [ ] SP3.8 S12: simulated send labeled "Simulated. Nothing was sent." A
   test proves no network request leaves the app.
-- [ ] SP3.9 S11: a clinical question gets a fixed decline that states the
+- [x] SP3.9 S11: a clinical question gets a fixed decline that states the
   administrative scope. No model call answers it.
 - [ ] SP3.10 Recorded responses and live evaluation for template selection.
 

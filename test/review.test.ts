@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { corpusMessages, loadScenarios } from "../src/fixtures/load.ts";
 import { IntakeService, InvalidRequestError } from "../src/intake/service.ts";
-import { RecordedModelClient, readRecording } from "../src/model/recorded.ts";
+import { RecordedModelClient, readRecording, type Recording } from "../src/model/recorded.ts";
 import { fromPackage } from "../src/paths.ts";
 import { EventStore, StaleEditError } from "../src/store/event-log.ts";
 import type { FixtureMessage } from "../src/fixtures/schema.ts";
@@ -84,9 +84,16 @@ describe("review queue", () => {
   });
 
   it("records an empty result for a message with no appointment facts", async () => {
-    const { service } = setup();
-    service.importMessage(fixture("s11-question"));
-    const { message, evidence } = await service.extract("s11-question", { effort: "low", expectedVersion: 1 });
+    // S11 text is now declined at import (R-f), so this uses a plain report
+    // and a recording with no claims.
+    const empty: Recording = {
+      message_id: "thanks",
+      effort: "any",
+      attempts: [{ output: { claims: [] }, usage: { input: 1, cached_input: 0, output: 1, reasoning: 0 }, latency_ms: 1 }],
+    };
+    const { service } = setup(RecordedModelClient.withOverrides([empty]));
+    service.importMessage({ id: "thanks", channel: "user_report", from: "Dana Reyes", received_at: "2026-11-06T19:30:00-07:00", text: "Thanks for the update." });
+    const { message, evidence } = await service.extract("thanks", { effort: "low", expectedVersion: 1 });
     expect(message.status).toBe("no_claims");
     expect(evidence).toEqual([]);
   });
