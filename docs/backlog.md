@@ -80,6 +80,18 @@ tier. Read-only MCP is the floor.
   items found: cited quotes repeated the source cards, long timestamps
   wrapped in the source headers, and the favicon request returned 404.
 
+## Carried over from sprint 3
+
+- [ ] Confirm or change the decisions marked "proposed, pending Jeff" in
+  `docs/decisions/0003-reply-templates.md` (R-a to R-g and T1 to T15). T1
+  departs from R-d: the place is optional for the accept template, because
+  m3 offers Monday without a place and the demo beat needs the accept
+  template for Monday.
+- [ ] Run `pnpm eval:live --d3-only` with the key. Sprint 3 ran the
+  template evaluation with recorded responses only.
+- [ ] Look at the reply panel in a browser. Sprint 3 checked it over HTTP
+  and with server-rendered markup only.
+
 ## Sprint 2: slot states and conflict resolution (D2)
 
 Branch `sprint/02-conflict-resolution`.
