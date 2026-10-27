@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Appointment change assistant (D2)</title>
+    <title>Appointment change assistant (D3)</title>
+    <link rel="icon" href="data:," />
     <style>
       body { font-family: system-ui, sans-serif; max-width: 980px; margin: 1rem auto; padding: 0 1rem; line-height: 1.4; }
       section { border-top: 1px solid #ccc; padding: 0.5rem 0 1rem; }
@@ -21,6 +22,13 @@
       .split { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
       .sources { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
       .source { margin: 0; }
+      .source .label { text-transform: none; }
+      .nowrap { white-space: nowrap; }
+      .cited { font-size: 0.9rem; color: #444; margin: 0.25rem 0; }
+      .notice { background: #eef4ff; border: 1px solid #9bb7e0; padding: 0.5rem 0.75rem; }
+      .sent { background: #eefbea; }
+      .simulated { font-weight: 700; color: #1f5f1a; }
+      textarea { max-width: 100%; }
     </style>
   </head>
   <body>

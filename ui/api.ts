@@ -37,10 +37,11 @@ export type EvidenceView = {
   version: number;
   messageId: string | null;
   claim: EvidenceClaim;
-  origin: "model" | "manual" | "answer";
+  origin: "model" | "manual" | "answer" | "reply";
   status: "pending" | "accepted" | "rejected";
   decidedAt: string | null;
   answer: { question_id: string; conflict_id: string; choice_id: string; clarifies: string | null; after: string } | null;
+  reply?: { draft_id: string; after: string; index: number } | null;
 };
 
 export type AppState = {
@@ -96,6 +97,15 @@ export const api = {
   explain: (conflictId: string, expectedVersion: number) =>
     request<ConflictView>("POST", `/api/conflicts/${encodeURIComponent(conflictId)}/explain`, { expectedVersion }),
   nextQuestion: (expectedVersion: number) => request<CaseView>("POST", "/api/questions/next", { expectedVersion }),
-  answer: (questionId: string, choiceId: string, expectedVersion: number) =>
-    request<CaseView>("POST", `/api/questions/${encodeURIComponent(questionId)}/answer`, { expectedVersion, choiceId }),
+  answer: (questionId: string, choiceId: string, expectedVersion: number, replyVersion: number) =>
+    request<CaseView>("POST", `/api/questions/${encodeURIComponent(questionId)}/answer`, { expectedVersion, choiceId, replyVersion }),
+  suggestReply: (intent: string | null, expectedVersion: number) => request<CaseView>("POST", "/api/reply/suggest", { expectedVersion, intent }),
+  startDraft: (template: string, slotKey: string, expectedVersion: number) =>
+    request<CaseView>("POST", "/api/reply/drafts", { expectedVersion, template, slotKey }),
+  editDraft: (id: string, text: string, expectedVersion: number) =>
+    request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/edit`, { expectedVersion, text }),
+  discardDraft: (id: string, expectedVersion: number) =>
+    request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/discard`, { expectedVersion }),
+  approveDraft: (id: string, confirmedFields: string[], expectedVersion: number) =>
+    request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/approve`, { expectedVersion, confirmedFields }),
 };

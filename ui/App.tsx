@@ -12,6 +12,7 @@ import {
   type FixtureScenario,
   type MessageView,
 } from "./api.ts";
+import { ReplyPanel, shortTime } from "./ReplyPanel.tsx";
 
 type Run = (action: () => Promise<unknown>) => Promise<void>;
 
@@ -23,6 +24,9 @@ const slotText = (s: { date: string | null; time: string | null; location: strin
 export function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The fixed decline for a health question (S11). Shown as a notice, not
+  // as an error.
+  const [notice, setNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -41,10 +45,12 @@ export function App() {
   const run = useCallback(
     async (action: () => Promise<unknown>) => {
       setError(null);
+      setNotice(null);
       try {
         await action();
       } catch (e) {
-        if (e instanceof ApiError && e.status === 409) setError("This record changed since it was shown. The current version is loaded.");
+        if (e instanceof ApiError && e.body.error === "out_of_scope") setNotice(e.body.message ?? null);
+        else if (e instanceof ApiError && e.status === 409) setError("This record changed since it was shown. The current version is loaded.");
         else setError(e instanceof Error ? e.message : String(e));
       }
       await refresh();
@@ -65,6 +71,7 @@ export function App() {
         access. All data here is synthetic. Model: <strong>{state.mode === "live" ? "live model" : "recorded responses"}</strong>.
       </p>
       {error && <p className="error" role="alert">{error}</p>}
+      {notice && <p className="notice" role="status">{notice}</p>}
 
       <section>
         <h2>1. Add messages</h2>
@@ -111,7 +118,12 @@ export function App() {
       </section>
 
       <section>
-        <h2>7. Conflicts ({kase.conflicts.length})</h2>
+        <h2>7. Reply to the office</h2>
+        <ReplyPanel reply={kase.reply} run={run} />
+      </section>
+
+      <section>
+        <h2>8. Conflicts ({kase.conflicts.length})</h2>
         {kase.conflicts.length === 0 && <p>No conflicts.</p>}
         {kase.conflicts.map((c) => (
           <ConflictCard key={c.id} conflict={c} state={state} run={run} />
@@ -119,7 +131,7 @@ export function App() {
       </section>
 
       <section>
-        <h2>8. Reviewed claims and your answers</h2>
+        <h2>9. Reviewed claims, your answers and your replies</h2>
         {decided.length === 0 && <p>None yet.</p>}
         {decided.map((e) => (
           <EvidenceCard key={e.id} item={e} state={state} run={run} />
@@ -342,12 +354,18 @@ function SourceQuote({ id, state }: { id: string; state: AppState }) {
   if (!item) return <div className="card">Evidence {id} is not in the case.</div>;
   const c = item.claim;
   const message = state.messages.find((m) => m.id === item.messageId);
-  const source = item.origin === "answer" ? "your answer" : c.source_type === "office_message" ? "office message" : "reported by you";
+  const source =
+    item.origin === "answer" ? "your answer" : item.origin === "reply" ? "your approved reply" : c.source_type === "office_message" ? "office message" : "reported by you";
   return (
     <div className="card source">
       <div className="label">
         {id} · {source}
-        {message && ` · ${message.message.from} · ${message.message.received_at}`}
+        {message && (
+          <>
+            {" "}
+            · {message.message.from} · <span className="nowrap">{shortTime(message.message.received_at)}</span>
+          </>
+        )}
         {state.case.staleEvidenceIds.includes(id) && " · possibly stale"}
       </div>
       <div>
@@ -397,10 +415,13 @@ function QuestionPanel({ state, run }: { state: AppState; run: Run }) {
           </p>
           <div className="label">Your answer (choices built by code, recorded as reported by you)</div>
           {q.choices.map((c) => (
-            <button key={c.id} onClick={() => run(() => api.answer(q.id, c.id, kase.questionsVersion))}>
+            <button key={c.id} onClick={() => run(() => api.answer(q.id, c.id, kase.questionsVersion, kase.reply.version))}>
               {c.label}
             </button>
           ))}
+          {q.conflictKind === "change_proposed" && (
+            <p>Choosing a time or keeping the original opens a reply draft. No slot changes until you approve the reply.</p>
+          )}
         </div>
         <div>
           <div className="label">Cited quotes</div>
@@ -434,15 +455,8 @@ function ConflictCard({ conflict, state, run }: { conflict: ConflictView; state:
       {x?.outcome === "valid" && (
         <div className="card model">
           <div className="label">Model output: explanation ({x.model}, effort {x.effort}), passed the code checks</div>
-          <div className="split">
-            <p>{x.text}</p>
-            <div>
-              <div className="label">Cited quotes</div>
-              {x.citedEvidenceIds.map((id) => (
-                <SourceQuote key={id} id={id} state={state} />
-              ))}
-            </div>
-          </div>
+          <p>{x.text}</p>
+          <CitedQuotes cited={x.citedEvidenceIds} shown={conflict.evidenceIds} state={state} />
         </div>
       )}
       {x?.outcome === "unavailable" && (
@@ -456,6 +470,23 @@ function ConflictCard({ conflict, state, run }: { conflict: ConflictView; state:
   );
 }
 
+// Citations of sources already on screen are listed by id. Only a cited
+// item that is not shown above gets its own card.
+function CitedQuotes({ cited, shown, state }: { cited: string[]; shown: string[]; state: AppState }) {
+  const above = cited.filter((id) => shown.includes(id));
+  const other = cited.filter((id) => !shown.includes(id));
+  return (
+    <div>
+      <div className="cited">
+        Cites {above.length > 0 ? `${above.join(", ")} (sources shown above)` : "no source shown above"}
+      </div>
+      {other.map((id) => (
+        <SourceQuote key={id} id={id} state={state} />
+      ))}
+    </div>
+  );
+}
+
 function MessageCard({ view, run }: { view: MessageView; run: Run }) {
   const [effort, setEffort] = useState<Effort>(DEFAULT_EXTRACTION_EFFORT);
   const [manualOpen, setManualOpen] = useState(false);
@@ -464,7 +495,7 @@ function MessageCard({ view, run }: { view: MessageView; run: Run }) {
   return (
     <div className="card">
       <div>
-        <strong>{m.from}</strong> · {m.channel} · received {m.received_at} ·{" "}
+        <strong>{m.from}</strong> · {m.channel} · received <span className="nowrap">{shortTime(m.received_at)}</span> ·{" "}
         {view.sourceType === "reported_by_user" ? "reported by you" : "office message"}
       </div>
       <div className="label">Message text (shown as data, never followed)</div>
@@ -611,7 +642,13 @@ function EvidenceCard({
   const c = item.claim;
   const source = state.messages.find((m) => m.id === item.messageId);
   const origin =
-    item.origin === "model" ? "Model output, passed the quote check" : item.origin === "answer" ? "Your answer to a question" : "Entered by you";
+    item.origin === "model"
+      ? "Model output, passed the quote check"
+      : item.origin === "answer"
+        ? "Your answer to a question"
+        : item.origin === "reply"
+          ? "Your approved reply (simulated send)"
+          : "Entered by you";
   return (
     <div className={`card ${item.origin === "model" ? "model" : ""}`}>
       <div className="label">
@@ -626,7 +663,7 @@ function EvidenceCard({
       <div>
         Source: {c.source_type.replaceAll("_", " ")} ·{" "}
         <strong>sender kind: {c.sender_kind}</strong>
-        {item.origin === "model" && " (model judgment, not checked by code)"} · from {source?.message.from ?? item.messageId ?? "your answer"}{" "}
+        {item.origin === "model" && " (model judgment, not checked by code)"} · from {source?.message.from ?? item.messageId ?? (item.origin === "reply" ? "your reply" : "your answer")}{" "}
         · evidence time {c.evidence_time}
         {c.event_time && ` · event time ${c.event_time}`}
       </div>

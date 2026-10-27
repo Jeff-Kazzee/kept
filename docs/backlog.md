@@ -75,8 +75,10 @@ tier. Read-only MCP is the floor.
   away from, so the wording should name the change from that slot. Sprint 3
   changed it to "A change away from Thursday 11/12 10:30 AM is still
   proposed".
-- [ ] Look at the conflict view in a browser. Sprint 2 checked it over HTTP
-  only.
+- [x] Look at the conflict view in a browser. Sprint 2 checked it over HTTP
+  only. The coordinator checked it in a browser. Sprint 3 fixed the three
+  items found: cited quotes repeated the source cards, long timestamps
+  wrapped in the source headers, and the favicon request returned 404.
 
 ## Sprint 2: slot states and conflict resolution (D2)
 
@@ -163,12 +165,12 @@ Tasks:
   offered for an incomplete slot.
 - [x] SP3.4 Model call: pick a template and propose field values. Code
   validates each field against slot states. One retry, then manual entry.
-- [ ] SP3.5 Field readback in the UI before approval.
-- [ ] SP3.6 User edit of the rendered text, labeled "Edited by you. Not
+- [x] SP3.5 Field readback in the UI before approval.
+- [x] SP3.6 User edit of the rendered text, labeled "Edited by you. Not
   checked."
 - [x] SP3.7 Approval records a request event. An accepted slot becomes
   requested.
-- [ ] SP3.8 S12: simulated send labeled "Simulated. Nothing was sent." A
+- [x] SP3.8 S12: simulated send labeled "Simulated. Nothing was sent." A
   test proves no network request leaves the app.
 - [x] SP3.9 S11: a clinical question gets a fixed decline that states the
   administrative scope. No model call answers it.
