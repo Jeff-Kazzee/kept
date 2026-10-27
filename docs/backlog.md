@@ -57,7 +57,7 @@ tier. Read-only MCP is the floor.
 - [ ] Choose the extraction effort level (`low` or `minimal`) for the demo.
   Sprint 1 measured `low` at 100% and `minimal` at 98% with one run at 94.1%.
   `minimal` was about twice as fast. This is Jeff's decision.
-- [ ] A weekday alone ("Monday") can match two dates inside the 14-day
+- [x] A weekday alone ("Monday") can match two dates inside the 14-day
   window. Sprint 2 raises it as a question instead of choosing.
 - [ ] A time written before its date can attach to the previous date and
   reject a real claim. Watch the live rejection rate.
@@ -82,28 +82,28 @@ Acceptance:
 
 Tasks:
 
-- [ ] SP2.1 Slot projection: compute slot records and states (offered,
+- [x] SP2.1 Slot projection: compute slot records and states (offered,
   requested, confirmed, change proposed, canceled, declined) from accepted
   evidence events only.
-- [ ] SP2.2 Source label beside each state: "office message", "reported by
+- [x] SP2.2 Source label beside each state: "office message", "reported by
   you", "reported by you through <grant name>".
-- [ ] SP2.3 Rule 1: only office evidence or a user report moves a confirmed
+- [x] SP2.3 Rule 1: only office evidence or a user report moves a confirmed
   slot to canceled.
 - [ ] SP2.4 Rule 2 and S3: the user chooses a replacement. This records a
   request on the replacement and leaves the original unchanged.
 - [ ] SP2.5 Rule 3 and S4: a confirmation of the replacement releases the
   original only when the evidence says it was moved or canceled. Otherwise
   both stay held and the app asks which one stands.
-- [ ] SP2.6 Rules 4 and 5: when both event times are known, the later event
+- [x] SP2.6 Rules 4 and 5: when both event times are known, the later event
   wins. When either is unknown, raise a conflict instead of choosing.
 - [ ] SP2.7 Rule 6 and S6: an automated reminder with an unknown event time
   that contradicts a later confirmed or reported event is marked possibly
   stale. Ask once. No state change.
-- [ ] SP2.8 S5: a user report ("They moved me to Monday") confirms Monday and
+- [x] SP2.8 S5: a user report ("They moved me to Monday") confirms Monday and
   cancels Thursday, both labeled "reported by you".
 - [ ] SP2.9 S7: an incomplete slot (date without time or location) is marked
   incomplete and produces a question for the missing detail.
-- [ ] SP2.10 Calendar clash detection against the loaded `.ics` file for
+- [x] SP2.10 Calendar clash detection against the loaded `.ics` file for
   offered and requested slots.
 - [ ] SP2.11 Question queue: one open question at a time. The answer is
   recorded as user-reported evidence and goes through review.

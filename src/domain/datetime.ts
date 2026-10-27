@@ -186,6 +186,32 @@ export function parseMentions(quote: string): Mention[] {
 // from the day the message arrived up to this many days later.
 export const WEEKDAY_WINDOW_DAYS = 14;
 
+const addDays = (date: string, days: number): string => {
+  const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+};
+
+// The dates a claim's date may mean when its quote names only a weekday,
+// such as "Monday". Every date inside the weekday window that falls on that
+// weekday is a candidate. Returns null when the quote states the month and
+// day, or does not name the claim's weekday. More than one candidate means
+// code cannot tell which date was meant, so the app asks instead of choosing.
+export function weekdayOnlyCandidates(date: string, quote: string, receivedAt: string): string[] | null {
+  if (!isValidDate(date)) return null;
+  const mentions = parseMentions(quote);
+  if (mentions.some((m) => m.monthDay === date.slice(5))) return null;
+  const weekday = weekdayOf(date);
+  if (!mentions.some((m) => m.monthDay === null && m.weekday === weekday)) return null;
+  const received = receivedAt.slice(0, 10);
+  if (!isValidDate(received)) return null;
+  const candidates: string[] = [];
+  for (let offset = 0; offset <= WEEKDAY_WINDOW_DAYS; offset++) {
+    const d = addDays(received, offset);
+    if (weekdayOf(d) === weekday) candidates.push(d);
+  }
+  return candidates;
+}
+
 export type SlotIssue =
   | "invalid_date"
   | "invalid_time"
