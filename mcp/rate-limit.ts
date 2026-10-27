@@ -1,31 +1,47 @@
-// Calls per grant in a sliding window, kept in the server process. A
-// client that restarts the server starts a new window, which is acceptable
-// because the client launches the server and pays for every restart.
+// Calls per grant in fixed one-minute windows, counted in the shared SQLite
+// file. Every server process on the file shares the count, so a grant used
+// by two clients, or a restarted client, still gets 60 calls a minute in
+// total. take() must run inside the store's transaction, so the count and
+// the call it allows are one step.
+import type { EventStore, RateWindow } from "../src/store/event-log.ts";
+
 export const CALLS_PER_MINUTE = 60;
 
+export type RateDecision =
+  | { ok: true; closed: RateWindow[] }
+  // `firstDenial` is true for the first call this window denies. Only that
+  // one is logged on its own.
+  | { ok: false; retryAfterSeconds: number; firstDenial: boolean; closed: RateWindow[] };
+
 export class RateLimiter {
+  readonly #store: EventStore;
   readonly #limit: number;
   readonly #windowMs: number;
   readonly #now: () => number;
-  readonly #calls = new Map<string, number[]>();
 
-  constructor(options: { limit?: number; windowMs?: number; now?: () => number } = {}) {
+  constructor(store: EventStore, options: { limit?: number; windowMs?: number; now?: () => number } = {}) {
+    this.#store = store;
     this.#limit = options.limit ?? CALLS_PER_MINUTE;
     this.#windowMs = options.windowMs ?? 60_000;
     this.#now = options.now ?? Date.now;
   }
 
-  // Counts the call when it is allowed. Returns the seconds to wait when it
-  // is not.
-  take(key: string): { ok: true } | { ok: false; retryAfterSeconds: number } {
+  get limit(): number {
+    return this.#limit;
+  }
+
+  // Counts the call when it is allowed. Also returns the key's earlier
+  // windows, which it removes, so the caller can log a summary of their
+  // denied calls.
+  take(key: string): RateDecision {
     const now = this.#now();
-    const recent = (this.#calls.get(key) ?? []).filter((t) => t > now - this.#windowMs);
-    if (recent.length >= this.#limit) {
-      this.#calls.set(key, recent);
-      return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil((recent[0]! + this.#windowMs - now) / 1000)) };
+    const start = Math.floor(now / this.#windowMs) * this.#windowMs;
+    const closed = this.#store.closeRateWindows(key, start);
+    if (this.#store.rateWindow(key, start).calls >= this.#limit) {
+      const w = this.#store.bumpRateWindow(key, start, "denied");
+      return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil((start + this.#windowMs - now) / 1000)), firstDenial: w.denied === 1, closed };
     }
-    recent.push(now);
-    this.#calls.set(key, recent);
-    return { ok: true };
+    this.#store.bumpRateWindow(key, start, "calls");
+    return { ok: true, closed };
   }
 }

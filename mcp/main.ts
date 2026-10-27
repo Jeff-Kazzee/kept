@@ -32,7 +32,7 @@ const store = new EventStore(appDbPath());
 const intake = new IntakeService(store, noModel);
 const records = new RecordsService(store, intake, new CaseService(store, intake, noModel));
 const grants = new GrantStore(store);
-const limiter = new RateLimiter();
+const limiter = new RateLimiter(store);
 
 const handle = serveStdio(() => createMcpServer({ records, grants, token, limiter }), {
   onerror: (err) => console.error(`MCP server error: ${err.message}`),

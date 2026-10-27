@@ -13,7 +13,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { afterEach, describe, expect, it } from "vitest";
 import { RateLimiter } from "../mcp/rate-limit.ts";
 import { cleanText, sanitize } from "../mcp/sanitize.ts";
-import { createMcpServer, type McpDeps } from "../mcp/server.ts";
+import { callTool, createMcpServer, type McpDeps } from "../mcp/server.ts";
 import { TOOLS } from "../mcp/tools.ts";
 import { CaseService } from "../src/case/service.ts";
 import { loadScenarios } from "../src/fixtures/load.ts";
@@ -69,7 +69,7 @@ async function setup(s: ResolvedScenario, tier: Tier = s.mcp!.grant.tier) {
   const app = services(store);
   await acceptMessages(app.intake, s.messages.map((m) => m.id));
   const { grant, token } = app.grants.create(s.mcp!.grant.name, tier);
-  const limiter = new RateLimiter();
+  const limiter = new RateLimiter(store);
   const client = await connect({ records: app.records, grants: app.grants, token, limiter });
   return { store, ...app, grant, token, client, limiter };
 }
@@ -251,10 +251,10 @@ describe("S16 and SP4.10: a reported phone confirmation goes to the review queue
   });
 
   it("names the agent by its grant, whatever name the client reports", async () => {
-    const { records, grants, kase } = await setup(scenario("S16"));
+    const { records, grants, kase, store } = await setup(scenario("S16"));
     const { token } = grants.create("Kitchen tablet", "propose");
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-    const handle = serveStdio(() => createMcpServer({ records, grants, token, limiter: new RateLimiter() }), { transport: serverSide });
+    const handle = serveStdio(() => createMcpServer({ records, grants, token, limiter: new RateLimiter(store) }), { transport: serverSide });
     const client = new Client({ name: "Laptop assistant", version: "9.9.9" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
     await client.connect(clientSide);
     cleanups.push(async () => {
@@ -328,12 +328,14 @@ describe("S18 and SP4.8: tool lists", () => {
     expect(TOOLS.map((t) => t.name)).toEqual(PROPOSE_TOOLS);
   });
 
-  it("answers a call to a tool that does not exist with a protocol error", async () => {
+  it("answers a call to a tool that does not exist with a protocol error, and logs it", async () => {
     const { client, records } = await setup(scenario("S18"));
-    for (const name of ["create_grant", "revoke_grant", "delete_case", "send_reply", "approve_reply", "confirm_proposal"]) {
-      await expect(client.callTool({ name, arguments: {} })).rejects.toThrow(/Unknown tool/);
+    const names = ["create_grant", "revoke_grant", "delete_case", "send_reply", "approve_reply", "confirm_proposal"];
+    for (const name of names) {
+      await expect(client.callTool({ name, arguments: { secret: "do not log me" } })).rejects.toThrow(/Unknown tool/);
     }
-    expect(records.accessLog()).toEqual([]);
+    expect(records.accessLog().map((e) => [e.grant_name, e.tool, e.result])).toEqual(names.map((n) => ["Laptop assistant", n, "unknown_tool"]));
+    expect(JSON.stringify(records.accessLog())).not.toContain("do not log me");
   });
 });
 
@@ -413,12 +415,13 @@ describe("SP4.12: validation, rate limit and the access log", () => {
   });
 
   it("allows 60 calls a minute per grant, then answers with a clear error", async () => {
-    let now = 1_000_000;
+    // The start of a one-minute window.
+    let now = 1_200_000;
     const store = new EventStore(":memory:", CLOCK);
     const app = services(store);
     await acceptMessages(app.intake, ["m2"]);
     const { token } = app.grants.create("Busy agent", "read");
-    const limiter = new RateLimiter({ now: () => now });
+    const limiter = new RateLimiter(store, { now: () => now });
     const client = await connect({ records: app.records, grants: app.grants, token, limiter });
     for (let i = 0; i < 60; i++) ok(await client.callTool({ name: "list_open_questions", arguments: {} }));
     const err = errorOf(await client.callTool({ name: "list_open_questions", arguments: {} }));
@@ -454,7 +457,7 @@ describe("SP4.12: validation, rate limit and the access log", () => {
     const app = services(store);
     await acceptMessages(app.intake, ["m2"]);
     app.grants.create("Real agent", "propose");
-    const client = await connect({ records: app.records, grants: app.grants, token: "not-a-real-token", limiter: new RateLimiter() });
+    const client = await connect({ records: app.records, grants: app.grants, token: "not-a-real-token", limiter: new RateLimiter(store) });
     expect(await toolNames(client)).toEqual([]);
     expect(errorOf(await client.callTool({ name: "list_appointments", arguments: {} }))).toMatchObject({ error: "permission_denied" });
     expect(app.records.accessLog()).toEqual([
@@ -483,7 +486,7 @@ describe("SP4.6: one store for the app and the MCP server", () => {
     const mcpStore = new EventStore(file, CLOCK);
     cleanups.push(() => mcpStore.close());
     const mcp = services(mcpStore);
-    const client = await connect({ records: mcp.records, grants: mcp.grants, token, limiter: new RateLimiter() });
+    const client = await connect({ records: mcp.records, grants: mcp.grants, token, limiter: new RateLimiter(mcpStore) });
 
     // The app writes a note. The agent's next read sees it.
     app.records.addNote(THU, "From the app.", 0, USER);
@@ -556,5 +559,141 @@ describe("stdio server", () => {
     expect(run.status).toBe(2);
     expect(run.stdout).toBe("");
     expect(run.stderr).toMatch(/Set APPT_GRANT_TOKEN/);
+  });
+});
+
+describe("review round 1", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  function tempFile() {
+    const dir = mkdtempSync(path.join(tmpdir(), "mcp-review-"));
+    dirs.push(dir);
+    return path.join(dir, "app.sqlite");
+  }
+
+  it("finding 1: a revoke cannot commit between the grant check and the write", async () => {
+    const file = tempFile();
+    // The app's connection fails at once on a held lock instead of waiting.
+    const appStore = new EventStore(file, CLOCK);
+    cleanups.push(() => appStore.close());
+    appStore.unsafeExecForTest("PRAGMA busy_timeout = 0");
+    const app = services(appStore);
+    await acceptMessages(app.intake, ["m2"]);
+    const { grant, token } = app.grants.create("Laptop assistant", "annotate");
+
+    // The server's connection. Right after the server reads the grant, the
+    // app tries to revoke it: the failing case from the review.
+    const mcpStore = new EventStore(file, CLOCK);
+    cleanups.push(() => mcpStore.close());
+    const mcp = services(mcpStore);
+    let revokeInGap: unknown = "not tried";
+    class GapGrants extends GrantStore {
+      override findByToken(t: string) {
+        const found = super.findByToken(t);
+        if (revokeInGap === "not tried") {
+          try {
+            app.grants.revoke(grant.id, grant.version);
+            revokeInGap = "committed";
+          } catch (err) {
+            revokeInGap = err;
+          }
+        }
+        return found;
+      }
+    }
+    const client = await connect({ records: mcp.records, grants: new GapGrants(mcpStore), token, limiter: new RateLimiter(mcpStore) });
+
+    ok(await client.callTool({ name: "add_note", arguments: { appointment_id: THU, text: "Agent note", expected_version: 0 } }));
+    // The revoke waited for the call's transaction, so it could not commit
+    // in the gap. The call ran under a grant that was active throughout.
+    expect(String(revokeInGap)).toMatch(/locked|busy/i);
+    expect(app.grants.get(grant.id).status).toBe("active");
+
+    // Once the call has committed, the revoke goes through and the next
+    // write fails.
+    app.grants.revoke(grant.id, grant.version);
+    expect(errorOf(await client.callTool({ name: "add_note", arguments: { appointment_id: THU, text: "Second", expected_version: 1 } }))).toMatchObject({
+      error: "permission_denied",
+    });
+    expect(app.records.record(THU).notes.map((n) => n.text)).toEqual(["Agent note"]);
+    expect(app.records.accessLog().map((e) => [e.tool, e.result])).toEqual([
+      ["add_note", "ok"],
+      ["add_note", "permission_denied"],
+    ]);
+  });
+
+  it("finding 3: two server processes and a restart share one count per grant", async () => {
+    const file = tempFile();
+    const now = () => 1_200_000;
+    const storeA = new EventStore(file, CLOCK);
+    cleanups.push(() => storeA.close());
+    const a = services(storeA);
+    await acceptMessages(a.intake, ["m2"]);
+    const { token } = a.grants.create("Shared agent", "read");
+    const storeB = new EventStore(file, CLOCK);
+    cleanups.push(() => storeB.close());
+    const b = services(storeB);
+    // One token configured in two clients, each with its own server process.
+    const clientA = await connect({ records: a.records, grants: a.grants, token, limiter: new RateLimiter(storeA, { now }) });
+    const clientB = await connect({ records: b.records, grants: b.grants, token, limiter: new RateLimiter(storeB, { now }) });
+    for (let i = 0; i < 30; i++) {
+      ok(await clientA.callTool({ name: "list_open_questions", arguments: {} }));
+      ok(await clientB.callTool({ name: "list_open_questions", arguments: {} }));
+    }
+    expect(errorOf(await clientA.callTool({ name: "list_open_questions", arguments: {} }))).toMatchObject({ error: "rate_limited" });
+    expect(errorOf(await clientB.callTool({ name: "list_open_questions", arguments: {} }))).toMatchObject({ error: "rate_limited" });
+    // A restarted server starts from the same count.
+    const restarted = await connect({ records: b.records, grants: b.grants, token, limiter: new RateLimiter(storeB, { now }) });
+    expect(errorOf(await restarted.callTool({ name: "list_open_questions", arguments: {} }))).toMatchObject({ error: "rate_limited" });
+  });
+
+  it("finding 4: denied calls past the limit add one log entry per window, not one per call", async () => {
+    let now = 1_200_000;
+    const store = new EventStore(":memory:", CLOCK);
+    const app = services(store);
+    await acceptMessages(app.intake, ["m2"]);
+    const { grant, token } = app.grants.create("Busy agent", "read");
+    const deps: McpDeps = { records: app.records, grants: app.grants, token, limiter: new RateLimiter(store, { now: () => now }) };
+    // Called without a transport to keep 2,000 calls fast. This is the
+    // handler the server registers for tools/call.
+    const isError = async () => "isError" in (await callTool(deps, "list_appointments", {}));
+    for (let i = 0; i < 60; i++) expect(await isError()).toBe(false);
+    for (let i = 0; i < 2_000; i++) expect(await isError()).toBe(true);
+    expect(store.readStream("access_log")).toHaveLength(61);
+    expect(app.records.accessLog().at(-1)).toMatchObject({ tool: "list_appointments", result: "rate_limited" });
+
+    // The grant's first call in a later window adds one summary of the
+    // other 1,999 denials, then its own entry.
+    now += 60_000;
+    expect(await isError()).toBe(false);
+    expect(app.records.accessLog().slice(-2).map(({ at: _at, ...e }) => e)).toEqual([
+      { grant_id: grant.id, grant_name: "Busy agent", tool: "*", result: "rate_limited", appointment_id: null, count: 1_999 },
+      { grant_id: grant.id, grant_name: "Busy agent", tool: "list_appointments", result: "ok", appointment_id: null },
+    ]);
+    expect(store.readStream("access_log")).toHaveLength(63);
+  });
+
+  it("finding 5: probes for unknown tools are logged with a safe name and count toward the limit", async () => {
+    const store = new EventStore(":memory:", CLOCK);
+    const app = services(store);
+    await acceptMessages(app.intake, ["m2"]);
+    const { token } = app.grants.create("Probing agent", "read");
+    const client = await connect({ records: app.records, grants: app.grants, token, limiter: new RateLimiter(store, { limit: 3, now: () => 1_200_000 }) });
+    const odd = `delete_case<script>\u0000${"x".repeat(100)}`;
+    await expect(client.callTool({ name: "delete_case", arguments: { token } })).rejects.toThrow(/Unknown tool: delete_case/);
+    await expect(client.callTool({ name: odd, arguments: {} })).rejects.toThrow(/Unknown tool/);
+    await expect(client.callTool({ name: "delete_case", arguments: {} })).rejects.toThrow(/Unknown tool/);
+    // The three probes used the grant's limit.
+    expect(errorOf(await client.callTool({ name: "list_appointments", arguments: {} }))).toMatchObject({ error: "rate_limited" });
+    const log = app.records.accessLog();
+    expect(log.map((e) => [e.grant_name, e.tool, e.result])).toEqual([
+      ["Probing agent", "delete_case", "unknown_tool"],
+      ["Probing agent", `delete_casescript${"x".repeat(47)}`, "unknown_tool"],
+      ["Probing agent", "delete_case", "unknown_tool"],
+      ["Probing agent", "list_appointments", "rate_limited"],
+    ]);
+    expect(JSON.stringify(store.readAll())).not.toContain(token);
   });
 });
