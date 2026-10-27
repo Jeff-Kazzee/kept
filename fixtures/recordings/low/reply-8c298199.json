@@ -1,0 +1,25 @@
+{
+  "message_id": "reply-8c298199",
+  "effort": "low",
+  "note": "m1, m2 and m3 accepted. Note: Friday does not work for me. Please offer another time.",
+  "attempts": [
+    {
+      "output": {
+        "template": "decline_offer",
+        "slot_id": "2026-11-13T09:15",
+        "fields": {
+          "date": "2026-11-13",
+          "time": "09:15",
+          "location": null
+        }
+      },
+      "usage": {
+        "input": 720,
+        "cached_input": 0,
+        "output": 58,
+        "reasoning": 24
+      },
+      "latency_ms": 1450
+    }
+  ]
+}

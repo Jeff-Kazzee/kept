@@ -1,0 +1,25 @@
+{
+  "message_id": "reply-df1ce4b1",
+  "effort": "low",
+  "note": "m1, m2 and m3 accepted. Note: I want Monday.",
+  "attempts": [
+    {
+      "output": {
+        "template": "accept_offer",
+        "slot_id": "2026-11-16T13:00",
+        "fields": {
+          "date": "2026-11-16",
+          "time": "13:00",
+          "location": null
+        }
+      },
+      "usage": {
+        "input": 720,
+        "cached_input": 0,
+        "output": 58,
+        "reasoning": 24
+      },
+      "latency_ms": 1380
+    }
+  ]
+}

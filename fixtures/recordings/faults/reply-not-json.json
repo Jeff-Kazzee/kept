@@ -1,0 +1,35 @@
+{
+  "message_id": "reply-df1ce4b1",
+  "effort": "any",
+  "note": "m1, m2 and m3 accepted. The first answer is not JSON. The retry is valid.",
+  "attempts": [
+    {
+      "output_text": "Sure, Monday at 1:00 PM works.",
+      "usage": {
+        "input": 720,
+        "cached_input": 0,
+        "output": 12,
+        "reasoning": 20
+      },
+      "latency_ms": 1200
+    },
+    {
+      "output": {
+        "template": "accept_offer",
+        "slot_id": "2026-11-16T13:00",
+        "fields": {
+          "date": "2026-11-16",
+          "time": "13:00",
+          "location": null
+        }
+      },
+      "usage": {
+        "input": 760,
+        "cached_input": 0,
+        "output": 58,
+        "reasoning": 24
+      },
+      "latency_ms": 1380
+    }
+  ]
+}

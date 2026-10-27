@@ -161,7 +161,7 @@ Tasks:
   renders. S9: accepting a slot that is not offered is blocked.
 - [x] SP3.3 S7 template part: no template that needs a missing detail is
   offered for an incomplete slot.
-- [ ] SP3.4 Model call: pick a template and propose field values. Code
+- [x] SP3.4 Model call: pick a template and propose field values. Code
   validates each field against slot states. One retry, then manual entry.
 - [ ] SP3.5 Field readback in the UI before approval.
 - [ ] SP3.6 User edit of the rendered text, labeled "Edited by you. Not

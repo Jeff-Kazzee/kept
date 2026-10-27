@@ -5,7 +5,11 @@
 // the reply stream.
 import type { CaseService } from "../case/service.ts";
 import type { CaseView } from "../case/types.ts";
-import type { EvidenceClaim } from "../domain/claim.ts";
+import type { Effort, EvidenceClaim } from "../domain/claim.ts";
+import { OutOfScopeError, hasClinicalContent } from "../domain/scope.ts";
+import type { ModelClient } from "../model/client.ts";
+import { MODEL } from "../model/request.ts";
+import { attemptData } from "../case/service.ts";
 import { evidenceStream, type EvidenceEvent, type ReplyMeta } from "../intake/events.ts";
 import { InvalidRequestError } from "../intake/service.ts";
 import { arrivalTime } from "../slots/time.ts";
@@ -13,23 +17,31 @@ import type { EventStore, StoredEvent, StreamWrite } from "../store/event-log.ts
 import { buildDraft } from "./draft.ts";
 import { REPLY_STREAM, draftEvents, openDraft, projectReplies, type DraftRecord, type ReplyEvent } from "./events.ts";
 import { TEMPLATES, TEMPLATE_IDS, type TemplateId } from "./templates.ts";
+import { MAX_INTENT_CHARS, suggestReply } from "./suggest.ts";
 import { draftValidity } from "./view.ts";
 
 export const MAX_REPLY_CHARS = 2000;
 
 const asEvent = (e: ReplyEvent | EvidenceEvent) => ({ type: e.type, data: e.data });
 
-export type ReplyOptions = { now?: () => string };
+// The template call defaults to effort low, like the other D2 calls.
+export type ReplyOptions = { now?: () => string; effort?: Effort; model?: string };
 
 export class ReplyService {
   readonly #store: EventStore;
   readonly #kase: CaseService;
+  readonly #client: ModelClient;
   readonly #now: () => string;
+  readonly #effort: Effort | undefined;
+  readonly #model: string;
 
-  constructor(store: EventStore, kase: CaseService, options: ReplyOptions = {}) {
+  constructor(store: EventStore, kase: CaseService, client: ModelClient, options: ReplyOptions = {}) {
     this.#store = store;
     this.#kase = kase;
+    this.#client = client;
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#effort = options.effort;
+    this.#model = options.model ?? MODEL;
   }
 
   #describe = (_streamId: string, events: StoredEvent[]) => {
@@ -63,6 +75,54 @@ export class ReplyService {
       declines: built.content.declines,
       text: built.content.text,
     });
+    this.#store.append(REPLY_STREAM, expectedVersion, events.map(asEvent), this.#describe);
+    return this.#kase.view();
+  }
+
+  // The model picks a template and a slot from the user's note. The note is
+  // checked for clinical content first (R-f): a clinical note gets the fixed
+  // decline, records nothing and makes no model call. A valid pick opens a
+  // draft that code builds. After two invalid outputs the suggestion is
+  // recorded with its attempts and the user picks by hand.
+  async suggest(intent: string | null, expectedVersion: number): Promise<CaseView> {
+    const note = intent?.trim() ? intent.trim() : null;
+    if (note !== null && note.length > MAX_INTENT_CHARS) throw new InvalidRequestError(`The note is longer than ${MAX_INTENT_CHARS} characters.`);
+    if (note !== null && hasClinicalContent(note)) throw new OutOfScopeError();
+    // Check before spending a model call. The append below checks again.
+    this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
+    const { context, log } = this.#kase.replyState();
+    const result = await suggestReply(note, context, this.#client, { effort: this.#effort, model: this.#model });
+    const built = result.outcome === "valid" ? buildDraft(result.template!, result.slotKey!, context) : null;
+    const suggestionId = `s${log.suggestions.length + 1}`;
+    const events: ReplyEvent[] = [
+      {
+        type: "reply_suggested",
+        data: {
+          suggestion_id: suggestionId,
+          intent: note,
+          key: result.key,
+          outcome: built?.ok ? "valid" : "manual_needed",
+          template: built?.ok ? result.template : null,
+          slot_key: built?.ok ? result.slotKey : null,
+          attempts: result.attempts.map(attemptData),
+        },
+      },
+    ];
+    if (built?.ok) {
+      events.push(
+        ...draftEvents(log, {
+          template: built.content.template,
+          slot_key: built.content.slot.key,
+          slot_label: built.content.slot.label,
+          origin: "model",
+          question_id: null,
+          suggestion_id: suggestionId,
+          fields: built.content.fields,
+          declines: built.content.declines,
+          text: built.content.text,
+        }),
+      );
+    }
     this.#store.append(REPLY_STREAM, expectedVersion, events.map(asEvent), this.#describe);
     return this.#kase.view();
   }

@@ -57,3 +57,16 @@ const CLINICAL = new RegExp(`\\b(?:${TERMS.join("|")})\\b`, "i");
 export function hasClinicalContent(text: string): boolean {
   return CLINICAL.test(text);
 }
+
+// S11: the fixed decline for text the user types that asks for clinical
+// content. The app states its administrative scope and makes no model call.
+export const SCOPE_DECLINE =
+  "This app only handles appointment times, places, confirmations and office requests. " +
+  "It cannot answer health questions. Please ask the office directly.";
+
+export class OutOfScopeError extends Error {
+  override name = "OutOfScopeError";
+  constructor() {
+    super(SCOPE_DECLINE);
+  }
+}

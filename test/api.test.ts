@@ -27,7 +27,7 @@ function setup() {
   const client = RecordedModelClient.fromDirectory();
   const service = new IntakeService(store, client);
   const kase = new CaseService(store, service, client, { userName: "Dana Reyes" });
-  return createApi(service, kase, { mode: "recorded" }, new ReplyService(store, kase));
+  return createApi(service, kase, { mode: "recorded" }, new ReplyService(store, kase, client));
 }
 
 describe("local API", () => {

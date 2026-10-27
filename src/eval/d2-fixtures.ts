@@ -26,7 +26,7 @@ export async function replayCheckpoint(
   const now = () => REPLAY_NOW;
   const intake = new IntakeService(store, RecordedModelClient.fromDirectory(), { now });
   const kase = new CaseService(store, intake, client, { now, userName: loadCaseProfile().user_name });
-  const reply = new ReplyService(store, kase, { now });
+  const reply = new ReplyService(store, kase, client, { now });
   if (scenario.calendar) kase.loadCalendar(scenario.calendar, readFixtureText(scenario.calendar), 0);
   for (const step of checkpoint.steps) {
     if ("message" in step) {

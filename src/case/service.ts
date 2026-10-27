@@ -40,7 +40,7 @@ export const MAX_CALENDAR_CHARS = 60_000;
 const asEvent = (e: CaseEvent | EvidenceEvent) => ({ type: e.type, data: e.data });
 const signature = (ids: string[]) => [...ids].sort().join(",");
 
-function attemptData<T>(a: CallAttempt<T>): AttemptData {
+export function attemptData<T>(a: CallAttempt<T>): AttemptData {
   return {
     attempt: a.attempt,
     outcome: a.outcome,

@@ -16,7 +16,12 @@ export type OutputProblem =
   | "clinical_content"
   | "too_long"
   | "not_a_question"
-  | "conflict_not_open";
+  | "conflict_not_open"
+  // Reply template checks (src/reply/suggest.ts).
+  | "unknown_slot"
+  | "template_not_valid_for_state"
+  | "missing_field"
+  | "field_mismatch";
 
 export function checkCitations(cited: string[], caseIds: ReadonlySet<string>, conflictIds: ReadonlySet<string>): OutputProblem[] {
   const problems = new Set<OutputProblem>();

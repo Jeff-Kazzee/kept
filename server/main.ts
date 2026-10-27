@@ -42,7 +42,7 @@ mkdirSync(path.dirname(dbPath), { recursive: true });
 const store = new EventStore(dbPath);
 const intake = new IntakeService(store, client);
 const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
-const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, new ReplyService(store, kase));
+const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, new ReplyService(store, kase, client));
 
 const allowedHosts = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]);
 

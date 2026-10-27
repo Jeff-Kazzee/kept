@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { CaseService } from "../src/case/service.ts";
 import { Channel, DEFAULT_EXTRACTION_EFFORT, Effort } from "../src/domain/claim.ts";
+import { OutOfScopeError } from "../src/domain/scope.ts";
 import { loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
 import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } from "../src/intake/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
@@ -34,6 +35,7 @@ const AnswerBody = z
   .strict();
 const StartDraftBody = z.object({ expectedVersion: Version, template: z.string().min(1).max(50), slotKey: z.string().min(1).max(50) }).strict();
 const EditDraftBody = z.object({ expectedVersion: Version, text: z.string().max(5000) }).strict();
+const SuggestBody = z.object({ expectedVersion: Version, intent: z.string().max(2000).nullable() }).strict();
 const ApproveBody = z.object({ expectedVersion: Version, confirmedFields: z.array(z.string().max(50)).max(20) }).strict();
 
 export type ApiOptions = { mode: "recorded" | "live" };
@@ -87,6 +89,10 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       const { expectedVersion, choiceId, replyVersion } = AnswerBody.parse(body);
       return kase.answer(decodeURIComponent(m[1]!), choiceId, expectedVersion, replyVersion);
     }],
+    ["POST", /^\/api\/reply\/suggest$/, (_m, body) => {
+      const { expectedVersion, intent } = SuggestBody.parse(body);
+      return reply.suggest(intent, expectedVersion);
+    }],
     ["POST", /^\/api\/reply\/drafts$/, (_m, body) => {
       const { expectedVersion, template, slotKey } = StartDraftBody.parse(body);
       return reply.start(template, slotKey, expectedVersion);
@@ -123,6 +129,7 @@ function toErrorResponse(err: unknown): ApiResponse {
   if (err instanceof StaleEditError) {
     return { status: 409, body: { error: "stale_edit", message: err.message, currentVersion: err.currentVersion, current: err.current } };
   }
+  if (err instanceof OutOfScopeError) return { status: 422, body: { error: "out_of_scope", message: err.message } };
   if (err instanceof NotFoundError) return { status: 404, body: { error: "not_found", message: err.message } };
   if (err instanceof InvalidRequestError) return { status: 422, body: { error: "invalid_request", message: err.message } };
   if (err instanceof z.ZodError) {

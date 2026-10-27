@@ -1,0 +1,43 @@
+{
+  "message_id": "reply-48934f4a",
+  "effort": "low",
+  "note": "S7: s7-confirm accepted. The only slot has no time, so every pick fails the missing-field check.",
+  "attempts": [
+    {
+      "output": {
+        "template": "ask_still_stands",
+        "slot_id": "2026-11-16",
+        "fields": {
+          "date": "2026-11-16",
+          "time": null,
+          "location": null
+        }
+      },
+      "usage": {
+        "input": 520,
+        "cached_input": 0,
+        "output": 58,
+        "reasoning": 24
+      },
+      "latency_ms": 1290
+    },
+    {
+      "output": {
+        "template": "ask_still_stands",
+        "slot_id": "2026-11-16",
+        "fields": {
+          "date": "2026-11-16",
+          "time": null,
+          "location": null
+        }
+      },
+      "usage": {
+        "input": 540,
+        "cached_input": 0,
+        "output": 58,
+        "reasoning": 24
+      },
+      "latency_ms": 1310
+    }
+  ]
+}

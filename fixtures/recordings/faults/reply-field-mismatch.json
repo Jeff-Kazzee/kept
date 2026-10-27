@@ -1,0 +1,43 @@
+{
+  "message_id": "reply-df1ce4b1",
+  "effort": "any",
+  "note": "m1, m2 and m3 accepted. The model gives Monday a place no message states, then a different time.",
+  "attempts": [
+    {
+      "output": {
+        "template": "accept_offer",
+        "slot_id": "2026-11-16T13:00",
+        "fields": {
+          "date": "2026-11-16",
+          "time": "13:00",
+          "location": "Elm Street office"
+        }
+      },
+      "usage": {
+        "input": 720,
+        "cached_input": 0,
+        "output": 58,
+        "reasoning": 24
+      },
+      "latency_ms": 1380
+    },
+    {
+      "output": {
+        "template": "accept_offer",
+        "slot_id": "2026-11-16T13:00",
+        "fields": {
+          "date": "2026-11-16",
+          "time": "14:00",
+          "location": null
+        }
+      },
+      "usage": {
+        "input": 720,
+        "cached_input": 0,
+        "output": 58,
+        "reasoning": 24
+      },
+      "latency_ms": 1380
+    }
+  ]
+}

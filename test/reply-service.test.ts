@@ -4,7 +4,9 @@
 import { describe, expect, it } from "vitest";
 import { CaseService } from "../src/case/service.ts";
 import type { CaseView } from "../src/case/types.ts";
-import { RecordedModelClient } from "../src/model/recorded.ts";
+import { RecordedModelClient, readRecording, type Recording } from "../src/model/recorded.ts";
+import { fromPackage } from "../src/paths.ts";
+import { checkReply } from "../src/reply/suggest.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { draftValidity } from "../src/reply/view.ts";
 import { EventStore, StaleEditError } from "../src/store/event-log.ts";
@@ -12,13 +14,14 @@ import { acceptMessages, intake } from "./helpers.ts";
 
 const NOW = "2026-11-05T09:00:00.000Z";
 
-async function setup(ids: string[]) {
+async function setup(ids: string[], overrides: Recording[] = []) {
   const store = new EventStore();
   const service = intake(store);
   await acceptMessages(service, ids);
-  const kase = new CaseService(store, service, RecordedModelClient.fromDirectory(), { now: () => NOW, userName: "Dana Reyes" });
-  const reply = new ReplyService(store, kase, { now: () => NOW });
-  return { store, intake: service, kase, reply };
+  const client = RecordedModelClient.withOverrides(overrides, RecordedModelClient.fromDirectory());
+  const kase = new CaseService(store, service, client, { now: () => NOW, userName: "Dana Reyes" });
+  const reply = new ReplyService(store, kase, client, { now: () => NOW });
+  return { store, intake: service, kase, reply, client };
 }
 
 const states = (view: CaseView) => view.slots.map((s) => [s.key, s.stateLabel]);
@@ -223,5 +226,120 @@ describe("SP3.6 edits and R-b drafts as events", () => {
     const view = kase.answer("q1", "request:2026-11-13T09:15", 1, 1);
     expect(view.reply.draft).toMatchObject({ id: "d2", template: "accept_offer", slotKey: "2026-11-13T09:15" });
     expect(replyEvents(store)).toEqual(["reply_drafted", "reply_discarded", "reply_drafted"]);
+  });
+});
+
+const fault = (name: string) => readRecording(fromPackage(`fixtures/recordings/faults/${name}.json`));
+
+describe("SP3.4 the model picks a template and a slot, and code checks it", () => {
+  it("demo: a valid pick opens a draft that code builds, and the model output stays visible", async () => {
+    const { reply, client, kase } = await setup(["m1", "m2", "m3"]);
+    const before = states(kase.view());
+    const view = await reply.suggest("I want Monday.", 0);
+    expect(states(view)).toEqual(before);
+    expect(view.reply.draft).toMatchObject({ id: "d1", template: "accept_offer", slotKey: "2026-11-16T13:00", origin: "model", suggestionId: "s1", valid: true });
+    expect(view.reply.suggestion).toMatchObject({
+      id: "s1",
+      intent: "I want Monday.",
+      outcome: "valid",
+      model: "muse-spark-1.3",
+      effort: "low",
+      attempts: [{ attempt: 1, outcome: "valid", problems: [] }],
+      outputs: [{ template: "accept_offer", slot_id: "2026-11-16T13:00", fields: { date: "2026-11-16", time: "13:00", location: null } }],
+    });
+    const call = client.calls.at(-1)!;
+    expect(call).toMatchObject({ key: "reply-df1ce4b1", effort: "low", body: { store: false, text: { format: { name: "reply_template" } } } });
+    // The model sees slots and templates, never message text.
+    expect(call.body.input).not.toContain("insurance card");
+    expect(JSON.parse(call.body.input)).toMatchObject({ note: "I want Monday.", slots: [{ id: "2026-11-10T14:00", state: "offered" }, {}, {}, {}] });
+  });
+
+  for (const [note, template, slot] of [
+    ["Friday does not work for me. Please offer another time.", "decline_offer", "2026-11-13T09:15"],
+    ["Is my Thursday visit still on?", "ask_still_stands", "2026-11-12T10:30"],
+    ["I want to keep Thursday.", "keep_original", "2026-11-12T10:30"],
+  ] as const) {
+    it(`picks ${template} for "${note}"`, async () => {
+      const { reply } = await setup(["m1", "m2", "m3"]);
+      expect((await reply.suggest(note, 0)).reply.draft).toMatchObject({ template, slotKey: slot, origin: "model" });
+    });
+  }
+
+  it("S9: blocks a pick of the accept template for a confirmed slot, then falls back to manual entry", async () => {
+    const { reply, store } = await setup(["m1", "m2"], [fault("reply-not-valid-for-state")]);
+    const view = await reply.suggest("I accept Thursday.", 0);
+    expect(view.reply.draft).toBeNull();
+    expect(view.reply.suggestion).toMatchObject({
+      outcome: "manual_needed",
+      template: null,
+      slotKey: null,
+      attempts: [{ problems: ["template_not_valid_for_state"] }, { problems: ["template_not_valid_for_state"] }],
+      outputs: [{ template: "accept_offer", slot_id: "2026-11-12T10:30" }, { template: "accept_offer", slot_id: "2026-11-12T10:30" }],
+    });
+    // Manual entry: the user picks from the options code offers.
+    expect(view.reply.options.map((o) => `${o.template} ${o.slotKey}`)).toEqual([
+      "accept_offer 2026-11-10T14:00",
+      "decline_offer 2026-11-10T14:00",
+      "ask_still_stands 2026-11-12T10:30",
+    ]);
+    expect(replyEvents(store)).toEqual(["reply_suggested"]);
+    expect(reply.start("ask_still_stands", "2026-11-12T10:30", 1).reply.draft).toMatchObject({ origin: "manual" });
+  });
+
+  it("S9: blocks a pick of a slot that no message offers", async () => {
+    const { reply } = await setup(["m1"], [fault("reply-unknown-slot")]);
+    const view = await reply.suggest("Please accept Wednesday at 3:00 PM.", 0);
+    expect(view.reply).toMatchObject({ draft: null, suggestion: { outcome: "manual_needed", attempts: [{ problems: ["unknown_slot"] }, { problems: ["unknown_slot"] }] } });
+  });
+
+  it("R-c: rejects a proposed field value that differs from the case", async () => {
+    const { reply } = await setup(["m1", "m2", "m3"], [fault("reply-field-mismatch")]);
+    const view = await reply.suggest("I want Monday.", 0);
+    expect(view.reply).toMatchObject({ draft: null, suggestion: { outcome: "manual_needed", attempts: [{ problems: ["field_mismatch"] }, { problems: ["field_mismatch"] }] } });
+  });
+
+  it("gives output that is not JSON one retry", async () => {
+    const { reply } = await setup(["m1", "m2", "m3"], [fault("reply-not-json")]);
+    const view = await reply.suggest("I want Monday.", 0);
+    expect(view.reply.suggestion).toMatchObject({
+      outcome: "valid",
+      attempts: [{ outcome: "invalid", problems: ["not_json"] }, { outcome: "valid" }],
+      outputs: [null, { template: "accept_offer" }],
+    });
+    expect(view.reply.draft).toMatchObject({ template: "accept_offer", origin: "model" });
+  });
+
+  it("S7: a pick for the slot without a time fails the missing-field check and falls back", async () => {
+    const { reply } = await setup(["s7-confirm"]);
+    const view = await reply.suggest("Please confirm my visit.", 0);
+    expect(view.reply).toMatchObject({
+      draft: null,
+      options: [],
+      suggestion: { outcome: "manual_needed", attempts: [{ problems: ["missing_field"] }, { problems: ["missing_field"] }] },
+    });
+  });
+
+  it("replaces an open draft through a discard event", async () => {
+    const { reply, store } = await setup(["m1", "m2", "m3"]);
+    reply.start("decline_offer", "2026-11-10T14:00", 0);
+    await reply.suggest("I want Monday.", 1);
+    expect(replyEvents(store)).toEqual(["reply_drafted", "reply_suggested", "reply_discarded", "reply_drafted"]);
+  });
+
+  it("checks the version and the note before calling the model", async () => {
+    const { reply, client } = await setup(["m1", "m2", "m3"]);
+    const calls = client.calls.length;
+    await expect(reply.suggest("I want Monday.", 1)).rejects.toBeInstanceOf(StaleEditError);
+    await expect(reply.suggest("x".repeat(501), 0)).rejects.toThrow(/longer than 500/);
+    expect(client.calls).toHaveLength(calls);
+  });
+
+  it("R-c: accepts a proposed place that equals the case value apart from case and spacing", async () => {
+    const { kase } = await setup(["m2", "m3"]);
+    const ctx = kase.replyState().context;
+    const out = { template: "ask_still_stands" as const, slot_id: "2026-11-12T10:30", fields: { date: "2026-11-12", time: "10:30", location: "lantern hill clinic,  400 elm street, suite 2" } };
+    expect(checkReply(out, ctx)).toEqual([]);
+    expect(checkReply({ ...out, fields: { ...out.fields, location: "Elm Street office" } }, ctx)).toEqual(["field_mismatch"]);
+    expect(checkReply({ ...out, fields: { date: null, time: null, location: null } }, ctx)).toEqual([]);
   });
 });

@@ -1,0 +1,25 @@
+{
+  "message_id": "reply-ab511791",
+  "effort": "low",
+  "note": "m1, m2 and m3 accepted. Note: I want to keep Thursday.",
+  "attempts": [
+    {
+      "output": {
+        "template": "keep_original",
+        "slot_id": "2026-11-12T10:30",
+        "fields": {
+          "date": "2026-11-12",
+          "time": "10:30",
+          "location": null
+        }
+      },
+      "usage": {
+        "input": 720,
+        "cached_input": 0,
+        "output": 58,
+        "reasoning": 24
+      },
+      "latency_ms": 1420
+    }
+  ]
+}

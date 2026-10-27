@@ -1,0 +1,25 @@
+{
+  "message_id": "reply-9f1665d3",
+  "effort": "low",
+  "note": "m1, m2 and m3 accepted. Note: Is my Thursday visit still on?",
+  "attempts": [
+    {
+      "output": {
+        "template": "ask_still_stands",
+        "slot_id": "2026-11-12T10:30",
+        "fields": {
+          "date": "2026-11-12",
+          "time": "10:30",
+          "location": "Lantern Hill Clinic, 400 Elm Street, Suite 2"
+        }
+      },
+      "usage": {
+        "input": 720,
+        "cached_input": 0,
+        "output": 72,
+        "reasoning": 24
+      },
+      "latency_ms": 1510
+    }
+  ]
+}
