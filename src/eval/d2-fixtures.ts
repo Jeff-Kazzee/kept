@@ -1,12 +1,14 @@
 // Replays the checkpoints in the fixtures. Messages go through recorded
 // extraction and are accepted. Answer steps ask the next question and tap
-// the choice with the given label. Approve steps approve the open reply. Used by the scenario tests and by the
-// conflict evaluation, which needs the conflict states without spending
-// model calls to reach them.
+// the choice with the given label. Approve steps approve the open reply.
+// D4 steps explain a conflict, ask a question and leave it open, or close
+// the app and open it again on the same database file. Used by the scenario
+// tests and by the conflict evaluation, which needs the conflict states
+// without spending model calls to reach them.
 import { CaseService } from "../case/service.ts";
 import { DEFAULT_EXTRACTION_EFFORT } from "../domain/claim.ts";
 import { loadCaseProfile, readFixtureText } from "../fixtures/load.ts";
-import type { D3Step, ResolvedScenario } from "../fixtures/schema.ts";
+import type { D4Step, ResolvedScenario } from "../fixtures/schema.ts";
 import { IntakeService } from "../intake/service.ts";
 import type { ModelCall, ModelClient } from "../model/client.ts";
 import { Recording, RecordedModelClient } from "../model/recorded.ts";
@@ -15,14 +17,35 @@ import { EventStore } from "../store/event-log.ts";
 
 export const REPLAY_NOW = "2026-11-11T12:00:00.000Z";
 
-export type Replayed = { store: EventStore; intake: IntakeService; kase: CaseService; reply: ReplyService };
+export type Replayed = {
+  store: EventStore;
+  intake: IntakeService;
+  kase: CaseService;
+  reply: ReplyService;
+  // The whole app state just before and just after each reopen step.
+  reopens: Array<{ before: AppSnapshot; after: AppSnapshot }>;
+};
 
+// Everything the app shows, read from the store.
+export type AppSnapshot = { messages: unknown; evidence: unknown; case: unknown; history: unknown; caseVersion: number };
+
+export function snapshot(r: Pick<Replayed, "intake" | "kase">): AppSnapshot {
+  return {
+    messages: r.intake.messages(),
+    evidence: r.intake.evidence(),
+    case: r.kase.view(),
+    history: r.kase.history(),
+    caseVersion: r.kase.caseVersion(),
+  };
+}
+
+// `file` is the database file. A checkpoint with a reopen step needs one.
 export async function replayCheckpoint(
   scenario: ResolvedScenario,
-  checkpoint: { steps: D3Step[] },
+  checkpoint: { steps: D4Step[] },
   base: ModelClient = RecordedModelClient.fromDirectory(),
+  options: { file?: string } = {},
 ): Promise<Replayed> {
-  const store = new EventStore();
   const now = () => REPLAY_NOW;
   // A suggest step may name a fault recording, which answers that one call
   // in place of the base client.
@@ -32,11 +55,38 @@ export async function replayCheckpoint(
     call: (request: ModelCall) =>
       fault && fault.message_id === request.key ? RecordedModelClient.withOverrides([fault]).call(request) : base.call(request),
   };
-  const intake = new IntakeService(store, RecordedModelClient.fromDirectory(), { now });
-  const kase = new CaseService(store, intake, client, { now, userName: loadCaseProfile().user_name });
-  const reply = new ReplyService(store, kase, client, { now });
+  const openApp = () => {
+    const store = new EventStore(options.file ?? ":memory:");
+    const intake = new IntakeService(store, RecordedModelClient.fromDirectory(), { now });
+    const kase = new CaseService(store, intake, client, { now, userName: loadCaseProfile().user_name });
+    const reply = new ReplyService(store, kase, client, { now });
+    return { store, intake, kase, reply };
+  };
+  let { store, intake, kase, reply } = openApp();
+  const reopens: Replayed["reopens"] = [];
   if (scenario.calendar) kase.loadCalendar(scenario.calendar, readFixtureText(scenario.calendar), 0);
   for (const step of checkpoint.steps) {
+    if ("reopen" in step) {
+      if (!options.file) throw new Error(`${scenario.id}: a reopen step needs a database file.`);
+      const before = snapshot({ intake, kase });
+      store.close();
+      ({ store, intake, kase, reply } = openApp());
+      reopens.push({ before, after: snapshot({ intake, kase }) });
+      continue;
+    }
+    if ("explain" in step) {
+      const conflict = kase.view().conflicts.find((c) => c.kind === step.explain);
+      if (!conflict) throw new Error(`${scenario.id}: no ${step.explain} conflict to explain.`);
+      await kase.explain(conflict.id, conflict.version);
+      continue;
+    }
+    if ("ask" in step) {
+      const asked = await kase.askNext(kase.view().questionsVersion);
+      if (asked.question?.conflictKind !== step.ask) {
+        throw new Error(`${scenario.id}: expected a ${step.ask} question, got ${asked.question?.conflictKind ?? "none"}.`);
+      }
+      continue;
+    }
     if ("message" in step) {
       const message = scenario.messages.find((m) => m.id === step.message)!;
       const { expected: _expected, ...input } = message;
@@ -79,5 +129,5 @@ export async function replayCheckpoint(
     if (!choice) throw new Error(`${scenario.id}: no choice "${step.answer.choice}".`);
     kase.answer(question.id, choice.id, asked.questionsVersion, asked.reply.version);
   }
-  return { store, intake, kase, reply };
+  return { store, intake, kase, reply, reopens };
 }

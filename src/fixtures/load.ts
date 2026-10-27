@@ -38,7 +38,7 @@ export function loadScenarios(fixturesDir: string = FIXTURES_DIR): ResolvedScena
     if (s.model_fault && !messages.some((m) => m.id === s.model_fault!.message)) {
       throw new Error(`${s.id} model_fault names a message that is not in the scenario.`);
     }
-    for (const [kind, checkpoints] of [["d2", s.d2 ?? []], ["d3", s.d3 ?? []]] as const) {
+    for (const [kind, checkpoints] of [["d2", s.d2 ?? []], ["d3", s.d3 ?? []], ["d4", s.d4 ?? []]] as const) {
       for (const step of checkpoints.flatMap((c) => c.steps)) {
         if ("message" in step && !messages.some((m) => m.id === step.message)) {
           throw new Error(`${s.id} ${kind} step names message ${step.message}, which is not in the scenario.`);

@@ -2,8 +2,92 @@
   "id": "S10",
   "title": "App closed after the draft and before approval",
   "calendar": "calendar/dana.ics",
-  "messages": [{ "ref": "m2" }, { "ref": "m3" }],
-  "later": [
-    { "deliverable": "D4", "expect": "A reply choosing Monday 2026-11-16 13:00 is drafted. The app closes before approval. Reopening restores the exact slot states and the draft." }
-  ]
+  "messages": [{ "ref": "m1" }, { "ref": "m2" }, { "ref": "m3" }, { "ref": "m4" }],
+  "d4": [
+    {
+      "expect": "The app closes while the question about the move is open and its explanation is stored. Reopening restores the slots, the conflict, the explanation, the open question and the checklist.",
+      "steps": [
+        { "message": "m1" },
+        { "message": "m2" },
+        { "message": "m3" },
+        { "explain": "change_proposed" },
+        { "ask": "change_proposed" },
+        { "reopen": true }
+      ],
+      "slots": {
+        "2026-11-10T14:00": "Offered · office message",
+        "2026-11-12T10:30": "Confirmed · office message, change proposed",
+        "2026-11-13T09:15": "Offered · office message",
+        "2026-11-16T13:00": "Offered · office message"
+      },
+      "conflicts": [{ "kind": "change_proposed", "status": "asked", "explained": true }],
+      "question": { "kind": "change_proposed", "choices": ["Request Friday 11/13 9:15 AM", "Request Monday 11/16 1:00 PM", "Not sure yet"] },
+      "draft": null,
+      "sent": [],
+      "checklist": [
+        { "item": "Bring new insurance card", "sources": [["office message", "Please bring your new insurance card"]] },
+        { "item": "Arrive 15 minutes early", "sources": [["office message", "arrive 15 minutes early"]] }
+      ]
+    },
+    {
+      "expect": "A reply choosing Monday 2026-11-16 13:00 is drafted and edited. The app closes before approval. Reopening restores the exact slot states and the draft with its edit and its edited label.",
+      "steps": [
+        { "message": "m1" },
+        { "message": "m2" },
+        { "message": "m3" },
+        { "explain": "change_proposed" },
+        { "answer": { "kind": "change_proposed", "choice": "Request Monday 11/16 1:00 PM" } },
+        { "edit_reply": "Hello Lantern Hill Clinic,\n\nMonday 11/16 at 1:00 PM works for me. Please confirm it.\n\nThank you,\nDana Reyes" },
+        { "reopen": true }
+      ],
+      "slots": {
+        "2026-11-10T14:00": "Offered · office message",
+        "2026-11-12T10:30": "Confirmed · office message, change proposed",
+        "2026-11-13T09:15": "Offered · office message",
+        "2026-11-16T13:00": "Offered · office message"
+      },
+      "conflicts": [{ "kind": "change_proposed", "status": "answered", "explained": true }],
+      "question": null,
+      "draft": {
+        "template": "accept_offer",
+        "slot": "2026-11-16T13:00",
+        "origin": "choice",
+        "edited": true,
+        "text": "Hello Lantern Hill Clinic,\n\nMonday 11/16 at 1:00 PM works for me. Please confirm it.\n\nThank you,\nDana Reyes"
+      },
+      "sent": [],
+      "checklist": [
+        { "item": "Bring new insurance card", "sources": [["office message", "Please bring your new insurance card"]] },
+        { "item": "Arrive 15 minutes early", "sources": [["office message", "arrive 15 minutes early"]] }
+      ]
+    },
+    {
+      "expect": "The reopened app approves the Monday reply. The office's reply m4 then arrives and goes through review. Monday becomes Confirmed · office message and Thursday Canceled · office message. The checklist is unchanged.",
+      "steps": [
+        { "message": "m1" },
+        { "message": "m2" },
+        { "message": "m3" },
+        { "answer": { "kind": "change_proposed", "choice": "Request Monday 11/16 1:00 PM" } },
+        { "reopen": true },
+        { "approve_reply": { "template": "accept_offer", "slot": "2026-11-16T13:00" } },
+        { "reopen": true },
+        { "message": "m4" }
+      ],
+      "slots": {
+        "2026-11-10T14:00": "Offered · office message",
+        "2026-11-12T10:30": "Canceled · office message",
+        "2026-11-13T09:15": "Offered · office message",
+        "2026-11-16T13:00": "Confirmed · office message"
+      },
+      "conflicts": [],
+      "question": null,
+      "draft": null,
+      "sent": [{ "template": "accept_offer", "slot": "2026-11-16T13:00" }],
+      "checklist": [
+        { "item": "Bring new insurance card", "sources": [["office message", "Please bring your new insurance card"]] },
+        { "item": "Arrive 15 minutes early", "sources": [["office message", "arrive 15 minutes early"]] }
+      ]
+    }
+  ],
+  "later": []
 }

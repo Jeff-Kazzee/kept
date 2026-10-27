@@ -141,6 +141,41 @@ export const D3Checkpoint = z
   .strict();
 export type D3Checkpoint = z.infer<typeof D3Checkpoint>;
 
+// D4 expectations over a saved case. Steps may also explain the open
+// conflict of a kind, ask the next question and leave it open, or close the
+// app and open it again on the same database file. The test checks that
+// every reopen restores the exact state, then compares the state after the
+// last step with the fields below.
+const D4Step = z.union([
+  D3Step,
+  z.object({ explain: ConflictKind }).strict(),
+  z.object({ ask: ConflictKind }).strict(),
+  z.object({ reopen: z.literal(true) }).strict(),
+]);
+export type D4Step = z.infer<typeof D4Step>;
+
+export const D4Checkpoint = z
+  .object({
+    expect: z.string().min(1),
+    steps: z.array(D4Step).min(1),
+    // Every slot by key, with its state label.
+    slots: z.record(z.string(), z.string()),
+    conflicts: z.array(
+      z.object({ kind: ConflictKind, status: z.enum(["open", "asked", "answered"]), explained: z.boolean() }).strict(),
+    ),
+    // The open question, or null.
+    question: z.object({ kind: ConflictKind, choices: z.array(z.string()) }).strict().nullable(),
+    // The open reply draft, or null. `text` is checked when given.
+    draft: TemplateSlot.extend({ origin: z.enum(["choice", "model", "manual"]), edited: z.boolean(), text: z.string().optional() })
+      .strict()
+      .nullable(),
+    sent: z.array(TemplateSlot),
+    // Checklist items with the source label and quote of each source.
+    checklist: z.array(z.object({ item: z.string(), sources: z.array(z.tuple([z.string(), z.string().nullable()])) }).strict()),
+  })
+  .strict();
+export type D4Checkpoint = z.infer<typeof D4Checkpoint>;
+
 // MCP expectations (D5). The test seeds the case with the scenario's
 // messages through recorded extraction and the review queue, creates the
 // grant, and drives the real MCP server. `slots_after` gives slot state
@@ -170,6 +205,7 @@ export const Scenario = z
       .optional(),
     d2: z.array(D2Checkpoint).optional(),
     d3: z.array(D3Checkpoint).optional(),
+    d4: z.array(D4Checkpoint).optional(),
     mcp: McpCheck.optional(),
     later: z.array(LaterStub),
   })
