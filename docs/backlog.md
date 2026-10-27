@@ -40,8 +40,8 @@ Rules:
 |---|---|---|---|---|
 | 0 | Model access check and fixtures | D0 | Oct 27 | Done (`38ed86d`) |
 | 1 | Evidence intake | D1 | Oct 27 | Done (`09042eb`) |
-| 2 | Slot states and conflict resolution | D2 | Oct 28 to 30 | Next |
-| 3 | Reviewed reply | D3 | Oct 31 to Nov 1 | Planned |
+| 2 | Slot states and conflict resolution | D2 | Oct 27 | Done (`46e5917`) |
+| 3 | Reviewed reply | D3 | Oct 31 to Nov 1 | Next |
 | 4 | MCP core: domain events, grants, tools | D5, part 1 | Oct 31 to Nov 1, beside sprint 3 | Planned |
 | 5 | Saved outcome and checklist | D4 | Nov 1 to 2 | Planned |
 | 6 | MCP in the app and connect test | D5, part 2 | Nov 2 | Planned |
@@ -56,11 +56,23 @@ tier. Read-only MCP is the floor.
 
 - [ ] Choose the extraction effort level (`low` or `minimal`) for the demo.
   Sprint 1 measured `low` at 100% and `minimal` at 98% with one run at 94.1%.
-  `minimal` was about twice as fast. This is Jeff's decision.
+  `minimal` was about twice as fast. This is Jeff's decision. Sprint 2
+  measured both at 100% across three runs, with `minimal` at p50 1.6 s
+  against 3.2 s for `low`.
 - [x] A weekday alone ("Monday") can match two dates inside the 14-day
   window. Sprint 2 raises it as a question instead of choosing.
 - [ ] A time written before its date can attach to the previous date and
   reject a real claim. Watch the live rejection rate.
+
+## Carried over from sprint 2
+
+- [ ] Confirm or change the decisions marked "proposed, pending Jeff" in
+  `docs/decisions/0002-slot-states.md` (D-a to D-h and W1 to W33).
+- [ ] Sprint 3 work: the unknown-order change question reads "The change to
+  Thursday 11/12 10:30 AM is still proposed". Thursday is the slot being moved
+  away from, so the wording should name the change from that slot.
+- [ ] Look at the conflict view in a browser. Sprint 2 checked it over HTTP
+  only.
 
 ## Sprint 2: slot states and conflict resolution (D2)
 
