@@ -11,7 +11,8 @@
           "date": "2026-11-16",
           "time": "13:00",
           "location": "Elm Street office"
-        }
+        },
+        "no_fit_reason": null
       },
       "usage": {
         "input": 720,
@@ -29,7 +30,8 @@
           "date": "2026-11-16",
           "time": "14:00",
           "location": null
-        }
+        },
+        "no_fit_reason": null
       },
       "usage": {
         "input": 720,

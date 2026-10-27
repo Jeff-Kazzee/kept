@@ -3,7 +3,7 @@
 Status: proposed, pending Jeff, 2026-10-27
 
 This records how the user replies to the office in sprint 3 (D3). R-a to
-R-h were set by the coordinator for this sprint. T1 was accepted by the
+R-h and C1 were set by the coordinator for this sprint. T1 was accepted by the
 coordinator on 2026-10-27 and waits for Jeff. T items were chosen while
 building it where the rules left a case open. Jeff's decisions of
 2026-10-27 on W30 and the extraction effort are recorded in 0002.
@@ -68,6 +68,27 @@ are shown when the case has them and left out of the text otherwise.
   the end do not count as a change for this. The edit label still follows
   any change. The ask-whether-it-stands template records no claim, so it
   shows none. Set in review round 1.
+- C1 (proposed, from the live evaluation of 2026-10-27). For "Please accept
+  Wednesday at 3:00 PM", with Tuesday and Thursday offered, the live model
+  picked "decline Tuesday" in every run, and code accepted the draft. Two
+  changes stop that meaning flip:
+  - The model may answer that no template fits: template and slot null with
+    a reason, `time_not_offered` (the note names a date or time that is not
+    a listed slot open to the reply it asks for) or `template_not_allowed`
+    (the note asks for a reply the named slot's state does not allow). The
+    prompt tells it to use this instead of another slot or a template with
+    a different meaning. A no-fit answer is valid. It is recorded with its
+    reason, goes to manual entry, and gets no retry.
+  - Code checks a pick against the note, whatever the model says. Every
+    date and time the note states is read with the date code. When the note
+    states any, the picked slot must match one of them, or the pick is
+    rejected with `slot_not_in_note`. A note with no date or time skips the
+    check. A pick that is rejected twice goes to manual entry.
+  - For "I accept Thursday" with Thursday confirmed, the live model asked
+    whether Thursday still stands. That commits to nothing and names the
+    slot the note names, so S9 accepts it beside a no-fit answer. The
+    evaluation counts a no-fit answer as a correct pick where only "no
+    template fits" is acceptable.
 
 ## Choices made while building
 

@@ -293,25 +293,37 @@ describe("SP3.10 eval:live for the reply template call", () => {
     expect(code).toBe(0);
     const report = JSON.parse(readFileSync(out, "utf8")) as ReplyEvalReport;
     // Four notes on the demo case (S3), the S7 slot without a time, two S9
-    // notes no template fits, and S12.
+    // notes, and S12.
     expect(report).toMatchObject({ effort: "low", runs: 3, stoppedBySpendGuard: false, corpus: { inputs: 8, withExpectedPick: 8 } });
-    expect(report.validTemplateRate).toBeCloseTo(15 / 24);
-    // The model picks as expected wherever a template fits.
-    expect(report.modelPickRate).toBe(1);
-    // The S7 and S9 notes expect no pick. The system outcome meets it through
-    // the code fallback, but the model still proposed a pick every time.
+    // S3 four times, S12 and the S9.2 question draft.
+    expect(report.validTemplateRate).toBeCloseTo(18 / 24);
+    // Every answer is acceptable except the S7 pick for the slot without a time.
+    expect(report.modelPickRate).toBeCloseTo(21 / 24);
     expect(report.expectedOutcomeRate).toBe(1);
-    expect(report.noFit).toEqual({ results: 9, modelProposedPick: 9 });
-    const s9 = report.runResults[0]!.items.find((i) => i.source === "S9.1")!;
-    expect(s9).toMatchObject({
-      outcome: "manual_needed",
+    // S9.1 and S7 accept only "no template fits". The model says so for S9.1
+    // and proposes a blocked pick for S7.
+    expect(report.noFit).toEqual({ results: 6, modelSaidNoFit: 3, modelProposedPick: 3 });
+    const items = report.runResults[0]!.items;
+    // C1: a no-fit answer on an expected-null item is a correct model pick.
+    expect(items.find((i) => i.source === "S9.1")).toMatchObject({
+      outcome: "no_fit",
       pick: null,
-      modelPick: { template: "accept_offer", slot: "2026-11-11T15:00" },
-      expected: null,
+      modelAnswer: "no_fit",
+      modelPick: null,
+      noFitReason: "time_not_offered",
+      expected: [null],
       outcomeMatches: true,
-      modelPickMatches: null,
+      modelPickMatches: true,
     });
-    expect(report).toMatchObject({ fallbacks: 9, calls: 33, rejections: { missing_field: 6, template_not_valid_for_state: 6, unknown_slot: 6 } });
+    // S9.2 accepts no fit or the question for Thursday.
+    expect(items.find((i) => i.source === "S9.2")).toMatchObject({
+      outcome: "valid",
+      modelPick: { template: "ask_still_stands", slot: "2026-11-12T10:30" },
+      outcomeMatches: true,
+      modelPickMatches: true,
+    });
+    expect(items.find((i) => i.source === "S7.1")).toMatchObject({ outcome: "manual_needed", modelAnswer: "pick", modelPickMatches: false, outcomeMatches: true });
+    expect(report).toMatchObject({ noFitAnswers: 3, fallbacks: 3, calls: 27, rejections: { missing_field: 6 } });
     expect(report.latencyMs.p50).toBeGreaterThan(0);
     expect(report.latencyMs.p95).toBeGreaterThanOrEqual(report.latencyMs.p50!);
     expect(report.costUsd).toBeCloseTo(estimateUsd(report.usage));
@@ -319,10 +331,10 @@ describe("SP3.10 eval:live for the reply template call", () => {
     expect(report.runResults.map((r) => r.complete)).toEqual([true, true, true]);
     const printed = lines.join("\n");
     expect(printed).toContain(
-      "[template] valid templates 62.5%, model picks as expected 100.0%, system outcomes as expected 100.0%, fallbacks 9, calls 33",
+      "[template] valid templates 75.0%, model picks as expected 87.5%, system outcomes as expected 100.0%, no-fit answers 3, fallbacks 3, calls 27",
     );
-    expect(printed).toContain("no template fits: 9 results, the model still proposed a pick that code blocked in 9");
-    expect(printed).toContain("rejections by reason: missing_field 6, unknown_slot 6, template_not_valid_for_state 6");
+    expect(printed).toContain("no template fits: 6 results, the model said no fit in 3 and proposed a pick that code blocked in 3");
+    expect(printed).toContain("rejections by reason: missing_field 6\n");
     expect(printed).not.toContain("[low] accuracy");
     expect(printed).not.toContain(KEY);
   });
@@ -332,7 +344,7 @@ describe("SP3.10 eval:live for the reply template call", () => {
     expect(await main(["--d3", "--out", out], { MODEL_API_KEY: KEY }, { createClient: recordedClient, log: () => {} })).toBe(0);
     const report = JSON.parse(readFileSync(out, "utf8")) as EvalReport & { d3: ReplyEvalReport };
     expect(report.perEffort.map((e) => e.effort)).toEqual(["minimal", "low"]);
-    expect(report.d3.calls).toBe(33);
+    expect(report.d3.calls).toBe(27);
     expect(report.d3.maxUsd).toBeCloseTo(5 - report.costUsdTotal);
     expect(report).not.toHaveProperty("d2");
 
@@ -341,7 +353,7 @@ describe("SP3.10 eval:live for the reply template call", () => {
     const pair = JSON.parse(readFileSync(both, "utf8")) as { d2: ConflictEvalReport; d3: ReplyEvalReport };
     expect(pair).not.toHaveProperty("perEffort");
     expect(pair.d2.explanation.calls).toBe(18);
-    expect(pair.d3.calls).toBe(33);
+    expect(pair.d3.calls).toBe(27);
     expect(pair.d3.maxUsd).toBeCloseTo(5 - pair.d2.costUsdTotal);
   });
 
@@ -353,10 +365,10 @@ describe("SP3.10 eval:live for the reply template call", () => {
     const out = path.join(tempDir(), "d3-faults.json");
     expect(await main(["--d3-only", "--out", out], { MODEL_API_KEY: KEY }, { createClient: () => faults, log: () => {} })).toBe(0);
     const report = JSON.parse(readFileSync(out, "utf8")) as ReplyEvalReport;
-    expect(report).toMatchObject({ fallbacks: 12, calls: 36, rejections: { field_mismatch: 6 } });
+    expect(report).toMatchObject({ fallbacks: 6, calls: 30, rejections: { field_mismatch: 6 } });
     // The model named the right template and slot with a wrong field value,
     // so its pick still matches while the system outcome does not.
-    expect(report.modelPickRate).toBe(1);
+    expect(report.modelPickRate).toBeCloseTo(21 / 24);
     expect(report.expectedOutcomeRate).toBeCloseTo(21 / 24);
   });
 

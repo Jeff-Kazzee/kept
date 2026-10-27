@@ -95,7 +95,7 @@ export type D2Checkpoint = z.infer<typeof D2Checkpoint>;
 // from a note, start a draft by hand, or edit the open draft. A suggest step
 // may name a fault recording that answers in place of the stored one, and
 // states the pick a correct model makes (`expect`, null when no template
-// fits), which the live evaluation scores. `blocked` lists drafts that code
+// fits, or a list of acceptable answers), which the live evaluation scores. `blocked` lists drafts that code
 // must refuse after the steps, with their problems. `declined` lists a
 // message and notes that the scope check must decline before any model call.
 const D3Step = z.union([
@@ -103,7 +103,11 @@ const D3Step = z.union([
   z
     .object({
       suggest: z
-        .object({ intent: z.string().nullable(), recording: z.string().min(1).optional(), expect: TemplateSlot.nullable().optional() })
+        .object({
+          intent: z.string().nullable(),
+          recording: z.string().min(1).optional(),
+          expect: z.union([TemplateSlot.nullable(), z.array(TemplateSlot.nullable()).min(1)]).optional(),
+        })
         .strict(),
     })
     .strict(),
@@ -126,7 +130,7 @@ export const D3Checkpoint = z
     withheld: z.array(TemplateSlot.extend({ missing: z.array(z.enum(["time", "date"])) }).strict()).optional(),
     draft: TemplateSlot.extend({ origin: z.enum(["choice", "model", "manual"]), edited: z.boolean() }).strict().nullable(),
     suggestion: z
-      .object({ outcome: z.enum(["valid", "manual_needed"]), problems: z.array(z.array(z.string())) })
+      .object({ outcome: z.enum(["valid", "no_fit", "manual_needed"]), problems: z.array(z.array(z.string())) })
       .strict()
       .nullable()
       .optional(),

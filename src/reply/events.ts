@@ -5,6 +5,7 @@
 // through an explicit discard event.
 import type { AttemptData } from "../case/events.ts";
 import type { StoredEvent } from "../store/event-log.ts";
+import type { NoFitReason } from "./suggest.ts";
 import { TEMPLATES, type TemplateId } from "./templates.ts";
 import type { DraftOrigin, FieldView } from "./types.ts";
 
@@ -17,9 +18,11 @@ export type ReplyEvent =
         suggestion_id: string;
         intent: string | null;
         key: string;
-        outcome: "valid" | "manual_needed";
+        outcome: "valid" | "no_fit" | "manual_needed";
         template: TemplateId | null;
         slot_key: string | null;
+        // Set when the model answered that no template fits (C1).
+        no_fit_reason?: NoFitReason | null;
         attempts: AttemptData[];
         // Problems with a valid pick once the case changed during the model
         // call. The suggestion then falls back to manual entry.

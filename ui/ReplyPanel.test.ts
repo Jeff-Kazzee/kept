@@ -88,3 +88,29 @@ describe("review round 1", () => {
     expect(sent).toContain("No slot change was recorded. You edited the text and did not confirm what it asserts.");
   });
 });
+
+describe("C1", () => {
+  it("shows a no-fit answer with its reason and the manual options", () => {
+    const html = render({
+      ...base,
+      draft: null,
+      options: [{ template: "accept_offer", title: "Accept an offered slot", slotKey: "2026-11-10T14:00", slotLabel: "Tuesday 11/10 2:00 PM" }],
+      suggestion: {
+        id: "s1",
+        intent: "Please accept Wednesday at 3:00 PM.",
+        outcome: "no_fit",
+        template: null,
+        slotKey: null,
+        noFitReason: "time_not_offered",
+        model: "muse-spark-1.3",
+        effort: "low",
+        attempts: [{ attempt: 1, outcome: "valid", problems: [], detail: null, latency_ms: 1 }],
+        outputs: [{ template: null, slot_id: null, no_fit_reason: "time_not_offered" }],
+        caseChanged: [],
+        recordedAt: "2026-11-05T09:00:00.000Z",
+      },
+    });
+    expect(html).toContain("Model output: no template fits your note, because it names a date or time that no open slot has. Pick a template yourself below.");
+    expect(html).toContain("Accept an offered slot: Tuesday 11/10 2:00 PM");
+  });
+});

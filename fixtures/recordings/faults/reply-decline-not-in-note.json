@@ -1,0 +1,45 @@
+{
+  "message_id": "reply-09f18053",
+  "effort": "any",
+  "note": "S9: m1 accepted. Note: Please accept Wednesday at 3:00 PM. The model declines Tuesday 11/10 2:00 PM on both attempts, as in the live run of 2026-10-27 before C1.",
+  "attempts": [
+    {
+      "output": {
+        "template": "decline_offer",
+        "slot_id": "2026-11-10T14:00",
+        "fields": {
+          "date": "2026-11-10",
+          "time": "14:00",
+          "location": "Elm Street office"
+        },
+        "no_fit_reason": null
+      },
+      "usage": {
+        "input": 580,
+        "cached_input": 0,
+        "output": 66,
+        "reasoning": 30
+      },
+      "latency_ms": 1420
+    },
+    {
+      "output": {
+        "template": "decline_offer",
+        "slot_id": "2026-11-10T14:00",
+        "fields": {
+          "date": "2026-11-10",
+          "time": "14:00",
+          "location": "Elm Street office"
+        },
+        "no_fit_reason": null
+      },
+      "usage": {
+        "input": 580,
+        "cached_input": 0,
+        "output": 66,
+        "reasoning": 30
+      },
+      "latency_ms": 1460
+    }
+  ]
+}

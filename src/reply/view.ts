@@ -91,6 +91,7 @@ export function replyView(log: ReplyLog, ctx: ReplyContext): ReplyView {
         outcome: last.outcome,
         template: last.template,
         slotKey: last.slot_key,
+        noFitReason: last.no_fit_reason ?? null,
         model: last.attempts[0]?.model ?? "",
         effort: last.attempts[0]?.effort ?? "",
         attempts: last.attempts.map((a) => ({ attempt: a.attempt, outcome: a.outcome, problems: a.problems, detail: a.detail, latency_ms: a.latency_ms })),

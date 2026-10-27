@@ -11,7 +11,8 @@
           "date": "2026-11-16",
           "time": "13:00",
           "location": null
-        }
+        },
+        "no_fit_reason": null
       },
       "usage": {
         "input": 720,

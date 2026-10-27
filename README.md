@@ -43,6 +43,9 @@ in this repo is synthetic.
   An accepted slot becomes "Requested · reported by you". Sending is
   simulated: it writes a local event and the UI shows "Simulated. Nothing
   was sent." No network call is made.
+- The model picks a template and a slot from the user's note, or answers
+  that no template fits. Code rejects a pick whose slot is not a date or
+  time the note states.
 - A health question the user types gets a fixed decline that states the
   app's administrative scope. Nothing is recorded and no model is called.
 - Each scenario in `fixtures/scenarios/` states its D3 checkpoints, and
@@ -90,8 +93,8 @@ the D3 fixtures, three runs at effort `low` (`--d3-effort` sets it).
 calls with no extraction. The case states are built with recorded
 extraction. The report gives the valid-template rate, the rate at which the
 model's own final pick matches the expected one, the rate at which the
-system outcome does, how often the model proposed a pick where no template
-fits, rejections by reason, fallbacks to manual entry, latency p50 and p95,
+system outcome does, how often the model answered that no template fits
+and how often it proposed a pick where none fits, rejections by reason, fallbacks to manual entry, latency p50 and p95,
 tokens and estimated cost.
 
 The pass criterion for each effort level is pooled accuracy across its three

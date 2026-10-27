@@ -82,7 +82,8 @@ export class ReplyService {
   // The model picks a template and a slot from the user's note. The note is
   // checked for clinical content first (R-f): a clinical note gets the fixed
   // decline, records nothing and makes no model call. A valid pick opens a
-  // draft that code builds. After two invalid outputs the suggestion is
+  // draft that code builds. A no-fit answer is recorded with its reason, and
+  // the user picks by hand. After two invalid outputs the suggestion is
   // recorded with its attempts and the user picks by hand.
   async suggest(intent: string | null, expectedVersion: number): Promise<CaseView> {
     const note = intent?.trim() ? intent.trim() : null;
@@ -97,8 +98,8 @@ export class ReplyService {
     // that no longer passes falls back to manual entry.
     const { context, log } = this.#kase.replyState();
     const final = result.outcome === "valid" ? result.attempts.at(-1)!.output! : null;
-    const caseChanged = final ? checkReply(final, context) : [];
-    const built = final && caseChanged.length === 0 ? buildDraft(final.template, final.slot_id, context) : null;
+    const caseChanged = final ? checkReply(final, context, note) : [];
+    const built = final?.template && final.slot_id && caseChanged.length === 0 ? buildDraft(final.template, final.slot_id, context) : null;
     const suggestionId = `s${log.suggestions.length + 1}`;
     const events: ReplyEvent[] = [
       {
@@ -107,9 +108,10 @@ export class ReplyService {
           suggestion_id: suggestionId,
           intent: note,
           key: result.key,
-          outcome: built?.ok ? "valid" : "manual_needed",
+          outcome: built?.ok ? "valid" : result.outcome === "no_fit" ? "no_fit" : "manual_needed",
           template: built?.ok ? result.template : null,
           slot_key: built?.ok ? result.slotKey : null,
+          no_fit_reason: result.noFitReason,
           attempts: result.attempts.map(attemptData),
           case_changed: caseChanged,
         },

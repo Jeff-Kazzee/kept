@@ -2,43 +2,235 @@
   "id": "S9",
   "title": "Accept template proposed for a slot that is not offered",
   "calendar": "calendar/dana.ics",
-  "messages": [{ "ref": "m1" }, { "ref": "m2" }],
-  "d3": [
+  "messages": [
     {
-      "expect": "An Accept reply for Wednesday 2026-11-11 15:00, which m1 does not offer, is blocked by code. The recorded model proposes it on both attempts, and the user picks a template by hand.",
-      "steps": [
-        { "message": "m1" },
-        { "suggest": { "intent": "Please accept Wednesday at 3:00 PM.", "expect": null } }
-      ],
-      "slots": { "2026-11-10T14:00": "Offered · office message", "2026-11-12T10:30": "Offered · office message" },
-      "options": [
-        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
-        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
-        { "template": "accept_offer", "slot": "2026-11-12T10:30" },
-        { "template": "decline_offer", "slot": "2026-11-12T10:30" }
-      ],
-      "draft": null,
-      "suggestion": { "outcome": "manual_needed", "problems": [["unknown_slot"], ["unknown_slot"]] },
-      "sent": [],
-      "blocked": [{ "template": "accept_offer", "slot": "2026-11-11T15:00", "problems": ["unknown_slot"] }]
+      "ref": "m1"
     },
     {
-      "expect": "After m2 confirms Thursday 2026-11-12 10:30, an Accept reply for Thursday is blocked by code, because Thursday is confirmed and not offered.",
+      "ref": "m2"
+    }
+  ],
+  "d3": [
+    {
+      "expect": "An Accept reply for Wednesday 2026-11-11 15:00, which m1 does not offer, is blocked by code. The recorded model answers that no template fits, in one call, and the user picks a template by hand.",
       "steps": [
-        { "message": "m1" },
-        { "message": "m2" },
-        { "suggest": { "intent": "I accept Thursday.", "expect": null } }
+        {
+          "message": "m1"
+        },
+        {
+          "suggest": {
+            "intent": "Please accept Wednesday at 3:00 PM.",
+            "expect": null
+          }
+        }
       ],
-      "slots": { "2026-11-10T14:00": "Offered · office message", "2026-11-12T10:30": "Confirmed · office message" },
+      "slots": {
+        "2026-11-10T14:00": "Offered · office message",
+        "2026-11-12T10:30": "Offered · office message"
+      },
       "options": [
-        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
-        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
-        { "template": "ask_still_stands", "slot": "2026-11-12T10:30" }
+        {
+          "template": "accept_offer",
+          "slot": "2026-11-10T14:00"
+        },
+        {
+          "template": "decline_offer",
+          "slot": "2026-11-10T14:00"
+        },
+        {
+          "template": "accept_offer",
+          "slot": "2026-11-12T10:30"
+        },
+        {
+          "template": "decline_offer",
+          "slot": "2026-11-12T10:30"
+        }
       ],
       "draft": null,
-      "suggestion": { "outcome": "manual_needed", "problems": [["template_not_valid_for_state"], ["template_not_valid_for_state"]] },
+      "suggestion": {
+        "outcome": "no_fit",
+        "problems": [
+          []
+        ]
+      },
       "sent": [],
-      "blocked": [{ "template": "accept_offer", "slot": "2026-11-12T10:30", "problems": ["template_not_valid_for_state"] }]
+      "blocked": [
+        {
+          "template": "accept_offer",
+          "slot": "2026-11-11T15:00",
+          "problems": [
+            "unknown_slot"
+          ]
+        }
+      ]
+    },
+    {
+      "expect": "After m2 confirms Thursday 2026-11-12 10:30, an Accept reply for Thursday is blocked by code, because Thursday is confirmed and not offered. A fault recording proposes it on both attempts.",
+      "steps": [
+        {
+          "message": "m1"
+        },
+        {
+          "message": "m2"
+        },
+        {
+          "suggest": {
+            "intent": "I accept Thursday.",
+            "recording": "recordings/faults/reply-accept-confirmed.json",
+            "expect": [
+              null,
+              {
+                "template": "ask_still_stands",
+                "slot": "2026-11-12T10:30"
+              }
+            ]
+          }
+        }
+      ],
+      "slots": {
+        "2026-11-10T14:00": "Offered · office message",
+        "2026-11-12T10:30": "Confirmed · office message"
+      },
+      "options": [
+        {
+          "template": "accept_offer",
+          "slot": "2026-11-10T14:00"
+        },
+        {
+          "template": "decline_offer",
+          "slot": "2026-11-10T14:00"
+        },
+        {
+          "template": "ask_still_stands",
+          "slot": "2026-11-12T10:30"
+        }
+      ],
+      "draft": null,
+      "suggestion": {
+        "outcome": "manual_needed",
+        "problems": [
+          [
+            "template_not_valid_for_state"
+          ],
+          [
+            "template_not_valid_for_state"
+          ]
+        ]
+      },
+      "sent": [],
+      "blocked": [
+        {
+          "template": "accept_offer",
+          "slot": "2026-11-12T10:30",
+          "problems": [
+            "template_not_valid_for_state"
+          ]
+        }
+      ]
+    },
+    {
+      "expect": "The live case before C1: for Please accept Wednesday at 3:00 PM the model declines Tuesday 11/10 2:00 PM. Code rejects it on both attempts because Tuesday is not the date or time the note names, and no draft opens.",
+      "steps": [
+        {
+          "message": "m1"
+        },
+        {
+          "suggest": {
+            "intent": "Please accept Wednesday at 3:00 PM.",
+            "recording": "recordings/faults/reply-decline-not-in-note.json",
+            "expect": null
+          }
+        }
+      ],
+      "slots": {
+        "2026-11-10T14:00": "Offered · office message",
+        "2026-11-12T10:30": "Offered · office message"
+      },
+      "options": [
+        {
+          "template": "accept_offer",
+          "slot": "2026-11-10T14:00"
+        },
+        {
+          "template": "decline_offer",
+          "slot": "2026-11-10T14:00"
+        },
+        {
+          "template": "accept_offer",
+          "slot": "2026-11-12T10:30"
+        },
+        {
+          "template": "decline_offer",
+          "slot": "2026-11-12T10:30"
+        }
+      ],
+      "draft": null,
+      "suggestion": {
+        "outcome": "manual_needed",
+        "problems": [
+          [
+            "slot_not_in_note"
+          ],
+          [
+            "slot_not_in_note"
+          ]
+        ]
+      },
+      "sent": []
+    },
+    {
+      "expect": "For I accept Thursday with Thursday confirmed, the recorded model asks whether Thursday still stands, as the live model did. That commits to nothing and names the slot the note names, so it is an acceptable draft.",
+      "steps": [
+        {
+          "message": "m1"
+        },
+        {
+          "message": "m2"
+        },
+        {
+          "suggest": {
+            "intent": "I accept Thursday.",
+            "expect": [
+              null,
+              {
+                "template": "ask_still_stands",
+                "slot": "2026-11-12T10:30"
+              }
+            ]
+          }
+        }
+      ],
+      "slots": {
+        "2026-11-10T14:00": "Offered · office message",
+        "2026-11-12T10:30": "Confirmed · office message"
+      },
+      "options": [
+        {
+          "template": "accept_offer",
+          "slot": "2026-11-10T14:00"
+        },
+        {
+          "template": "decline_offer",
+          "slot": "2026-11-10T14:00"
+        },
+        {
+          "template": "ask_still_stands",
+          "slot": "2026-11-12T10:30"
+        }
+      ],
+      "draft": {
+        "template": "ask_still_stands",
+        "slot": "2026-11-12T10:30",
+        "origin": "model",
+        "edited": false
+      },
+      "suggestion": {
+        "outcome": "valid",
+        "problems": [
+          []
+        ]
+      },
+      "sent": []
     }
   ],
   "later": []

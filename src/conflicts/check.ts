@@ -21,7 +21,8 @@ export type OutputProblem =
   | "unknown_slot"
   | "template_not_valid_for_state"
   | "missing_field"
-  | "field_mismatch";
+  | "field_mismatch"
+  | "slot_not_in_note";
 
 export function checkCitations(cited: string[], caseIds: ReadonlySet<string>, conflictIds: ReadonlySet<string>): OutputProblem[] {
   const problems = new Set<OutputProblem>();

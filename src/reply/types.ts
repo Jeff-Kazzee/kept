@@ -59,10 +59,13 @@ export type DraftView = {
 export type SuggestionView = {
   id: string;
   intent: string | null;
+  // no_fit: the model answered that no template fits the note.
   // manual_needed: the model output failed the code checks twice.
-  outcome: "valid" | "manual_needed";
+  outcome: "valid" | "no_fit" | "manual_needed";
   template: TemplateId | null;
   slotKey: string | null;
+  // time_not_offered or template_not_allowed, set for a no-fit answer.
+  noFitReason: "time_not_offered" | "template_not_allowed" | null;
   model: string;
   effort: string;
   attempts: AttemptSummary[];

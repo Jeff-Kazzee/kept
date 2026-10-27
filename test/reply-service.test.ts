@@ -8,7 +8,7 @@ import { SCOPE_DECLINE } from "../src/domain/scope.ts";
 import type { ModelClient } from "../src/model/client.ts";
 import { RecordedModelClient, readRecording, type Recording } from "../src/model/recorded.ts";
 import { fromPackage } from "../src/paths.ts";
-import { checkReply, replyInput, replyKey } from "../src/reply/suggest.ts";
+import { ReplyOutput, checkReply, replyInput, replyKey, slotInNote } from "../src/reply/suggest.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { draftValidity } from "../src/reply/view.ts";
 import { EventStore, StaleEditError } from "../src/store/event-log.ts";
@@ -268,7 +268,7 @@ describe("SP3.4 the model picks a template and a slot, and code checks it", () =
   }
 
   it("S9: blocks a pick of the accept template for a confirmed slot, then falls back to manual entry", async () => {
-    const { reply, store } = await setup(["m1", "m2"]);
+    const { reply, store } = await setup(["m1", "m2"], [fault("reply-accept-confirmed")]);
     const view = await reply.suggest("I accept Thursday.", 0);
     expect(view.reply.draft).toBeNull();
     expect(view.reply.suggestion).toMatchObject({
@@ -289,7 +289,7 @@ describe("SP3.4 the model picks a template and a slot, and code checks it", () =
   });
 
   it("S9: blocks a pick of a slot that no message offers", async () => {
-    const { reply } = await setup(["m1"]);
+    const { reply } = await setup(["m1"], [fault("reply-unknown-slot")]);
     const view = await reply.suggest("Please accept Wednesday at 3:00 PM.", 0);
     expect(view.reply).toMatchObject({ draft: null, suggestion: { outcome: "manual_needed", attempts: [{ problems: ["unknown_slot"] }, { problems: ["unknown_slot"] }] } });
   });
@@ -339,10 +339,15 @@ describe("SP3.4 the model picks a template and a slot, and code checks it", () =
   it("R-c: accepts a proposed place that equals the case value apart from case and spacing", async () => {
     const { kase } = await setup(["m2", "m3"]);
     const ctx = kase.replyState().context;
-    const out = { template: "ask_still_stands" as const, slot_id: "2026-11-12T10:30", fields: { date: "2026-11-12", time: "10:30", location: "lantern hill clinic,  400 elm street, suite 2" } };
-    expect(checkReply(out, ctx)).toEqual([]);
-    expect(checkReply({ ...out, fields: { ...out.fields, location: "Elm Street office" } }, ctx)).toEqual(["field_mismatch"]);
-    expect(checkReply({ ...out, fields: { date: null, time: null, location: null } }, ctx)).toEqual([]);
+    const out = {
+      template: "ask_still_stands" as const,
+      slot_id: "2026-11-12T10:30",
+      fields: { date: "2026-11-12", time: "10:30", location: "lantern hill clinic,  400 elm street, suite 2" },
+      no_fit_reason: null,
+    };
+    expect(checkReply(out, ctx, null)).toEqual([]);
+    expect(checkReply({ ...out, fields: { ...out.fields, location: "Elm Street office" } }, ctx, null)).toEqual(["field_mismatch"]);
+    expect(checkReply({ ...out, fields: { date: null, time: null, location: null } }, ctx, null)).toEqual([]);
   });
 });
 
@@ -463,7 +468,7 @@ describe("review round 2", () => {
       effort: "any",
       attempts: [
         {
-          output: { template: "accept_offer", slot_id: "2026-11-10T14:00", fields: { date: "2026-11-10", time: "14:00", location: "Elm Street office" } },
+          output: { template: "accept_offer", slot_id: "2026-11-10T14:00", fields: { date: "2026-11-10", time: "14:00", location: "Elm Street office" }, no_fit_reason: null },
           usage: { input: 1, cached_input: 0, output: 1, reasoning: 0 },
           latency_ms: 1,
         },
@@ -516,5 +521,66 @@ describe("review round 2", () => {
     const rendered = reply.start("accept_offer", "2026-11-16T13:00", 0).reply.draft!.text;
     const edited = reply.edit("d1", `${rendered.replace("Monday", "Tuesday")}\n`, 1);
     expect(edited.reply.draft!.claimConfirmation).toBe("This reply still requests Monday 11/16 1:00 PM");
+  });
+});
+
+describe("C1: a pick must fit the note, and the model may say no template fits", () => {
+  const NOTE = "Please accept Wednesday at 3:00 PM.";
+
+  it("C1: the live S9.1 answer, decline Tuesday for 'accept Wednesday at 3:00 PM', is rejected with slot_not_in_note", async () => {
+    const { reply, store } = await setup(["m1"], [fault("reply-decline-not-in-note")]);
+    const view = await reply.suggest(NOTE, 0);
+    expect(view.reply.draft).toBeNull();
+    expect(view.reply.suggestion).toMatchObject({
+      outcome: "manual_needed",
+      attempts: [{ problems: ["slot_not_in_note"] }, { problems: ["slot_not_in_note"] }],
+      outputs: [{ template: "decline_offer", slot_id: "2026-11-10T14:00" }, { template: "decline_offer", slot_id: "2026-11-10T14:00" }],
+    });
+    expect(replyEvents(store)).toEqual(["reply_suggested"]);
+  });
+
+  it("C1: a no-fit answer goes to manual entry in one call with its reason", async () => {
+    const { reply, client } = await setup(["m1"]);
+    const calls = client.calls.length;
+    const view = await reply.suggest(NOTE, 0);
+    expect(client.calls).toHaveLength(calls + 1);
+    expect(view.reply).toMatchObject({
+      draft: null,
+      suggestion: { outcome: "no_fit", noFitReason: "time_not_offered", template: null, slotKey: null, attempts: [{ outcome: "valid", problems: [] }] },
+    });
+    expect(view.reply.options).toHaveLength(4);
+    // The no-fit instruction and the reason codes reach the model.
+    expect(client.calls.at(-1)!.body.instructions).toContain("time_not_offered when the note names a date or time");
+    expect(JSON.stringify(client.calls.at(-1)!.body.text.format.schema)).toContain("template_not_allowed");
+  });
+
+  it("C1: the demo notes still draft", async () => {
+    const demo = await setup(["m1", "m2", "m3"]);
+    expect((await demo.reply.suggest("I want Monday.", 0)).reply.draft).toMatchObject({ template: "accept_offer", slotKey: "2026-11-16T13:00" });
+    const s12 = await setup(["m3"]);
+    expect((await s12.reply.suggest("MON", 0)).reply.draft).toMatchObject({ template: "accept_offer", slotKey: "2026-11-16T13:00" });
+  });
+
+  it("C1: matches the slot against every date and time the note states", () => {
+    expect(slotInNote(NOTE, "2026-11-10", "14:00")).toBe(false);
+    expect(slotInNote(NOTE, "2026-11-11", "15:00")).toBe(true);
+    expect(slotInNote(NOTE, "2026-11-11", "10:00")).toBe(false);
+    expect(slotInNote("I want Monday.", "2026-11-16", "13:00")).toBe(true);
+    expect(slotInNote("Monday 11/16 at 1:00 PM works.", "2026-11-16", "13:00")).toBe(true);
+    expect(slotInNote("November 17 works.", "2026-11-16", "13:00")).toBe(false);
+    expect(slotInNote("Friday does not work, Monday does.", "2026-11-13", "09:15")).toBe(true);
+    expect(slotInNote("At 2:00 then.", "2026-11-10", "14:00")).toBe(true);
+    // A note with no date or time skips the check.
+    expect(slotInNote("Please confirm my visit.", "2026-11-10", "14:00")).toBe(true);
+    expect(slotInNote(null, "2026-11-10", "14:00")).toBe(true);
+  });
+
+  it("C1: a no-fit answer must name a reason and no template or slot", () => {
+    const fields = { date: null, time: null, location: null };
+    expect(ReplyOutput.safeParse({ template: null, slot_id: null, fields, no_fit_reason: "time_not_offered" }).success).toBe(true);
+    expect(ReplyOutput.safeParse({ template: null, slot_id: null, fields, no_fit_reason: null }).success).toBe(false);
+    expect(ReplyOutput.safeParse({ template: null, slot_id: "2026-11-10T14:00", fields, no_fit_reason: "time_not_offered" }).success).toBe(false);
+    expect(ReplyOutput.safeParse({ template: "accept_offer", slot_id: "2026-11-10T14:00", fields, no_fit_reason: "time_not_offered" }).success).toBe(false);
+    expect(ReplyOutput.safeParse({ template: "accept_offer", slot_id: "2026-11-10T14:00", fields }).success).toBe(false);
   });
 });

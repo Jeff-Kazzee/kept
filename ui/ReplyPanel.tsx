@@ -192,13 +192,20 @@ function DraftCard({ draft, version, run }: { draft: DraftView; version: number;
   );
 }
 
+const NO_FIT_TEXT: Record<"time_not_offered" | "template_not_allowed", string> = {
+  time_not_offered: "it names a date or time that no open slot has",
+  template_not_allowed: "the slot's state does not allow the reply it asks for",
+};
+
 function SuggestionCard({ suggestion }: { suggestion: SuggestionView }) {
   return (
-    <div className={`card ${suggestion.outcome === "valid" ? "model" : "rejected"}`}>
+    <div className={`card ${suggestion.outcome === "manual_needed" ? "rejected" : "model"}`}>
       <div className="label">
         {suggestion.outcome === "valid"
           ? `Model output (${suggestion.model}, effort ${suggestion.effort}), passed the code checks`
-          : suggestion.caseChanged.length > 0
+          : suggestion.outcome === "no_fit"
+            ? `Model output: no template fits your note, because ${NO_FIT_TEXT[suggestion.noFitReason ?? "time_not_offered"]}. Pick a template yourself below.`
+            : suggestion.caseChanged.length > 0
             ? `The case changed during the model call, so its pick no longer fits (${suggestion.caseChanged.join(", ")}). Pick a template yourself below.`
             : "Model output failed the code checks twice. Pick a template yourself below."}
       </div>

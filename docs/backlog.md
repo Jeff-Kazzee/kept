@@ -83,12 +83,13 @@ tier. Read-only MCP is the floor.
 ## Carried over from sprint 3
 
 - [ ] Confirm or change the decisions marked "proposed, pending Jeff" in
-  `docs/decisions/0003-reply-templates.md` (R-a to R-h and T1 to T17). T1
+  `docs/decisions/0003-reply-templates.md` (R-a to R-h, C1 and T1 to T17). T1
   departs from R-d: the place is optional for the accept template, because
   m3 offers Monday without a place and the demo beat needs the accept
   template for Monday. The coordinator accepted T1.
-- [ ] Run `pnpm eval:live --d3-only` with the key. Sprint 3 ran the
-  template evaluation with recorded responses only.
+- [ ] Run `pnpm eval:live --d3-only` with the key on the C1 change. The
+  coordinator's live run of `152a1fe` passed S3, S7 and S12 in every run
+  and found the S9 meaning flip that C1 fixes.
 - [ ] Look at the reply panel in a browser. Sprint 3 checked it over HTTP
   and with server-rendered markup only.
 
