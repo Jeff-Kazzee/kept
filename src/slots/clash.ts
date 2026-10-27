@@ -19,7 +19,6 @@ export type Clash = {
 };
 
 const MINUTE = 60_000;
-const DAY = 86_400_000;
 
 function offsetMs(utcMs: number, timeZone: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -66,12 +65,18 @@ function icsInstant(t: IcsTime): number {
   return wallClockToUtc(t.date, t.time, t.tzid ?? CASE_TIME_ZONE);
 }
 
-// An all-day event with no end lasts one day. A timed event with no end has
-// no length, as in RFC 5545.
+const nextDate = (date: string): string => {
+  const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+};
+
+// An all-day event with no end lasts until local midnight of the next
+// date, as in RFC 5545. That day is 23 or 25 hours long when daylight time
+// starts or ends. A timed event with no end has no length.
 function eventInterval(ev: IcsEvent): [number, number] {
   const start = icsInstant(ev.start);
   if (ev.end) return [start, icsInstant(ev.end)];
-  return [start, ev.start.time === null ? start + DAY : start];
+  return [start, ev.start.time === null ? wallClockToUtc(nextDate(ev.start.date), "00:00") : start];
 }
 
 export function findClashes(date: string, time: string, events: IcsEvent[]): Clash[] {

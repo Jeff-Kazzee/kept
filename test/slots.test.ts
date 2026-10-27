@@ -479,6 +479,20 @@ describe("SP2.10 calendar clashes", () => {
     expect(wallClockToUtc("2026-11-13", "09:00")).toBe(Date.UTC(2026, 10, 13, 16, 0));
   });
 
+  it("review R1-2: an all-day event without an end lasts to local midnight on daylight change days", () => {
+    const ics = (date: string) => parseIcs(`BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nDTSTART;VALUE=DATE:${date}\nSUMMARY:Away\nEND:VEVENT\nEND:VCALENDAR`);
+    // 2026-11-01 is 25 hours long in Denver. 23:30 is still that day.
+    expect(findClashes("2026-11-01", "23:30", ics("20261101")).map((c) => c.summary)).toEqual(["Away"]);
+    expect(findClashes("2026-11-02", "00:00", ics("20261101"))).toEqual([]);
+    // 2026-03-08 is 23 hours long. 00:30 on 03-09 is the next day.
+    expect(findClashes("2026-03-08", "23:30", ics("20260308")).map((c) => c.summary)).toEqual(["Away"]);
+    expect(findClashes("2026-03-09", "00:30", ics("20260308"))).toEqual([]);
+    expect(findClashes("2026-03-07", "23:00", ics("20260308"))).toEqual([]);
+    expect(findClashes("2026-03-07", "23:01", ics("20260308")).map((c) => c.summary)).toEqual(["Away"]);
+    // A slot that starts before midnight and runs into the event day clashes.
+    expect(findClashes("2026-10-31", "23:30", ics("20261101")).map((c) => c.summary)).toEqual(["Away"]);
+  });
+
   it("checks offered, requested and held slots, not closed ones, and needs a calendar", () => {
     const fri = { date: "2026-11-13", time: "09:15" };
     const offered = projectSlots({ evidence: [ev("a", "offer", fri.date, fri.time, T1)], calendar });

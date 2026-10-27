@@ -174,7 +174,8 @@ Column: what the next claim says.
   canceled or declined ones. A slot without a time is not checked.
 - W23. Calendar times with a TZID or no zone are wall-clock times in that
   zone (an unknown zone name is read as America/Denver). UTC times are
-  converted. An all-day event without an end lasts one day. A timed event
+  converted. An all-day event without an end lasts until local midnight of
+  the next date, so it covers 23 or 25 hours on a daylight change day. A timed event
   without an end has no length, as in RFC 5545. Recurring events count only
   their first instance, because the reader does not expand RRULE.
 - W24. The calendar is loaded into the case as an event, so the server can
