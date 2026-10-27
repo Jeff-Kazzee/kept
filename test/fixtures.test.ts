@@ -54,18 +54,46 @@ describe("fixtures", () => {
       S4: [],
       S5: [],
       S6: [],
-      S7: ["D3"],
+      S7: [],
       S8: [],
-      S9: ["D3"],
+      S9: [],
       S10: ["D4"],
-      S11: ["product"],
-      S12: ["D3"],
+      S11: [],
+      S12: [],
     });
   });
 
   it("turns every D2 stub into checkpoints for S1 to S7", () => {
     const counts = Object.fromEntries(scenarios.filter((s) => s.d2).map((s) => [s.id, s.d2!.length]));
     expect(counts).toEqual({ S1: 1, S2: 1, S3: 4, S4: 1, S5: 1, S6: 2, S7: 1 });
+  });
+
+  it("turns every D3 stub and the S11 product stub into checkpoints", () => {
+    const counts = Object.fromEntries(scenarios.filter((s) => s.d3).map((s) => [s.id, s.d3!.length]));
+    expect(counts).toEqual({ S7: 1, S9: 2, S11: 1, S12: 1 });
+    for (const s of scenarios) {
+      for (const step of (s.d3 ?? []).flatMap((c) => c.steps)) {
+        if ("suggest" in step && step.suggest.recording) expect(() => readFixtureText(step.suggest.recording!)).not.toThrow();
+      }
+    }
+  });
+
+  it("refuses a D3 step or decline that names a message outside the scenario", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "d3-fixture-"));
+    try {
+      cpSync(fromPackage("fixtures"), dir, { recursive: true });
+      const file = path.join(dir, "scenarios", "S12.json");
+      const s12 = JSON.parse(readFileSync(file, "utf8"));
+      s12.d3[0].steps.unshift({ message: "m4" });
+      writeFileSync(file, JSON.stringify(s12));
+      expect(() => loadScenarios(dir)).toThrow(/S12 d3 step names message m4/);
+      s12.d3[0].steps.shift();
+      s12.d3[0].declined = { messages: ["m4"], notes: [] };
+      writeFileSync(file, JSON.stringify(s12));
+      expect(() => loadScenarios(dir)).toThrow(/S12 d3 declines message m4/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("refuses a D2 step that names a message outside the scenario", () => {

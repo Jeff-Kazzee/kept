@@ -5,7 +5,9 @@
 import { describe, expect, it } from "vitest";
 import type { CaseView } from "../src/case/types.ts";
 import { replayCheckpoint } from "../src/eval/d2-fixtures.ts";
+import { SCOPE_DECLINE } from "../src/domain/scope.ts";
 import { loadScenarios } from "../src/fixtures/load.ts";
+import { buildDraft } from "../src/reply/draft.ts";
 
 const scenarios = loadScenarios().filter((s) => s.d2);
 
@@ -54,4 +56,52 @@ describe("D2 checkpoints in the fixtures", () => {
     const wrong = [{ message: "m2" }, { message: "m3" }, { answer: { kind: "change_proposed" as const, choice: "Keep it" } }];
     await expect(replayCheckpoint(s3, { ...s3.d2![1]!, steps: wrong })).rejects.toThrow(/no choice "Keep it"/);
   });
+});
+
+// D3 acceptance: runs every D3 checkpoint through the real reply path.
+// Suggest steps go through the recorded model, or a fault recording that
+// the step names, and approval reads back every field.
+describe("D3 checkpoints in the fixtures", () => {
+  const d3 = loadScenarios().filter((s) => s.d3);
+
+  it("covers S7, S9, S11 and S12", () => {
+    expect(d3.map((s) => s.id)).toEqual(["S7", "S9", "S11", "S12"]);
+  });
+
+  for (const s of d3) {
+    s.d3!.forEach((checkpoint, i) => {
+      it(`${s.id}.${i + 1}: ${checkpoint.expect}`, async () => {
+        const { kase, reply, intake, store } = await replayCheckpoint(s, checkpoint);
+        const view = kase.view();
+        const r = view.reply;
+        const pair = (x: { template: string; slotKey: string }) => ({ template: x.template, slot: x.slotKey });
+        expect(r.options.map(pair)).toEqual(checkpoint.options);
+        if (checkpoint.withheld) expect(r.withheld.map((w) => ({ ...pair(w), missing: w.missing }))).toEqual(checkpoint.withheld);
+        expect(r.draft && { ...pair(r.draft), origin: r.draft.origin, edited: r.draft.edited }).toEqual(checkpoint.draft);
+        if (checkpoint.suggestion !== undefined) {
+          expect(r.suggestion && { outcome: r.suggestion.outcome, problems: r.suggestion.attempts.map((a) => a.problems) }).toEqual(checkpoint.suggestion);
+        }
+        expect(r.sent.map(pair)).toEqual(checkpoint.sent);
+        expect(r.sent.every((x) => x.simulated)).toBe(true);
+        if (checkpoint.slots) expect(Object.fromEntries(view.slots.map((x) => [x.key, x.stateLabel]))).toEqual(checkpoint.slots);
+        if (checkpoint.messages) expect(intake.messages().map((m) => m.id)).toEqual(checkpoint.messages);
+
+        // Code refuses each blocked draft and writes nothing.
+        const count = store.readAll().length;
+        for (const b of checkpoint.blocked ?? []) {
+          expect(buildDraft(b.template, b.slot, kase.replyState().context)).toMatchObject({ ok: false, problems: b.problems });
+          expect(() => reply.start(b.template, b.slot, r.version)).toThrow(`Code blocked this reply: ${b.problems.join(", ")}.`);
+        }
+        // The scope check declines before anything is recorded or a model is called.
+        for (const id of checkpoint.declined?.messages ?? []) {
+          const { expected: _expected, ...message } = s.messages.find((m) => m.id === id)!;
+          expect(() => intake.importMessage(message)).toThrow(SCOPE_DECLINE);
+        }
+        for (const note of checkpoint.declined?.notes ?? []) {
+          await expect(reply.suggest(note, r.version)).rejects.toThrow(SCOPE_DECLINE);
+        }
+        expect(store.readAll()).toHaveLength(count);
+      });
+    });
+  }
 });

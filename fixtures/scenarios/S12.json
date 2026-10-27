@@ -3,7 +3,30 @@
   "title": "User approves a send",
   "calendar": "calendar/dana.ics",
   "messages": [{ "ref": "m3" }],
-  "later": [
-    { "deliverable": "D3", "expect": "Dana approves the reply MON. This step adds no new message. The UI shows the simulated-send label. No network request leaves the app." }
-  ]
+  "d3": [
+    {
+      "expect": "Dana approves the reply MON. This step adds no new message. The send is simulated and Monday shows Requested · reported by you. test/send.test.ts proves no network request leaves the app.",
+      "steps": [
+        { "message": "m3" },
+        { "suggest": { "intent": "MON" } },
+        { "approve_reply": { "template": "accept_offer", "slot": "2026-11-16T13:00" } }
+      ],
+      "slots": {
+        "2026-11-12T10:30": "Confirmed · office message, change proposed",
+        "2026-11-13T09:15": "Offered · office message",
+        "2026-11-16T13:00": "Requested · reported by you"
+      },
+      "messages": ["m3"],
+      "options": [
+        { "template": "ask_still_stands", "slot": "2026-11-12T10:30" },
+        { "template": "keep_original", "slot": "2026-11-12T10:30" },
+        { "template": "accept_offer", "slot": "2026-11-13T09:15" },
+        { "template": "decline_offer", "slot": "2026-11-13T09:15" }
+      ],
+      "draft": null,
+      "suggestion": { "outcome": "valid", "problems": [[]] },
+      "sent": [{ "template": "accept_offer", "slot": "2026-11-16T13:00" }]
+    }
+  ],
+  "later": []
 }

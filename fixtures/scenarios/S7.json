@@ -24,5 +24,21 @@
       "question": { "kind": "incomplete_slot", "choices": ["I will add it from a message or a report", "Not sure yet"] }
     }
   ],
-  "later": [{ "deliverable": "D3", "expect": "The app offers no reply template that needs the missing time or location." }]
+  "d3": [
+    {
+      "expect": "The slot has a date and no time or place. No reply template is offered. Asking whether it stands is withheld for the missing time, and a model pick for it falls back to manual entry.",
+      "steps": [{ "message": "s7-confirm" }, { "suggest": { "intent": "Please confirm my visit." } }],
+      "slots": { "2026-11-16": "Confirmed · office message" },
+      "options": [],
+      "withheld": [{ "template": "ask_still_stands", "slot": "2026-11-16", "missing": ["time"] }],
+      "draft": null,
+      "suggestion": { "outcome": "manual_needed", "problems": [["missing_field"], ["missing_field"]] },
+      "sent": [],
+      "blocked": [
+        { "template": "ask_still_stands", "slot": "2026-11-16", "problems": ["missing_field"] },
+        { "template": "accept_offer", "slot": "2026-11-16", "problems": ["template_not_valid_for_state", "missing_field"] }
+      ]
+    }
+  ],
+  "later": []
 }

@@ -91,6 +91,44 @@ export const D2Checkpoint = z
   .strict();
 export type D2Checkpoint = z.infer<typeof D2Checkpoint>;
 
+// D3 expectations over replies. Steps may also ask the model for a reply
+// from a note (with a fault recording in place of the stored one), start a
+// draft by hand, or edit the open draft. `blocked` lists drafts that code
+// must refuse after the steps, with their problems. `declined` lists a
+// message and notes that the scope check must decline before any model call.
+const D3Step = z.union([
+  D2Step,
+  z.object({ suggest: z.object({ intent: z.string().nullable(), recording: z.string().min(1).optional() }).strict() }).strict(),
+  z.object({ start_reply: TemplateSlot }).strict(),
+  z.object({ edit_reply: z.string().min(1) }).strict(),
+]);
+export type D3Step = z.infer<typeof D3Step>;
+
+const DraftProblem = z.enum(["unknown_slot", "template_not_valid_for_state", "missing_field"]);
+
+export const D3Checkpoint = z
+  .object({
+    expect: z.string().min(1),
+    steps: z.array(D3Step),
+    // Every slot by key, with its state label. Not checked when absent.
+    slots: z.record(z.string(), z.string()).optional(),
+    // Every message in the case. Not checked when absent.
+    messages: z.array(z.string()).optional(),
+    options: z.array(TemplateSlot),
+    withheld: z.array(TemplateSlot.extend({ missing: z.array(z.enum(["time", "date"])) }).strict()).optional(),
+    draft: TemplateSlot.extend({ origin: z.enum(["choice", "model", "manual"]), edited: z.boolean() }).strict().nullable(),
+    suggestion: z
+      .object({ outcome: z.enum(["valid", "manual_needed"]), problems: z.array(z.array(z.string())) })
+      .strict()
+      .nullable()
+      .optional(),
+    sent: z.array(TemplateSlot),
+    blocked: z.array(TemplateSlot.extend({ problems: z.array(DraftProblem) }).strict()).optional(),
+    declined: z.object({ messages: z.array(z.string()), notes: z.array(z.string()) }).strict().optional(),
+  })
+  .strict();
+export type D3Checkpoint = z.infer<typeof D3Checkpoint>;
+
 export const Scenario = z
   .object({
     id: z.string().regex(/^S\d+$/),
@@ -106,6 +144,7 @@ export const Scenario = z
       .strict()
       .optional(),
     d2: z.array(D2Checkpoint).optional(),
+    d3: z.array(D3Checkpoint).optional(),
     later: z.array(LaterStub),
   })
   .strict();

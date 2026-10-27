@@ -11,7 +11,17 @@
       "expected": []
     }
   ],
-  "later": [
-    { "deliverable": "product", "expect": "The app declines and states that it only handles appointment times, places, confirmations and office requests." }
-  ]
+  "d3": [
+    {
+      "expect": "The app declines and states that it only handles appointment times, places, confirmations and office requests. It records nothing and calls no model, for the pasted report and for the same question typed as a reply note.",
+      "steps": [],
+      "messages": [],
+      "options": [],
+      "draft": null,
+      "suggestion": null,
+      "sent": [],
+      "declined": { "messages": ["s11-question"], "notes": ["Before the visit, can you tell me what my symptoms mean?"] }
+    }
+  ],
+  "later": []
 }

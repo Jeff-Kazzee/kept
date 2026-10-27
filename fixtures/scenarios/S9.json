@@ -2,8 +2,44 @@
   "id": "S9",
   "title": "Accept template proposed for a slot that is not offered",
   "calendar": "calendar/dana.ics",
-  "messages": [{ "ref": "m1" }],
-  "later": [
-    { "deliverable": "D3", "expect": "An Accept reply for Wednesday 2026-11-11 15:00, which m1 does not offer, is blocked by code." }
-  ]
+  "messages": [{ "ref": "m1" }, { "ref": "m2" }],
+  "d3": [
+    {
+      "expect": "An Accept reply for Wednesday 2026-11-11 15:00, which m1 does not offer, is blocked by code. The model proposes it on both attempts, and the user picks a template by hand.",
+      "steps": [
+        { "message": "m1" },
+        { "suggest": { "intent": "Please accept Wednesday at 3:00 PM.", "recording": "recordings/faults/reply-unknown-slot.json" } }
+      ],
+      "slots": { "2026-11-10T14:00": "Offered · office message", "2026-11-12T10:30": "Offered · office message" },
+      "options": [
+        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
+        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
+        { "template": "accept_offer", "slot": "2026-11-12T10:30" },
+        { "template": "decline_offer", "slot": "2026-11-12T10:30" }
+      ],
+      "draft": null,
+      "suggestion": { "outcome": "manual_needed", "problems": [["unknown_slot"], ["unknown_slot"]] },
+      "sent": [],
+      "blocked": [{ "template": "accept_offer", "slot": "2026-11-11T15:00", "problems": ["unknown_slot"] }]
+    },
+    {
+      "expect": "After m2 confirms Thursday 2026-11-12 10:30, an Accept reply for Thursday is blocked by code, because Thursday is confirmed and not offered.",
+      "steps": [
+        { "message": "m1" },
+        { "message": "m2" },
+        { "suggest": { "intent": "I accept Thursday.", "recording": "recordings/faults/reply-not-valid-for-state.json" } }
+      ],
+      "slots": { "2026-11-10T14:00": "Offered · office message", "2026-11-12T10:30": "Confirmed · office message" },
+      "options": [
+        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
+        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
+        { "template": "ask_still_stands", "slot": "2026-11-12T10:30" }
+      ],
+      "draft": null,
+      "suggestion": { "outcome": "manual_needed", "problems": [["template_not_valid_for_state"], ["template_not_valid_for_state"]] },
+      "sent": [],
+      "blocked": [{ "template": "accept_offer", "slot": "2026-11-12T10:30", "problems": ["template_not_valid_for_state"] }]
+    }
+  ],
+  "later": []
 }
