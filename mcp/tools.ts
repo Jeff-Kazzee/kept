@@ -47,7 +47,7 @@ const EvidenceItem = z
     date: z.string().nullable(),
     time: z.string().nullable(),
     source_label: z.string(),
-    origin: z.enum(["model", "manual", "answer", "agent"]),
+    origin: z.enum(["model", "manual", "answer", "reply", "agent"]),
     accepted_at: z.string().nullable(),
     quote: UntrustedQuote.nullable(),
     location: UntrustedText.nullable(),
