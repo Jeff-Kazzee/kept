@@ -1,0 +1,29 @@
+{
+  "message_id": "s4-confirm",
+  "effort": "minimal",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "confirm",
+            "date": "2026-11-16",
+            "time": "13:00",
+            "location": "400 Elm Street, Suite 2",
+            "quote": "You're confirmed for Monday 11/16 at 1:00 PM at 400 Elm Street, Suite 2.",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": {
+        "input": 815,
+        "cached_input": 512,
+        "output": 115,
+        "reasoning": 0
+      },
+      "latency_ms": 1285
+    }
+  ]
+}

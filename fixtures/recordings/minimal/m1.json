@@ -1,0 +1,39 @@
+{
+  "message_id": "m1",
+  "effort": "minimal",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "offer",
+            "date": "2026-11-10",
+            "time": "14:00",
+            "location": "Elm Street office",
+            "quote": "Tuesday, November 10 at 2:00 PM",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          },
+          {
+            "claim_type": "offer",
+            "date": "2026-11-12",
+            "time": "10:30",
+            "location": "Elm Street office",
+            "quote": "Thursday, November 12 at 10:30 AM at our Elm Street office",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": {
+        "input": 780,
+        "cached_input": 512,
+        "output": 170,
+        "reasoning": 0
+      },
+      "latency_ms": 1100
+    }
+  ]
+}

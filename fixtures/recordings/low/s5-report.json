@@ -1,0 +1,39 @@
+{
+  "message_id": "s5-report",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "confirm",
+            "date": "2026-11-16",
+            "time": "13:00",
+            "location": null,
+            "quote": "They moved me to Monday 11/16 at 1:00 PM",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          },
+          {
+            "claim_type": "cancel",
+            "date": "2026-11-12",
+            "time": "10:30",
+            "location": null,
+            "quote": "my Thursday 11/12 10:30 AM appointment is canceled",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": {
+        "input": 822,
+        "cached_input": 0,
+        "output": 260,
+        "reasoning": 90
+      },
+      "latency_ms": 2022
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "message_id": "s8-offer",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "offer",
+            "date": "2026-11-18",
+            "time": "11:00",
+            "location": null,
+            "quote": "A spot opened on Wednesday, November 18 at 11:00 AM.",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": {
+        "input": 843,
+        "cached_input": 0,
+        "output": 205,
+        "reasoning": 90
+      },
+      "latency_ms": 2133
+    }
+  ]
+}

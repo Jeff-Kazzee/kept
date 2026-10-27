@@ -1,0 +1,49 @@
+{
+  "message_id": "m2",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "confirm",
+            "date": "2026-11-12",
+            "time": "10:30",
+            "location": "Lantern Hill Clinic, 400 Elm Street, Suite 2",
+            "quote": "This confirms your appointment on Thursday, November 12 at 10:30 AM at Lantern Hill Clinic, 400 Elm Street, Suite 2.",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          },
+          {
+            "claim_type": "office_request",
+            "date": null,
+            "time": null,
+            "location": null,
+            "quote": "Please bring your new insurance card",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": "Bring new insurance card"
+          },
+          {
+            "claim_type": "office_request",
+            "date": null,
+            "time": null,
+            "location": null,
+            "quote": "arrive 15 minutes early",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": "Arrive 15 minutes early"
+          }
+        ]
+      },
+      "usage": {
+        "input": 787,
+        "cached_input": 0,
+        "output": 315,
+        "reasoning": 90
+      },
+      "latency_ms": 1837
+    }
+  ]
+}

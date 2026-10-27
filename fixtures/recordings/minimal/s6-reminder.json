@@ -1,0 +1,29 @@
+{
+  "message_id": "s6-reminder",
+  "effort": "minimal",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "reminder",
+            "date": "2026-11-12",
+            "time": "10:30",
+            "location": "Lantern Hill Clinic",
+            "quote": "you have an appointment at Lantern Hill Clinic on Thu 11/12 at 10:30 AM",
+            "sender_kind": "automated",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": {
+        "input": 829,
+        "cached_input": 512,
+        "output": 115,
+        "reasoning": 0
+      },
+      "latency_ms": 1359
+    }
+  ]
+}

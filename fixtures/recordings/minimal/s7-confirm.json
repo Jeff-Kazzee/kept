@@ -1,0 +1,29 @@
+{
+  "message_id": "s7-confirm",
+  "effort": "minimal",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "confirm",
+            "date": "2026-11-16",
+            "time": null,
+            "location": null,
+            "quote": "Your visit on November 16 is confirmed.",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": {
+        "input": 836,
+        "cached_input": 512,
+        "output": 115,
+        "reasoning": 0
+      },
+      "latency_ms": 1396
+    }
+  ]
+}

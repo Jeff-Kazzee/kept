@@ -1,0 +1,18 @@
+{
+  "message_id": "s11-question",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "claims": []
+      },
+      "usage": {
+        "input": 850,
+        "cached_input": 0,
+        "output": 150,
+        "reasoning": 90
+      },
+      "latency_ms": 2170
+    }
+  ]
+}

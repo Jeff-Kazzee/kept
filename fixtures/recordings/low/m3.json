@@ -1,0 +1,49 @@
+{
+  "message_id": "m3",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "move",
+            "date": "2026-11-12",
+            "time": "10:30",
+            "location": null,
+            "quote": "we need to move your Thursday 11/12 10:30 AM visit",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          },
+          {
+            "claim_type": "offer",
+            "date": "2026-11-13",
+            "time": "09:15",
+            "location": null,
+            "quote": "Friday 11/13 at 9:15 AM",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          },
+          {
+            "claim_type": "offer",
+            "date": "2026-11-16",
+            "time": "13:00",
+            "location": null,
+            "quote": "Monday 11/16 at 1:00 PM",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": {
+        "input": 794,
+        "cached_input": 0,
+        "output": 315,
+        "reasoning": 90
+      },
+      "latency_ms": 1874
+    }
+  ]
+}

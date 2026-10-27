@@ -1,0 +1,29 @@
+{
+  "message_id": "s2-offer",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "offer",
+            "date": "2026-11-11",
+            "time": "15:00",
+            "location": "Elm Street office",
+            "quote": "An earlier time opened up on Wednesday, November 11 at 3:00 PM at our Elm Street office.",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": {
+        "input": 808,
+        "cached_input": 0,
+        "output": 205,
+        "reasoning": 90
+      },
+      "latency_ms": 1948
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "message_id": "m4",
+  "effort": "minimal",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "confirm",
+            "date": "2026-11-16",
+            "time": "13:00",
+            "location": "Lantern Hill Clinic, 400 Elm Street, Suite 2",
+            "quote": "This confirms your appointment on Monday, November 16 at 1:00 PM at Lantern Hill Clinic, 400 Elm Street, Suite 2.",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          },
+          {
+            "claim_type": "cancel",
+            "date": "2026-11-12",
+            "time": null,
+            "location": null,
+            "quote": "Your Thursday, November 12 appointment is canceled.",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": {
+        "input": 801,
+        "cached_input": 512,
+        "output": 170,
+        "reasoning": 0
+      },
+      "latency_ms": 1211
+    }
+  ]
+}
