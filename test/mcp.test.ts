@@ -24,6 +24,7 @@ import { RecordedModelClient } from "../src/model/recorded.ts";
 import { PACKAGE_ROOT } from "../src/paths.ts";
 import { USER } from "../src/records/events.ts";
 import { RecordsService } from "../src/records/service.ts";
+import { ReplyService } from "../src/reply/service.ts";
 import { EventStore, StoreBusyError, type Describe, type NewEvent, type StoreOptions } from "../src/store/event-log.ts";
 import { acceptMessages, intake } from "./helpers.ts";
 
@@ -873,5 +874,52 @@ describe("review round 2", () => {
     sweepRateWindows(quietDeps);
     expect(app.records.accessLog().at(-1)).toMatchObject({ grant_name: "Quiet agent", tool: "*", count: 9 });
     expect(store.closeRateWindows(null, Number.MAX_SAFE_INTEGER)).toEqual([]);
+  });
+});
+
+describe("sprint 3 replies and sprint 4 records", () => {
+  // Reply drafts live in the `reply` stream and approvals add new
+  // `evidence:reply-*` streams. Notes and tags live in `record:<key>`. Each
+  // stream has its own version, so neither side can make the other stale.
+  async function both() {
+    const store = new EventStore(":memory:", CLOCK);
+    const svc = intake(store);
+    await acceptMessages(svc, ["m2", "m3"]);
+    const client = RecordedModelClient.fromDirectory();
+    const kase = new CaseService(store, svc, client, { userName: "Dana Reyes" });
+    const records = new RecordsService(store, svc, kase);
+    const grants = new GrantStore(store);
+    const reply = new ReplyService(store, kase, client);
+    const { token } = grants.create("Laptop assistant", "annotate");
+    const agent = await connect({ records, grants, token, limiter: new RateLimiter(store) });
+    return { store, kase, records, reply, agent };
+  }
+  const fields = (view: ReturnType<CaseService["view"]>) => view.reply.draft!.fields.map((f) => f.name);
+
+  it("an agent's add_note and set_tags do not make the user's reply approval stale", async () => {
+    const { store, reply, agent, records } = await both();
+    const started = reply.start("keep_original", THU, 0);
+    expect(started.reply.version).toBe(1);
+    // The agent annotates the same appointment while the draft is open.
+    ok(await agent.callTool({ name: "add_note", arguments: { appointment_id: THU, text: "Ask about parking.", expected_version: 0 } }));
+    ok(await agent.callTool({ name: "set_tags", arguments: { appointment_id: THU, tags: ["keep"], expected_version: 1 } }));
+    // The approval states the reply version it saw, which did not move.
+    const approved = reply.approve(started.reply.draft!.id, fields(started), 1);
+    expect(approved.reply.sent).toHaveLength(1);
+    expect(store.streamVersion("reply")).toBe(3);
+    expect(records.record(THU).version).toBe(2);
+  });
+
+  it("a user's reply approval does not make an agent's add_note or set_tags stale", async () => {
+    const { reply, agent, records } = await both();
+    const read = ok(await agent.callTool({ name: "get_appointment", arguments: { appointment_id: THU } }));
+    expect(read.appointment.version).toBe(0);
+    // The user drafts and approves a reply about the same appointment.
+    const started = reply.start("keep_original", THU, 0);
+    reply.approve(started.reply.draft!.id, fields(started), 1);
+    // The agent writes with the version it read before the approval.
+    ok(await agent.callTool({ name: "add_note", arguments: { appointment_id: THU, text: "Reply sent.", expected_version: read.appointment.version } }));
+    ok(await agent.callTool({ name: "set_tags", arguments: { appointment_id: THU, tags: ["replied"], expected_version: 1 } }));
+    expect(records.record(THU)).toMatchObject({ version: 2, tags: ["replied"] });
   });
 });
