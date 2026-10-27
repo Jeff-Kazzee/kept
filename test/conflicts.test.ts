@@ -205,6 +205,38 @@ describe("citation and date checks", () => {
     expect(datesAndTimesSupported("It is at 3:30.", cited)).toBe(false);
   });
 
+  it("review R1-3: checks the year of a date against the cited evidence", () => {
+    expect(datesAndTimesSupported("Thursday, November 12, 2027 at 10:30 AM", cited)).toBe(false);
+    expect(datesAndTimesSupported("Thursday, November 12, 2026 at 10:30 AM", cited)).toBe(true);
+    expect(datesAndTimesSupported("11/12/2027", cited)).toBe(false);
+    // A yearless quote read in late December may mean the next January.
+    const january = [ev("j", "offer", null, null, "2026-12-20T09:00:00-07:00", { quote: "January 5 at 9:00 AM" })];
+    expect(datesAndTimesSupported("January 5, 2027 at 9:00 AM", january)).toBe(true);
+    expect(datesAndTimesSupported("January 5, 2028 at 9:00 AM", january)).toBe(false);
+  });
+
+  it("review R1-3: checks each mention as one unit against one cited source", () => {
+    const two = [
+      ...cited,
+      ev("b", "confirm", "2026-11-16", "13:00", "2026-11-05T09:20:00-07:00", { quote: "Monday 11/16 at 1:00 PM" }),
+    ];
+    expect(datesAndTimesSupported("November 12 at 10:30 AM and November 16 at 1:00 PM", two)).toBe(true);
+    expect(datesAndTimesSupported("November 12 at 1:00 PM", two)).toBe(false);
+    expect(datesAndTimesSupported("November 16 at 10:30 AM", two)).toBe(false);
+    expect(datesAndTimesSupported("Monday 11/12", two)).toBe(false);
+    expect(datesAndTimesSupported("Thursday 11/16", two)).toBe(false);
+    expect(datesAndTimesSupported("Thursday or Monday", two)).toBe(true);
+  });
+
+  it("review R1-3: an explanation that moves a cited time to another cited date is rejected", async () => {
+    const { evidence, conflicts } = await caseOf(["m2", "m3", "s4-confirm"]);
+    const key = explanationKey(conflicts[0]!);
+    const output = { explanation: "The office confirmed November 12 at 1:00 PM and Monday 11/16.", evidence_ids: ["m2-e1", "s4-confirm-e1"] };
+    const client = RecordedModelClient.withOverrides([{ message_id: key, effort: "any", attempts: [{ output, usage, latency_ms: 5 }] }]);
+    const result = await explainConflict(conflicts[0]!, evidence, client);
+    expect(result.attempts.map((a) => a.problems)).toEqual([["invented_date_or_time"], ["invented_date_or_time"]]);
+  });
+
   it("names each citation problem once", () => {
     const caseIds = new Set(["a", "b"]);
     expect(checkCitations([], caseIds, new Set(["a"]))).toEqual(["no_citation"]);

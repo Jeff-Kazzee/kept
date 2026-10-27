@@ -219,6 +219,12 @@ Column: what the next claim says.
   code.
 - W28. Both checks also reject text with clinical words, text over a length
   limit, and (for questions) text that does not end with a question mark.
+- W32. Each date mention in model text is checked as one unit. Its year,
+  month and day, weekday and times must all fit one point in time that one
+  cited item states: its slot, its event time, its evidence time, or one
+  mention in its quote. A quote without a year means the arrival year, or
+  the next year when that month and day had already passed, as in
+  extraction.
 - W31. The date check covers what the date parser reads: month names with a
   day, M/D, ISO dates, weekdays and clock times. Relative words such as
   "tomorrow" or "the 12th" are not read, so they are not checked.
