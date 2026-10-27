@@ -54,10 +54,17 @@ function factsFrom(evidence: EvidenceView[]): Fact[] {
     const arrival = Number(c.evidence_time.slice(0, 4));
     const arrivalDay = c.evidence_time.slice(5, 10);
     for (const m of parseMentions(c.quote ?? "")) {
-      const years =
-        m.monthDay === null ? [] : m.year !== null ? [m.year] : m.monthDay < arrivalDay ? [arrival, arrival + 1] : [arrival];
-      const weekdays = m.weekday !== null ? [m.weekday] : years.map((y) => weekdayOf(`${y}-${m.monthDay}`));
-      facts.push({ monthDay: m.monthDay, years: new Set(years), weekdays: new Set(weekdays), times: new Set([...m.times, ...m.ambiguousTimes]) });
+      const times = new Set([...m.times, ...m.ambiguousTimes]);
+      if (m.monthDay === null) {
+        facts.push({ monthDay: null, years: new Set(), weekdays: new Set(m.weekday === null ? [] : [m.weekday]), times });
+        continue;
+      }
+      // One fact per year the mention may mean, so a year and a weekday are
+      // never taken from two different dates.
+      const years = m.year !== null ? [m.year] : m.monthDay < arrivalDay ? [arrival, arrival + 1] : [arrival];
+      for (const y of years) {
+        facts.push({ monthDay: m.monthDay, years: new Set([y]), weekdays: new Set([m.weekday ?? weekdayOf(`${y}-${m.monthDay}`)]), times });
+      }
     }
   }
   return facts;

@@ -2,14 +2,15 @@
 // and office requests only. Model text that uses a clinical word is
 // rejected. The list errs toward rejecting: a false match costs one retry
 // or the fixed wording, while a missed clinical word reaches the user.
-// Each term matches its singular and plural forms. Runs in the browser and
-// in Node.
+// Each term matches its singular and plural forms. Words that are also
+// ordinary administrative words ("result", "lab", the verb "treat") are
+// listed only inside clinical phrases. Runs in the browser and in Node.
 
 const TERMS = [
   "diagnos\\w*",
   "prognos\\w*",
   "symptoms?",
-  "treat(?:s|ed|ing|ments?)?",
+  "treatments?",
   "therap\\w*",
   "medicat\\w*",
   "medicines?",
@@ -20,8 +21,10 @@ const TERMS = [
   "pills?",
   "doses?",
   "dosages?",
-  "labs?",
-  "results?",
+  "lab (?:results?|work|tests?|reports?|values?)",
+  "test results?",
+  "results? of your",
+  "your (?:lab |test )?results?",
   "blood",
   "biops(?:y|ies)",
   "cancers?",

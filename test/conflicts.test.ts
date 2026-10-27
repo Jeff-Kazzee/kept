@@ -242,6 +242,15 @@ describe("citation and date checks", () => {
     expect(result.attempts.map((a) => a.problems)).toEqual([["invented_date_or_time"], ["invented_date_or_time"]]);
   });
 
+  it("review R2-11: takes the weekday and the year of a yearless quote from the same date", () => {
+    // Received 2026-12-20, "January 5" may mean 2026-01-05 (a Monday) or 2027-01-05 (a Tuesday).
+    const january = [ev("j", "offer", null, null, "2026-12-20T09:00:00-07:00", { quote: "January 5 at 9:00 AM" })];
+    expect(datesAndTimesSupported("Monday, January 5, 2027 at 9:00 AM", january)).toBe(false);
+    expect(datesAndTimesSupported("Tuesday, January 5, 2027 at 9:00 AM", january)).toBe(true);
+    expect(datesAndTimesSupported("Monday, January 5, 2026 at 9:00 AM", january)).toBe(true);
+    expect(datesAndTimesSupported("Tuesday, January 5, 2026", january)).toBe(false);
+  });
+
   it("names each citation problem once", () => {
     const caseIds = new Set(["a", "b"]);
     expect(checkCitations([], caseIds, new Set(["a"]))).toEqual(["no_citation"]);
@@ -258,13 +267,23 @@ describe("citation and date checks", () => {
   it("review R1-4: flags singular and plural clinical words", () => {
     expect(hasClinicalContent("Your lab result is ready for Thursday 11/12 at 10:30 AM")).toBe(true);
     for (const word of [
-      "lab", "labs", "lab result", "test results", "biopsy", "biopsies", "cancer", "tumor", "tumour", "symptom",
-      "diagnosis", "diagnosed", "treatment", "treated", "therapy", "medication", "medicine", "medical", "prescription",
+      "lab result", "lab work", "lab test", "test results", "biopsy", "biopsies", "cancer", "tumor", "tumour", "symptom",
+      "diagnosis", "diagnosed", "treatment", "therapy", "medication", "medicine", "medical", "prescription",
       "pharmacy", "drug", "pill", "dose", "dosage", "blood", "scan", "X-ray", "xray", "MRI", "ultrasound", "screening",
       "surgery", "surgical", "illness", "disease", "disorder", "condition", "infection", "allergy", "pregnancy",
       "vaccine", "injection", "pain", "mental health", "chemotherapy", "radiation", "prognosis",
     ]) {
       expect(hasClinicalContent(`About your ${word} on Thursday.`), word).toBe(true);
+    }
+  });
+
+  it("review R2-12: passes ordinary uses of result, treat and lab, and still rejects a lab result", () => {
+    expect(hasClinicalContent("As a result, your Thursday 11/12 10:30 AM visit still holds.")).toBe(false);
+    expect(hasClinicalContent("Should we treat Thursday 11/12 as canceled?")).toBe(false);
+    expect(hasClinicalContent("North Lab office")).toBe(false);
+    expect(hasClinicalContent("Your lab result is ready for Thursday 11/12 at 10:30 AM")).toBe(true);
+    for (const text of ["Your results are in.", "The results of your visit", "Your test result", "lab work", "Your treatment plan"]) {
+      expect(hasClinicalContent(text), text).toBe(true);
     }
   });
 
