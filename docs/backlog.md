@@ -41,7 +41,7 @@ Rules:
 | 0 | Model access check and fixtures | D0 | Oct 27 | Done (`38ed86d`) |
 | 1 | Evidence intake | D1 | Oct 27 | Done (`09042eb`) |
 | 2 | Slot states and conflict resolution | D2 | Oct 27 | Done (`46e5917`) |
-| 3 | Reviewed reply | D3 | Oct 31 to Nov 1 | Next |
+| 3 | Reviewed reply | D3 | Oct 27 | Done (`af00de3`) |
 | 4 | MCP core: domain events, grants, tools | D5, part 1 | Oct 31 to Nov 1, beside sprint 3 | Planned |
 | 5 | Saved outcome and checklist | D4 | Nov 1 to 2 | Planned |
 | 6 | MCP in the app and connect test | D5, part 2 | Nov 2 | Planned |
@@ -87,9 +87,14 @@ tier. Read-only MCP is the floor.
   departs from R-d: the place is optional for the accept template, because
   m3 offers Monday without a place and the demo beat needs the accept
   template for Monday. The coordinator accepted T1.
-- [ ] Run `pnpm eval:live --d3-only` with the key on the C1 change. The
-  coordinator's live run of `152a1fe` passed S3, S7 and S12 in every run
-  and found the S9 meaning flip that C1 fixes.
+- [x] Run `pnpm eval:live --d3-only` with the key on the C1 change. The
+  coordinator's live run of `af00de3` (3 runs, effort low) gave no meaning
+  flips. S9.1 and S9.2 answered no fit in every run. System outcomes were as
+  expected in 21 of 24 items.
+- [ ] Sprint 7 work: the template call answers no fit too often for short
+  notes. In the run above, "MON" (S12.1) got no fit in 2 of 3 runs and S3.4
+  once. Each falls back to a manual pick, which is safe but costs the user a
+  step. Tune the prompt or try effort minimal, then measure again.
 - [ ] Look at the reply panel in a browser. Sprint 3 checked it over HTTP
   and with server-rendered markup only.
 
