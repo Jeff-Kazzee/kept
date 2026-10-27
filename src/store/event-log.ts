@@ -1,7 +1,8 @@
 // Append-only event log on node:sqlite. Each stream is one record with a
 // version number. A write states the version it expects. If the stream has
 // moved on, the write fails with StaleEditError and nothing is written.
-// Triggers block UPDATE and DELETE on the events table.
+// Triggers block UPDATE and DELETE on the events table. eraseCase is the
+// one exception, for Delete case only.
 import { DatabaseSync } from "node:sqlite";
 
 export type NewEvent = { type: string; data: unknown };
@@ -40,6 +41,12 @@ export class StaleEditError extends Error {
   }
 }
 
+// The guard against deleting events. eraseCase drops it and creates it
+// again inside its own transaction, so no other connection ever sees the
+// table without it.
+const NO_DELETE_TRIGGER = `CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
+BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,8 +59,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
-CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
-BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+${NO_DELETE_TRIGGER}
 CREATE TABLE IF NOT EXISTS rate_windows (
   key TEXT NOT NULL,
   window_start INTEGER NOT NULL,
@@ -98,8 +104,31 @@ export type StoreOptions = {
   lockRetryMs?: number[];
 };
 
+// Delete case removed the data, but another program kept the file busy, so
+// the old text may still be in the file. Running Delete case again finishes
+// the job.
+export class CompactionError extends Error {
+  override name = "CompactionError";
+  constructor() {
+    super(
+      "The case was deleted, but another program is using the database file, so old text may remain in it until that program closes. " +
+        "Close the MCP client or other programs that use it, then run Delete case again.",
+    );
+  }
+}
+
+// SQL that matches stream ids starting with any of the prefixes.
+function prefixMatch(prefixes: readonly string[]): { sql: string; params: Array<string | number> } {
+  if (prefixes.length === 0) return { sql: "0", params: [] };
+  return {
+    sql: prefixes.map(() => "substr(stream_id, 1, ?) = ?").join(" OR "),
+    params: prefixes.flatMap((p) => [p.length, p]),
+  };
+}
+
 export class EventStore {
   readonly #db: DatabaseSync;
+  readonly #file: boolean;
   readonly #clock: () => string;
   #depth = 0;
   readonly #retryMs: number[];
@@ -113,7 +142,8 @@ export class EventStore {
     // the other writes, and the busy timeout makes a writer wait for the
     // other's lock instead of failing at once.
     this.#retryMs = options.lockRetryMs ?? [100, 250, 500];
-    if (location !== ":memory:") this.#db.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = ${options.busyTimeoutMs ?? 5000};`);
+    this.#file = location !== ":memory:";
+    if (this.#file) this.#db.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = ${options.busyTimeoutMs ?? 5000};`);
     this.#db.exec(SCHEMA);
   }
 
@@ -280,6 +310,61 @@ export class EventStore {
     return rows
       .map((r) => ({ key: r.key, windowStart: r.window_start, calls: r.calls, denied: r.denied }))
       .sort((a, b) => a.key.localeCompare(b.key) || a.windowStart - b.windowStart);
+  }
+
+  // The highest seq among events whose stream does not start with one of the
+  // prefixes, or 0 when there are none.
+  latestSeqExcept(prefixes: readonly string[]): number {
+    const skip = prefixMatch(prefixes);
+    const row = this.#db.prepare(`SELECT MAX(seq) AS s FROM events WHERE NOT (${skip.sql})`).get(...skip.params) as
+      | { s: number | null }
+      | undefined;
+    return row?.s ?? 0;
+  }
+
+  // Delete case. The one path that removes events. In one transaction it
+  // runs `check`, lifts the delete guard, removes every event whose stream
+  // does not start with one of `keepPrefixes`, puts the guard back and
+  // clears every rate-limit counter. Then it rewrites the file, so the
+  // removed text is gone from disk and not only from queries: VACUUM
+  // rebuilds the database without the freed pages, and a TRUNCATE checkpoint
+  // copies the WAL into the file and empties it. Returns the number of
+  // events removed. Running it again on an empty case only compacts.
+  eraseCase(keepPrefixes: readonly string[], check: () => void): number {
+    if (this.#depth > 0) throw new Error("Delete case cannot run inside another transaction.");
+    const keep = prefixMatch(keepPrefixes);
+    // Freed space is zeroed, so even the pages this transaction writes to
+    // the WAL hold none of the removed text.
+    this.#db.exec("PRAGMA secure_delete = ON");
+    const erased = this.transaction(() => {
+      check();
+      this.#db.exec("DROP TRIGGER events_no_delete");
+      const { changes } = this.#db.prepare(`DELETE FROM events WHERE NOT (${keep.sql})`).run(...keep.params);
+      this.#db.exec(NO_DELETE_TRIGGER);
+      this.#db.exec("DELETE FROM rate_windows");
+      return Number(changes);
+    });
+    this.#compact();
+    return erased;
+  }
+
+  // Rewrites the database file without free pages and empties the WAL.
+  // VACUUM builds its copy in memory, so no temporary file holds the text.
+  #compact(): void {
+    this.#db.exec("PRAGMA temp_store = MEMORY");
+    try {
+      if (this.#file) this.#checkpoint();
+      this.#db.exec("VACUUM");
+      if (this.#file) this.#checkpoint();
+    } catch (err) {
+      if (isBusy(err)) throw new CompactionError();
+      throw err;
+    }
+  }
+
+  #checkpoint(): void {
+    const row = this.#db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number } | undefined;
+    if (row && row.busy !== 0) throw new CompactionError();
   }
 
   // Exposed for tests that prove the triggers block edits.

@@ -18,7 +18,9 @@ import { ASSUMED_SLOT_MINUTES, CASE_TIME_ZONE } from "../slots/clash.ts";
 import { projectSlots } from "../slots/project.ts";
 import { arrivalTime } from "../slots/time.ts";
 import type { Conflict } from "../slots/types.ts";
-import type { EventStore, StoredEvent, StreamWrite } from "../store/event-log.ts";
+import { StaleEditError, type EventStore, type StoredEvent, type StreamWrite } from "../store/event-log.ts";
+import { GRANT_PREFIX } from "../grants/grants.ts";
+import { ACCESS_LOG_STREAM } from "../records/events.ts";
 import { buildDraft, type ReplyContext } from "../reply/draft.ts";
 import { REPLY_STREAM, draftEvents, projectReplies, type ReplyLog } from "../reply/events.ts";
 import { replyView } from "../reply/view.ts";
@@ -36,6 +38,13 @@ import {
 import type { AttemptSummary, CaseView, ConflictView, QuestionView } from "./types.ts";
 
 export const MAX_CALENDAR_CHARS = 60_000;
+
+// Delete case keeps grants, which are app settings. Every other event in the
+// file is case data and is erased.
+export const KEPT_ON_DELETE = [GRANT_PREFIX] as const;
+
+// The words the user types to confirm Delete case.
+export const DELETE_CONFIRMATION = "DELETE";
 
 const asEvent = (e: CaseEvent | EvidenceEvent) => ({ type: e.type, data: e.data });
 const signature = (ids: string[]) => [...ids].sort().join(",");
@@ -107,6 +116,26 @@ export class CaseService {
 
   view(): CaseView {
     return this.#build().view;
+  }
+
+  // The version Delete case states: the latest event of the case. Access log
+  // entries do not move it, so an agent reading the case does not make the
+  // user's confirmation stale.
+  caseVersion(): number {
+    return this.#store.latestSeqExcept([GRANT_PREFIX, ACCESS_LOG_STREAM]);
+  }
+
+  // Delete case: erases every event of the case, its access log and its
+  // rate-limit counters, and clears them from the file on disk. Grants stay.
+  // App only, after the user types the confirmation. No MCP tool calls it.
+  // The version check runs in the same transaction as the delete.
+  deleteCase(expectedVersion: number, confirmation: string): { erased: number } {
+    if (confirmation !== DELETE_CONFIRMATION) throw new InvalidRequestError(`Type ${DELETE_CONFIRMATION} to confirm.`);
+    const erased = this.#store.eraseCase(KEPT_ON_DELETE, () => {
+      const current = this.caseVersion();
+      if (current !== expectedVersion) throw new StaleEditError("case", expectedVersion, current, { version: current });
+    });
+    return { erased };
   }
 
   #build() {
