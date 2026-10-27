@@ -2,7 +2,6 @@
 // extraction only adds pending claims, and only a user accept event makes a
 // claim accepted evidence. Message text is data. Nothing in a message or a
 // claim triggers an action.
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ClaimType, Effort, Message, sourceTypeForChannel, type EvidenceClaim } from "../domain/claim.ts";
 import { checkSlotFormats } from "../domain/datetime.ts";
@@ -47,17 +46,21 @@ const asEvent = (e: MessageEvent | EvidenceEvent) => ({ type: e.type, data: e.da
 export class IntakeService {
   readonly #store: EventStore;
   readonly #client: ModelClient;
-  readonly #newId: () => string;
+  readonly #newId: (suggested: string) => string;
   readonly #now: () => string;
 
   constructor(
     store: EventStore,
     client: ModelClient,
-    options: { newId?: () => string; now?: () => string } = {},
+    options: { newId?: (suggested: string) => string; now?: () => string } = {},
   ) {
     this.#store = store;
     this.#client = client;
-    this.#newId = options.newId ?? randomUUID;
+    // Evidence ids are derived from the message id, such as m2-e1 for the
+    // first extracted claim of m2 and m2-u1 for the first manual entry. Short
+    // stable ids are easy for a model to cite and for a person to read. The
+    // stream's expected version 0 refuses a duplicate id.
+    this.#newId = options.newId ?? ((suggested) => suggested);
     this.#now = options.now ?? (() => new Date().toISOString());
   }
 
@@ -142,12 +145,12 @@ export class IntakeService {
     }
 
     const finalAttempt = result.attempts.at(-1)!.attempt;
-    const evidenceWrites: StreamWrite[] = result.passed.map((claim) => {
+    const evidenceWrites: StreamWrite[] = result.passed.map((claim, i) => {
       const event: EvidenceEvent = {
         type: "claim_extracted",
         data: { message_id: messageId, claim, effort, attempt: finalAttempt },
       };
-      return { streamId: evidenceStream(this.#newId()), expectedVersion: 0, events: [asEvent(event)] };
+      return { streamId: evidenceStream(this.#newId(`${messageId}-e${i + 1}`)), expectedVersion: 0, events: [asEvent(event)] };
     });
     const evidenceIds = evidenceWrites.map((w) => w.streamId.slice("evidence:".length));
     const outcome: ExtractionOutcome = result.needsManualEntry
@@ -192,7 +195,8 @@ export class IntakeService {
   enterManually(messageId: string, expectedVersion: number, input: ManualClaimInput): EvidenceView {
     const claimInput = ManualClaimInput.parse(input);
     this.#store.assertVersion(messageStream(messageId), expectedVersion, this.#describeMessage);
-    const source = this.message(messageId).message;
+    const before = this.message(messageId);
+    const source = before.message;
     const quote = claimInput.quote?.trim() ? claimInput.quote : null;
     if (quote !== null && !quoteAppearsIn(quote, source.text)) {
       throw new InvalidRequestError("The quote does not appear in the message.");
@@ -214,7 +218,7 @@ export class IntakeService {
       event_time: null,
       request_item: claimInput.claim_type === "office_request" ? claimInput.request_item : null,
     };
-    const id = this.#newId();
+    const id = this.#newId(`${messageId}-u${before.manualEvidenceIds.length + 1}`);
     const evidenceEvent: EvidenceEvent = { type: "claim_entered_manually", data: { message_id: messageId, claim } };
     const messageEvent: MessageEvent = { type: "manual_entry_recorded", data: { evidence_id: id } };
     this.#store.appendMany(

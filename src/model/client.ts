@@ -6,7 +6,9 @@ import { assertAllowedModel, parseResponseBody, type ResponsesRequestBody, type 
 export { assertAllowedModel };
 
 export type ModelCall = {
-  messageId: string;
+  // Names the call for recordings and logs. For extraction it is the message
+  // id. For conflict calls it is a key such as explain-<conflict id>.
+  key: string;
   attempt: number; // 1 for the first call, 2 for the one retry
   effort: Effort;
   body: ResponsesRequestBody;

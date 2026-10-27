@@ -1,6 +1,8 @@
 // A model client that replays hand-written responses from files. Recordings
-// are keyed by message id and effort level:
-//   fixtures/recordings/<effort>/<message id>.json
+// are keyed by call key and effort level:
+//   fixtures/recordings/<effort>/<key>.json
+// The key is the message id for extraction and a call key such as
+// explain-<conflict id> for conflict calls. The `message_id` field holds it.
 // Attempt N of a call returns the recording's Nth attempt, or its last one.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -48,7 +50,7 @@ export function readRecording(file: string): Recording {
   return Recording.parse(JSON.parse(readFileSync(file, "utf8")));
 }
 
-export type RecordingLookup = (messageId: string, effort: Effort) => Recording | undefined;
+export type RecordingLookup = (key: string, effort: Effort) => Recording | undefined;
 
 export class RecordedModelClient implements ModelClient {
   readonly label: string;
@@ -61,31 +63,31 @@ export class RecordedModelClient implements ModelClient {
   }
 
   static fromDirectory(dir: string = RECORDINGS_DIR): RecordedModelClient {
-    return new RecordedModelClient((messageId, effort) => {
-      if (!/^[A-Za-z0-9_-]+$/.test(messageId)) return undefined;
-      const file = path.join(dir, effort, `${messageId}.json`);
+    return new RecordedModelClient((key, effort) => {
+      if (!/^[A-Za-z0-9_-]+$/.test(key)) return undefined;
+      const file = path.join(dir, effort, `${key}.json`);
       return existsSync(file) ? readRecording(file) : undefined;
     });
   }
 
   // Replays the given recordings first and falls back to `base` for the rest.
   static withOverrides(overrides: Recording[], base?: RecordedModelClient): RecordedModelClient {
-    return new RecordedModelClient((messageId, effort) => {
-      const hit = overrides.find((r) => r.message_id === messageId && (r.effort === "any" || r.effort === effort));
-      return hit ?? base?.lookup(messageId, effort);
+    return new RecordedModelClient((key, effort) => {
+      const hit = overrides.find((r) => r.message_id === key && (r.effort === "any" || r.effort === effort));
+      return hit ?? base?.lookup(key, effort);
     }, "recorded-overrides");
   }
 
-  lookup(messageId: string, effort: Effort): Recording | undefined {
-    return this.#lookup(messageId, effort);
+  lookup(key: string, effort: Effort): Recording | undefined {
+    return this.#lookup(key, effort);
   }
 
   async call(request: ModelCall): Promise<ModelReply> {
     assertAllowedModel(request.body.model);
     this.calls.push(request);
-    const recording = this.#lookup(request.messageId, request.effort);
+    const recording = this.#lookup(request.key, request.effort);
     if (!recording) {
-      throw new ModelCallError(`No recording for message ${request.messageId} at effort ${request.effort}.`);
+      throw new ModelCallError(`No recording for ${request.key} at effort ${request.effort}.`);
     }
     const attempt = recording.attempts[Math.min(request.attempt, recording.attempts.length) - 1]!;
     if (attempt.error) throw new ModelCallError(attempt.error.message, attempt.error.status, attempt.latency_ms);

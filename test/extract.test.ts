@@ -214,7 +214,7 @@ describe("model client", () => {
   it("cannot reach the network in tests", async () => {
     const live = new MetaResponsesClient({ apiKey: "test-key-not-real" });
     const err = await live
-      .call({ messageId: "m1", attempt: 1, effort: "low", body: buildRequestBody(message, "low") })
+      .call({ key: "m1", attempt: 1, effort: "low", body: buildRequestBody(message, "low") })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ModelCallError);
     expect(() => fetch("https://api.meta.ai/v1/responses")).toThrow(NETWORK_BLOCKED);
@@ -228,7 +228,7 @@ describe("model client", () => {
     });
     const live = new MetaResponsesClient({ apiKey: "secret-value-123" });
     const err = (await live
-      .call({ messageId: "m1", attempt: 1, effort: "low", body: buildRequestBody(message, "low") })
+      .call({ key: "m1", attempt: 1, effort: "low", body: buildRequestBody(message, "low") })
       .catch((e: unknown) => e)) as ModelCallError;
     expect(err.status).toBe(400);
     expect(err.message).not.toContain("secret-value-123");
@@ -254,7 +254,7 @@ describe("model client", () => {
       }),
     );
     const live = new MetaResponsesClient({ apiKey: "k" });
-    const reply = await live.call({ messageId: "m1", attempt: 1, effort: "low", body: buildRequestBody(message, "low") });
+    const reply = await live.call({ key: "m1", attempt: 1, effort: "low", body: buildRequestBody(message, "low") });
     expect(reply.outputText).toBe('{"claims":[]}');
     expect(reply.usage).toEqual({ input: 900, cachedInput: 512, output: 70, reasoning: 40 });
     expect(reply.latencyMs).toBeGreaterThanOrEqual(0);

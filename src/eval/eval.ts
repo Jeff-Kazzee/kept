@@ -31,7 +31,7 @@ export class SpendGuardError extends Error {
 export type CallLog = {
   effort: Effort;
   run: number;
-  messageId: string;
+  key: string;
   attempt: number;
   ok: boolean;
   latencyMs: number;
@@ -59,7 +59,7 @@ export class GuardedClient implements ModelClient {
     if (this.spentUsd >= this.maxUsd) {
       throw new SpendGuardError(`Spend guard reached: estimate $${this.spentUsd.toFixed(4)} of $${this.maxUsd} limit.`);
     }
-    const base = { effort: request.effort, run: this.run, messageId: request.messageId, attempt: request.attempt };
+    const base = { effort: request.effort, run: this.run, key: request.key, attempt: request.attempt };
     try {
       const reply = await this.#inner.call(request);
       const costUsd = estimateUsd(reply.usage);

@@ -1,4 +1,4 @@
-// Domain types for D1 evidence intake. Shared by the server, the scripts and
+// Domain types for evidence intake and slot states. Shared by the server, the scripts and
 // the UI, so this file must not import Node modules.
 import { z } from "zod";
 
@@ -15,7 +15,16 @@ export type SenderKind = z.infer<typeof SenderKind>;
 export const Effort = z.enum(["minimal", "low"]);
 export type Effort = z.infer<typeof Effort>;
 
-// Slot state names only. The rules that move a slot between states are D2.
+// Claim types that only a user answer creates. The model can never return
+// them, because the extraction schema lists CLAIM_TYPES only.
+//   request  the user chose this slot (rule 2)
+//   decline  the user declined an offered slot
+//   clarify  the user said which date, time or place a claim means
+export const ANSWER_CLAIM_TYPES = ["request", "decline", "clarify"] as const;
+export const EvidenceClaimType = z.enum([...CLAIM_TYPES, ...ANSWER_CLAIM_TYPES]);
+export type EvidenceClaimType = z.infer<typeof EvidenceClaimType>;
+
+// Slot state names. src/slots/project.ts holds the rules.
 export const SLOT_STATES = ["offered", "requested", "confirmed", "change_proposed", "canceled", "declined"] as const;
 export type SlotState = (typeof SLOT_STATES)[number];
 
@@ -49,7 +58,7 @@ export type Slot = z.infer<typeof Slot>;
 
 // An evidence item: one claim about an appointment, tied to its source.
 export const EvidenceClaim = z.object({
-  claim_type: ClaimType,
+  claim_type: EvidenceClaimType,
   slot: Slot,
   // Verbatim words from the source message. Null only for a manual entry
   // where the user gave no quote.
@@ -61,5 +70,8 @@ export const EvidenceClaim = z.object({
   // When the described event happened, if the message says so.
   event_time: z.string().nullable(),
   request_item: z.string().nullable(),
+  // The grant name for reported_by_user_via_agent. Grants arrive in a later
+  // sprint. Absent for every other source.
+  agent_name: z.string().min(1).max(100).nullable().optional(),
 });
 export type EvidenceClaim = z.infer<typeof EvidenceClaim>;

@@ -1,7 +1,9 @@
 // Event kinds for evidence intake and the projections built from them.
 // A message stream holds the imported message and its extraction history.
 // Each evidence item has its own stream, so a review decision states the
-// version of that one item. Unknown event kinds are skipped, which leaves
+// version of that one item. An answer to a question also creates evidence
+// items. The user's tap on the answer is their review, so an answer item is
+// accepted when it is recorded. Unknown event kinds are skipped, which leaves
 // room for later kinds such as notes, tags, archive and undo.
 import type { Effort, EvidenceClaim, Message, SourceType } from "../domain/claim.ts";
 import type { AttemptProblem, ClaimProblem } from "../extract/extract.ts";
@@ -40,7 +42,20 @@ export type EvidenceEvent =
   | { type: "claim_extracted"; data: { message_id: string; claim: EvidenceClaim; effort: Effort; attempt: number } }
   | { type: "claim_entered_manually"; data: { message_id: string; claim: EvidenceClaim } }
   | { type: "claim_accepted"; data: Record<string, never> }
-  | { type: "claim_rejected_by_user"; data: Record<string, never> };
+  | { type: "claim_rejected_by_user"; data: Record<string, never> }
+  | { type: "answer_recorded"; data: { claim: EvidenceClaim } & AnswerMeta };
+
+// Where an answer item came from. `clarifies` names the evidence item whose
+// date or time the answer resolves. `after` is the latest evidence time in
+// the case when the user answered. The answer is ordered after it, because
+// the user answered with all of that evidence in view.
+export type AnswerMeta = {
+  question_id: string;
+  conflict_id: string;
+  choice_id: string;
+  clarifies: string | null;
+  after: string;
+};
 
 export type MessageView = {
   id: string;
@@ -59,12 +74,14 @@ export type ReviewStatus = "pending" | "accepted" | "rejected";
 export type EvidenceView = {
   id: string;
   version: number;
-  messageId: string;
+  // Null for an answer item, which comes from no message.
+  messageId: string | null;
   claim: EvidenceClaim;
   // "model" means model output that passed the code checks.
-  origin: "model" | "manual";
+  origin: "model" | "manual" | "answer";
   status: ReviewStatus;
   decidedAt: string | null;
+  answer: AnswerMeta | null;
 };
 
 function streamKey(streamId: string, prefix: string): string | null {
@@ -121,6 +138,21 @@ export function projectEvidence(events: StoredEvent[]): Map<string, EvidenceView
         origin: event.type === "claim_extracted" ? "model" : "manual",
         status: "pending",
         decidedAt: null,
+        answer: null,
+      });
+      continue;
+    }
+    if (event.type === "answer_recorded") {
+      const { claim, ...answer } = event.data;
+      views.set(id, {
+        id,
+        version: e.version,
+        messageId: null,
+        claim,
+        origin: "answer",
+        status: "accepted",
+        decidedAt: e.recordedAt,
+        answer,
       });
       continue;
     }

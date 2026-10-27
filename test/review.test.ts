@@ -161,6 +161,16 @@ describe("review queue", () => {
     expect(store.readStream("message:s8-offer").map((e) => e.type)).toEqual(["message_imported", "manual_entry_recorded"]);
   });
 
+  it("derives short evidence ids from the message id by default", async () => {
+    const service = new IntakeService(new EventStore(), RecordedModelClient.fromDirectory(), { now: () => "2026-11-06T10:00:00.000Z" });
+    service.importMessage(fixture("m3"));
+    const { evidence, message } = await service.extract("m3", { effort: "low", expectedVersion: 1 });
+    expect(evidence.map((e) => e.id)).toEqual(["m3-e1", "m3-e2", "m3-e3"]);
+    const claim = { claim_type: "offer" as const, date: "2026-11-13", time: "09:15", location: null, quote: null, request_item: null };
+    expect(service.enterManually("m3", message.version, claim).id).toBe("m3-u1");
+    expect(service.enterManually("m3", message.version + 1, claim).id).toBe("m3-u2");
+  });
+
   it("treats instructions inside a message as data", async () => {
     const { service } = setup();
     service.importMessage({

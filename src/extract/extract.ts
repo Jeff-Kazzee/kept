@@ -113,7 +113,7 @@ async function runAttempt(
   const body = buildRequestBody(message, effort, retryReasons, model);
   let reply;
   try {
-    reply = await client.call({ messageId: message.id, attempt, effort, body });
+    reply = await client.call({ key: message.id, attempt, effort, body });
   } catch (err) {
     // Only a failed model call counts as an invalid attempt. Other errors,
     // such as the eval spend guard, stop the run.

@@ -98,7 +98,7 @@ describe("eval:live logic against the recorded client", () => {
       label: "degraded",
       async call(request: ModelCall) {
         const reply = await recorded.call(request);
-        if (request.messageId === "m1" && request.effort === "low" && ++m1Calls === 3) {
+        if (request.key === "m1" && request.effort === "low" && ++m1Calls === 3) {
           const out = JSON.parse(reply.outputText) as { claims: unknown[] };
           return { ...reply, outputText: JSON.stringify({ claims: out.claims.slice(0, 1) }) };
         }

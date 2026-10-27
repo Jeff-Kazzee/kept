@@ -62,8 +62,29 @@ export type ResponsesRequestBody = {
   reasoning: { effort: Effort };
   instructions: string;
   input: string;
-  text: { format: { type: "json_schema"; name: string; schema: typeof CLAIM_JSON_SCHEMA; strict: false } };
+  text: { format: { type: "json_schema"; name: string; schema: object; strict: false } };
 };
+
+// A request with structured output, shared by every model call. It always
+// sets store: false and refuses contributor models.
+export function buildJsonRequest(options: {
+  model: string;
+  effort: Effort;
+  instructions: string;
+  input: string;
+  schemaName: string;
+  schema: object;
+}): ResponsesRequestBody {
+  assertAllowedModel(options.model);
+  return {
+    model: options.model,
+    store: false,
+    reasoning: { effort: options.effort },
+    instructions: options.instructions,
+    input: options.input,
+    text: { format: { type: "json_schema", name: options.schemaName, schema: options.schema, strict: false } },
+  };
+}
 
 // `retryReasons` holds only problem codes produced by this code, never
 // message text, so a retry cannot carry instructions from the message.
@@ -79,16 +100,14 @@ export function buildRequestBody(
   retryReasons: string[] = [],
   model: string = MODEL,
 ): ResponsesRequestBody {
-  assertAllowedModel(model);
   const instructions =
     retryReasons.length === 0
       ? INSTRUCTIONS
       : `${INSTRUCTIONS} A previous answer was rejected for: ${retryReasons.join(", ")}. ` +
         "Copy every quote exactly from the text field and use null for values the message does not state.";
-  return {
+  return buildJsonRequest({
     model,
-    store: false,
-    reasoning: { effort },
+    effort,
     instructions,
     input: JSON.stringify({
       channel: message.channel,
@@ -96,8 +115,9 @@ export function buildRequestBody(
       received_at: message.received_at,
       text: message.text,
     }),
-    text: { format: { type: "json_schema", name: SCHEMA_NAME, schema: CLAIM_JSON_SCHEMA, strict: false } },
-  };
+    schemaName: SCHEMA_NAME,
+    schema: CLAIM_JSON_SCHEMA,
+  });
 }
 
 export type TokenUsage = { input: number; cachedInput: number; output: number; reasoning: number };
