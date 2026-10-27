@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { corpusMessages, loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
 import { checkSlotValues, isValidDate, isValidTime } from "../src/domain/datetime.ts";
+import { hasClinicalContent } from "../src/domain/scope.ts";
 import { fromPackage } from "../src/paths.ts";
 
 const scenarios = loadScenarios();
@@ -98,10 +99,10 @@ describe("fixtures", () => {
   });
 
   it("holds no clinical content outside the S11 out-of-scope question", () => {
-    const clinical = /\b(diagnos\w*|symptom\w*|treatment|medication|medicine|prescri\w*|dose|dosage|lab results|test results|condition)\b/i;
     for (const m of corpusMessages(scenarios)) {
       if (m.id === "s11-question") continue;
-      expect(clinical.test(m.text), m.id).toBe(false);
+      expect(hasClinicalContent(m.text), m.id).toBe(false);
     }
+    expect(hasClinicalContent(scenarios.find((s) => s.id === "S11")!.messages[0]!.text)).toBe(true);
   });
 });

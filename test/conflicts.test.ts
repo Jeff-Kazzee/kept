@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readdirSync } from "node:fs";
+import path from "node:path";
 import { checkCitations, datesAndTimesSupported } from "../src/conflicts/check.ts";
 import { explainConflict, explanationKey } from "../src/conflicts/explain.ts";
 import { proposeQuestion, questionKey } from "../src/conflicts/question.ts";
@@ -248,5 +250,45 @@ describe("citation and date checks", () => {
   it("flags clinical words", () => {
     expect(hasClinicalContent("Your symptoms may change.")).toBe(true);
     expect(hasClinicalContent("Bring your new insurance card.")).toBe(false);
+  });
+
+  it("review R1-4: flags singular and plural clinical words", () => {
+    expect(hasClinicalContent("Your lab result is ready for Thursday 11/12 at 10:30 AM")).toBe(true);
+    for (const word of [
+      "lab", "labs", "lab result", "test results", "biopsy", "biopsies", "cancer", "tumor", "tumour", "symptom",
+      "diagnosis", "diagnosed", "treatment", "treated", "therapy", "medication", "medicine", "medical", "prescription",
+      "pharmacy", "drug", "pill", "dose", "dosage", "blood", "scan", "X-ray", "xray", "MRI", "ultrasound", "screening",
+      "surgery", "surgical", "illness", "disease", "disorder", "condition", "infection", "allergy", "pregnancy",
+      "vaccine", "injection", "pain", "mental health", "chemotherapy", "radiation", "prognosis",
+    ]) {
+      expect(hasClinicalContent(`About your ${word} on Thursday.`), word).toBe(true);
+    }
+  });
+
+  it("review R1-4: passes the administrative words, every fixture text and all recorded model output", async () => {
+    for (const text of [
+      "appointment", "visit", "clinic", "Lantern Hill Clinic", "insurance card", "arrive 15 minutes early", "Front Desk",
+      "Reply C to confirm", "reminder", "confirmed", "canceled", "office", "Suite 2", "check in", "front desk",
+    ]) {
+      expect(hasClinicalContent(text), text).toBe(false);
+    }
+    const strings = (v: unknown): string[] =>
+      typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(strings) : v && typeof v === "object" ? Object.values(v).flatMap(strings) : [];
+    const dir = fromPackage("fixtures/recordings");
+    const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".json"));
+    expect(files.length).toBeGreaterThan(30);
+    for (const f of files) {
+      for (const a of readRecording(path.join(dir, f)).attempts) {
+        for (const text of strings(a.output)) expect(hasClinicalContent(text), `${f}: ${text}`).toBe(false);
+      }
+    }
+    // Code-built text: summaries, fixed questions and choice labels.
+    for (const ids of Object.values(STATES)) {
+      for (const c of (await caseOf(ids)).conflicts) {
+        for (const text of [c.summary, c.fixedQuestion, ...c.choices.map((ch) => ch.label)]) {
+          expect(hasClinicalContent(text), text).toBe(false);
+        }
+      }
+    }
   });
 });

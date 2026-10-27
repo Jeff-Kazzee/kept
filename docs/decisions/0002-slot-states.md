@@ -219,6 +219,11 @@ Column: what the next claim says.
   code.
 - W28. Both checks also reject text with clinical words, text over a length
   limit, and (for questions) text that does not end with a question mark.
+  The clinical list (`src/domain/scope.ts`) covers singular and plural forms
+  and errs toward rejecting, because a false match costs a retry or the
+  fixed wording. Words such as "lab", "result", "scan" and "medical" are on
+  it. A test checks that every fixture message, recorded model output and
+  code-built question passes.
 - W32. Each date mention in model text is checked as one unit. Its year,
   month and day, weekday and times must all fit one point in time that one
   cited item states: its slot, its event time, its evidence time, or one
