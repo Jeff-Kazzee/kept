@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { main } from "../src/eval/cli.ts";
 import type { ConflictEvalReport } from "../src/eval/conflict-eval.ts";
+import type { ReplyEvalReport } from "../src/eval/reply-eval.ts";
 import { claimMatches, estimateUsd, percentile, runEval, scoreMessage, type EvalReport } from "../src/eval/eval.ts";
 import { corpusMessages, loadScenarios } from "../src/fixtures/load.ts";
 import type { ModelCall, ModelClient } from "../src/model/client.ts";
@@ -279,5 +280,76 @@ describe("SP2.16 eval:live for the explanation and question calls", () => {
     const errors: string[] = [];
     expect(await main(["--d2-only", "--d2-effort", "high"], { MODEL_API_KEY: KEY }, { error: (l) => errors.push(l), log: () => {} })).toBe(2);
     expect(errors.join("\n")).toMatch(/--d2-effort must be minimal or low/);
+  });
+});
+
+describe("SP3.10 eval:live for the reply template call", () => {
+  const recordedClient = () => RecordedModelClient.fromDirectory();
+
+  it("--d3-only runs the template call three times over the D3 fixtures and writes a report", async () => {
+    const out = path.join(tempDir(), "d3.json");
+    const lines: string[] = [];
+    const code = await main(["--d3-only", "--out", out], { MODEL_API_KEY: KEY }, { createClient: recordedClient, log: (l) => lines.push(l) });
+    expect(code).toBe(0);
+    const report = JSON.parse(readFileSync(out, "utf8")) as ReplyEvalReport;
+    // Four notes on the demo case (S3), the S7 slot without a time, two S9
+    // notes no template fits, and S12.
+    expect(report).toMatchObject({ effort: "low", runs: 3, stoppedBySpendGuard: false, corpus: { inputs: 8, withExpectedPick: 8 } });
+    expect(report.validTemplateRate).toBeCloseTo(15 / 24);
+    // The S7 and S9 notes expect no pick, which the fallback meets.
+    expect(report.correctPickRate).toBe(1);
+    expect(report).toMatchObject({ fallbacks: 9, calls: 33, rejections: { missing_field: 6, template_not_valid_for_state: 6, unknown_slot: 6 } });
+    expect(report.latencyMs.p50).toBeGreaterThan(0);
+    expect(report.latencyMs.p95).toBeGreaterThanOrEqual(report.latencyMs.p50!);
+    expect(report.costUsd).toBeCloseTo(estimateUsd(report.usage));
+    expect(report.callLog.every((c) => c.key.startsWith("reply-") && c.effort === "low")).toBe(true);
+    expect(report.runResults.map((r) => r.complete)).toEqual([true, true, true]);
+    const printed = lines.join("\n");
+    expect(printed).toContain("[template] valid templates 62.5%, expected picks 100.0%, fallbacks 9, calls 33");
+    expect(printed).toContain("rejections by reason: missing_field 6, unknown_slot 6, template_not_valid_for_state 6");
+    expect(printed).not.toContain("[low] accuracy");
+    expect(printed).not.toContain(KEY);
+  });
+
+  it("--d3 adds the D3 report after extraction, and --d2-only --d3-only writes both without extraction", async () => {
+    const out = path.join(tempDir(), "with-d3.json");
+    expect(await main(["--d3", "--out", out], { MODEL_API_KEY: KEY }, { createClient: recordedClient, log: () => {} })).toBe(0);
+    const report = JSON.parse(readFileSync(out, "utf8")) as EvalReport & { d3: ReplyEvalReport };
+    expect(report.perEffort.map((e) => e.effort)).toEqual(["minimal", "low"]);
+    expect(report.d3.calls).toBe(33);
+    expect(report.d3.maxUsd).toBeCloseTo(5 - report.costUsdTotal);
+    expect(report).not.toHaveProperty("d2");
+
+    const both = path.join(tempDir(), "d2-d3.json");
+    expect(await main(["--d2-only", "--d3-only", "--out", both], { MODEL_API_KEY: KEY }, { createClient: recordedClient, log: () => {} })).toBe(0);
+    const pair = JSON.parse(readFileSync(both, "utf8")) as { d2: ConflictEvalReport; d3: ReplyEvalReport };
+    expect(pair).not.toHaveProperty("perEffort");
+    expect(pair.d2.explanation.calls).toBe(18);
+    expect(pair.d3.calls).toBe(33);
+    expect(pair.d3.maxUsd).toBeCloseTo(5 - pair.d2.costUsdTotal);
+  });
+
+  it("counts a rejected field value and the wrong-pick rate", async () => {
+    const faults = RecordedModelClient.withOverrides(
+      [readRecording(fromPackage("fixtures/recordings/faults/reply-field-mismatch.json"))],
+      RecordedModelClient.fromDirectory(),
+    );
+    const out = path.join(tempDir(), "d3-faults.json");
+    expect(await main(["--d3-only", "--out", out], { MODEL_API_KEY: KEY }, { createClient: () => faults, log: () => {} })).toBe(0);
+    const report = JSON.parse(readFileSync(out, "utf8")) as ReplyEvalReport;
+    expect(report).toMatchObject({ fallbacks: 12, calls: 36, rejections: { field_mismatch: 6 } });
+    expect(report.correctPickRate).toBeCloseTo(21 / 24);
+  });
+
+  it("stops the template call at the spend limit and refuses a bad effort", async () => {
+    const out = path.join(tempDir(), "d3-guard.json");
+    const code = await main(["--d3-only", "--max-usd", "0.001", "--out", out], { MODEL_API_KEY: KEY }, { createClient: recordedClient, log: () => {} });
+    expect(code).toBe(3);
+    const report = JSON.parse(readFileSync(out, "utf8")) as ReplyEvalReport;
+    expect(report).toMatchObject({ stoppedBySpendGuard: true, calls: 1 });
+    expect(report.runResults[0]!.complete).toBe(false);
+    const errors: string[] = [];
+    expect(await main(["--d3-only", "--d3-effort", "high"], { MODEL_API_KEY: KEY }, { error: (l) => errors.push(l), log: () => {} })).toBe(2);
+    expect(errors.join("\n")).toMatch(/--d3-effort must be minimal or low/);
   });
 });

@@ -27,7 +27,7 @@
   "d3": [
     {
       "expect": "The slot has a date and no time or place. No reply template is offered. Asking whether it stands is withheld for the missing time, and a model pick for it falls back to manual entry.",
-      "steps": [{ "message": "s7-confirm" }, { "suggest": { "intent": "Please confirm my visit." } }],
+      "steps": [{ "message": "s7-confirm" }, { "suggest": { "intent": "Please confirm my visit.", "expect": null } }],
       "slots": { "2026-11-16": "Confirmed · office message" },
       "options": [],
       "withheld": [{ "template": "ask_still_stands", "slot": "2026-11-16", "missing": ["time"] }],

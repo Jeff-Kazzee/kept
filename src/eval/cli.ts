@@ -11,13 +11,17 @@
 //                  question calls over the D2 conflict fixtures
 //   --d2-only      run only the explanation and question calls
 //   --d2-effort <minimal|low>  reasoning effort for those calls (default low)
+//   --d3           also run the reply template call over the D3 fixtures
+//   --d3-only      run only the reply template call. With --d2-only, run
+//                  the D2 and D3 calls and no extraction.
+//   --d3-effort <minimal|low>  reasoning effort for the template call (default low)
 //
 // The spend limit covers the whole command. The D2 calls get what the
-// extraction runs left.
+// extraction runs left, and the D3 call what the D2 calls left.
 //
 // Exit codes: 0 target met, 1 extraction target missed or S8 failed, 2 bad
-// usage or MODEL_API_KEY missing, 3 stopped by the spend guard. The D2 calls
-// have no pass criterion yet. Their report states the rates.
+// usage or MODEL_API_KEY missing, 3 stopped by the spend guard. The D2 and
+// D3 calls have no pass criterion yet. Their reports state the rates.
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -29,6 +33,7 @@ import { MODEL } from "../model/request.ts";
 import { FIXTURES_DIR, PACKAGE_ROOT } from "../paths.ts";
 import { formatConflictSummary, runConflictEval, type ConflictEvalReport } from "./conflict-eval.ts";
 import { formatSummary, runEval, type EvalReport } from "./eval.ts";
+import { formatReplySummary, runReplyEval, type ReplyEvalReport } from "./reply-eval.ts";
 
 export type CliDeps = {
   createClient?: (apiKey: string) => ModelClient;
@@ -41,7 +46,17 @@ export async function main(argv: string[], env: Record<string, string | undefine
   const log = deps.log ?? ((line) => console.log(line));
   const error = deps.error ?? ((line) => console.error(line));
 
-  let values: { "max-usd"?: string; out?: string; recorded?: boolean; d2?: boolean; "d2-only"?: boolean; "d2-effort"?: string };
+  let values: {
+    "max-usd"?: string;
+    out?: string;
+    recorded?: boolean;
+    d2?: boolean;
+    "d2-only"?: boolean;
+    "d2-effort"?: string;
+    d3?: boolean;
+    "d3-only"?: boolean;
+    "d3-effort"?: string;
+  };
   try {
     ({ values } = parseArgs({
       args: argv[0] === "--" ? argv.slice(1) : argv,
@@ -52,6 +67,9 @@ export async function main(argv: string[], env: Record<string, string | undefine
         d2: { type: "boolean" },
         "d2-only": { type: "boolean" },
         "d2-effort": { type: "string" },
+        d3: { type: "boolean" },
+        "d3-only": { type: "boolean" },
+        "d3-effort": { type: "string" },
       },
       strict: true,
       allowPositionals: false,
@@ -71,8 +89,16 @@ export async function main(argv: string[], env: Record<string, string | undefine
     error("--d2-effort must be minimal or low.");
     return 2;
   }
+  const d3Effort = Effort.safeParse(values["d3-effort"] ?? "low");
+  if (!d3Effort.success) {
+    error("--d3-effort must be minimal or low.");
+    return 2;
+  }
   const d2Only = values["d2-only"] === true;
+  const d3Only = values["d3-only"] === true;
   const withD2 = d2Only || values.d2 === true;
+  const withD3 = d3Only || values.d3 === true;
+  const skipExtraction = d2Only || d3Only;
 
   const apiKey = env.MODEL_API_KEY;
   if (!apiKey && !values.recorded) {
@@ -94,13 +120,13 @@ export async function main(argv: string[], env: Record<string, string | undefine
   const startedAt = now();
   const out = path.resolve(
     PACKAGE_ROOT,
-    values.out ?? path.join("eval-results", `eval-${d2Only ? "d2" : "live"}-${startedAt.replace(/[:.]/g, "-")}.json`),
+    values.out ?? path.join("eval-results", `eval-${d2Only ? "d2" : d3Only ? "d3" : "live"}-${startedAt.replace(/[:.]/g, "-")}.json`),
   );
 
   const client = values.recorded
     ? RecordedModelClient.fromDirectory()
     : (deps.createClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!);
-  const report: EvalReport | null = d2Only
+  const report: EvalReport | null = skipExtraction
     ? null
     : await runEval({
         client,
@@ -124,14 +150,31 @@ export async function main(argv: string[], env: Record<string, string | undefine
     });
   }
 
-  const written = report === null ? d2 : withD2 ? { ...report, d2 } : report;
+  let d3: ReplyEvalReport | null = null;
+  if (withD3 && !report?.stoppedBySpendGuard && !d2?.stoppedBySpendGuard) {
+    d3 = await runReplyEval({
+      client,
+      scenarios,
+      effort: d3Effort.data,
+      maxUsd: Math.max(0, maxUsd - (report?.costUsdTotal ?? 0) - (d2?.costUsdTotal ?? 0)),
+      model: MODEL,
+      now,
+      onProgress: log,
+    });
+  }
+
+  // A report with extraction carries the D2 and D3 reports as fields. With
+  // no extraction, a single D2 or D3 report is written on its own.
+  const extras = { ...(withD2 ? { d2 } : {}), ...(withD3 ? { d3 } : {}) };
+  const written = report !== null ? { ...report, ...extras } : withD2 && withD3 ? extras : withD2 ? d2 : d3;
   mkdirSync(path.dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify(written, null, 2) + "\n");
   if (report) log(formatSummary(report));
   if (d2) log(formatConflictSummary(d2));
+  if (d3) log(formatReplySummary(d3));
   log(`Report: ${out}`);
 
-  if (report?.stoppedBySpendGuard || d2?.stoppedBySpendGuard) return 3;
+  if (report?.stoppedBySpendGuard || d2?.stoppedBySpendGuard || d3?.stoppedBySpendGuard) return 3;
   if (report === null) return 0;
   return report.perEffort.every((e) => e.meetsTarget) && report.s8.passed ? 0 : 1;
 }

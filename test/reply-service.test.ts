@@ -266,7 +266,7 @@ describe("SP3.4 the model picks a template and a slot, and code checks it", () =
   }
 
   it("S9: blocks a pick of the accept template for a confirmed slot, then falls back to manual entry", async () => {
-    const { reply, store } = await setup(["m1", "m2"], [fault("reply-not-valid-for-state")]);
+    const { reply, store } = await setup(["m1", "m2"]);
     const view = await reply.suggest("I accept Thursday.", 0);
     expect(view.reply.draft).toBeNull();
     expect(view.reply.suggestion).toMatchObject({
@@ -287,7 +287,7 @@ describe("SP3.4 the model picks a template and a slot, and code checks it", () =
   });
 
   it("S9: blocks a pick of a slot that no message offers", async () => {
-    const { reply } = await setup(["m1"], [fault("reply-unknown-slot")]);
+    const { reply } = await setup(["m1"]);
     const view = await reply.suggest("Please accept Wednesday at 3:00 PM.", 0);
     expect(view.reply).toMatchObject({ draft: null, suggestion: { outcome: "manual_needed", attempts: [{ problems: ["unknown_slot"] }, { problems: ["unknown_slot"] }] } });
   });

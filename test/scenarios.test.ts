@@ -64,8 +64,8 @@ describe("D2 checkpoints in the fixtures", () => {
 describe("D3 checkpoints in the fixtures", () => {
   const d3 = loadScenarios().filter((s) => s.d3);
 
-  it("covers S7, S9, S11 and S12", () => {
-    expect(d3.map((s) => s.id)).toEqual(["S7", "S9", "S11", "S12"]);
+  it("covers S3, S7, S9, S11 and S12", () => {
+    expect(d3.map((s) => s.id)).toEqual(["S3", "S7", "S9", "S11", "S12"]);
   });
 
   for (const s of d3) {

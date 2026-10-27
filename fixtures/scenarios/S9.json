@@ -5,10 +5,10 @@
   "messages": [{ "ref": "m1" }, { "ref": "m2" }],
   "d3": [
     {
-      "expect": "An Accept reply for Wednesday 2026-11-11 15:00, which m1 does not offer, is blocked by code. The model proposes it on both attempts, and the user picks a template by hand.",
+      "expect": "An Accept reply for Wednesday 2026-11-11 15:00, which m1 does not offer, is blocked by code. The recorded model proposes it on both attempts, and the user picks a template by hand.",
       "steps": [
         { "message": "m1" },
-        { "suggest": { "intent": "Please accept Wednesday at 3:00 PM.", "recording": "recordings/faults/reply-unknown-slot.json" } }
+        { "suggest": { "intent": "Please accept Wednesday at 3:00 PM.", "expect": null } }
       ],
       "slots": { "2026-11-10T14:00": "Offered · office message", "2026-11-12T10:30": "Offered · office message" },
       "options": [
@@ -27,7 +27,7 @@
       "steps": [
         { "message": "m1" },
         { "message": "m2" },
-        { "suggest": { "intent": "I accept Thursday.", "recording": "recordings/faults/reply-not-valid-for-state.json" } }
+        { "suggest": { "intent": "I accept Thursday.", "expect": null } }
       ],
       "slots": { "2026-11-10T14:00": "Offered · office message", "2026-11-12T10:30": "Confirmed · office message" },
       "options": [

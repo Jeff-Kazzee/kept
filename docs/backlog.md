@@ -174,7 +174,7 @@ Tasks:
   test proves no network request leaves the app.
 - [x] SP3.9 S11: a clinical question gets a fixed decline that states the
   administrative scope. No model call answers it.
-- [ ] SP3.10 Recorded responses and live evaluation for template selection.
+- [x] SP3.10 Recorded responses and live evaluation for template selection.
 
 ## Sprint 4: MCP core (D5, part 1)
 

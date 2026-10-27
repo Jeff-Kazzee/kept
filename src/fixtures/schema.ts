@@ -92,13 +92,21 @@ export const D2Checkpoint = z
 export type D2Checkpoint = z.infer<typeof D2Checkpoint>;
 
 // D3 expectations over replies. Steps may also ask the model for a reply
-// from a note (with a fault recording in place of the stored one), start a
-// draft by hand, or edit the open draft. `blocked` lists drafts that code
+// from a note, start a draft by hand, or edit the open draft. A suggest step
+// may name a fault recording that answers in place of the stored one, and
+// states the pick a correct model makes (`expect`, null when no template
+// fits), which the live evaluation scores. `blocked` lists drafts that code
 // must refuse after the steps, with their problems. `declined` lists a
 // message and notes that the scope check must decline before any model call.
 const D3Step = z.union([
   D2Step,
-  z.object({ suggest: z.object({ intent: z.string().nullable(), recording: z.string().min(1).optional() }).strict() }).strict(),
+  z
+    .object({
+      suggest: z
+        .object({ intent: z.string().nullable(), recording: z.string().min(1).optional(), expect: TemplateSlot.nullable().optional() })
+        .strict(),
+    })
+    .strict(),
   z.object({ start_reply: TemplateSlot }).strict(),
   z.object({ edit_reply: z.string().min(1) }).strict(),
 ]);

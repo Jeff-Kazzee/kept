@@ -70,7 +70,7 @@ describe("fixtures", () => {
 
   it("turns every D3 stub and the S11 product stub into checkpoints", () => {
     const counts = Object.fromEntries(scenarios.filter((s) => s.d3).map((s) => [s.id, s.d3!.length]));
-    expect(counts).toEqual({ S7: 1, S9: 2, S11: 1, S12: 1 });
+    expect(counts).toEqual({ S3: 6, S7: 1, S9: 2, S11: 1, S12: 1 });
     for (const s of scenarios) {
       for (const step of (s.d3 ?? []).flatMap((c) => c.steps)) {
         if ("suggest" in step && step.suggest.recording) expect(() => readFixtureText(step.suggest.recording!)).not.toThrow();

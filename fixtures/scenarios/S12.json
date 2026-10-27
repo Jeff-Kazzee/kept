@@ -8,7 +8,7 @@
       "expect": "Dana approves the reply MON. This step adds no new message. The send is simulated and Monday shows Requested · reported by you. test/send.test.ts proves no network request leaves the app.",
       "steps": [
         { "message": "m3" },
-        { "suggest": { "intent": "MON" } },
+        { "suggest": { "intent": "MON", "expect": { "template": "accept_offer", "slot": "2026-11-16T13:00" } } },
         { "approve_reply": { "template": "accept_offer", "slot": "2026-11-16T13:00" } }
       ],
       "slots": {

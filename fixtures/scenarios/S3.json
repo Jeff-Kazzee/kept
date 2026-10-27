@@ -3,6 +3,7 @@
   "title": "User chooses the replacement",
   "calendar": "calendar/dana.ics",
   "messages": [
+    { "ref": "m1" },
     { "ref": "m2" },
     { "ref": "m3" },
     {
@@ -112,6 +113,142 @@
       "conflicts": [],
       "question": null,
       "draft": null
+    }
+  ],
+  "d3": [
+    {
+      "expect": "Dana types I want Monday. The model picks the accept template for Monday 2026-11-16 13:00 and code builds the draft. No slot changes.",
+      "steps": [
+        { "message": "m1" },
+        { "message": "m2" },
+        { "message": "m3" },
+        { "suggest": { "intent": "I want Monday.", "expect": { "template": "accept_offer", "slot": "2026-11-16T13:00" } } }
+      ],
+      "options": [
+        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
+        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
+        { "template": "ask_still_stands", "slot": "2026-11-12T10:30" },
+        { "template": "keep_original", "slot": "2026-11-12T10:30" },
+        { "template": "accept_offer", "slot": "2026-11-13T09:15" },
+        { "template": "decline_offer", "slot": "2026-11-13T09:15" },
+        { "template": "accept_offer", "slot": "2026-11-16T13:00" },
+        { "template": "decline_offer", "slot": "2026-11-16T13:00" }
+      ],
+      "draft": { "template": "accept_offer", "slot": "2026-11-16T13:00", "origin": "model", "edited": false },
+      "suggestion": { "outcome": "valid", "problems": [[]] },
+      "sent": []
+    },
+    {
+      "expect": "Dana says Friday does not work. The model picks the decline template for Friday 2026-11-13 09:15.",
+      "steps": [
+        { "message": "m1" },
+        { "message": "m2" },
+        { "message": "m3" },
+        { "suggest": { "intent": "Friday does not work for me. Please offer another time.", "expect": { "template": "decline_offer", "slot": "2026-11-13T09:15" } } }
+      ],
+      "options": [
+        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
+        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
+        { "template": "ask_still_stands", "slot": "2026-11-12T10:30" },
+        { "template": "keep_original", "slot": "2026-11-12T10:30" },
+        { "template": "accept_offer", "slot": "2026-11-13T09:15" },
+        { "template": "decline_offer", "slot": "2026-11-13T09:15" },
+        { "template": "accept_offer", "slot": "2026-11-16T13:00" },
+        { "template": "decline_offer", "slot": "2026-11-16T13:00" }
+      ],
+      "draft": { "template": "decline_offer", "slot": "2026-11-13T09:15", "origin": "model", "edited": false },
+      "suggestion": { "outcome": "valid", "problems": [[]] },
+      "sent": []
+    },
+    {
+      "expect": "Dana asks whether Thursday is still on. The model picks the question template for Thursday 2026-11-12 10:30.",
+      "steps": [
+        { "message": "m1" },
+        { "message": "m2" },
+        { "message": "m3" },
+        { "suggest": { "intent": "Is my Thursday visit still on?", "expect": { "template": "ask_still_stands", "slot": "2026-11-12T10:30" } } }
+      ],
+      "options": [
+        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
+        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
+        { "template": "ask_still_stands", "slot": "2026-11-12T10:30" },
+        { "template": "keep_original", "slot": "2026-11-12T10:30" },
+        { "template": "accept_offer", "slot": "2026-11-13T09:15" },
+        { "template": "decline_offer", "slot": "2026-11-13T09:15" },
+        { "template": "accept_offer", "slot": "2026-11-16T13:00" },
+        { "template": "decline_offer", "slot": "2026-11-16T13:00" }
+      ],
+      "draft": { "template": "ask_still_stands", "slot": "2026-11-12T10:30", "origin": "model", "edited": false },
+      "suggestion": { "outcome": "valid", "problems": [[]] },
+      "sent": []
+    },
+    {
+      "expect": "Dana wants to keep Thursday. The model picks the keep-the-original template for Thursday 2026-11-12 10:30.",
+      "steps": [
+        { "message": "m1" },
+        { "message": "m2" },
+        { "message": "m3" },
+        { "suggest": { "intent": "I want to keep Thursday.", "expect": { "template": "keep_original", "slot": "2026-11-12T10:30" } } }
+      ],
+      "options": [
+        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
+        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
+        { "template": "ask_still_stands", "slot": "2026-11-12T10:30" },
+        { "template": "keep_original", "slot": "2026-11-12T10:30" },
+        { "template": "accept_offer", "slot": "2026-11-13T09:15" },
+        { "template": "decline_offer", "slot": "2026-11-13T09:15" },
+        { "template": "accept_offer", "slot": "2026-11-16T13:00" },
+        { "template": "decline_offer", "slot": "2026-11-16T13:00" }
+      ],
+      "draft": { "template": "keep_original", "slot": "2026-11-12T10:30", "origin": "model", "edited": false },
+      "suggestion": { "outcome": "valid", "problems": [[]] },
+      "sent": []
+    },
+    {
+      "expect": "The model gives Monday a place and then a time that the case does not state. Code rejects both attempts, and Dana picks the accept template by hand and edits the text, which is labeled as not checked.",
+      "steps": [
+        { "message": "m1" },
+        { "message": "m2" },
+        { "message": "m3" },
+        { "suggest": { "intent": "I want Monday.", "recording": "recordings/faults/reply-field-mismatch.json" } },
+        { "start_reply": { "template": "accept_offer", "slot": "2026-11-16T13:00" } },
+        { "edit_reply": "Hello Lantern Hill Clinic,\n\nI accept the appointment on Monday 11/16 at 1:00 PM. Please confirm it. I can arrive 15 minutes early.\n\nThank you,\nDana Reyes" }
+      ],
+      "options": [
+        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
+        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
+        { "template": "ask_still_stands", "slot": "2026-11-12T10:30" },
+        { "template": "keep_original", "slot": "2026-11-12T10:30" },
+        { "template": "accept_offer", "slot": "2026-11-13T09:15" },
+        { "template": "decline_offer", "slot": "2026-11-13T09:15" },
+        { "template": "accept_offer", "slot": "2026-11-16T13:00" },
+        { "template": "decline_offer", "slot": "2026-11-16T13:00" }
+      ],
+      "draft": { "template": "accept_offer", "slot": "2026-11-16T13:00", "origin": "manual", "edited": true },
+      "suggestion": { "outcome": "manual_needed", "problems": [["field_mismatch"], ["field_mismatch"]] },
+      "sent": []
+    },
+    {
+      "expect": "The first model answer is not JSON. The one retry is valid, and code builds the accept draft for Monday.",
+      "steps": [
+        { "message": "m1" },
+        { "message": "m2" },
+        { "message": "m3" },
+        { "suggest": { "intent": "I want Monday.", "recording": "recordings/faults/reply-not-json.json" } }
+      ],
+      "options": [
+        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
+        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
+        { "template": "ask_still_stands", "slot": "2026-11-12T10:30" },
+        { "template": "keep_original", "slot": "2026-11-12T10:30" },
+        { "template": "accept_offer", "slot": "2026-11-13T09:15" },
+        { "template": "decline_offer", "slot": "2026-11-13T09:15" },
+        { "template": "accept_offer", "slot": "2026-11-16T13:00" },
+        { "template": "decline_offer", "slot": "2026-11-16T13:00" }
+      ],
+      "draft": { "template": "accept_offer", "slot": "2026-11-16T13:00", "origin": "model", "edited": false },
+      "suggestion": { "outcome": "valid", "problems": [["not_json"], []] },
+      "sent": []
     }
   ],
   "later": []

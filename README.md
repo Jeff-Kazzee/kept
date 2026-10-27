@@ -31,8 +31,26 @@ in this repo is synthetic.
 - Each scenario in `fixtures/scenarios/` states its D2 checkpoints, and
   `test/scenarios.test.ts` runs them.
 
-See `docs/decisions/0001-stack.md` for the stack and dependency checks, and
-`docs/decisions/0002-slot-states.md` for the slot rules.
+## D3: reviewed reply
+
+- `src/reply/` holds the four reply templates, the code that checks each
+  template against the slot's state and fills every field from the case,
+  the model call that picks a template and a slot, and the reply commands.
+- The user replies only through a template. Code fills the fields, the UI
+  reads each one back with its source, and approval needs every field
+  ticked. Edited text shows "Edited by you. Not checked."
+- Approval records what the template asserts as user-reported evidence.
+  An accepted slot becomes "Requested · reported by you". Sending is
+  simulated: it writes a local event and the UI shows "Simulated. Nothing
+  was sent." No network call is made.
+- A health question the user types gets a fixed decline that states the
+  app's administrative scope. Nothing is recorded and no model is called.
+- Each scenario in `fixtures/scenarios/` states its D3 checkpoints, and
+  `test/scenarios.test.ts` runs them.
+
+See `docs/decisions/0001-stack.md` for the stack and dependency checks,
+`docs/decisions/0002-slot-states.md` for the slot rules, and
+`docs/decisions/0003-reply-templates.md` for the reply rules.
 
 ## Commands
 
@@ -65,6 +83,14 @@ recorded extraction, so `--d2-only` spends nothing on extraction. The report
 gives the valid-citation rate, rejections by reason, fallbacks, latency p50
 and p95, tokens and estimated cost. The spend limit covers the whole
 command.
+
+Add `--d3` to also run the reply template call over the suggest steps in
+the D3 fixtures, three runs at effort `low` (`--d3-effort` sets it).
+`--d3-only` runs only that call, and with `--d2-only` it runs the D2 and D3
+calls with no extraction. The case states are built with recorded
+extraction. The report gives the valid-template rate, the rate of expected
+picks, rejections by reason, fallbacks to manual entry, latency p50 and
+p95, tokens and estimated cost.
 
 The pass criterion for each effort level is pooled accuracy across its three
 runs of at least 95%, because the criterion is stated over three runs. The
