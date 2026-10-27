@@ -14,6 +14,9 @@ export type ReplyContext = {
   messages: MessageView[];
   // From the case profile. Null leaves the name out of the reply.
   userName: string | null;
+  // Event seq numbers at which the user accepted a claim from an office
+  // message. Used only to say why a draft no longer fits.
+  officeAcceptedSeqs?: number[];
 };
 
 export type DraftProblem = "unknown_slot" | "template_not_valid_for_state" | "missing_field";

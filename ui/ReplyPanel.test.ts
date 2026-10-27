@@ -26,6 +26,7 @@ const draft = {
   claimConfirmation: null,
   valid: true,
   problems: [],
+  invalidNotice: null,
   createdAt: "2026-11-05T09:00:00.000Z",
 } satisfies ReplyView["draft"];
 

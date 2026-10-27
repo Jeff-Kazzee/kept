@@ -53,6 +53,9 @@ export type DraftView = {
   // matches. Approval is refused until a new draft is made.
   valid: boolean;
   problems: string[];
+  // Plain words for why a draft that is not valid no longer fits. Null for
+  // a valid draft.
+  invalidNotice: string | null;
   createdAt: string;
 };
 

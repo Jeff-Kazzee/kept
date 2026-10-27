@@ -123,12 +123,13 @@ function DraftCard({ draft, version, run }: { draft: DraftView; version: number;
         <strong>{draft.title}</strong> for {draft.slotLabel}. {draft.asserts}
       </p>
       {!draft.valid && (
-        <p className="warn">
-          The case changed since this draft was made ({draft.problems.join(", ")}). Discard it and start a new one.
+        <p className="warn" role="status">
+          {draft.invalidNotice} ({draft.problems.join(", ")})
         </p>
       )}
 
       <div className="label">Read back every field before you approve</div>
+      <p>Your ticks are not saved. If you close and reopen the app, the draft and your edit are kept, and you read each field again.</p>
       <table>
         <thead>
           <tr>

@@ -59,8 +59,19 @@ export function claimConfirmation(draft: DraftRecord): string | null {
   }
 }
 
+export const OFFICE_REPLIED_NOTICE = "The office replied. This draft no longer fits. Discard it and start a new one if you still need to reply.";
+export const CASE_CHANGED_NOTICE = "The case changed since this draft was made. This draft no longer fits. Discard it and start a new one.";
+
+// Why a draft no longer fits, in plain words. An office claim accepted after
+// the draft was made means the office replied.
+export function invalidNotice(d: DraftRecord, ctx: ReplyContext, valid: boolean): string | null {
+  if (valid) return null;
+  return (ctx.officeAcceptedSeqs ?? []).some((seq) => seq > d.createdSeq) ? OFFICE_REPLIED_NOTICE : CASE_CHANGED_NOTICE;
+}
+
 function draftView(d: DraftRecord, ctx: ReplyContext): DraftView {
   const def = TEMPLATES[d.template];
+  const validity = draftValidity(d, ctx);
   return {
     id: d.id,
     template: d.template,
@@ -76,7 +87,8 @@ function draftView(d: DraftRecord, ctx: ReplyContext): DraftView {
     text: d.text,
     edited: d.edited,
     claimConfirmation: claimConfirmation(d),
-    ...draftValidity(d, ctx),
+    ...validity,
+    invalidNotice: invalidNotice(d, ctx, validity.valid),
     createdAt: d.createdAt,
   };
 }

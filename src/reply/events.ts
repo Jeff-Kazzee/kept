@@ -83,6 +83,8 @@ export type DraftRecord = {
   edited: boolean;
   status: "open" | "discarded" | "approved";
   createdAt: string;
+  // The event seq of the draft, to order it against evidence decisions.
+  createdSeq: number;
   approval: { text: string; edited: boolean; evidenceIds: string[]; claims: ApprovalClaims; approvedAt: string; sent: boolean } | null;
 };
 
@@ -117,6 +119,7 @@ export function projectReplies(events: StoredEvent[]): ReplyLog {
         edited: false,
         status: "open",
         createdAt: e.recordedAt,
+        createdSeq: e.seq,
         approval: null,
       });
       continue;
