@@ -61,14 +61,14 @@ describe("date and time values", () => {
 
   it("groups each date with its own weekday and time", () => {
     expect(parseMentions("Can you do Friday 11/13 at 9:15 AM or Monday 11/16 at 1:00 PM instead?")).toEqual([
-      { monthDay: "11-13", year: null, weekday: 5, time: "09:15", ambiguousTimes: [] },
-      { monthDay: "11-16", year: null, weekday: 1, time: "13:00", ambiguousTimes: [] },
+      { monthDay: "11-13", year: null, weekday: 5, times: ["09:15"], ambiguousTimes: [] },
+      { monthDay: "11-16", year: null, weekday: 1, times: ["13:00"], ambiguousTimes: [] },
     ]);
     expect(parseMentions("at noon on Nov. 3rd, 2026")).toEqual([
-      { monthDay: "11-03", year: 2026, weekday: null, time: "12:00", ambiguousTimes: [] },
+      { monthDay: "11-03", year: 2026, weekday: null, times: ["12:00"], ambiguousTimes: [] },
     ]);
     expect(parseMentions("They moved me to Monday")).toEqual([
-      { monthDay: null, year: null, weekday: 1, time: null, ambiguousTimes: [] },
+      { monthDay: null, year: null, weekday: 1, times: [], ambiguousTimes: [] },
     ]);
   });
 
@@ -120,6 +120,51 @@ describe("date and time values", () => {
     expect(check(null, null, "Tuesday, November 10 at 2:00 PM", "2026-11-10T15:00:00-07:00")).toEqual([
       "event_time_not_in_quote",
     ]);
+  });
+
+  it("R2-1: allows the next year only when the month and day had passed on arrival", () => {
+    expect(check("2027-11-10", "14:00", "November 10 at 2:00 PM")).toEqual(["date_year_mismatch"]);
+    expect(check("2026-11-10", "14:00", "November 10 at 2:00 PM")).toEqual([]);
+    const late = (date: string) =>
+      checkSlotValues({ date, time: null, event_time: null, quote: "January 5", receivedAt: "2026-12-20T09:00:00-07:00" });
+    expect(late("2027-01-05")).toEqual([]);
+    expect(late("2028-01-05")).toEqual(["date_year_mismatch"]);
+  });
+
+  it("R2-2: holds event times to the same year and weekday rules", () => {
+    const quote = "Tuesday, November 10 at 2:00 PM";
+    expect(check(null, null, quote, "2027-11-10T14:00:00-07:00")).toEqual(["event_time_not_in_quote"]);
+    expect(check(null, null, "November 10 at 2:00 PM", "2027-11-10T14:00:00-07:00")).toEqual(["event_time_not_in_quote"]);
+    expect(check(null, null, "Wednesday, November 10", "2026-11-10")).toEqual(["event_time_not_in_quote"]);
+    expect(check(null, null, quote, "2026-11-10T14:00:00-07:00")).toEqual([]);
+  });
+
+  it("R2-3: links a time to its date across words and sentences", () => {
+    expect(check("2026-11-12", "10:30", "November 12 at our Elm Street office at 10:30 AM")).toEqual([]);
+    expect(check("2026-11-12", "10:30", "Your visit is November 12. Please come at 10:30 AM.")).toEqual([]);
+  });
+
+  it("R2-4: accepts a second time on the same date", () => {
+    expect(check("2026-11-12", "10:30", "November 12 at 9:00 AM or 10:30 AM")).toEqual([]);
+    expect(check("2026-11-12", "09:00", "November 12 at 9:00 AM or 10:30 AM")).toEqual([]);
+  });
+
+  it("R2-3 and R2-4: still rejects a time that belongs to another dated offer", () => {
+    expect(check("2026-11-10", "10:30", M1_TEXT)).toEqual(["time_not_in_quote"]);
+    expect(check("2026-11-10", "10:30", "November 10 at 2:00 PM. Or November 12. Please come at 10:30 AM.")).toEqual([
+      "time_not_in_quote",
+    ]);
+    expect(check("2026-11-10", "14:00", "November 10 at 2:00 PM, Thursday 11/12 at 10:30 AM")).toEqual([]);
+    expect(check("2026-11-12", "14:00", "November 10 at 2:00 PM, Thursday 11/12 at 10:30 AM")).toEqual(["time_not_in_quote"]);
+  });
+
+  it("keeps the round 1 pairings", () => {
+    const received = "2026-11-04T11:40:00-07:00";
+    const at = (date: string, time: string, quote: string) =>
+      checkSlotValues({ date, time, event_time: null, quote, receivedAt: received });
+    expect(at("2026-11-13", "09:15", "11/13 at 9:15 AM")).toEqual([]);
+    expect(at("2026-11-12", "10:30", "Thursday 11/12 10:30 AM")).toEqual([]);
+    expect(at("2026-11-12", "10:30", "November 12 at 10:30 AM")).toEqual([]);
   });
 
   it("rejects a time read from a bare clock value without AM or PM", () => {

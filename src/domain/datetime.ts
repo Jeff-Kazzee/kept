@@ -55,7 +55,7 @@ export type Mention = {
   monthDay: string | null; // "MM-DD"
   year: number | null;
   weekday: number | null;
-  time: string | null; // "HH:MM", stated with AM, PM, noon or in 24-hour form
+  times: string[]; // "HH:MM", stated with AM, PM, noon or in 24-hour form
   ambiguousTimes: string[]; // both readings of a bare "2:00"
 };
 
@@ -133,18 +133,24 @@ function tokenize(quote: string): Token[] {
 
 const ADJACENT = /^[\s,()]*$/;
 const CONNECTIVE = /^[\s,]*(?:on|for)?[\s,]*$/i;
-const NEAR_TIME = /^[^.!?;]{0,15}$/;
 
+// Groups tokens into mentions. A weekday and a date written next to each
+// other form one mention. A time belongs to the latest mention, however far
+// away it is, until a new date or weekday starts another mention. So in
+// "November 12 at 9:00 AM or 10:30 AM" both times belong to November 12,
+// and in "Tuesday at 2:00 PM or Thursday at 10:30 AM" 10:30 belongs only to
+// Thursday. A time before any date starts a mention that a following date
+// joins when only "on" or "for" sits between them.
 export function parseMentions(quote: string): Mention[] {
   const mentions: Mention[] = [];
   let current = null as Mention | null;
   let prevEnd = 0;
   const start = (): Mention => {
-    const m: Mention = { monthDay: null, year: null, weekday: null, time: null, ambiguousTimes: [] };
+    const m: Mention = { monthDay: null, year: null, weekday: null, times: [], ambiguousTimes: [] };
     mentions.push(m);
     return m;
   };
-  const hasTime = (m: Mention) => m.time !== null || m.ambiguousTimes.length > 0;
+  const hasTime = (m: Mention) => m.times.length > 0 || m.ambiguousTimes.length > 0;
 
   for (const t of tokenize(quote)) {
     const gap = quote.slice(prevEnd, t.start);
@@ -153,22 +159,23 @@ export function parseMentions(quote: string): Mention[] {
       const joins: boolean =
         c !== null &&
         c.weekday === null &&
-        ((c.monthDay !== null && ADJACENT.test(gap)) || (c.monthDay === null && hasTime(c) && CONNECTIVE.test(gap)));
+        ((c.monthDay !== null && !hasTime(c) && ADJACENT.test(gap)) ||
+          (c.monthDay === null && hasTime(c) && CONNECTIVE.test(gap)));
       current = joins && c ? c : start();
       current.weekday = t.weekday;
     } else if (t.kind === "date") {
       const joins: boolean =
         c !== null &&
         c.monthDay === null &&
-        ((c.weekday !== null && ADJACENT.test(gap)) || (c.weekday === null && hasTime(c) && CONNECTIVE.test(gap)));
+        ((c.weekday !== null && !hasTime(c) && ADJACENT.test(gap)) ||
+          (c.weekday === null && hasTime(c) && CONNECTIVE.test(gap)));
       current = joins && c ? c : start();
       current.monthDay = t.monthDay;
       current.year = t.year;
     } else {
-      const joins: boolean = c !== null && !hasTime(c) && (c.monthDay !== null || c.weekday !== null) && NEAR_TIME.test(gap);
-      current = joins && c ? c : start();
-      current.time = t.time;
-      current.ambiguousTimes = t.ambiguous;
+      current = c ?? start();
+      if (t.time !== null) current.times.push(t.time);
+      current.ambiguousTimes.push(...t.ambiguous);
     }
     prevEnd = t.end;
   }
@@ -205,6 +212,33 @@ export function checkSlotFormats(input: { date: string | null; time: string | nu
   return issues;
 }
 
+// The year a yearless month and day may resolve to. It is the year the
+// message arrived. The next year is also allowed when that month and day
+// had already passed on arrival, so "January 5" received on 2026-12-20 can
+// mean 2027-01-05.
+function yearAllowed(year: number, monthDay: string, receivedDate: string): boolean {
+  const receivedYear = Number(receivedDate.slice(0, 4));
+  if (year === receivedYear) return true;
+  return year === receivedYear + 1 && monthDay < receivedDate.slice(5);
+}
+
+type DateMatch = { mentions: Mention[]; issue: SlotIssue | null };
+
+// The mentions that state `date` as a month and day, held to the weekday and
+// year rules.
+function explicitMentions(date: string, mentions: Mention[], receivedDate: string): DateMatch | null {
+  const monthDay = date.slice(5);
+  const explicit = mentions.filter((m) => m.monthDay === monthDay);
+  if (explicit.length === 0) return null;
+  const year = Number(date.slice(0, 4));
+  const weekday = weekdayOf(date);
+  const weekdayOk = explicit.filter((m) => m.weekday === null || m.weekday === weekday);
+  const yearOk = weekdayOk.filter((m) => (m.year !== null ? m.year === year : yearAllowed(year, monthDay, receivedDate)));
+  if (weekdayOk.length === 0) return { mentions: [], issue: "weekday_mismatch" };
+  if (yearOk.length === 0) return { mentions: [], issue: "date_year_mismatch" };
+  return { mentions: yearOk, issue: null };
+}
+
 // Checks a claim's date, time and event time against format rules and
 // against the mentions in its quote. `receivedAt` is the message's ISO
 // arrival time. Its first ten characters are the local arrival date.
@@ -218,47 +252,38 @@ export function checkSlotValues(input: {
   const issues = checkSlotFormats(input);
   const mentions = parseMentions(input.quote);
   const receivedDate = input.receivedAt.slice(0, 10);
-  const receivedYear = Number(receivedDate.slice(0, 4));
 
   // The mentions that state the claim's date. The time must come from one
-  // of them.
+  // of them. When the date fails, the time is still checked against every
+  // mention.
   let dateMentions: Mention[] = mentions;
   if (input.date !== null && isValidDate(input.date)) {
-    const monthDay = input.date.slice(5);
-    const year = Number(input.date.slice(0, 4));
-    const weekday = weekdayOf(input.date);
-    const explicit = mentions.filter((m) => m.monthDay === monthDay);
-    if (explicit.length > 0) {
-      const weekdayOk = explicit.filter((m) => m.weekday === null || m.weekday === weekday);
-      const yearOk = weekdayOk.filter((m) =>
-        m.year !== null ? m.year === year : year === receivedYear || year === receivedYear + 1,
-      );
-      if (weekdayOk.length === 0) issues.push("weekday_mismatch");
-      else if (yearOk.length === 0) issues.push("date_year_mismatch");
-      // When the date fails, the time is still checked against every mention.
-      dateMentions = yearOk.length > 0 ? yearOk : mentions;
+    const explicit = explicitMentions(input.date, mentions, receivedDate);
+    if (explicit !== null) {
+      if (explicit.issue) issues.push(explicit.issue);
+      else dateMentions = explicit.mentions;
     } else {
-      const byWeekday = mentions.filter((m) => m.monthDay === null && m.weekday === weekday);
+      const byWeekday = mentions.filter((m) => m.monthDay === null && m.weekday === weekdayOf(input.date!));
       const offset = dayNumber(input.date) - dayNumber(receivedDate);
       if (byWeekday.length === 0) issues.push("date_not_in_quote");
       else if (!isValidDate(receivedDate) || offset < 0 || offset > WEEKDAY_WINDOW_DAYS) issues.push("date_outside_window");
-      dateMentions = issues.length === 0 ? byWeekday : mentions;
+      else dateMentions = byWeekday;
     }
   }
 
   if (input.time !== null && isValidTime(input.time)) {
-    if (!dateMentions.some((m) => m.time === input.time)) {
+    if (!dateMentions.some((m) => m.times.includes(input.time!))) {
       issues.push(dateMentions.some((m) => m.ambiguousTimes.includes(input.time!)) ? "ambiguous_time" : "time_not_in_quote");
     }
   }
 
+  // An event time must name a month and day in the quote, under the same
+  // weekday and year rules as a claim date. A weekday alone is not enough,
+  // because an event time is usually in the past.
   if (input.event_time !== null && isValidEventTime(input.event_time)) {
-    const date = input.event_time.slice(0, 10);
     const time = input.event_time.length > 10 ? input.event_time.slice(11, 16) : null;
-    const stated = mentions.filter(
-      (m) => m.monthDay === date.slice(5) && (m.year === null || m.year === Number(date.slice(0, 4))),
-    );
-    if (stated.length === 0 || (time !== null && !stated.some((m) => m.time === time))) {
+    const explicit = explicitMentions(input.event_time.slice(0, 10), mentions, receivedDate);
+    if (explicit === null || explicit.issue !== null || (time !== null && !explicit.mentions.some((m) => m.times.includes(time)))) {
       issues.push("event_time_not_in_quote");
     }
   }
