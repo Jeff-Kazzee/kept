@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { CLAIM_TYPES, type Channel, type ClaimType, type Effort } from "../src/domain/claim.ts";
+import { CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT, type Channel, type ClaimType, type Effort } from "../src/domain/claim.ts";
 import type { IcsTime } from "../src/domain/ics.ts";
 import type { ConflictKind } from "../src/slots/types.ts";
 import {
@@ -457,7 +457,7 @@ function ConflictCard({ conflict, state, run }: { conflict: ConflictView; state:
 }
 
 function MessageCard({ view, run }: { view: MessageView; run: Run }) {
-  const [effort, setEffort] = useState<Effort>("low");
+  const [effort, setEffort] = useState<Effort>(DEFAULT_EXTRACTION_EFFORT);
   const [manualOpen, setManualOpen] = useState(false);
   const m = view.message;
 
@@ -474,8 +474,8 @@ function MessageCard({ view, run }: { view: MessageView; run: Run }) {
       {view.status === "imported" && (
         <div>
           <select value={effort} onChange={(e) => setEffort(e.target.value as Effort)}>
-            <option value="low">effort low</option>
             <option value="minimal">effort minimal</option>
+            <option value="low">effort low</option>
           </select>
           <button onClick={() => run(() => api.extract(view.id, effort, view.version))}>Extract claims</button>
         </div>

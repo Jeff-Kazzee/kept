@@ -249,7 +249,7 @@ export async function checkFabricatedQuote(message: Message, recording: Recordin
 
 export async function runEval(options: EvalOptions): Promise<EvalReport> {
   const now = options.now ?? (() => new Date().toISOString());
-  const efforts = options.efforts ?? ["low", "minimal"];
+  const efforts = options.efforts ?? ["minimal", "low"];
   const runs = options.runs ?? 3;
   const progress = options.onProgress ?? (() => {});
   const guarded = new GuardedClient(options.client, options.maxUsd);

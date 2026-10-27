@@ -15,6 +15,11 @@ export type SenderKind = z.infer<typeof SenderKind>;
 export const Effort = z.enum(["minimal", "low"]);
 export type Effort = z.infer<typeof Effort>;
 
+// Jeff chose effort minimal for extraction on 2026-10-27. Sprint 2 measured
+// both levels at 100% across three runs, and minimal was about twice as
+// fast. Effort low stays available by option.
+export const DEFAULT_EXTRACTION_EFFORT: Effort = "minimal";
+
 // Claim types that only a user answer creates. The model can never return
 // them, because the extraction schema lists CLAIM_TYPES only.
 //   request  the user chose this slot (rule 2)

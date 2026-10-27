@@ -60,6 +60,13 @@ describe("local API", () => {
     expect((await api({ method: "POST", path: `/api/evidence/${id}/reject`, body: { expectedVersion: 1 } })).status).toBe(409);
   });
 
+  it("extracts at effort minimal when the body names no effort", async () => {
+    const api = setup();
+    await api({ method: "POST", path: "/api/messages", body: M1 });
+    const extracted = await api({ method: "POST", path: "/api/messages/m1/extract", body: { expectedVersion: 1 } });
+    expect(extracted.body).toMatchObject({ message: { attempts: [{ effort: "minimal" }] } });
+  });
+
   it("assigns an id to pasted messages and validates bodies", async () => {
     const api = setup();
     const { id: _id, ...pasted } = M1;

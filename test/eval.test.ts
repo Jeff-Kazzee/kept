@@ -118,13 +118,13 @@ describe("eval:live logic against the recorded client", () => {
         recording: readRecording(fromPackage("fixtures/recordings/faults/s8-offer-fabricated.json")),
       },
     });
-    const low = report.perEffort[0]!;
+    const low = report.perEffort.find((e) => e.effort === "low")!;
     expect(low.runs.map((r) => r.matched)).toEqual([17, 17, 16]);
     expect(low.totals.accuracy).toBeCloseTo(50 / 51);
     expect(low.meetsTarget).toBe(true);
     expect(low.minRunAccuracy).toBeCloseTo(16 / 17);
     expect(low.everyRunMeetsTarget).toBe(false);
-    expect(report.perEffort[1]!.everyRunMeetsTarget).toBe(true);
+    expect(report.perEffort.find((e) => e.effort === "minimal")!.everyRunMeetsTarget).toBe(true);
   });
 
   it("runs both effort levels three times and writes a full report", async () => {
@@ -137,7 +137,7 @@ describe("eval:live logic against the recorded client", () => {
     });
     expect(code).toBe(0);
     const report = JSON.parse(readFileSync(out, "utf8")) as EvalReport;
-    expect(report.perEffort.map((e) => e.effort)).toEqual(["low", "minimal"]);
+    expect(report.perEffort.map((e) => e.effort)).toEqual(["minimal", "low"]);
     for (const e of report.perEffort) {
       expect(e.runs.map((r) => r.run)).toEqual([1, 2, 3]);
       expect(e.totals.accuracy).toBe(1);
@@ -162,7 +162,7 @@ describe("eval:live logic against the recorded client", () => {
 
   it("stops before a call once the spend estimate reaches the limit", async () => {
     const out = path.join(tempDir(), "report.json");
-    const code = await main(["--max-usd", "0.004", "--out", out], { MODEL_API_KEY: KEY }, {
+    const code = await main(["--max-usd", "0.002", "--out", out], { MODEL_API_KEY: KEY }, {
       createClient: () => RecordedModelClient.fromDirectory(),
       log: () => {},
     });
@@ -229,7 +229,7 @@ describe("SP2.16 eval:live for the explanation and question calls", () => {
     const code = await main(["--d2", "--out", out], { MODEL_API_KEY: KEY }, { createClient: recordedClient, log: () => {} });
     expect(code).toBe(0);
     const report = JSON.parse(readFileSync(out, "utf8")) as EvalReport & { d2: ConflictEvalReport };
-    expect(report.perEffort.map((e) => e.effort)).toEqual(["low", "minimal"]);
+    expect(report.perEffort.map((e) => e.effort)).toEqual(["minimal", "low"]);
     expect(report.d2.explanation.calls).toBe(18);
     expect(report.d2.maxUsd).toBeCloseTo(5 - report.costUsdTotal);
   });

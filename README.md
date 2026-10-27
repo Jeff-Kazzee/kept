@@ -54,8 +54,9 @@ Live evaluation (needs `MODEL_API_KEY`):
 pnpm eval:live --max-usd 5 --out eval-results/run.json
 ```
 
-It runs every fixture message three times at reasoning effort `low` and
-three times at `minimal`, and writes a JSON report.
+It runs every fixture message three times at reasoning effort `minimal`
+and three times at `low`, and writes a JSON report. The app extracts at
+`minimal` by default. `low` stays available in the UI and the API.
 
 Add `--d2` to also run the explanation and question calls over the conflict
 states in the D2 fixtures, three runs at effort `low` (`--d2-effort` sets

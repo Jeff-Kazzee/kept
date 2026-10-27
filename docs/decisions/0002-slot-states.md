@@ -1,10 +1,11 @@
 # 0002: Slot states and conflict resolution
 
-Status: proposed, pending Jeff, 2026-10-27
+Status: proposed, pending Jeff, 2026-10-27. W19, W20 and D-f were accepted
+by Jeff on 2026-10-27.
 
 This records how accepted evidence becomes slot states, how conflicts are
 raised and asked about, and how model output is checked. Items marked D-a to
-D-h were set for sprint 2 and wait for Jeff's review. Items marked W were
+D-h were set for sprint 2 and wait for Jeff's review unless marked accepted. Items marked W were
 chosen while building sprint 2 where the rules left a case open. Each W item
 is the narrowest choice found that keeps rules 1 to 7 true.
 
@@ -21,7 +22,7 @@ calls and checks), `src/case/` (calendar, question queue, answers).
   "Thursday, November 12" with no time, and joins Thursday 11/12 10:30 AM.
 - W2. A claim with no date is not placed on any slot. Office requests are not
   slot claims.
-- D-f. A date that comes only from a weekday in the quote ("Monday") is
+- D-f (accepted by Jeff 2026-10-27). A date that comes only from a weekday in the quote ("Monday") is
   checked against the 14-day window. Every weekday matches at least two dates
   in that window, so such a claim always raises an `ambiguous_date` conflict
   and is left out until the user picks a date. Only model-extracted claims are
@@ -157,7 +158,7 @@ Column: what the next claim says.
 
 ## Places
 
-- W19. Messages describe one place in different words. Two places agree when
+- W19 (accepted by Jeff 2026-10-27). Messages describe one place in different words. Two places agree when
   the distinctive words of one all appear in the other. Generic words
   ("our", "the", "office", "clinic", "location", "building") are not
   distinctive. So "Elm Street office" (m1) agrees with "Lantern Hill Clinic,
@@ -171,7 +172,7 @@ Column: what the next claim says.
 
 ## Incomplete slots (S7)
 
-- W20. A held slot without a time or without a place is incomplete. Offered
+- W20 (accepted by Jeff 2026-10-27). A held slot without a time or without a place is incomplete. Offered
   and requested slots are not checked, because offers often omit the place.
   In S5, Monday is confirmed by the user's report with no place, so the app
   asks for it.
@@ -252,7 +253,8 @@ Column: what the next claim says.
   day, M/D, ISO dates, weekdays and clock times. Relative words such as
   "tomorrow" or "the 12th" are not read, so they are not checked.
 - D-h. The new calls use reasoning effort `low` by default, set by an
-  option. The extraction default is unchanged.
+  option. Extraction defaults to effort `minimal` since Jeff's decision of
+  2026-10-27. Effort `low` stays available by option.
 - W29. The model receives the conflict summary written by code, and for
   each evidence item its ID, claim type, source, sender kind, times, slot
   values and quote. For an answer item the quote is the label the user

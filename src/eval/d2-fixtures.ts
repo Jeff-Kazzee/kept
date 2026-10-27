@@ -4,6 +4,7 @@
 // conflict evaluation, which needs the conflict states without spending
 // model calls to reach them.
 import { CaseService } from "../case/service.ts";
+import { DEFAULT_EXTRACTION_EFFORT } from "../domain/claim.ts";
 import { readFixtureText } from "../fixtures/load.ts";
 import type { D2Checkpoint, ResolvedScenario } from "../fixtures/schema.ts";
 import { IntakeService } from "../intake/service.ts";
@@ -28,7 +29,7 @@ export async function replayCheckpoint(
       const message = scenario.messages.find((m) => m.id === step.message)!;
       const { expected: _expected, ...input } = message;
       const imported = intake.importMessage(input);
-      const { evidence } = await intake.extract(message.id, { effort: "low", expectedVersion: imported.version });
+      const { evidence } = await intake.extract(message.id, { effort: DEFAULT_EXTRACTION_EFFORT, expectedVersion: imported.version });
       for (const e of evidence) intake.accept(e.id, e.version);
       continue;
     }

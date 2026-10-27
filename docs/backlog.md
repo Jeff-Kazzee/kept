@@ -54,7 +54,9 @@ tier. Read-only MCP is the floor.
 
 ## Carried over from sprint 1
 
-- [ ] Choose the extraction effort level (`low` or `minimal`) for the demo.
+- [x] Choose the extraction effort level (`low` or `minimal`) for the demo.
+  Jeff chose `minimal` on 2026-10-27. Sprint 3 made it the default in the
+  app and runs it first in `eval:live`.
   Sprint 1 measured `low` at 100% and `minimal` at 98% with one run at 94.1%.
   `minimal` was about twice as fast. This is Jeff's decision. Sprint 2
   measured both at 100% across three runs, with `minimal` at p50 1.6 s

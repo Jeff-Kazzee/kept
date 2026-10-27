@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { CaseService } from "../src/case/service.ts";
-import { Channel, Effort } from "../src/domain/claim.ts";
+import { Channel, DEFAULT_EXTRACTION_EFFORT, Effort } from "../src/domain/claim.ts";
 import { loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
 import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } from "../src/intake/service.ts";
 import { StaleEditError } from "../src/store/event-log.ts";
@@ -21,7 +21,7 @@ const PastedMessage = z
   })
   .strict();
 
-const ExtractBody = z.object({ effort: Effort.default("low"), expectedVersion: z.number().int().nonnegative() }).strict();
+const ExtractBody = z.object({ effort: Effort.default(DEFAULT_EXTRACTION_EFFORT), expectedVersion: z.number().int().nonnegative() }).strict();
 const ReviewBody = z.object({ expectedVersion: z.number().int().nonnegative() }).strict();
 const ManualBody = z.object({ expectedVersion: z.number().int().nonnegative(), claim: ManualClaimInput }).strict();
 const CalendarBody = z
