@@ -185,6 +185,57 @@ describe("SP2.6 rules 4 and 5: event order", () => {
     ]);
   });
 
+  it("review R1-1: chooses no winner between two claims that both have unknown times", () => {
+    const cancel = ev("x", "cancel", THU.date, THU.time, "2026-11-02T09:00:00-07:00", { sender_kind: "unknown" });
+    const reconfirm = ev("y", "confirm", THU.date, THU.time, "2026-11-03T09:00:00-07:00", { sender_kind: "unknown" });
+    for (const order of [[cancel, reconfirm], [reconfirm, cancel]]) {
+      const p = project(...order);
+      expect(p.slots).toEqual([]);
+      expect(p.conflicts.map((c) => [c.id, c.kind, c.evidenceIds])).toEqual([["unknown-order-20261112-1030", "unknown_order", ["x", "y"]]]);
+      expect(p.conflicts[0]!.summary).toBe(
+        "Sources disagree about Thursday 11/12 10:30 AM, and none of them has a known time. Code does not choose between them, so the slot has no state until you answer.",
+      );
+      expect(p.conflicts[0]!.choices.map((c) => [c.label, c.settles])).toEqual([
+        ["Thursday 11/12 10:30 AM is confirmed", ["x", "y"]],
+        ["Thursday 11/12 10:30 AM is canceled", ["x", "y"]],
+        ["Not sure yet", []],
+      ]);
+    }
+    const reported = ev("ans", "confirm", THU.date, THU.time, T3, { ...user, origin: "answer", answer: answer({ after: "2026-11-03T09:00:00-07:00" }) });
+    const settled = projectSlots({ evidence: [cancel, reconfirm, reported], settled: new Set(["x", "y"]) });
+    expect(settled.slots.map((s) => s.stateLabel)).toEqual(["Confirmed · reported by you"]);
+    expect(disagreements(settled)).toEqual([]);
+  });
+
+  it("review R1-1: applies unknown-time claims that agree in every order", () => {
+    const a = ev("x", "confirm", THU.date, THU.time, T1, { sender_kind: "unknown" });
+    const b = ev("y", "reminder", THU.date, THU.time, T2, { sender_kind: "automated" });
+    const p = project(a, b);
+    expect(p.slots.map((s) => s.state)).toEqual(["confirmed"]);
+    expect(disagreements(p)).toEqual([]);
+  });
+
+  it("review R1-1: judges several unknown claims together against the known state", () => {
+    // Known offer. Unknown confirm and unknown cancel: neither is applied.
+    const p = project(
+      ev("k", "offer", THU.date, THU.time, T1),
+      ev("x", "confirm", THU.date, THU.time, T2, { sender_kind: "unknown" }),
+      ev("y", "cancel", THU.date, THU.time, T3, { sender_kind: "unknown" }),
+    );
+    expect(p.slots.map((s) => s.stateLabel)).toEqual(["Offered · office message"]);
+    expect(disagreements(p).map((c) => [c.evidenceIds, c.choices.map((ch) => ch.id)])).toEqual([
+      [["k", "x", "y"], ["status:offered", "status:confirmed", "status:canceled", "unsure"]],
+    ]);
+    // Known confirm. An unknown re-offer cannot change it and is kept. The unknown cancel is left out.
+    const q = project(
+      ev("k", "confirm", THU.date, THU.time, T1),
+      ev("x", "offer", THU.date, THU.time, T2, { sender_kind: "unknown" }),
+      ev("y", "cancel", THU.date, THU.time, T3, { sender_kind: "unknown" }),
+    );
+    expect(q.slots.map((s) => s.state)).toEqual(["confirmed"]);
+    expect(disagreements(q).map((c) => c.evidenceIds)).toEqual([["k", "y"]]);
+  });
+
   it("raises no conflict when the unknown time would not change the result", () => {
     const p = project(confirm, ev("b", "offer", THU.date, THU.time, T2, { sender_kind: "unknown" }));
     expect(p.slots[0]!.state).toBe("confirmed");

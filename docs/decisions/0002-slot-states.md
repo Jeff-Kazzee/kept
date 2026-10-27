@@ -83,15 +83,21 @@ Column: what the next claim says.
 
 ## Unknown order (rule 5)
 
-- W9. Claims with a known event time are applied first. Each claim with an
-  unknown time is tried at every position in that sequence. If every position
-  gives the same status, it is applied. If not, the slot keeps the status
-  from the known claims, the claim is left out, and an `unknown_order`
-  conflict shows both sources. Two disagreeing claims at the same instant are
-  treated the same way.
+- W9. Claims with a known event time are applied first. The claims with an
+  unknown time are then judged together: code places them at every position
+  in that sequence, in every order. If every placement gives the same
+  status, they are applied. If not, code keeps only the unknown claims that
+  cannot change the state from the known claims on their own, leaves the
+  rest out, and raises one `unknown_order` conflict for the slot that shows
+  the known source and every claim left out. With no known claim, code keeps
+  none of them, so it never picks one unknown claim over another. The slot
+  then has no state until the user answers. Two disagreeing claims at the
+  same instant are treated as claims with an unknown time. Above four
+  unknown claims on one slot, code over-estimates the possible statuses,
+  which can only raise more conflicts.
 - W10. An answer to an `unknown_order` conflict records the chosen status as
-  a user report and settles the claim with the unknown time, so it no longer
-  raises the conflict.
+  a user report and settles every claim that was left out, so they no
+  longer raise the conflict.
 
 ## Possibly stale reminders (rule 6)
 

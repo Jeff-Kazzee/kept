@@ -122,9 +122,12 @@ type Folded = SlotDraft & {
   latest: EvidenceView | null; // null when the hold is implied by a move
   moves: EvidenceView[];
   stale: EvidenceView[];
-  // Evidence left out of the state because its position is unknown.
-  floating: EvidenceView[];
 };
+
+// Claims with an unknown time that code left out, the claim with a known
+// time that set the slot's state (null when none did), and every status
+// the claims could give in some order.
+type Unordered = { floating: EvidenceView[]; against: EvidenceView | null; statuses: SlotStatus[] };
 
 const label = (s: { date: string; time: string | null }) => slotLabel(s.date, s.time);
 
@@ -140,7 +143,35 @@ function makeConflict(c: Omit<Conflict, "askable">): Conflict {
   return { ...c, askable: c.choices.some((ch) => ch.id !== UNSURE.id) };
 }
 
-function foldSlot(draft: SlotDraft, settled: ReadonlySet<string>): Folded | null {
+// Every status the known sequence can end in once the unknown claims are
+// placed at every possible position, in every relative order. Inserting
+// the claims one by one at every position covers each order once. Above
+// MAX_ENUMERATED claims the result is an over-estimate: the status each
+// claim gives alone, plus every status the claims assert.
+const MAX_ENUMERATED = 4;
+
+function outcomesOf(base: Assertion[], unknown: Assertion[]): Set<SlotStatus> {
+  const out = new Set<SlotStatus>();
+  if (unknown.length > MAX_ENUMERATED) {
+    for (const u of unknown) {
+      for (const s of outcomesOf(base, [u])) out.add(s);
+      out.add(u.status);
+    }
+    return out;
+  }
+  const place = (seq: Assertion[], i: number) => {
+    if (i === unknown.length) {
+      const r = run(seq);
+      if (r) out.add(r.status);
+      return;
+    }
+    for (let at = 0; at <= seq.length; at++) place([...seq.slice(0, at), unknown[i]!, ...seq.slice(at)], i + 1);
+  };
+  place(base, 0);
+  return out;
+}
+
+function foldSlot(draft: SlotDraft, settled: ReadonlySet<string>): { folded: Folded | null; unordered: Unordered | null } {
   const moves = draft.items.filter((e) => e.claim.claim_type === "move").sort(byArrival);
   const assertions: Assertion[] = draft.items
     .filter((e) => STATUS_OF[e.claim.claim_type] !== undefined)
@@ -159,7 +190,7 @@ function foldSlot(draft: SlotDraft, settled: ReadonlySet<string>): Folded | null
   const unknown = assertions.filter((a) => a.time === null);
   // Two claims at the same instant that disagree have no order, so the
   // second is handled like a claim with an unknown time.
-  let base: Assertion[] = [];
+  const base: Assertion[] = [];
   for (const a of known) {
     const last = base.at(-1);
     if (last && last.time === a.time && last.status !== a.status) unknown.push(a);
@@ -167,35 +198,48 @@ function foldSlot(draft: SlotDraft, settled: ReadonlySet<string>): Folded | null
   }
   unknown.sort((a, b) => byArrival(a.ev, b.ev));
 
+  // Rule 6: with a state from claims with known times, an automated
+  // reminder with an unknown time never changes it. One that disagrees is
+  // possibly stale.
+  const knownRun = run(base);
   const stale: EvidenceView[] = [];
-  const floating: EvidenceView[] = [];
-  for (const u of unknown) {
-    const current = run(base);
-    if (current === null) {
-      base = [u];
-      continue;
-    }
-    if (u.automatedReminder) {
-      if (current.status !== "confirmed") stale.push(u.ev);
-      continue;
-    }
-    const outcomes = new Set<SlotStatus>();
-    for (let i = 0; i <= base.length; i++) outcomes.add(run([...base.slice(0, i), u, ...base.slice(i)])!.status);
-    if (outcomes.size === 1) {
-      const at = base.findIndex((b) => byArrival(u.ev, b.ev) < 0);
-      base = at === -1 ? [...base, u] : [...base.slice(0, at), u, ...base.slice(at)];
-    } else {
-      floating.push(u.ev);
-    }
+  let rest = unknown;
+  if (knownRun) {
+    for (const u of unknown) if (u.automatedReminder && knownRun.status !== "confirmed") stale.push(u.ev);
+    rest = unknown.filter((u) => !u.automatedReminder);
   }
 
-  const result = run(base);
+  // Rules 4 and 5: the unknown claims are applied only if no order of them
+  // changes the result. Otherwise code keeps only the claims that cannot
+  // change the state from the known claims on their own, and leaves the
+  // rest out. With no known claim, nothing is kept, so code never picks
+  // one unknown claim over another.
+  let kept = rest;
+  let unordered: Unordered | null = null;
+  const all = outcomesOf(base, rest);
+  if (all.size > 1) {
+    kept = knownRun ? rest.filter((u) => { const o = outcomesOf(base, [u]); return o.size === 1 && o.has(knownRun.status); }) : [];
+    if (outcomesOf(base, kept).size > 1) kept = [];
+    const floating = rest.filter((u) => !kept.includes(u));
+    const statuses = new Set(outcomesOf(base, floating));
+    if (knownRun) statuses.add(knownRun.status);
+    unordered = { floating: floating.map((u) => u.ev), against: knownRun?.by.ev ?? null, statuses: [...statuses] };
+  }
+
+  // Kept claims cannot change the status in any position, so they go in
+  // arrival order.
+  const seq = [...base];
+  for (const u of kept) {
+    const at = seq.findIndex((b) => byArrival(u.ev, b.ev) < 0);
+    seq.splice(at === -1 ? seq.length : at, 0, u);
+  }
+  const result = run(seq);
   if (result === null) {
     // A move with no other claim still says the office holds the slot.
-    if (moves.length === 0) return null;
-    return { ...draft, status: "confirmed", by: moves[0]!, latest: null, moves, stale, floating };
+    if (moves.length === 0 || unordered) return { folded: null, unordered };
+    return { folded: { ...draft, status: "confirmed", by: moves[0]!, latest: null, moves, stale }, unordered };
   }
-  return { ...draft, status: result.status, by: result.by.ev, latest: result.latest.ev, moves, stale, floating };
+  return { folded: { ...draft, status: result.status, by: result.by.ev, latest: result.latest.ev, moves, stale }, unordered };
 }
 
 export function projectSlots(input: ProjectionInput): Projection {
@@ -244,10 +288,10 @@ export function projectSlots(input: ProjectionInput): Projection {
   // Step 2: fold each slot.
   const folded: Folded[] = [];
   for (const draft of [...timed.values(), ...untimed.values()]) {
-    const f = foldSlot(draft, settled);
+    const { folded: f, unordered } = foldSlot(draft, settled);
+    if (unordered) conflicts.push(unknownOrderConflict(draft, unordered));
     if (f === null) continue;
     folded.push(f);
-    for (const ev of f.floating) conflicts.push(unknownOrderConflict(f, ev));
     if (f.stale.length > 0) conflicts.push(staleConflict(f));
   }
 
@@ -374,22 +418,25 @@ function ambiguousConflict(ev: EvidenceView, options: Array<{ date: string; time
   });
 }
 
-function unknownOrderConflict(f: Folded, ev: EvidenceView): Conflict {
-  const theirs = STATUS_OF[ev.claim.claim_type]!;
-  const statuses = [...new Set<SlotStatus>([f.status, theirs])];
+function unknownOrderConflict(slot: SlotDraft, u: Unordered): Conflict {
+  const floating = u.floating.map((e) => e.id);
+  const order: SlotStatus[] = ["offered", "requested", "confirmed", "canceled", "declined"];
+  const statuses = order.filter((s) => u.statuses.includes(s));
   return makeConflict({
-    id: `${conflictId("unknown_order", [f.key])}-${ev.id}`,
+    id: conflictId("unknown_order", [slot.key]),
     kind: "unknown_order",
-    slotKeys: [f.key],
-    evidenceIds: [f.by.id, ev.id],
-    summary: `Two sources disagree about ${label(f)}, and the time of one of them is unknown. The slot keeps the state from the source with a known time.`,
-    fixedQuestion: `Two messages disagree about ${label(f)}. Which is true now?`,
+    slotKeys: [slot.key],
+    evidenceIds: u.against ? [u.against.id, ...floating] : floating,
+    summary: u.against
+      ? `Sources disagree about ${label(slot)}, and the time of at least one of them is unknown. The slot keeps the state from the source with a known time.`
+      : `Sources disagree about ${label(slot)}, and none of them has a known time. Code does not choose between them, so the slot has no state until you answer.`,
+    fixedQuestion: `Sources disagree about ${label(slot)}. Which is true now?`,
     choices: [
       ...statuses.map((s) => ({
         id: `status:${s}`,
-        label: `${label(f)} is ${STATUS_WORD[s]}`,
-        effects: [effect(CLAIM_FOR_STATUS[s], f)],
-        settles: [ev.id],
+        label: `${label(slot)} is ${STATUS_WORD[s]}`,
+        effects: [effect(CLAIM_FOR_STATUS[s], slot)],
+        settles: floating,
       })),
       UNSURE,
     ],
