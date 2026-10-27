@@ -5,7 +5,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { OFFICE_REPLIED_NOTICE } from "../src/reply/view.ts";
+import { OFFICE_REPLIED_NOTICE } from "../src/reply/templates.ts";
 import type { ReplyView } from "../src/reply/types.ts";
 import { ChecklistPanel, DeleteCasePanel, HistoryPanel } from "./App.tsx";
 import { ReplyPanel } from "./ReplyPanel.tsx";

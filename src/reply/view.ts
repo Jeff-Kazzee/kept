@@ -4,7 +4,9 @@
 // approved.
 import { buildDraft, replyOptions, sameFields, type ReplyContext } from "./draft.ts";
 import { openDraft, type DraftRecord, type ReplyLog } from "./events.ts";
-import { TEMPLATES } from "./templates.ts";
+import { CASE_CHANGED_NOTICE, OFFICE_REPLIED_NOTICE, TEMPLATES } from "./templates.ts";
+
+export { CASE_CHANGED_NOTICE, OFFICE_REPLIED_NOTICE };
 import type { DraftView, ReplyView, SentView, SuggestionView } from "./types.ts";
 
 export function draftValidity(draft: DraftRecord, ctx: ReplyContext): { valid: boolean; problems: string[] } {
@@ -58,9 +60,6 @@ export function claimConfirmation(draft: DraftRecord): string | null {
       return `This reply still keeps ${draft.slotLabel} and declines ${declined}`;
   }
 }
-
-export const OFFICE_REPLIED_NOTICE = "The office replied. This draft no longer fits. Discard it and start a new one if you still need to reply.";
-export const CASE_CHANGED_NOTICE = "The case changed since this draft was made. This draft no longer fits. Discard it and start a new one.";
 
 // Why a draft no longer fits, in plain words. An office claim accepted after
 // the draft was made means the office replied.

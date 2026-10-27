@@ -13,6 +13,9 @@ export type TemplateId = (typeof TEMPLATE_IDS)[number];
 // the same words.
 export const EDITED_LABEL = "Edited by you. Not checked.";
 export const SIMULATED_SEND_LABEL = "Simulated. Nothing was sent.";
+// Why an open draft no longer fits the case.
+export const OFFICE_REPLIED_NOTICE = "The office replied. This draft no longer fits. Discard it and start a new one if you still need to reply.";
+export const CASE_CHANGED_NOTICE = "The case changed since this draft was made. This draft no longer fits. Discard it and start a new one.";
 
 export const FIELD_NAMES = ["office_name", "date", "time", "location", "declined_slots", "user_name"] as const;
 export type FieldName = (typeof FIELD_NAMES)[number];
