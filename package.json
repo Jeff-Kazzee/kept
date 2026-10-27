@@ -1,0 +1,7 @@
+{
+  "name": "meta-hackathon-appointments",
+  "private": true,
+  "devDependencies": {
+    "varlock": "1.17.1"
+  }
+}
