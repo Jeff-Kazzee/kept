@@ -89,28 +89,28 @@ Tasks:
   you", "reported by you through <grant name>".
 - [x] SP2.3 Rule 1: only office evidence or a user report moves a confirmed
   slot to canceled.
-- [ ] SP2.4 Rule 2 and S3: the user chooses a replacement. This records a
+- [x] SP2.4 Rule 2 and S3: the user chooses a replacement. This records a
   request on the replacement and leaves the original unchanged.
-- [ ] SP2.5 Rule 3 and S4: a confirmation of the replacement releases the
+- [x] SP2.5 Rule 3 and S4: a confirmation of the replacement releases the
   original only when the evidence says it was moved or canceled. Otherwise
   both stay held and the app asks which one stands.
 - [x] SP2.6 Rules 4 and 5: when both event times are known, the later event
   wins. When either is unknown, raise a conflict instead of choosing.
-- [ ] SP2.7 Rule 6 and S6: an automated reminder with an unknown event time
+- [x] SP2.7 Rule 6 and S6: an automated reminder with an unknown event time
   that contradicts a later confirmed or reported event is marked possibly
   stale. Ask once. No state change.
 - [x] SP2.8 S5: a user report ("They moved me to Monday") confirms Monday and
   cancels Thursday, both labeled "reported by you".
-- [ ] SP2.9 S7: an incomplete slot (date without time or location) is marked
+- [x] SP2.9 S7: an incomplete slot (date without time or location) is marked
   incomplete and produces a question for the missing detail.
 - [x] SP2.10 Calendar clash detection against the loaded `.ics` file for
   offered and requested slots.
-- [ ] SP2.11 Question queue: one open question at a time. The answer is
+- [x] SP2.11 Question queue: one open question at a time. The answer is
   recorded as user-reported evidence and goes through review.
-- [ ] SP2.12 Model call: discrepancy explanation that cites evidence IDs.
+- [x] SP2.12 Model call: discrepancy explanation that cites evidence IDs.
   Code rejects an explanation that cites an unknown ID. One retry, then the
   conflict shows with its quotes and no explanation (proposed).
-- [ ] SP2.13 Model call: propose the next clarifying question. Code
+- [x] SP2.13 Model call: propose the next clarifying question. Code
   validates it against the open conflicts and asks it through the question
   queue. One retry, then a fixed wording for that conflict (proposed).
 - [ ] SP2.14 Conflict view in the UI: both sources, their quotes, the state
