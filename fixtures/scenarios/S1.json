@@ -1,0 +1,9 @@
+{
+  "id": "S1",
+  "title": "Offer, then office confirmation",
+  "calendar": "calendar/dana.ics",
+  "messages": [{ "ref": "m1" }, { "ref": "m2" }],
+  "later": [
+    { "deliverable": "D2", "expect": "Thursday 2026-11-12 10:30 is Confirmed · office message. Tuesday 2026-11-10 14:00 stays offered." }
+  ]
+}

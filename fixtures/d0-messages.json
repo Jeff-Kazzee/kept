@@ -6,8 +6,8 @@
     "received_at": "2026-10-30T15:04:00-06:00",
     "text": "Lantern Hill Clinic: Hi Dana, we can see you Tuesday, November 10 at 2:00 PM or Thursday, November 12 at 10:30 AM at our Elm Street office. Reply 1 or 2.",
     "expected": [
-      { "claim_type": "offer", "date": "2026-11-10", "time": "14:00" },
-      { "claim_type": "offer", "date": "2026-11-12", "time": "10:30" }
+      { "claim_type": "offer", "date": "2026-11-10", "time": "14:00", "location": "Elm Street office" },
+      { "claim_type": "offer", "date": "2026-11-12", "time": "10:30", "location": "Elm Street office" }
     ]
   },
   {
@@ -17,9 +17,9 @@
     "received_at": "2026-10-31T09:12:00-06:00",
     "text": "Hi Dana,\n\nThis confirms your appointment on Thursday, November 12 at 10:30 AM at Lantern Hill Clinic, 400 Elm Street, Suite 2. Please bring your new insurance card and arrive 15 minutes early.\n\nFront Desk\nLantern Hill Clinic",
     "expected": [
-      { "claim_type": "confirm", "date": "2026-11-12", "time": "10:30" },
-      { "claim_type": "office_request" },
-      { "claim_type": "office_request" }
+      { "claim_type": "confirm", "date": "2026-11-12", "time": "10:30", "location": "400 Elm Street, Suite 2" },
+      { "claim_type": "office_request", "request_item": "new insurance card" },
+      { "claim_type": "office_request", "request_item": "arrive 15 minutes early" }
     ]
   },
   {

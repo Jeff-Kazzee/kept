@@ -1,0 +1,21 @@
+{
+  "id": "S7",
+  "title": "Confirmation with a date but no time or location",
+  "calendar": "calendar/dana.ics",
+  "messages": [
+    {
+      "id": "s7-confirm",
+      "channel": "email",
+      "from": "Front Desk, Lantern Hill Clinic",
+      "received_at": "2026-11-06T14:00:00-07:00",
+      "text": "Hi Dana,\n\nYour visit on November 16 is confirmed. We will send the details soon.\n\nFront Desk\nLantern Hill Clinic",
+      "expected": [
+        { "claim_type": "confirm", "date": "2026-11-16", "time": null, "location": null }
+      ]
+    }
+  ],
+  "later": [
+    { "deliverable": "D2", "expect": "The slot is incomplete. The app asks for the missing time and location." },
+    { "deliverable": "unassigned", "expect": "The app offers no reply template that needs the missing time or location." }
+  ]
+}

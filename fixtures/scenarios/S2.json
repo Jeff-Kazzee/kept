@@ -1,0 +1,21 @@
+{
+  "id": "S2",
+  "title": "Confirmed slot, then an office offer of a different slot",
+  "calendar": "calendar/dana.ics",
+  "messages": [
+    { "ref": "m2" },
+    {
+      "id": "s2-offer",
+      "channel": "sms",
+      "from": "Lantern Hill Clinic",
+      "received_at": "2026-11-02T08:30:00-07:00",
+      "text": "Lantern Hill Clinic: An earlier time opened up on Wednesday, November 11 at 3:00 PM at our Elm Street office. Reply YES to take it.",
+      "expected": [
+        { "claim_type": "offer", "date": "2026-11-11", "time": "15:00", "location": "Elm Street office" }
+      ]
+    }
+  ],
+  "later": [
+    { "deliverable": "D2", "expect": "Thursday 2026-11-12 10:30 is change proposed. Wednesday 2026-11-11 15:00 is offered." }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "S3",
+  "title": "User chooses the replacement",
+  "calendar": "calendar/dana.ics",
+  "messages": [
+    { "ref": "m2" },
+    { "ref": "m3" },
+    {
+      "id": "m4",
+      "channel": "email",
+      "from": "Front Desk, Lantern Hill Clinic",
+      "received_at": "2026-11-05T10:02:00-07:00",
+      "text": "Hi Dana,\n\nThis confirms your appointment on Monday, November 16 at 1:00 PM at Lantern Hill Clinic, 400 Elm Street, Suite 2. Your Thursday, November 12 appointment is canceled.\n\nFront Desk\nLantern Hill Clinic",
+      "expected": [
+        { "claim_type": "confirm", "date": "2026-11-16", "time": "13:00", "location": "400 Elm Street, Suite 2" },
+        { "claim_type": "cancel", "date": "2026-11-12", "time": null }
+      ]
+    }
+  ],
+  "later": [
+    { "deliverable": "D2", "expect": "Friday 2026-11-13 09:15 clashes with the Team meeting in dana.ics. Dana chooses Monday 2026-11-16 13:00. Monday is requested. Thursday 2026-11-12 10:30 is unchanged." },
+    { "deliverable": "D2", "expect": "After m4, Monday 2026-11-16 13:00 is Confirmed · office message and Thursday 2026-11-12 10:30 is Canceled · office message." }
+  ]
+}

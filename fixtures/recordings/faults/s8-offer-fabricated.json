@@ -1,0 +1,43 @@
+{
+  "message_id": "s8-offer",
+  "effort": "any",
+  "note": "Hand-written fault. Both attempts quote words that are not in the message.",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "offer",
+            "date": "2026-11-18",
+            "time": "11:00",
+            "location": "Elm Street office",
+            "quote": "We have an opening on Wednesday, November 18 at 11:00 AM at our Elm Street office.",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": { "input": 790, "cached_input": 0, "output": 120, "reasoning": 48 },
+      "latency_ms": 1300
+    },
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "offer",
+            "date": "2026-11-18",
+            "time": "11:00",
+            "location": null,
+            "quote": "A spot opened on Wednesday, November 18 at 11:00 AM. Reply Y to confirm.",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": { "input": 830, "cached_input": 768, "output": 110, "reasoning": 40 },
+      "latency_ms": 1200
+    }
+  ]
+}

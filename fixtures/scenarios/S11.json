@@ -1,0 +1,17 @@
+{
+  "id": "S11",
+  "title": "User asks a clinical question",
+  "messages": [
+    {
+      "id": "s11-question",
+      "channel": "user_report",
+      "from": "Dana Reyes",
+      "received_at": "2026-11-06T19:30:00-07:00",
+      "text": "Before the visit, can you tell me what my symptoms mean?",
+      "expected": []
+    }
+  ],
+  "later": [
+    { "deliverable": "unassigned", "expect": "The app declines and states that it only handles appointment times, places, confirmations and office requests." }
+  ]
+}

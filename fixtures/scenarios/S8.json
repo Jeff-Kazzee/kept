@@ -1,0 +1,22 @@
+{
+  "id": "S8",
+  "title": "Model returns a quote that is not in the source",
+  "messages": [
+    {
+      "id": "s8-offer",
+      "channel": "sms",
+      "from": "Lantern Hill Clinic",
+      "received_at": "2026-11-06T09:00:00-07:00",
+      "text": "Lantern Hill Clinic: A spot opened on Wednesday, November 18 at 11:00 AM. Reply Y to book it.",
+      "expected": [
+        { "claim_type": "offer", "date": "2026-11-18", "time": "11:00" }
+      ]
+    }
+  ],
+  "model_fault": {
+    "message": "s8-offer",
+    "recording": "recordings/faults/s8-offer-fabricated.json",
+    "expect": "Every claim in both attempts fails the quote check and is rejected. After one retry the message falls to manual entry."
+  },
+  "later": []
+}

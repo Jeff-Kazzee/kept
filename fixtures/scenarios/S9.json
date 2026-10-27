@@ -1,0 +1,9 @@
+{
+  "id": "S9",
+  "title": "Accept template proposed for a slot that is not offered",
+  "calendar": "calendar/dana.ics",
+  "messages": [{ "ref": "m1" }],
+  "later": [
+    { "deliverable": "unassigned", "expect": "An Accept reply for Wednesday 2026-11-11 15:00, which m1 does not offer, is blocked by code." }
+  ]
+}

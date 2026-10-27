@@ -1,0 +1,22 @@
+{
+  "id": "S6",
+  "title": "After S5, an automated reminder for Thursday arrives",
+  "calendar": "calendar/dana.ics",
+  "messages": [
+    { "ref": "m2" },
+    { "ref": "s5-report" },
+    {
+      "id": "s6-reminder",
+      "channel": "sms",
+      "from": "Lantern Hill Clinic Reminders",
+      "received_at": "2026-11-10T08:00:00-07:00",
+      "text": "Automated reminder: Dana, you have an appointment at Lantern Hill Clinic on Thu 11/12 at 10:30 AM. Reply C to confirm. This number does not accept calls.",
+      "expected": [
+        { "claim_type": "reminder", "date": "2026-11-12", "time": "10:30", "sender_kind": "automated" }
+      ]
+    }
+  ],
+  "later": [
+    { "deliverable": "D2", "expect": "The reminder is marked possibly stale. The app asks once. Slot states do not change." }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "id": "S5",
+  "title": "User reports a call: they moved me to Monday",
+  "calendar": "calendar/dana.ics",
+  "messages": [
+    { "ref": "m2" },
+    {
+      "id": "s5-report",
+      "channel": "user_report",
+      "from": "Dana Reyes",
+      "received_at": "2026-11-05T12:10:00-07:00",
+      "text": "I called the clinic. They moved me to Monday 11/16 at 1:00 PM, and my Thursday 11/12 10:30 AM appointment is canceled.",
+      "expected": [
+        { "claim_type": "confirm", "date": "2026-11-16", "time": "13:00" },
+        { "claim_type": "cancel", "date": "2026-11-12", "time": "10:30" }
+      ]
+    }
+  ],
+  "later": [
+    { "deliverable": "D2", "expect": "Monday 2026-11-16 13:00 is Confirmed · reported by you. Thursday 2026-11-12 10:30 is Canceled · reported by you." }
+  ]
+}
