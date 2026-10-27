@@ -190,6 +190,11 @@ Column: what the next claim says.
   reminder is asked about once.
 - W27. A conflict where no choice would change anything (a move with no open
   alternative) is shown but not asked.
+- W30. The PRD defines requested as "the user approved a request for the
+  slot and sent it". Sending arrives with reply templates in sprint 3. In
+  this sprint the request is recorded when the user taps "Request <slot>",
+  as the S3 fixture stub states. Sprint 3 may move this step to the approval
+  of the reply.
 
 ## Model calls
 
@@ -207,6 +212,9 @@ Column: what the next claim says.
   code.
 - W28. Both checks also reject text with clinical words, text over a length
   limit, and (for questions) text that does not end with a question mark.
+- W31. The date check covers what the date parser reads: month names with a
+  day, M/D, ISO dates, weekdays and clock times. Relative words such as
+  "tomorrow" or "the 12th" are not read, so they are not checked.
 - D-h. The new calls use reasoning effort `low` by default, set by an
   option. The extraction default is unchanged.
 - W29. The model receives the conflict summary written by code, and for
