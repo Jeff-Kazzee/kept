@@ -10,6 +10,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ui/tsconfig.json",
     "dev": "node server/main.ts",
+    "grant": "node src/grants/cli.ts",
     "eval:live": "node scripts/eval-live.ts"
   },
   "dependencies": {

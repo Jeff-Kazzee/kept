@@ -210,7 +210,7 @@ Tasks:
   current record and writes nothing.
 - [x] SP4.3 S17: archive removes a record from the default list, keeps it in
   history, and undo brings it back.
-- [ ] SP4.4 Grant store: create, name, revoke, and tiers (read, annotate,
+- [x] SP4.4 Grant store: create, name, revoke, and tiers (read, annotate,
   propose). Off by default. Tokens stored hashed (proposed).
 - [x] SP4.5 Choose the MCP server library. Record license, install scripts,
   and publish age in a decision doc.
