@@ -28,7 +28,12 @@ writer made while building it.
   carry quotes only, each as `{ "untrusted_quote": "...", "evidence_id": "..." }`.
 - M-d. The app and the MCP server open the same SQLite file in WAL mode with
   a 5 second busy timeout. Every tool call reads current state. Nothing is
-  cached across calls.
+  cached across calls. Reads and projections run with no write lock held.
+  Writes take the lock in short transactions that recheck only what the
+  write depends on. When the busy timeout runs out, a write retries after
+  100, 250 and 500 ms, then fails with "The case is busy ... Nothing was
+  saved. Try again in a moment." This covers every app write, revocation
+  included.
 - M-e. 60 calls a minute per grant, in fixed one-minute windows. The count
   lives in a `rate_windows` table in the shared SQLite file, so every
   server process on the file shares it, and a restart does not reset it.
@@ -40,8 +45,10 @@ writer made while building it.
   Every record write by a user or an agent still states its expected
   version. The first call the rate limit denies in a window is logged on
   its own. The later denials of that window become one summary entry, with
-  tool `*` and a `count`, written when the grant's next call arrives after
-  the window. So a flood of calls adds at most two log entries a minute.
+  tool `*` and a `count`, written when the window is closed: by the next
+  call to any server on the file after the window ends, at server start, or
+  when the grant is revoked. So a flood of calls adds at most two log
+  entries a minute, and no count stays only in the counter table.
 - M-g. A confirmed proposal becomes evidence with source
   `reported_by_user_via_agent` and `agent_name` from the grant, never from
   the client. The slot shows "reported by you through <grant name>".
@@ -104,20 +111,27 @@ writer made while building it.
 
 ### Server
 
-- M-q. Each tool call is one transaction on the store (BEGIN IMMEDIATE):
-  grant lookup, rate limit, tool name, grant active, tier, input, the
-  tool's writes and the log entry. A revoke from the app commits either
-  before the call, which then fails, or after it. The tool's writes run in
-  a savepoint, so a failed tool writes nothing and its log entry still
-  commits. Every call is logged, including denied, rate-limited and unknown
-  tools. A call with an unknown token is logged with no grant name. The log holds the grant ID and name, the tool, the result
-  and the appointment ID. It never holds the call's input.
+- M-q. A tool call runs in three steps, so the write lock is held only
+  briefly. First, one short transaction checks the grant, the rate limit,
+  the tool name, the tier and the input, counts the call and logs a
+  refusal. Second, the tool runs with no lock held. Each write it makes
+  checks the grant again inside the write's own transaction, so a revoke
+  commits either before the write, which then fails, or after it. Third,
+  one short transaction logs the result. A read returns its data only if
+  the grant is still active then. Every call is logged, including denied,
+  rate-limited and unknown tools. A call with an unknown token is logged
+  with no grant name. A call that cannot get the lock returns a `busy`
+  tool error, is not counted, and its log entry is written by the next
+  call that gets the lock. The log holds the grant ID and name, the tool,
+  the result and the appointment ID. It never holds the call's input.
 - M-r. Errors are tool results with `isError: true` and a JSON text block:
   `permission_denied`, `stale_edit` (with the current record),
-  `invalid_input`, `not_found`, `rate_limited`, `error`. An unknown tool
-  name is a protocol error (invalid params). It is logged as
-  `unknown_tool` with the name cut to 64 letters, digits and `_ . -`, and it
-  counts toward the rate limit.
+  `invalid_input`, `not_found`, `rate_limited`, `busy`, `error`. An
+  unknown tool name is a protocol error (invalid params) that does not
+  repeat the name. It is logged as `unknown_tool` with tool `(unknown)` and
+  the first 12 hex digits of the name's SHA-256, never the name, because a
+  client could send a secret as the name. It counts toward the rate
+  limit.
 - M-s. `tools/list` results carry `ttlMs: 0` and `cacheScope: "private"`,
   so a client does not reuse a tool list after the grant changes.
 - M-t. Imported or agent-written text is labeled, not only quotes. Places,
