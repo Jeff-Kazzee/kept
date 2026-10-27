@@ -1,0 +1,40 @@
+{
+  "message_id": "explain-change-proposed-20261112-1030-e21e7875",
+  "effort": "any",
+  "note": "Hand-written fault. Both attempts cite m1-e1, which is in the case but belongs to no part of this conflict.",
+  "attempts": [
+    {
+      "output": {
+        "explanation": "The office confirmed Thursday 11/12 at 10:30 AM and later asked to move it.",
+        "evidence_ids": [
+          "m1-e1",
+          "m2-e1",
+          "m3-e1"
+        ]
+      },
+      "usage": {
+        "input": 1040,
+        "cached_input": 0,
+        "output": 120,
+        "reasoning": 40
+      },
+      "latency_ms": 1500
+    },
+    {
+      "output": {
+        "explanation": "The office asked to move Thursday 11/12 at 10:30 AM.",
+        "evidence_ids": [
+          "m1-e1",
+          "m3-e1"
+        ]
+      },
+      "usage": {
+        "input": 1060,
+        "cached_input": 0,
+        "output": 110,
+        "reasoning": 35
+      },
+      "latency_ms": 1400
+    }
+  ]
+}

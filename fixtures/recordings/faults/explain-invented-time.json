@@ -1,0 +1,39 @@
+{
+  "message_id": "explain-change-proposed-20261112-1030-e21e7875",
+  "effort": "any",
+  "note": "Hand-written fault. Attempt 1 adds the time 11:00 AM and attempt 2 adds the date 11/17. Neither is in the cited evidence.",
+  "attempts": [
+    {
+      "output": {
+        "explanation": "The office confirmed Thursday 11/12 at 10:30 AM, then offered Friday 11/13 at 11:00 AM instead.",
+        "evidence_ids": [
+          "m2-e1",
+          "m3-e2"
+        ]
+      },
+      "usage": {
+        "input": 1040,
+        "cached_input": 0,
+        "output": 100,
+        "reasoning": 40
+      },
+      "latency_ms": 1500
+    },
+    {
+      "output": {
+        "explanation": "The office confirmed Thursday 11/12 at 10:30 AM, then offered Tuesday 11/17 at 9:15 AM instead.",
+        "evidence_ids": [
+          "m2-e1",
+          "m3-e2"
+        ]
+      },
+      "usage": {
+        "input": 1060,
+        "cached_input": 0,
+        "output": 100,
+        "reasoning": 35
+      },
+      "latency_ms": 1400
+    }
+  ]
+}

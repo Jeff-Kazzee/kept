@@ -1,0 +1,39 @@
+{
+  "message_id": "explain-change-proposed-20261112-1030-e21e7875",
+  "effort": "any",
+  "note": "Hand-written fault. Both attempts cite m9-e1, which is not in the case.",
+  "attempts": [
+    {
+      "output": {
+        "explanation": "The office confirmed Thursday 11/12 at 10:30 AM and later asked to move it.",
+        "evidence_ids": [
+          "m2-e1",
+          "m9-e1"
+        ]
+      },
+      "usage": {
+        "input": 1040,
+        "cached_input": 0,
+        "output": 100,
+        "reasoning": 40
+      },
+      "latency_ms": 1500
+    },
+    {
+      "output": {
+        "explanation": "The office later asked to move Thursday 11/12 at 10:30 AM.",
+        "evidence_ids": [
+          "m9-e1",
+          "m2-e1"
+        ]
+      },
+      "usage": {
+        "input": 1060,
+        "cached_input": 0,
+        "output": 90,
+        "reasoning": 35
+      },
+      "latency_ms": 1400
+    }
+  ]
+}

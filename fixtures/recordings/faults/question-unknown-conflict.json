@@ -1,0 +1,39 @@
+{
+  "message_id": "question-d627cb73",
+  "effort": "any",
+  "note": "Hand-written fault. Both attempts name a conflict that is not open.",
+  "attempts": [
+    {
+      "output": {
+        "conflict_id": "both-held-20261112-1030_20261116-1300",
+        "question": "Which visit stands?",
+        "evidence_ids": [
+          "m2-e1"
+        ]
+      },
+      "usage": {
+        "input": 1120,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 30
+      },
+      "latency_ms": 1400
+    },
+    {
+      "output": {
+        "conflict_id": "change-proposed-20261113-0915",
+        "question": "Do you want Friday?",
+        "evidence_ids": [
+          "m3-e2"
+        ]
+      },
+      "usage": {
+        "input": 1140,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 30
+      },
+      "latency_ms": 1350
+    }
+  ]
+}

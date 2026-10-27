@@ -1,0 +1,22 @@
+{
+  "message_id": "question-4ad99f95",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "conflict_id": "incomplete-slot-20261116-1300",
+        "question": "Your Monday 11/16 1:00 PM visit has no place yet. Can you add it from a message or a report?",
+        "evidence_ids": [
+          "s5-report-e1"
+        ]
+      },
+      "usage": {
+        "input": 800,
+        "cached_input": 0,
+        "output": 90,
+        "reasoning": 35
+      },
+      "latency_ms": 1350
+    }
+  ]
+}

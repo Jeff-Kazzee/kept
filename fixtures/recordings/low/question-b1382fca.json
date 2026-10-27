@@ -1,0 +1,22 @@
+{
+  "message_id": "question-b1382fca",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "conflict_id": "incomplete-slot-20261116",
+        "question": "Your visit on November 16 is confirmed, but the time and place are missing. Can you add them from a message or a report?",
+        "evidence_ids": [
+          "s7-confirm-e1"
+        ]
+      },
+      "usage": {
+        "input": 790,
+        "cached_input": 0,
+        "output": 95,
+        "reasoning": 35
+      },
+      "latency_ms": 1330
+    }
+  ]
+}

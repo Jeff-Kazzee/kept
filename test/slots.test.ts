@@ -264,7 +264,7 @@ describe("SP2.9 S7: incomplete slots", () => {
       ["2026-11-16", "Monday 11/16, no time", "Confirmed · office message", ["time", "location"], null],
     ]);
     expect(p.conflicts.map((c) => [c.kind, c.evidenceIds, c.askable])).toEqual([["incomplete_slot", ["s7-confirm-e1"], true]]);
-    expect(p.conflicts[0]!.fixedQuestion).toBe("Monday 11/16, no time is confirmed without a time and place. Can you add them from a message or a report?");
+    expect(p.conflicts[0]!.fixedQuestion).toBe("The visit on Monday 11/16 is confirmed without a time and place. Can you add them from a message or a report?");
   });
 
   it("does not mark offered or requested slots as incomplete", () => {

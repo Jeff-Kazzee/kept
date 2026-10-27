@@ -1,0 +1,21 @@
+{
+  "message_id": "explain-incomplete-slot-20261116-81844e77",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "explanation": "The office confirmed your visit on November 16. The message gives no time and no place.",
+        "evidence_ids": [
+          "s7-confirm-e1"
+        ]
+      },
+      "usage": {
+        "input": 740,
+        "cached_input": 0,
+        "output": 80,
+        "reasoning": 30
+      },
+      "latency_ms": 1250
+    }
+  ]
+}

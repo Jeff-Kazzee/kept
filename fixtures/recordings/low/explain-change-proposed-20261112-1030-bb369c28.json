@@ -1,0 +1,22 @@
+{
+  "message_id": "explain-change-proposed-20261112-1030-bb369c28",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "explanation": "The office confirmed Thursday 11/12 at 10:30 AM. A later office message offered a different time, Wednesday 11/11 at 3:00 PM. The confirmed Thursday time still holds unless you change it.",
+        "evidence_ids": [
+          "m2-e1",
+          "s2-offer-e1"
+        ]
+      },
+      "usage": {
+        "input": 880,
+        "cached_input": 0,
+        "output": 110,
+        "reasoning": 40
+      },
+      "latency_ms": 1420
+    }
+  ]
+}

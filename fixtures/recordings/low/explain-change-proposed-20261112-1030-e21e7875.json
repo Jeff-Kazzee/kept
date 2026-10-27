@@ -1,0 +1,24 @@
+{
+  "message_id": "explain-change-proposed-20261112-1030-e21e7875",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "explanation": "The office confirmed your visit for Thursday, November 12 at 10:30 AM. A later office message says it needs to move that visit and offers Friday 11/13 at 9:15 AM or Monday 11/16 at 1:00 PM instead. Until a new time is confirmed, the Thursday visit still holds.",
+        "evidence_ids": [
+          "m2-e1",
+          "m3-e1",
+          "m3-e2",
+          "m3-e3"
+        ]
+      },
+      "usage": {
+        "input": 1040,
+        "cached_input": 0,
+        "output": 150,
+        "reasoning": 50
+      },
+      "latency_ms": 1610
+    }
+  ]
+}

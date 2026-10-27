@@ -1,0 +1,21 @@
+{
+  "message_id": "explain-incomplete-slot-20261116-1300-d9cbb80b",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "explanation": "You reported that the visit moved to Monday 11/16 at 1:00 PM. Your report does not say where the visit is.",
+        "evidence_ids": [
+          "s5-report-e1"
+        ]
+      },
+      "usage": {
+        "input": 760,
+        "cached_input": 0,
+        "output": 90,
+        "reasoning": 30
+      },
+      "latency_ms": 1300
+    }
+  ]
+}

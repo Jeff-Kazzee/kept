@@ -1,0 +1,23 @@
+{
+  "message_id": "question-6ed4c2c7",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "conflict_id": "both-held-20261112-1030_20261116-1300",
+        "question": "The office confirmed both Thursday 11/12 at 10:30 AM and Monday 11/16 at 1:00 PM. Which one stands?",
+        "evidence_ids": [
+          "m2-e1",
+          "s4-confirm-e1"
+        ]
+      },
+      "usage": {
+        "input": 960,
+        "cached_input": 0,
+        "output": 100,
+        "reasoning": 40
+      },
+      "latency_ms": 1460
+    }
+  ]
+}

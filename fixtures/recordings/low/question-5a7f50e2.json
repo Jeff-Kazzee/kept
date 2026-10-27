@@ -1,0 +1,23 @@
+{
+  "message_id": "question-5a7f50e2",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "conflict_id": "change-proposed-20261112-1030",
+        "question": "The office offered Wednesday 11/11 at 3:00 PM while Thursday 11/12 at 10:30 AM is confirmed. Do you want to request Wednesday or keep Thursday?",
+        "evidence_ids": [
+          "m2-e1",
+          "s2-offer-e1"
+        ]
+      },
+      "usage": {
+        "input": 950,
+        "cached_input": 0,
+        "output": 120,
+        "reasoning": 45
+      },
+      "latency_ms": 1480
+    }
+  ]
+}

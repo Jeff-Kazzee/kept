@@ -1,0 +1,24 @@
+{
+  "message_id": "question-d627cb73",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "conflict_id": "change-proposed-20261112-1030",
+        "question": "The office needs to move your Thursday 11/12 10:30 AM visit. Which new time do you want to request?",
+        "evidence_ids": [
+          "m3-e1",
+          "m3-e2",
+          "m3-e3"
+        ]
+      },
+      "usage": {
+        "input": 1120,
+        "cached_input": 0,
+        "output": 110,
+        "reasoning": 45
+      },
+      "latency_ms": 1540
+    }
+  ]
+}

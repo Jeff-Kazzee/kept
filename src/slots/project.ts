@@ -28,7 +28,7 @@ import { weekdayOnlyCandidates } from "../domain/datetime.ts";
 import type { IcsEvent } from "../domain/ics.ts";
 import type { EvidenceView } from "../intake/events.ts";
 import { findClashes } from "./clash.ts";
-import { slotIdPart, slotKey, slotLabel, sourceLabel, stateLabel } from "./labels.ts";
+import { dateLabel, slotIdPart, slotKey, slotLabel, sourceLabel, stateLabel } from "./labels.ts";
 import { distinctiveWords, locationsAgree } from "./location.ts";
 import { arrivalTime, effectiveTime, isLater } from "./time.ts";
 import {
@@ -484,13 +484,14 @@ function locationConflict(f: Folded, candidates: LocationResult["candidates"]): 
 
 function incompleteConflict(f: Folded, missing: SlotView["missing"]): Conflict {
   const what = missing.map((m) => (m === "time" ? "time" : "place")).join(" and ");
+  const subject = f.time === null ? `The visit on ${dateLabel(f.date)}` : label(f);
   return makeConflict({
     id: conflictId("incomplete_slot", [f.key]),
     kind: "incomplete_slot",
     slotKeys: [f.key],
     evidenceIds: [f.by.id],
-    summary: `${label(f)} is confirmed, but the ${what} ${missing.length > 1 ? "are" : "is"} missing.`,
-    fixedQuestion: `${label(f)} is confirmed without a ${what}. Can you add ${missing.length > 1 ? "them" : "it"} from a message or a report?`,
+    summary: `${subject} is confirmed, but the ${what} ${missing.length > 1 ? "are" : "is"} missing.`,
+    fixedQuestion: `${subject} is confirmed without a ${what}. Can you add ${missing.length > 1 ? "them" : "it"} from a message or a report?`,
     choices: [{ id: "later", label: "I will add it from a message or a report", effects: [], settles: [] }, UNSURE],
   });
 }

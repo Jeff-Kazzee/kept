@@ -1,0 +1,23 @@
+{
+  "message_id": "question-96bd235c",
+  "effort": "low",
+  "attempts": [
+    {
+      "output": {
+        "conflict_id": "possibly-stale-20261112-1030",
+        "question": "An automated reminder still mentions Thursday 11/12 at 10:30 AM, which you reported as canceled. Is the reminder out of date?",
+        "evidence_ids": [
+          "s6-reminder-e1",
+          "s5-report-e2"
+        ]
+      },
+      "usage": {
+        "input": 1180,
+        "cached_input": 0,
+        "output": 110,
+        "reasoning": 45
+      },
+      "latency_ms": 1600
+    }
+  ]
+}
