@@ -155,11 +155,11 @@ Acceptance:
 
 Tasks:
 
-- [ ] SP3.1 Template definitions: accept an offered slot, decline and ask for
+- [x] SP3.1 Template definitions: accept an offered slot, decline and ask for
   another time, ask whether a slot still stands, keep the original.
-- [ ] SP3.2 Validity table: each template checks the slot state before it
+- [x] SP3.2 Validity table: each template checks the slot state before it
   renders. S9: accepting a slot that is not offered is blocked.
-- [ ] SP3.3 S7 template part: no template that needs a missing detail is
+- [x] SP3.3 S7 template part: no template that needs a missing detail is
   offered for an incomplete slot.
 - [ ] SP3.4 Model call: pick a template and propose field values. Code
   validates each field against slot states. One retry, then manual entry.
