@@ -84,20 +84,27 @@ Column: what the next claim says.
 ## Unknown order (rule 5)
 
 - W9. Claims with a known event time are applied first. The claims with an
-  unknown time are then judged together: code places them at every position
-  in that sequence, in every order. If every placement gives the same
-  status, they are applied. If not, code keeps only the unknown claims that
-  cannot change the state from the known claims on their own, leaves the
-  rest out, and raises one `unknown_order` conflict for the slot that shows
-  the known source and every claim left out. With no known claim, code keeps
-  none of them, so it never picks one unknown claim over another. The slot
-  then has no state until the user answers. Two disagreeing claims at the
-  same instant are treated as claims with an unknown time. Above four
-  unknown claims on one slot, code over-estimates the possible statuses,
-  which can only raise more conflicts.
-- W10. An answer to an `unknown_order` conflict records the chosen status as
-  a user report and settles every claim that was left out, so they no
-  longer raise the conflict.
+  unknown time are then judged together: code finds every outcome reachable
+  by placing them at any position in that sequence, in any order. An
+  outcome is the status and the source of the claim that set it. The search
+  is exact. It walks states of (known claims used, unknown claims used per
+  kind, status, source), so many claims on one slot stay fast. If every
+  placement gives the same outcome, the claims are applied. If not, code
+  keeps only the unknown claims that cannot change the outcome from the
+  known claims on their own, leaves the rest out, and raises one
+  `unknown_order` conflict for the slot that shows the known source and
+  every claim left out. With no known claim, code keeps none of them, so it
+  never picks one unknown claim over another. The slot then has no state
+  until the user answers. Two disagreeing claims at the same instant are
+  treated as claims with an unknown time.
+- W10. The `unknown_order` choices cover every status any order of the
+  claims can give, including orders that combine a kept claim with one left
+  out. An answer records the shortest run of user-reported claims that
+  reaches the chosen status through the transition table, in order (from
+  confirmed, "offered" is a cancel and then an offer). It settles every
+  unknown-time claim on the slot, kept or left out, so none of them raises
+  the conflict again. A settled claim is dropped whatever its event time,
+  which covers a claim left out for a same-instant tie.
 
 ## Possibly stale reminders (rule 6)
 
@@ -112,10 +119,19 @@ Column: what the next claim says.
 
 ## Change proposed
 
-- W13. A confirmed slot is change proposed when, after its latest
-  confirmation, the office proposed to move it, or the office offered a
-  different slot that is still offered or requested. The original still
-  holds. The label is "Confirmed · office message, change proposed".
+- W13. A confirmed slot is change proposed when the office proposed to move
+  it, or offered a different slot that is still offered or requested, and
+  that proposal certainly came after every claim that holds the slot. The
+  original still holds. The label is "Confirmed · office message, change
+  proposed". A proposal that certainly came before a hold does not count.
+- W33. Order is certain when both times are known, or when the earlier
+  claim's message arrived before the later claim's known time, since an
+  event happens no later than its message arrives. When the order of a
+  proposal and a hold is not certain, the change is shown as proposed and an
+  `unknown_order` conflict asks whether it is still proposed. "Still
+  proposed" changes nothing. "Stands with no change proposed" records a
+  user-reported confirmation, which comes after every proposal and so
+  withdraws them.
 - W14. An offer made before the confirmation proposes nothing. In S1,
   Tuesday stays offered and Thursday is confirmed.
 - W15. A move with no other claim on the slot still shows it as held with a
@@ -221,15 +237,17 @@ Column: what the next claim says.
   limit, and (for questions) text that does not end with a question mark.
   The clinical list (`src/domain/scope.ts`) covers singular and plural forms
   and errs toward rejecting, because a false match costs a retry or the
-  fixed wording. Words such as "lab", "result", "scan" and "medical" are on
-  it. A test checks that every fixture message, recorded model output and
+  fixed wording. Words that are also ordinary administrative words
+  ("result", "lab", the verb "treat") appear only in clinical phrases such as
+  "lab result", "test results" and "your results". A test checks that every fixture message, recorded model output and
   code-built question passes.
 - W32. Each date mention in model text is checked as one unit. Its year,
   month and day, weekday and times must all fit one point in time that one
   cited item states: its slot, its event time, its evidence time, or one
   mention in its quote. A quote without a year means the arrival year, or
   the next year when that month and day had already passed, as in
-  extraction.
+  extraction. Each candidate year is its own point, so a year and a weekday
+  are never taken from two different dates.
 - W31. The date check covers what the date parser reads: month names with a
   day, M/D, ISO dates, weekdays and clock times. Relative words such as
   "tomorrow" or "the 12th" are not read, so they are not checked.

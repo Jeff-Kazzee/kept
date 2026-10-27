@@ -6,7 +6,8 @@ import type { AnswerMeta } from "../src/intake/events.ts";
 import { ASSUMED_SLOT_MINUTES, findClashes, wallClockToUtc } from "../src/slots/clash.ts";
 import { slotLabel, sourceLabel, stateLabel } from "../src/slots/labels.ts";
 import { locationsAgree } from "../src/slots/location.ts";
-import { TRANSITIONS, projectSlots } from "../src/slots/project.ts";
+import { TRANSITIONS, claimsToReach, projectSlots } from "../src/slots/project.ts";
+import type { Choice, Conflict } from "../src/slots/types.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { acceptMessages, ev, intake } from "./helpers.ts";
 
@@ -266,6 +267,110 @@ describe("SP2.6 rules 4 and 5: event order", () => {
     const office = ev("b", "confirm", THU.date, THU.time, T2);
     const reported = ev("ans", "cancel", THU.date, THU.time, T1, { ...user, origin: "answer", answer: answer({ after: T2 }) });
     expect(project(office, reported).slots[0]!.state).toBe("canceled");
+  });
+});
+
+// Records a choice the way CaseService does: each effect becomes an
+// accepted user-reported item in order, and the choice settles its claims.
+function answerWith(evidence: EvidenceViewList, conflict: Conflict, choice: Choice, after: string) {
+  const items = choice.effects.map((e, i) =>
+    ev(`ans-${i + 1}`, e.claim_type, e.date, e.time, T1, {
+      ...user,
+      location: e.location,
+      origin: "answer",
+      answer: answer({ conflict_id: conflict.id, choice_id: choice.id, clarifies: e.clarifies, after, index: i }),
+    }),
+  );
+  return projectSlots({ evidence: [...evidence, ...items], settled: new Set(choice.settles) });
+}
+type EvidenceViewList = Parameters<typeof projectSlots>[0]["evidence"];
+
+describe("review round 2: unknown-time claims", () => {
+  const unknownSender = { sender_kind: "unknown" as const };
+
+  it("R2-6: offers every status that any order of the claims can give, and each answer gives its status", () => {
+    const evidence = [
+      ev("k", "confirm", THU.date, THU.time, T1),
+      ev("x", "offer", THU.date, THU.time, T2, unknownSender),
+      ev("y", "cancel", THU.date, THU.time, T3, unknownSender),
+    ];
+    const p = projectSlots({ evidence });
+    const conflict = disagreements(p)[0]!;
+    // confirm, cancel, offer gives offered, which needs the kept offer and the left-out cancel.
+    expect(conflict.choices.map((c) => c.id)).toEqual(["status:offered", "status:confirmed", "status:canceled", "unsure"]);
+    expect(conflict.evidenceIds).toEqual(["k", "y"]);
+    for (const choice of conflict.choices.filter((c) => c.id !== "unsure")) {
+      const after = answerWith(evidence, conflict, choice, T3);
+      const status = choice.id.slice("status:".length);
+      // A repeat of the current status keeps its source (W8). A change is reported by you.
+      expect(after.slots.map((x) => [x.state, x.sourceLabel]), choice.label).toEqual([
+        [status, status === "confirmed" ? "office message" : "reported by you"],
+      ]);
+      expect(disagreements(after), choice.label).toEqual([]);
+    }
+    expect(claimsToReach("confirmed", "offered")).toEqual(["canceled", "offered"]);
+    expect(claimsToReach("confirmed", "declined")).toEqual(["canceled", "offered", "declined"]);
+    expect(claimsToReach("none", "confirmed")).toEqual(["confirmed"]);
+  });
+
+  it("R2-7: keeps five unknown-time re-offers that cannot change a confirmed slot", () => {
+    const offers = [1, 2, 3, 4, 5].map((n) => ev(`o${n}`, "offer", THU.date, THU.time, T2, unknownSender));
+    const p = project(ev("k", "confirm", THU.date, THU.time, T1), ...offers);
+    expect(p.slots.map((x) => [x.stateLabel, x.evidenceIds.length])).toEqual([["Confirmed · office message", 6]]);
+    expect(disagreements(p)).toEqual([]);
+  });
+
+  it("R2-8: an answer settles a claim that was left out for a same-instant tie", () => {
+    const evidence = [ev("a", "confirm", THU.date, THU.time, T1), ev("b", "cancel", THU.date, THU.time, T1)];
+    const conflict = disagreements(project(...evidence))[0]!;
+    expect(conflict.evidenceIds).toEqual(["a", "b"]);
+    const choice = conflict.choices.find((c) => c.id === "status:confirmed")!;
+    expect(choice.settles).toEqual(["b"]);
+    const after = answerWith(evidence, conflict, choice, T1);
+    expect(after.slots.map((x) => x.state)).toEqual(["confirmed"]);
+    expect(disagreements(after)).toEqual([]);
+  });
+
+  it("R2-9: projects many known and unknown claims on one slot quickly", () => {
+    const statuses = ["offer", "confirm", "cancel", "offer", "request", "confirm"] as const;
+    const known = Array.from({ length: 30 }, (_, i) =>
+      ev(`k${i}`, statuses[i % statuses.length]!, THU.date, THU.time, new Date(Date.UTC(2026, 9, 1, i)).toISOString()),
+    );
+    for (const n of [4, 6]) {
+      const unknown = Array.from({ length: n }, (_, i) =>
+        ev(`u${i}`, statuses[i % statuses.length]!, THU.date, THU.time, "2026-11-01T12:00:00Z", { ...unknownSender, location: `Room ${i}` }),
+      );
+      const started = performance.now();
+      const p = project(...known, ...unknown);
+      expect(performance.now() - started, `${n} unknown claims`).toBeLessThan(1000);
+      expect(disagreements(p).filter((c) => c.kind === "unknown_order")).toHaveLength(1);
+    }
+  });
+
+  it("R2-10: a hold with an unknown time does not silently withdraw a known move", () => {
+    const evidence = [
+      ev("c1", "confirm", THU.date, THU.time, T1),
+      ev("mv", "move", THU.date, THU.time, T2),
+      ev("c2", "confirm", THU.date, THU.time, T3, unknownSender),
+    ];
+    const p = projectSlots({ evidence });
+    expect(p.slots.map((x) => x.stateLabel)).toEqual(["Confirmed · office message, change proposed"]);
+    const conflict = disagreements(p).find((c) => c.kind === "unknown_order")!;
+    expect([conflict.id, conflict.evidenceIds]).toEqual(["unknown-order-20261112-1030-change", ["c1", "c2", "mv"]]);
+    expect(conflict.choices.map((c) => c.label)).toEqual([
+      "The change to Thursday 11/12 10:30 AM is still proposed",
+      "Thursday 11/12 10:30 AM stands with no change proposed",
+      "Not sure yet",
+    ]);
+    const withdrawn = answerWith(evidence, conflict, conflict.choices[1]!, T3);
+    expect(withdrawn.slots.map((x) => x.state)).toEqual(["confirmed"]);
+    expect(disagreements(withdrawn)).toEqual([]);
+    const kept = answerWith(evidence, conflict, conflict.choices[0]!, T3);
+    expect(kept.slots.map((x) => x.state)).toEqual(["change_proposed"]);
+    // A known confirmation after the move still withdraws it, with no conflict.
+    const later = project(evidence[0]!, evidence[1]!, ev("c3", "confirm", THU.date, THU.time, T3));
+    expect(later.slots.map((x) => x.state)).toEqual(["confirmed"]);
+    expect(disagreements(later)).toEqual([]);
   });
 });
 

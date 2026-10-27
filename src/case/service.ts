@@ -242,7 +242,14 @@ export class CaseService {
         event_time: null,
         request_item: null,
       };
-      const meta: AnswerMeta = { question_id: questionId, conflict_id: current.conflictId, choice_id: choice.id, clarifies: effect.clarifies, after };
+      const meta: AnswerMeta = {
+        question_id: questionId,
+        conflict_id: current.conflictId,
+        choice_id: choice.id,
+        clarifies: effect.clarifies,
+        after,
+        index: i,
+      };
       const event: EvidenceEvent = { type: "answer_recorded", data: { claim, ...meta } };
       return { streamId: evidenceStream(`answer-${questionId}-${i + 1}`), expectedVersion: 0, events: [asEvent(event)] };
     });

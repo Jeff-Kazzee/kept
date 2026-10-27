@@ -55,6 +55,8 @@ export type AnswerMeta = {
   choice_id: string;
   clarifies: string | null;
   after: string;
+  // Position among the effects of one answer, from 0.
+  index?: number;
 };
 
 export type MessageView = {
