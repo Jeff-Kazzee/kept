@@ -29,12 +29,19 @@ writer made while building it.
 - M-d. The app and the MCP server open the same SQLite file in WAL mode with
   a 5 second busy timeout. Every tool call reads current state. Nothing is
   cached across calls.
-- M-e. 60 calls a minute per grant, counted in the server process. Notes
-  are at most 2,000 characters. At most 20 tags of 40 characters each.
+- M-e. 60 calls a minute per grant, in fixed one-minute windows. The count
+  lives in a `rate_windows` table in the shared SQLite file, so every
+  server process on the file shares it, and a restart does not reset it.
+  The table holds counters, not history, so its rows are updated and
+  removed. Notes are at most 2,000 characters. At most 20 tags of 40
+  characters each.
 - M-f. Access log entries are system events in the `access_log` stream.
   They are appended without an expected version (`EventStore.appendSystem`).
   Every record write by a user or an agent still states its expected
-  version.
+  version. The first call the rate limit denies in a window is logged on
+  its own. The later denials of that window become one summary entry, with
+  tool `*` and a `count`, written when the grant's next call arrives after
+  the window. So a flood of calls adds at most two log entries a minute.
 - M-g. A confirmed proposal becomes evidence with source
   `reported_by_user_via_agent` and `agent_name` from the grant, never from
   the client. The slot shows "reported by you through <grant name>".
@@ -55,8 +62,9 @@ writer made while building it.
   key (a date-only slot gains a time), the old record does not follow it.
 - M-k. Undo names one earlier event by its version: a note, a tag change or
   an archive. It appends `event_undone`, and the projection skips the
-  reversed event. Undoing a tag change brings back the tags before it. An
-  undo cannot itself be undone. To redo, make the change again. Undo is app
+  reversed event. Undoing a tag change brings back the tags before it, so
+  only the latest tag change still in effect can be undone. An undo cannot
+  itself be undone. To redo, make the change again. Undo is app
   only. No tool undoes.
 - M-l. Archive is app only, or an agent proposal the user confirms. An
   archived record leaves `list_appointments` unless `include_archived` is
@@ -68,7 +76,10 @@ writer made while building it.
   - `new_appointment`: a date, a time, an optional place and `offered` or
     `confirmed`. Refused when the slot already exists.
   - `user_report`: one claim with the same types and format rules as a
-    manual entry. A date is required except for an office request.
+    manual entry. A date is required except for an office request. It has
+    no event time, as a manual entry has none, so an agent cannot place its
+    report ahead of office messages. Slot order uses the time the agent
+    reported it.
   - `detail_edit`: a corrected place for one appointment. A changed date or
     time is a `user_report` instead, for example a confirm on the new slot
     and a cancel on the old one.
@@ -86,21 +97,27 @@ writer made while building it.
   the agent proposed it, which is when the user reported it. A place edit
   becomes a `clarify` claim with the place, so the slot treats it like the
   user's answer about a place.
-- M-p. `detail_edit` and `archive` state the record version the agent saw,
-  and a stale version is refused at proposal time. Confirming an archive
-  states the record version the user saw.
+- M-p. `detail_edit` and `archive` state the record version the agent saw.
+  The check and the proposal write are one transaction, and a stale version
+  is refused. Confirming either one states the record version the user saw,
+  checked in the same transaction as the confirmation.
 
 ### Server
 
-- M-q. Each call checks in this order: grant lookup, rate limit, grant
-  active, tier, input. Every call to a known tool is logged, including
-  denied and rate-limited calls. A call with an unknown token is logged with
-  no grant name. The log holds the grant ID and name, the tool, the result
+- M-q. Each tool call is one transaction on the store (BEGIN IMMEDIATE):
+  grant lookup, rate limit, tool name, grant active, tier, input, the
+  tool's writes and the log entry. A revoke from the app commits either
+  before the call, which then fails, or after it. The tool's writes run in
+  a savepoint, so a failed tool writes nothing and its log entry still
+  commits. Every call is logged, including denied, rate-limited and unknown
+  tools. A call with an unknown token is logged with no grant name. The log holds the grant ID and name, the tool, the result
   and the appointment ID. It never holds the call's input.
 - M-r. Errors are tool results with `isError: true` and a JSON text block:
   `permission_denied`, `stale_edit` (with the current record),
   `invalid_input`, `not_found`, `rate_limited`, `error`. An unknown tool
-  name is a protocol error (invalid params) and is not logged.
+  name is a protocol error (invalid params). It is logged as
+  `unknown_tool` with the name cut to 64 letters, digits and `_ . -`, and it
+  counts toward the rate limit.
 - M-s. `tools/list` results carry `ttlMs: 0` and `cacheScope: "private"`,
   so a client does not reuse a tool list after the grant changes.
 - M-t. Imported or agent-written text is labeled, not only quotes. Places,
