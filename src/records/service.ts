@@ -90,10 +90,16 @@ export class RecordsService {
     this.#newId = options.newId ?? (() => `p-${randomBytes(4).toString("hex")}`);
   }
 
-  // Runs `fn` as one unit of work on the store. The MCP server uses it so the
-  // grant check, the rate limit and the write see the same state.
+  // Runs `fn` as one short unit of work on the store. The MCP server uses
+  // it for the grant check, the rate limit and the access log.
   transaction<T>(fn: () => T): T {
     return this.#store.transaction(fn);
+  }
+
+  // Runs `fn` so that every write it makes first runs `guard` inside the
+  // write's own transaction. See EventStore.withWriteGuard.
+  withWriteGuard<T>(guard: () => void, fn: () => T): T {
+    return this.#store.withWriteGuard(guard, fn);
   }
 
   #describeRecord = (streamId: string, events: StoredEvent[]) => projectRecord(streamId.slice(RECORD_PREFIX.length), events);
@@ -211,22 +217,16 @@ export class RecordsService {
   // An agent proposes a change. It is stored as a pending proposal and
   // changes nothing else. A change to one record states the record version
   // the agent saw, and a stale version is refused.
+  // Projections run before the write lock, so a slow read never blocks the
+  // app. The checks a write depends on run again inside one short
+  // transaction with the write.
   propose(input: unknown, grant: ProposingGrant): ProposalView {
-    // One transaction, so the record cannot move on between the version
-    // check and the proposal write.
-    return this.#store.transaction(() => this.#propose(input, grant));
-  }
-
-  #propose(input: unknown, grant: ProposingGrant): ProposalView {
     const change = parse(ProposedChangeInput, input, "proposal");
     let stored: ProposedChange;
+    let target: string | null = null;
     let recordVersion: number | null = null;
     if (change.kind === "detail_edit" || change.kind === "archive") {
-      const slot = this.#slot(change.appointment_id);
-      this.#store.assertVersion(recordStream(slot.key), change.expected_version, this.#describeRecord);
-      if (change.kind === "archive" && this.record(slot.key).archived) {
-        throw new InvalidRequestError(`Appointment ${slot.key} is already archived.`);
-      }
+      target = this.#slot(change.appointment_id).key;
       recordVersion = change.expected_version;
       const { expected_version: _v, ...rest } = change;
       stored = rest;
@@ -241,7 +241,15 @@ export class RecordsService {
       type: "change_proposed",
       data: { grant_id: grant.id, grant_name: grant.name, change: stored, record_version: recordVersion },
     };
-    this.#store.append(proposalStream(id), 0, [asEvent(event)], this.#describeProposal);
+    // One transaction, so the record cannot move on between the version
+    // check and the proposal write.
+    this.#store.transaction(() => {
+      if (target !== null) {
+        this.#store.assertVersion(recordStream(target), recordVersion!, this.#describeRecord);
+        if (stored.kind === "archive" && this.record(target).archived) throw new InvalidRequestError(`Appointment ${target} is already archived.`);
+      }
+      this.#store.append(proposalStream(id), 0, [asEvent(event)], this.#describeProposal);
+    });
     return this.proposal(id);
   }
 
@@ -250,45 +258,45 @@ export class RecordsService {
   // states `recordVersion`, the record version they saw, and a record that
   // moved on since is a stale edit.
   confirmProposal(id: string, expectedVersion: number, options: { recordVersion?: number } = {}): ProposalView {
-    return this.#store.transaction(() => this.#confirm(id, expectedVersion, options));
-  }
-
-  #confirm(id: string, expectedVersion: number, options: { recordVersion?: number }): ProposalView {
+    // Read and check before the lock. The proposal version is checked again
+    // inside the transaction, and an append-only stream at the same version
+    // has not changed.
     this.#store.assertVersion(proposalStream(id), expectedVersion, this.#describeProposal);
     const proposal = this.proposal(id);
     if (proposal.status !== "pending") throw new InvalidRequestError(`Proposal ${id} was already ${proposal.status}.`);
     const change = proposal.change;
+    const recordVersion = options.recordVersion;
+    const target = change.kind === "archive" || change.kind === "detail_edit" ? this.#slot(change.appointment_id) : null;
+    if (target && recordVersion === undefined) {
+      throw new InvalidRequestError(`Confirming ${change.kind === "archive" ? "an archive" : "a place edit"} needs the record version.`);
+    }
     const writes: StreamWrite[] = [];
     const evidenceIds: string[] = [];
-
-    const recordVersion = options.recordVersion;
-    if (change.kind === "archive" || change.kind === "detail_edit") {
-      if (recordVersion === undefined) {
-        throw new InvalidRequestError(`Confirming ${change.kind === "archive" ? "an archive" : "a place edit"} needs the record version.`);
-      }
-      this.#store.assertVersion(recordStream(this.#slot(change.appointment_id).key), recordVersion, this.#describeRecord);
-    }
     if (change.kind === "archive") {
-      const slot = this.#slot(change.appointment_id);
-      if (this.record(slot.key).archived) throw new InvalidRequestError(`Appointment ${slot.key} is already archived.`);
       const event: RecordEvent = { type: "record_archived", data: { by: USER, proposal_id: id } };
-      writes.push({ streamId: recordStream(slot.key), expectedVersion: recordVersion!, events: [asEvent(event)] });
+      writes.push({ streamId: recordStream(target!.key), expectedVersion: recordVersion!, events: [asEvent(event)] });
     } else {
-      const claim = claimFor(proposal, change, change.kind === "detail_edit" ? this.#slot(change.appointment_id) : null);
+      const claim = claimFor(proposal, change, target);
       const evidenceId = `${id}-1`;
       const event: EvidenceEvent = { type: "agent_report_confirmed", data: { proposal_id: id, grant_id: proposal.grantId, claim } };
       writes.push({ streamId: evidenceStream(evidenceId), expectedVersion: 0, events: [asEvent(event)] });
       evidenceIds.push(evidenceId);
     }
-
     const confirmed: ProposalEvent = { type: "proposal_confirmed", data: { evidence_ids: evidenceIds } };
-    this.#store.appendMany([{ streamId: proposalStream(id), expectedVersion, events: [asEvent(confirmed)] }, ...writes], (streamId, events) =>
-      streamId.startsWith(PROPOSAL_PREFIX)
-        ? this.#describeProposal(streamId, events)
-        : streamId.startsWith(RECORD_PREFIX)
-          ? this.#describeRecord(streamId, events)
-          : null,
-    );
+
+    this.#store.transaction(() => {
+      if (target) {
+        this.#store.assertVersion(recordStream(target.key), recordVersion!, this.#describeRecord);
+        if (change.kind === "archive" && this.record(target.key).archived) throw new InvalidRequestError(`Appointment ${target.key} is already archived.`);
+      }
+      this.#store.appendMany([{ streamId: proposalStream(id), expectedVersion, events: [asEvent(confirmed)] }, ...writes], (streamId, events) =>
+        streamId.startsWith(PROPOSAL_PREFIX)
+          ? this.#describeProposal(streamId, events)
+          : streamId.startsWith(RECORD_PREFIX)
+            ? this.#describeRecord(streamId, events)
+            : null,
+      );
+    });
     return this.proposal(id);
   }
 

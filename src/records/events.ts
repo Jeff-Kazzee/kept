@@ -10,7 +10,7 @@
 //   confirms it in the app.
 // - The `access_log` stream holds one system event per MCP tool call.
 import type { ClaimType } from "../domain/claim.ts";
-import type { StoredEvent } from "../store/event-log.ts";
+import type { RateWindow, StoredEvent } from "../store/event-log.ts";
 
 export const RECORD_PREFIX = "record:";
 export const PROPOSAL_PREFIX = "proposal:";
@@ -192,12 +192,17 @@ export type AccessResult =
   | "not_found"
   | "stale_edit"
   | "rate_limited"
+  | "busy"
   | "error";
 
 // One MCP tool call. Never holds the token, its hash or the call's input.
 // The first call a rate limit denies in a window is logged on its own. The
 // later denials of that window are logged as one summary entry with tool
-// "*" and `count`, when the grant's next call arrives after the window.
+// "*" and `count`, when the window closes: on the next call to any server
+// on the file after the window, at server start, or when the grant is
+// revoked. A name that is not a tool is never stored. The entry has tool
+// "(unknown)" and a short fingerprint of the name, so repeated probes with
+// one name can be grouped.
 export type AccessEvent = {
   type: "tool_called";
   data: {
@@ -207,8 +212,19 @@ export type AccessEvent = {
     result: AccessResult;
     appointment_id: string | null;
     count?: number;
+    name_fingerprint?: string;
   };
 };
+
+export const UNKNOWN_TOOL = "(unknown)";
+
+// The denials after the first in each closed window, as one entry per
+// window. The first denial was logged when it happened.
+export function rateSummaryEvents(windows: RateWindow[], grantOf: (key: string) => { grant_id: string | null; grant_name: string | null }): AccessEvent[] {
+  return windows
+    .filter((w) => w.denied > 1)
+    .map((w) => ({ type: "tool_called", data: { ...grantOf(w.key), tool: "*", result: "rate_limited", appointment_id: null, count: w.denied - 1 } }));
+}
 
 export type AccessEntry = AccessEvent["data"] & { at: string };
 

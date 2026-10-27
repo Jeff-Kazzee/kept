@@ -9,6 +9,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { InvalidRequestError, NotFoundError } from "../intake/service.ts";
+import { ACCESS_LOG_STREAM, rateSummaryEvents } from "../records/events.ts";
 import type { EventStore, StoredEvent } from "../store/event-log.ts";
 
 export const TIERS = ["read", "annotate", "propose"] as const;
@@ -145,7 +146,14 @@ export class GrantStore {
       throw new InvalidRequestError(`Grant ${id} is already revoked.`);
     }
     const event: GrantEvent = { type: "grant_revoked", data: {} };
-    this.#store.append(grantStream(id), expectedVersion, [event], this.#describe);
+    this.#store.transaction(() => {
+      this.#store.append(grantStream(id), expectedVersion, [event], this.#describe);
+      // The grant makes no more calls, so its rate-limit counts are closed
+      // now and their denials summarized in the access log.
+      const closed = this.#store.closeRateWindows(id, Number.MAX_SAFE_INTEGER);
+      const summaries = rateSummaryEvents(closed, () => ({ grant_id: id, grant_name: current.name }));
+      if (summaries.length > 0) this.#store.appendSystem(ACCESS_LOG_STREAM, summaries);
+    });
     return this.get(id);
   }
 

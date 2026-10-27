@@ -5,15 +5,17 @@
 //
 // Every tool call is rate limited per grant and logged in the case history
 // with the grant name, the tool and the result, including calls to tools
-// that do not exist. The token never reaches the log or any output.
+// that do not exist. The token never reaches the log or any output, and
+// neither does a name that is not a tool.
+import { createHash } from "node:crypto";
 import { ProtocolError, ProtocolErrorCode, Server } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { tierAllows, type GrantStore, type GrantView } from "../src/grants/grants.ts";
 import { InvalidRequestError, NotFoundError } from "../src/intake/service.ts";
-import type { AccessResult } from "../src/records/events.ts";
+import { UNKNOWN_TOOL, rateSummaryEvents, type AccessEvent, type AccessResult } from "../src/records/events.ts";
 import { AppointmentId } from "../src/records/inputs.ts";
 import type { RecordsService } from "../src/records/service.ts";
-import { StaleEditError } from "../src/store/event-log.ts";
+import { StaleEditError, StoreBusyError, type RateWindow } from "../src/store/event-log.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { sanitize } from "./sanitize.ts";
 import { TOOLS, summary, toolByName, type ToolDef } from "./tools.ts";
@@ -73,111 +75,181 @@ function issueText(err: z.ZodError): string {
   return `Invalid input${where}: ${issue.message}`;
 }
 
-// A tool name from the client, made safe to log.
-const loggableName = (name: string) => name.replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64) || "(empty)";
+// A short fingerprint of a name that is not a tool. The name itself is
+// never stored, because a client could send a secret as the name.
+const fingerprint = (name: string) => createHash("sha256").update(name, "utf8").digest("hex").slice(0, 12);
 
 type CallResult =
   | ReturnType<typeof errorResult>
   | { content: Array<{ type: "text"; text: string }>; structuredContent: Record<string, unknown> };
-type Outcome = { kind: "result"; result: CallResult } | { kind: "unknown_tool" };
-const done = (result: CallResult): Outcome => ({ kind: "result", result });
 
-// One call is one transaction on the store: the grant lookup, the rate
-// limit, the tool's writes and the log entry. A revoke from the app commits
-// either before the call, which then fails, or after it.
-export async function callTool(deps: McpDeps, name: string, args: unknown) {
-  const outcome = deps.records.transaction(() => handleCall(deps, name, args));
-  if (outcome.kind === "unknown_tool") throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown tool: ${loggableName(name)}`);
-  return outcome.result;
+type AccessEntry = AccessEvent["data"];
+
+class PermissionDenied extends Error {}
+
+const BUSY: ToolError = { error: "busy", message: "The case is busy because the app is saving. Nothing was changed. Try again in a moment." };
+const REVOKED: ToolError = {
+  error: "permission_denied",
+  message: "This grant was revoked or does not exist. The user can create a new grant in the app.",
+};
+
+// Log entries for calls that could not get the write lock. The next call
+// that gets it writes them first. Kept per records service, which is one
+// per server process.
+const pendingAudit = new WeakMap<RecordsService, AccessEntry[]>();
+
+function logSummaries(deps: McpDeps, windows: RateWindow[]): void {
+  if (windows.length === 0) return;
+  const names = new Map(deps.grants.list().map((g) => [g.id, g.name]));
+  for (const e of rateSummaryEvents(windows, (key) => ({ grant_id: names.has(key) ? key : null, grant_name: names.get(key) ?? null }))) {
+    deps.records.logAccess(e.data);
+  }
 }
 
-function handleCall(deps: McpDeps, name: string, args: unknown): Outcome {
-  const grant = deps.grants.findByToken(deps.token);
+// Closes every rate-limit window that has ended and logs its summary. The
+// server runs it at start, and every call runs it.
+export function sweepRateWindows(deps: McpDeps): void {
+  deps.records.transaction(() => logSummaries(deps, deps.limiter.sweep()));
+}
+
+// A call runs in three steps, so the write lock is held only briefly:
+// 1. One short transaction: the grant, the rate limit, the tier and the
+//    input are checked and the call is counted. A refused call is logged
+//    here.
+// 2. The tool runs with no lock held. Its reads see committed state. Each
+//    write it makes checks the grant again inside the write's own
+//    transaction, so a revoke commits either before the write, which then
+//    fails, or after it.
+// 3. One short transaction logs the result. A read returns its data only
+//    if the grant is still active then.
+// If the lock stays busy through every retry, the call returns a busy error
+// and its log entry waits for the next call.
+export async function callTool(deps: McpDeps, name: string, args: unknown): Promise<CallResult> {
   const tool = toolByName(name);
   const parsed = tool ? tool.input.safeParse(args ?? {}) : null;
   const rawId = tool && parsed?.success ? tool.appointmentOf(parsed.data as never) : null;
   const appointmentId = rawId !== null && AppointmentId.safeParse(rawId).success ? rawId : null;
-  const who = { grant_id: grant?.id ?? null, grant_name: grant?.name ?? null };
-  const log = (result: AccessResult) =>
-    deps.records.logAccess({ ...who, tool: tool?.name ?? loggableName(name), result, appointment_id: appointmentId });
+  const toolField = tool ? { tool: tool.name } : { tool: UNKNOWN_TOOL, name_fingerprint: fingerprint(name) };
+  let grant = deps.grants.findByToken(deps.token);
+  const entry = (result: AccessResult): AccessEntry => ({
+    grant_id: grant?.id ?? null,
+    grant_name: grant?.name ?? null,
+    ...toolField,
+    result,
+    appointment_id: appointmentId,
+  });
+  const pending = pendingAudit.get(deps.records) ?? [];
+  pendingAudit.set(deps.records, pending);
 
-  const limit = deps.limiter.take(grant?.id ?? "no-grant");
-  // Later denials of an earlier window, as one entry.
-  for (const w of limit.closed) {
-    if (w.denied > 1) deps.records.logAccess({ ...who, tool: "*", result: "rate_limited", appointment_id: null, count: w.denied - 1 });
-  }
-  if (!limit.ok) {
-    if (limit.firstDenial) log("rate_limited");
-    return done(
-      errorResult({
-        error: "rate_limited",
-        message: `This grant may make at most ${deps.limiter.limit} calls a minute. Try again in ${limit.retryAfterSeconds} seconds.`,
-      }),
-    );
-  }
-  if (!tool || !parsed) {
-    log("unknown_tool");
-    return { kind: "unknown_tool" };
-  }
-  if (!grant || grant.status !== "active") {
-    log("permission_denied");
-    return done(
-      errorResult({
-        error: "permission_denied",
-        message: "This grant was revoked or does not exist. The user can create a new grant in the app.",
-      }),
-    );
-  }
-  if (!tierAllows(grant.tier, tool.tier)) {
-    log("permission_denied");
-    return done(
-      errorResult({
-        error: "permission_denied",
-        message: `The grant ${grant.name} has the ${grant.tier} tier. ${tool.name} needs the ${tool.tier} tier, which only the user can grant in the app.`,
-      }),
-    );
-  }
-  if (!parsed.success) {
-    log("invalid_input");
-    return done(errorResult({ error: "invalid_input", message: issueText(parsed.error) }));
-  }
-
+  // Step 1.
+  let gate: { refused: CallResult } | { unknown: true } | { allowed: GrantView };
   try {
-    // A savepoint, so a failed tool undoes its own writes and the log entry
-    // below still commits.
-    const structured = deps.records.transaction(
-      () =>
-        sanitize(
-          tool.run({ records: deps.records, actor: { kind: "agent", grant_id: grant.id, grant_name: grant.name }, grant }, parsed.data as never),
-        ) as Record<string, unknown>,
-    );
-    log("ok");
-    return done({ content: [{ type: "text" as const, text: JSON.stringify(structured) }], structuredContent: structured });
+    const flushed = pending.length;
+    gate = deps.records.transaction(() => {
+      for (const e of pending.slice(0, flushed)) deps.records.logAccess(e);
+      logSummaries(deps, deps.limiter.sweep());
+      grant = deps.grants.findByToken(deps.token);
+      const log = (result: AccessResult) => deps.records.logAccess(entry(result));
+      const limit = deps.limiter.take(grant?.id ?? "no-grant");
+      if (!limit.ok) {
+        if (limit.firstDenial) log("rate_limited");
+        return {
+          refused: errorResult({
+            error: "rate_limited",
+            message: `This grant may make at most ${deps.limiter.limit} calls a minute. Try again in ${limit.retryAfterSeconds} seconds.`,
+          }),
+        };
+      }
+      if (!tool || !parsed) {
+        log("unknown_tool");
+        return { unknown: true as const };
+      }
+      if (!grant || grant.status !== "active") {
+        log("permission_denied");
+        return { refused: errorResult(REVOKED) };
+      }
+      if (!tierAllows(grant.tier, tool.tier)) {
+        log("permission_denied");
+        return {
+          refused: errorResult({
+            error: "permission_denied",
+            message: `The grant ${grant.name} has the ${grant.tier} tier. ${tool.name} needs the ${tool.tier} tier, which only the user can grant in the app.`,
+          }),
+        };
+      }
+      if (!parsed.success) {
+        log("invalid_input");
+        return { refused: errorResult({ error: "invalid_input", message: issueText(parsed.error) }) };
+      }
+      return { allowed: grant };
+    });
+    pending.splice(0, flushed);
   } catch (err) {
-    if (err instanceof StaleEditError) {
-      log("stale_edit");
-      const current = appointmentId
-        ? deps.records.appointments({ includeArchived: true }).find((a) => a.id === appointmentId)
-        : undefined;
-      return done(
-        errorResult({
-          error: "stale_edit",
-          message: `The record changed. You sent expected_version ${err.expectedVersion}, and the current version is ${err.currentVersion}. Nothing was written. Read the current record and try again.`,
-          ...(current ? { current: summary(current) } : {}),
-        }),
-      );
-    }
-    if (err instanceof NotFoundError) {
-      log("not_found");
-      return done(errorResult({ error: "not_found", message: err.message }));
-    }
-    if (err instanceof InvalidRequestError) {
-      log("invalid_input");
-      return done(errorResult({ error: "invalid_input", message: err.message }));
-    }
-    log("error");
-    return done(errorResult({ error: "error", message: "The server could not complete the call." }));
+    if (!(err instanceof StoreBusyError)) throw err;
+    pending.push(entry("busy"));
+    return errorResult(BUSY);
   }
+  if ("unknown" in gate) throw new ProtocolError(ProtocolErrorCode.InvalidParams, "Unknown tool.");
+  if ("refused" in gate) return gate.refused;
+  const allowed = gate.allowed;
+  const t = tool!;
+
+  // Step 2.
+  const recheck = () => {
+    const g = deps.grants.findByToken(deps.token);
+    if (!g || g.status !== "active" || !tierAllows(g.tier, t.tier)) throw new PermissionDenied();
+  };
+  let result: CallResult;
+  let outcome: AccessResult;
+  try {
+    const structured = deps.records.withWriteGuard(recheck, () =>
+      sanitize(t.run({ records: deps.records, actor: { kind: "agent", grant_id: allowed.id, grant_name: allowed.name }, grant: allowed }, parsed!.data as never)),
+    ) as Record<string, unknown>;
+    result = { content: [{ type: "text" as const, text: JSON.stringify(structured) }], structuredContent: structured };
+    outcome = "ok";
+  } catch (err) {
+    [result, outcome] = failure(deps, err, appointmentId);
+  }
+
+  // Step 3.
+  try {
+    return deps.records.transaction(() => {
+      if (outcome === "ok" && t.annotations.readOnlyHint) {
+        try {
+          recheck();
+        } catch {
+          [result, outcome] = [errorResult(REVOKED), "permission_denied"];
+        }
+      }
+      deps.records.logAccess(entry(outcome));
+      return result;
+    });
+  } catch (err) {
+    if (!(err instanceof StoreBusyError)) throw err;
+    // The tool's own writes, if any, are already committed. The log entry
+    // waits for the next call.
+    pending.push(entry(outcome));
+    return result;
+  }
+}
+
+function failure(deps: McpDeps, err: unknown, appointmentId: string | null): [CallResult, AccessResult] {
+  if (err instanceof PermissionDenied) return [errorResult(REVOKED), "permission_denied"];
+  if (err instanceof StoreBusyError) return [errorResult(BUSY), "busy"];
+  if (err instanceof StaleEditError) {
+    const current = appointmentId ? deps.records.appointments({ includeArchived: true }).find((a) => a.id === appointmentId) : undefined;
+    return [
+      errorResult({
+        error: "stale_edit",
+        message: `The record changed. You sent expected_version ${err.expectedVersion}, and the current version is ${err.currentVersion}. Nothing was written. Read the current record and try again.`,
+        ...(current ? { current: summary(current) } : {}),
+      }),
+      "stale_edit",
+    ];
+  }
+  if (err instanceof NotFoundError) return [errorResult({ error: "not_found", message: err.message }), "not_found"];
+  if (err instanceof InvalidRequestError) return [errorResult({ error: "invalid_input", message: err.message }), "invalid_input"];
+  return [errorResult({ error: "error", message: "The server could not complete the call." }), "error"];
 }
 
 // One server instance per connection. Holds no grant state: each request

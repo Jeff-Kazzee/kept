@@ -76,21 +76,44 @@ const toEvent = (r: Row): StoredEvent => ({
 
 const defaultDescribe: Describe = (_streamId, events) => ({ version: events.at(-1)?.version ?? 0, events });
 
-export type RateWindow = { windowStart: number; calls: number; denied: number };
+export type RateWindow = { key: string; windowStart: number; calls: number; denied: number };
+
+// Another process held the write lock through the busy timeout and every
+// retry. Nothing was written.
+export class StoreBusyError extends Error {
+  override name = "StoreBusyError";
+  constructor() {
+    super("The case is busy because another process is writing to it. Nothing was saved. Try again in a moment.");
+  }
+}
+
+export const isBusy = (err: unknown) => (err as { errcode?: unknown } | null)?.errcode === 5;
+
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+export type StoreOptions = {
+  // How long SQLite waits for another process's write lock, in ms.
+  busyTimeoutMs?: number;
+  // Pauses before each retry once that wait runs out, in ms.
+  lockRetryMs?: number[];
+};
 
 export class EventStore {
   readonly #db: DatabaseSync;
   readonly #clock: () => string;
   #depth = 0;
+  readonly #retryMs: number[];
+  #guard: (() => void) | null = null;
 
   // `location` is a file path or ":memory:".
-  constructor(location: string = ":memory:", clock: () => string = () => new Date().toISOString()) {
+  constructor(location: string = ":memory:", clock: () => string = () => new Date().toISOString(), options: StoreOptions = {}) {
     this.#db = new DatabaseSync(location);
     this.#clock = clock;
     // The app and the MCP server open the same file. WAL lets one read while
     // the other writes, and the busy timeout makes a writer wait for the
     // other's lock instead of failing at once.
-    if (location !== ":memory:") this.#db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
+    this.#retryMs = options.lockRetryMs ?? [100, 250, 500];
+    if (location !== ":memory:") this.#db.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = ${options.busyTimeoutMs ?? 5000};`);
     this.#db.exec(SCHEMA);
   }
 
@@ -140,9 +163,11 @@ export class EventStore {
   // `fn` must be synchronous.
   transaction<T>(fn: () => T): T {
     const savepoint = `sp${this.#depth}`;
-    this.#db.exec(this.#depth === 0 ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
+    if (this.#depth === 0) this.#lock();
+    else this.#db.exec(`SAVEPOINT ${savepoint}`);
     this.#depth++;
     try {
+      if (this.#depth === 1 && this.#guard) this.#guard();
       const result = fn();
       if (result instanceof Promise) throw new Error("A transaction must be synchronous.");
       this.#depth--;
@@ -152,6 +177,36 @@ export class EventStore {
       this.#depth--;
       this.#db.exec(this.#depth === 0 ? "ROLLBACK" : `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`);
       throw err;
+    }
+  }
+
+  // Takes the write lock. When the busy timeout runs out, retries after
+  // each pause in lockRetryMs, then gives up with StoreBusyError.
+  #lock(): void {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        this.#db.exec("BEGIN IMMEDIATE");
+        return;
+      } catch (err) {
+        if (!isBusy(err)) throw err;
+        const pause = this.#retryMs[attempt];
+        if (pause === undefined) throw new StoreBusyError();
+        sleepSync(pause);
+      }
+    }
+  }
+
+  // Runs `fn` with a check that every write transaction it starts runs
+  // first, inside the lock. The MCP server uses it to check the grant in the
+  // same transaction as the agent's write, while the reads before the write
+  // hold no lock.
+  withWriteGuard<T>(guard: () => void, fn: () => T): T {
+    const previous = this.#guard;
+    this.#guard = guard;
+    try {
+      return fn();
+    } finally {
+      this.#guard = previous;
     }
   }
 
@@ -201,7 +256,7 @@ export class EventStore {
     const row = this.#db.prepare("SELECT calls, denied FROM rate_windows WHERE key = ? AND window_start = ?").get(key, windowStart) as
       | { calls: number; denied: number }
       | undefined;
-    return { windowStart, calls: row?.calls ?? 0, denied: row?.denied ?? 0 };
+    return { key, windowStart, calls: row?.calls ?? 0, denied: row?.denied ?? 0 };
   }
 
   bumpRateWindow(key: string, windowStart: number, field: "calls" | "denied"): RateWindow {
@@ -214,12 +269,17 @@ export class EventStore {
     return this.rateWindow(key, windowStart);
   }
 
-  // Removes and returns the key's windows that started before `before`.
-  closeRateWindows(key: string, before: number): RateWindow[] {
-    const rows = this.#db
-      .prepare("DELETE FROM rate_windows WHERE key = ? AND window_start < ? RETURNING window_start, calls, denied")
-      .all(key, before) as Array<{ window_start: number; calls: number; denied: number }>;
-    return rows.map((r) => ({ windowStart: r.window_start, calls: r.calls, denied: r.denied })).sort((a, b) => a.windowStart - b.windowStart);
+  // Removes and returns the windows that started before `before`, for one
+  // key or, with key null, for every key.
+  closeRateWindows(key: string | null, before: number): RateWindow[] {
+    const rows = (
+      key === null
+        ? this.#db.prepare("DELETE FROM rate_windows WHERE window_start < ? RETURNING *").all(before)
+        : this.#db.prepare("DELETE FROM rate_windows WHERE key = ? AND window_start < ? RETURNING *").all(key, before)
+    ) as Array<{ key: string; window_start: number; calls: number; denied: number }>;
+    return rows
+      .map((r) => ({ key: r.key, windowStart: r.window_start, calls: r.calls, denied: r.denied }))
+      .sort((a, b) => a.key.localeCompare(b.key) || a.windowStart - b.windowStart);
   }
 
   // Exposed for tests that prove the triggers block edits.

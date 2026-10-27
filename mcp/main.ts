@@ -13,7 +13,7 @@ import { appDbPath } from "../src/paths.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { RateLimiter } from "./rate-limit.ts";
-import { createMcpServer } from "./server.ts";
+import { createMcpServer, sweepRateWindows } from "./server.ts";
 
 const token = process.env.APPT_GRANT_TOKEN ?? "";
 // Keep the token out of the environment of anything this process starts.
@@ -33,8 +33,15 @@ const intake = new IntakeService(store, noModel);
 const records = new RecordsService(store, intake, new CaseService(store, intake, noModel));
 const grants = new GrantStore(store);
 const limiter = new RateLimiter(store);
+const deps = { records, grants, token, limiter };
+// Summarize rate-limit windows that ended while no server was running.
+try {
+  sweepRateWindows(deps);
+} catch (err) {
+  console.error(`Could not close old rate-limit windows: ${err instanceof Error ? err.message : String(err)}`);
+}
 
-const handle = serveStdio(() => createMcpServer({ records, grants, token, limiter }), {
+const handle = serveStdio(() => createMcpServer(deps), {
   onerror: (err) => console.error(`MCP server error: ${err.message}`),
 });
 
