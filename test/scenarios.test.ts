@@ -3,34 +3,11 @@
 // questions through the recorded model and the question queue, and answers
 // through the user's tap on a choice built by code.
 import { describe, expect, it } from "vitest";
-import { CaseService } from "../src/case/service.ts";
 import type { CaseView } from "../src/case/types.ts";
-import { loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
-import type { D2Checkpoint } from "../src/fixtures/schema.ts";
-import { RecordedModelClient } from "../src/model/recorded.ts";
-import { EventStore } from "../src/store/event-log.ts";
-import { acceptMessages, intake } from "./helpers.ts";
+import { replayCheckpoint } from "../src/eval/d2-fixtures.ts";
+import { loadScenarios } from "../src/fixtures/load.ts";
 
 const scenarios = loadScenarios().filter((s) => s.d2);
-
-async function runCheckpoint(calendar: string | undefined, checkpoint: D2Checkpoint) {
-  const store = new EventStore();
-  const service = intake(store, () => "2026-11-11T12:00:00.000Z");
-  const kase = new CaseService(store, service, RecordedModelClient.fromDirectory(), { now: () => "2026-11-11T12:00:00.000Z" });
-  if (calendar) kase.loadCalendar(calendar, readFixtureText(calendar), 0);
-  for (const step of checkpoint.steps) {
-    if ("message" in step) {
-      await acceptMessages(service, [step.message]);
-      continue;
-    }
-    const asked = await kase.askNext(kase.view().questionsVersion);
-    expect(asked.question?.conflictKind).toBe(step.answer.kind);
-    const choice = asked.question!.choices.find((c) => c.label === step.answer.choice);
-    expect(choice, step.answer.choice).toBeDefined();
-    kase.answer(asked.question!.id, choice!.id, asked.questionsVersion);
-  }
-  return kase;
-}
 
 function observed(view: CaseView) {
   return {
@@ -50,7 +27,7 @@ describe("D2 checkpoints in the fixtures", () => {
   for (const s of scenarios) {
     s.d2!.forEach((checkpoint, i) => {
       it(`${s.id}.${i + 1}: ${checkpoint.expect}`, async () => {
-        const kase = await runCheckpoint(s.calendar, checkpoint);
+        const { kase } = await replayCheckpoint(s, checkpoint);
         const view = kase.view();
         const { question, expect: _text, steps: _steps, ...expected } = checkpoint;
         expect(observed(view)).toEqual(expected);
@@ -66,4 +43,12 @@ describe("D2 checkpoints in the fixtures", () => {
       });
     });
   }
+
+  it("refuses a replay whose answer step does not match the next question", async () => {
+    const s3 = scenarios.find((s) => s.id === "S3")!;
+    const steps = [{ message: "m2" }, { message: "m3" }, { answer: { kind: "both_held" as const, choice: "Not sure yet" } }];
+    await expect(replayCheckpoint(s3, { ...s3.d2![1]!, steps })).rejects.toThrow(/expected a both_held question, got change_proposed/);
+    const wrong = [{ message: "m2" }, { message: "m3" }, { answer: { kind: "change_proposed" as const, choice: "Keep it" } }];
+    await expect(replayCheckpoint(s3, { ...s3.d2![1]!, steps: wrong })).rejects.toThrow(/no choice "Keep it"/);
+  });
 });

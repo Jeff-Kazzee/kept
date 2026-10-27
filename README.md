@@ -19,7 +19,20 @@ in this repo is synthetic.
 - `src/eval/` and `scripts/eval-live.ts` run the live evaluation.
 - `server/` and `ui/` are the local server and the minimal UI.
 
-See `docs/decisions/0001-stack.md` for the stack and dependency checks.
+## D2: slot states and conflict resolution
+
+- `src/slots/` turns accepted evidence into slot states by a fixed
+  transition table, raises conflicts and checks calendar clashes. It reads
+  only accepted evidence, so model output never changes a slot.
+- `src/conflicts/` holds the two model calls, explain a conflict and
+  propose the next question, with the code checks on citations and dates.
+- `src/case/` loads the calendar into the case, keeps one open question at a
+  time and records each answer as user-reported evidence.
+- Each scenario in `fixtures/scenarios/` states its D2 checkpoints, and
+  `test/scenarios.test.ts` runs them.
+
+See `docs/decisions/0001-stack.md` for the stack and dependency checks, and
+`docs/decisions/0002-slot-states.md` for the slot rules.
 
 ## Commands
 
@@ -43,6 +56,14 @@ pnpm eval:live --max-usd 5 --out eval-results/run.json
 
 It runs every fixture message three times at reasoning effort `low` and
 three times at `minimal`, and writes a JSON report.
+
+Add `--d2` to also run the explanation and question calls over the conflict
+states in the D2 fixtures, three runs at effort `low` (`--d2-effort` sets
+it). `--d2-only` runs only those calls. The conflict states are built with
+recorded extraction, so `--d2-only` spends nothing on extraction. The report
+gives the valid-citation rate, rejections by reason, fallbacks, latency p50
+and p95, tokens and estimated cost. The spend limit covers the whole
+command.
 
 The pass criterion for each effort level is pooled accuracy across its three
 runs of at least 95%, because the criterion is stated over three runs. The

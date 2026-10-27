@@ -118,7 +118,7 @@ Tasks:
   output, and the current question.
 - [x] SP2.15 Recorded responses for the new calls, and fixture stubs marked
   D2 turned into real expectations.
-- [ ] SP2.16 Live evaluation: add explanation and question calls. Report the
+- [x] SP2.16 Live evaluation: add explanation and question calls. Report the
   rate of valid citations and the rejection count.
 
 ## Sprint 3: reviewed reply (D3)

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { main } from "../src/eval/cli.ts";
+import type { ConflictEvalReport } from "../src/eval/conflict-eval.ts";
 import { claimMatches, estimateUsd, percentile, runEval, scoreMessage, type EvalReport } from "../src/eval/eval.ts";
 import { corpusMessages, loadScenarios } from "../src/fixtures/load.ts";
 import type { ModelCall, ModelClient } from "../src/model/client.ts";
@@ -192,5 +193,79 @@ describe("eval:live logic against the recorded client", () => {
     const stdout = execFileSync(process.execPath, [script, "--recorded", "--out", out], { cwd, env, encoding: "utf8" });
     expect(stdout).toContain("S8 fabricated quote: 2/2 rejected");
     expect(JSON.parse(readFileSync(out, "utf8")).client).toBe("recorded");
+  });
+});
+
+describe("SP2.16 eval:live for the explanation and question calls", () => {
+  const recordedClient = () => RecordedModelClient.fromDirectory();
+
+  it("--d2-only runs both calls three times over the conflict fixtures and writes a report", async () => {
+    const out = path.join(tempDir(), "d2.json");
+    const lines: string[] = [];
+    const code = await main(["--d2-only", "--out", out], { MODEL_API_KEY: KEY }, {
+      createClient: recordedClient,
+      log: (l) => lines.push(l),
+      error: (l) => lines.push(l),
+    });
+    expect(code).toBe(0);
+    const report = JSON.parse(readFileSync(out, "utf8")) as ConflictEvalReport;
+    expect(report).toMatchObject({ effort: "low", runs: 3, stoppedBySpendGuard: false, corpus: { explanationInputs: 6, questionInputs: 6 } });
+    for (const kind of [report.explanation, report.question]) {
+      expect(kind).toMatchObject({ items: 6, calls: 18, validCitationRate: 1, validRate: 1, fallbacks: 0, rejections: {} });
+      expect(kind.latencyMs.p50).toBeGreaterThan(0);
+      expect(kind.latencyMs.p95).toBeGreaterThanOrEqual(kind.latencyMs.p50!);
+      expect(kind.costUsd).toBeCloseTo(estimateUsd(kind.usage));
+    }
+    expect(report.calls.every((c) => c.key.startsWith("explain-") || c.key.startsWith("question-"))).toBe(true);
+    expect(report.runResults.map((r) => r.complete)).toEqual([true, true, true]);
+    const printed = lines.join("\n");
+    expect(printed).toContain("[explanation] valid citations 100.0% of parsed attempts, valid results 100.0%, fallbacks 0, calls 18");
+    expect(printed).not.toContain("[low] accuracy");
+    expect(printed).not.toContain(KEY);
+  });
+
+  it("--d2 adds the D2 report after the extraction runs", async () => {
+    const out = path.join(tempDir(), "both.json");
+    const code = await main(["--d2", "--out", out], { MODEL_API_KEY: KEY }, { createClient: recordedClient, log: () => {} });
+    expect(code).toBe(0);
+    const report = JSON.parse(readFileSync(out, "utf8")) as EvalReport & { d2: ConflictEvalReport };
+    expect(report.perEffort.map((e) => e.effort)).toEqual(["low", "minimal"]);
+    expect(report.d2.explanation.calls).toBe(18);
+    expect(report.d2.maxUsd).toBeCloseTo(5 - report.costUsdTotal);
+  });
+
+  it("counts rejections by reason and fallbacks", async () => {
+    const recorded = RecordedModelClient.fromDirectory();
+    const faults = RecordedModelClient.withOverrides(
+      [
+        readRecording(fromPackage("fixtures/recordings/faults/explain-unknown-id.json")),
+        readRecording(fromPackage("fixtures/recordings/faults/question-invented-date.json")),
+      ],
+      recorded,
+    );
+    const out = path.join(tempDir(), "faults.json");
+    const code = await main(["--d2-only", "--out", out], { MODEL_API_KEY: KEY }, { createClient: () => faults, log: () => {} });
+    expect(code).toBe(0);
+    const report = JSON.parse(readFileSync(out, "utf8")) as ConflictEvalReport;
+    expect(report.explanation).toMatchObject({ calls: 21, fallbacks: 3, rejections: { unknown_evidence_id: 6 } });
+    expect(report.explanation.validCitationRate).toBeCloseTo(15 / 21);
+    expect(report.explanation.validRate).toBeCloseTo(15 / 18);
+    expect(report.question).toMatchObject({ calls: 21, fallbacks: 3, rejections: { invented_date_or_time: 3, not_a_question: 3 } });
+    expect(report.question.validCitationRate).toBe(1);
+  });
+
+  it("stops the D2 calls at the spend limit and refuses a bad effort", async () => {
+    const out = path.join(tempDir(), "guard.json");
+    const code = await main(["--d2-only", "--max-usd", "0.001", "--out", out], { MODEL_API_KEY: KEY }, {
+      createClient: recordedClient,
+      log: () => {},
+    });
+    expect(code).toBe(3);
+    const report = JSON.parse(readFileSync(out, "utf8")) as ConflictEvalReport;
+    expect(report.stoppedBySpendGuard).toBe(true);
+    expect(report.runResults[0]!.complete).toBe(false);
+    const errors: string[] = [];
+    expect(await main(["--d2-only", "--d2-effort", "high"], { MODEL_API_KEY: KEY }, { error: (l) => errors.push(l), log: () => {} })).toBe(2);
+    expect(errors.join("\n")).toMatch(/--d2-effort must be minimal or low/);
   });
 });
