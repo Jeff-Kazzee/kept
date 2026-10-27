@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT, type Channel, type ClaimType, type Effort } from "../src/domain/claim.ts";
 import type { IcsTime } from "../src/domain/ics.ts";
+import { sourceLabel } from "../src/slots/labels.ts";
 import type { ConflictKind } from "../src/slots/types.ts";
 import {
   ApiError,
@@ -20,6 +21,29 @@ const CHANNELS: Channel[] = ["sms", "email", "portal", "voicemail_transcript", "
 
 const slotText = (s: { date: string | null; time: string | null; location: string | null }) =>
   [s.date ?? "no date", s.time ?? "no time", s.location ?? "no location"].join(" · ");
+
+// "reported by you through <grant name>" for a confirmed agent report. The
+// name is the grant's, stored on the evidence when the user confirmed it,
+// never a name the agent's client reported.
+const agentSource = (item: EvidenceView) => sourceLabel("reported_by_user_via_agent", item.claim.agent_name ?? null);
+
+// Where an evidence item came from, as the evidence list shows it.
+export function evidenceOrigin(item: EvidenceView): string {
+  switch (item.origin) {
+    case "model":
+      return "Model output, passed the quote check";
+    case "answer":
+      return "Your answer to a question";
+    case "reply":
+      return "Your approved reply (simulated send)";
+    case "agent": {
+      const label = agentSource(item);
+      return label.charAt(0).toUpperCase() + label.slice(1);
+    }
+    case "manual":
+      return "Entered by you";
+  }
+}
 
 export function App() {
   const [state, setState] = useState<AppState | null>(null);
@@ -349,13 +373,21 @@ function SlotsPanel({ kase }: { kase: CaseView }) {
 }
 
 // One evidence item as a source: its id, where it came from and its quote.
-function SourceQuote({ id, state }: { id: string; state: AppState }) {
+export function SourceQuote({ id, state }: { id: string; state: AppState }) {
   const item = state.evidence.find((e) => e.id === id);
   if (!item) return <div className="card">Evidence {id} is not in the case.</div>;
   const c = item.claim;
   const message = state.messages.find((m) => m.id === item.messageId);
   const source =
-    item.origin === "answer" ? "your answer" : item.origin === "reply" ? "your approved reply" : c.source_type === "office_message" ? "office message" : "reported by you";
+    item.origin === "answer"
+      ? "your answer"
+      : item.origin === "reply"
+        ? "your approved reply"
+        : item.origin === "agent"
+          ? agentSource(item)
+          : c.source_type === "office_message"
+            ? "office message"
+            : "reported by you";
   return (
     <div className="card source">
       <div className="label">
@@ -630,7 +662,7 @@ function ManualEntryForm({
   );
 }
 
-function EvidenceCard({
+export function EvidenceCard({
   item,
   state,
   run,
@@ -641,14 +673,7 @@ function EvidenceCard({
 }) {
   const c = item.claim;
   const source = state.messages.find((m) => m.id === item.messageId);
-  const origin =
-    item.origin === "model"
-      ? "Model output, passed the quote check"
-      : item.origin === "answer"
-        ? "Your answer to a question"
-        : item.origin === "reply"
-          ? "Your approved reply (simulated send)"
-          : "Entered by you";
+  const origin = evidenceOrigin(item);
   return (
     <div className={`card ${item.origin === "model" ? "model" : ""}`}>
       <div className="label">
@@ -663,7 +688,9 @@ function EvidenceCard({
       <div>
         Source: {c.source_type.replaceAll("_", " ")} ·{" "}
         <strong>sender kind: {c.sender_kind}</strong>
-        {item.origin === "model" && " (model judgment, not checked by code)"} · from {source?.message.from ?? item.messageId ?? (item.origin === "reply" ? "your reply" : "your answer")}{" "}
+        {item.origin === "model" && " (model judgment, not checked by code)"} · from {source?.message.from ??
+          item.messageId ??
+          (item.origin === "reply" ? "your reply" : item.origin === "agent" ? agentSource(item).replace("reported by ", "") : "your answer")}{" "}
         · evidence time {c.evidence_time}
         {c.event_time && ` · event time ${c.event_time}`}
       </div>

@@ -37,7 +37,9 @@ export type EvidenceView = {
   version: number;
   messageId: string | null;
   claim: EvidenceClaim;
-  origin: "model" | "manual" | "answer" | "reply";
+  // "agent": a change an agent proposed and the user confirmed. Its claim
+  // carries agent_name, the name of the grant the agent used.
+  origin: "model" | "manual" | "answer" | "reply" | "agent";
   status: "pending" | "accepted" | "rejected";
   decidedAt: string | null;
   answer: { question_id: string; conflict_id: string; choice_id: string; clarifies: string | null; after: string } | null;

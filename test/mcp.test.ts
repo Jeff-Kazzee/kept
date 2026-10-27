@@ -252,7 +252,7 @@ describe("S16 and SP4.10: a reported phone confirmation goes to the review queue
   });
 
   it("names the agent by its grant, whatever name the client reports", async () => {
-    const { records, grants, kase, store } = await setup(scenario("S16"));
+    const { records, grants, kase, store, intake: svc } = await setup(scenario("S16"));
     const { token } = grants.create("Kitchen tablet", "propose");
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     const handle = serveStdio(() => createMcpServer({ records, grants, token, limiter: new RateLimiter(store) }), { transport: serverSide });
@@ -272,6 +272,11 @@ describe("S16 and SP4.10: a reported phone confirmation goes to the review queue
     expect(p.grantName).toBe("Kitchen tablet");
     records.confirmProposal(p.id, p.version);
     expect(labels(kase)[MON]).toBe("Confirmed · reported by you through Kitchen tablet");
+    // The evidence the app's list renders carries the grant's name, which
+    // ui/EvidenceCard.test.ts shows as "Reported by you through <name>".
+    const ev = svc.evidenceItem(`${p.id}-1`);
+    expect(ev).toMatchObject({ origin: "agent", claim: { agent_name: "Kitchen tablet" } });
+    expect(JSON.stringify(ev)).not.toContain("Laptop assistant");
   });
 });
 
