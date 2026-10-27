@@ -1,6 +1,7 @@
 {
   "message_id": "m2",
   "effort": "minimal",
+  "note": "Checked against the extraction instructions that ask for one office_request per instruction. Both requests are separate claims.",
   "attempts": [
     {
       "output": {

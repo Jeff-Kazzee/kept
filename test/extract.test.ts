@@ -3,7 +3,8 @@ import { extractClaims, MAX_ATTEMPTS } from "../src/extract/extract.ts";
 import { corpusMessages, loadScenarios } from "../src/fixtures/load.ts";
 import { MetaResponsesClient, ModelCallError } from "../src/model/client.ts";
 import { RecordedModelClient, readRecording, type Recording } from "../src/model/recorded.ts";
-import { buildRequestBody, MODEL } from "../src/model/request.ts";
+import { CLAIM_JSON_SCHEMA, INSTRUCTIONS, buildRequestBody, MODEL } from "../src/model/request.ts";
+import { wordsAppearIn } from "../src/domain/quote.ts";
 import { fromPackage } from "../src/paths.ts";
 import type { Message } from "../src/domain/claim.ts";
 import { NETWORK_BLOCKED } from "./setup.ts";
@@ -258,5 +259,21 @@ describe("model client", () => {
     expect(reply.outputText).toBe('{"claims":[]}');
     expect(reply.usage).toEqual({ input: 900, cachedInput: 512, output: 70, reasoning: 40 });
     expect(reply.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("O-g: one office request per instruction", () => {
+  it("tells the model to split each thing to bring or do into its own claim, with examples not taken from the fixtures", () => {
+    expect(INSTRUCTIONS).toContain("Return a separate office_request claim for each separate thing the office asks the person to bring or do");
+    expect(INSTRUCTIONS).toContain("Give each one its own quote and request_item.");
+    const examples = ["bring a photo ID", "complete the online check-in form", "Bring your parking pass", "sign in at the front desk"];
+    for (const m of corpusMessages(loadScenarios())) {
+      for (const e of examples) expect(m.text.toLowerCase(), `${m.id}: ${e}`).not.toContain(e.toLowerCase());
+    }
+    // Each example's request_item passes the same check as a real claim.
+    expect(wordsAppearIn("bring a photo ID", "bring a photo ID")).toBe(true);
+    expect(wordsAppearIn("complete the online check-in form", "complete the online check-in form")).toBe(true);
+    // The schema, the quote check and the scoring are unchanged.
+    expect(CLAIM_JSON_SCHEMA.properties.claims.items.required).toEqual(["claim_type", "date", "time", "location", "quote", "sender_kind", "event_time", "request_item"]);
   });
 });
