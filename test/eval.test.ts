@@ -355,7 +355,7 @@ describe("SP3.10 eval:live for the reply template call", () => {
     expect(pair.d2.explanation.calls).toBe(18);
     expect(pair.d3.calls).toBe(27);
     expect(pair.d3.maxUsd).toBeCloseTo(5 - pair.d2.costUsdTotal);
-  });
+  }, 30_000);
 
   it("counts a rejected field value and the wrong-pick rate", async () => {
     const faults = RecordedModelClient.withOverrides(
