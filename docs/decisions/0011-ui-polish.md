@@ -284,6 +284,24 @@ mountains, rivers, creeks, hot springs and wildlife, at a high-end polish.
 - U43. `src/records/types.ts`, sprint 8's shim for the old proposal card,
   is deleted. `ui/case/ProposalCard.tsx` was already gone.
 
+## On sprint 8's round 2 (rebased onto `9eb9a08`)
+
+- U44. The own-report card (`own_report`, 0009 D1'): one line with
+  `OWN_REPORT_QUESTION`, the sender and the start of the message as
+  labeled data (so two open questions can be told apart), and Yes and No.
+  It answers through `POST /api/messages/:id/own-report` with the
+  message's version. Answered, it folds to a receipt, "Recorded as your
+  own report" or "Not recorded as your own report", with Undo through its
+  `own_report_recorded` entry. A Yes on clinical text shows the fixed
+  scope decline in the card and changes nothing. While a question is open
+  the assistant cannot decide the message's facts, so each open question
+  is first in "Waiting for you" and counts there.
+- U45. `IMPORT_AFTER_ACTION_NOTICE` is gone. `PASTE_TURN_NOTICE` and
+  `waits_for_person` stay notices written by code.
+- U46. Agents may answer a question only with a choice that records no
+  claim. The page needs no change: a refused answer comes back as a turn
+  error or an activity refusal in the server's words.
+
 ## Measured on the production build
 
 Measured 2026-10-28 on the server with a temporary database, in Chrome
