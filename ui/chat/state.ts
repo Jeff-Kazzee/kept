@@ -1,0 +1,97 @@
+// The chat as the page holds it: the stored messages, and the turn being
+// streamed. The streamed turn is shown as it arrives. When it ends, the page
+// reads the stored chat again, and the stored messages replace it. A turn
+// the server did not store stays on screen with its error, so the user sees
+// what happened and that nothing was saved.
+import type { Card, ChatEvent, ChatLog, ChatMessage, FactChip } from "./types.ts";
+
+export type ToolLine = { callId: string; label: string; ok: boolean | null };
+
+export type PendingTurn = {
+  turnId: string | null;
+  userMessageId: string | null;
+  userText: string;
+  createdAt: string;
+  text: string;
+  tools: ToolLine[];
+  cards: Card[];
+  chips: FactChip[];
+  status: "streaming" | "ended";
+  error: { code: string; message: string } | null;
+};
+
+export type ChatState = {
+  status: "loading" | "ready" | "unavailable";
+  chatVersion: number;
+  messages: ChatMessage[];
+  pending: PendingTurn | null;
+};
+
+export type ChatAction =
+  | { type: "loaded"; log: ChatLog | null }
+  | { type: "start"; text: string; at: string }
+  | { type: "event"; event: ChatEvent }
+  | { type: "failed"; code: string; message: string }
+  | { type: "settled"; log: ChatLog | null }
+  | { type: "dismiss" };
+
+export const initialChat: ChatState = { status: "loading", chatVersion: 0, messages: [], pending: null };
+
+// A stream that ends with no turn.done and no turn.error.
+export const STREAM_CUT = "The answer stopped before it finished. Nothing was saved.";
+
+export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  switch (action.type) {
+    case "loaded":
+      if (action.log === null) return { ...state, status: "unavailable", messages: [], chatVersion: 0 };
+      // A load while a turn streams keeps the turn on screen.
+      return { ...state, status: "ready", chatVersion: action.log.chatVersion, messages: action.log.messages };
+    case "start":
+      return {
+        ...state,
+        pending: { turnId: null, userMessageId: null, userText: action.text, createdAt: action.at, text: "", tools: [], cards: [], chips: [], status: "streaming", error: null },
+      };
+    case "event": {
+      const p = state.pending;
+      if (!p) return state;
+      const e = action.event;
+      // Events of another turn are not this page's.
+      if (e.event !== "turn.started" && p.turnId !== null && e.data.turnId !== p.turnId) return state;
+      switch (e.event) {
+        case "turn.started":
+          return { ...state, pending: { ...p, turnId: e.data.turnId, userMessageId: e.data.userMessageId } };
+        case "text.delta":
+          return { ...state, pending: { ...p, text: p.text + e.data.text } };
+        case "tool.started":
+          return { ...state, pending: { ...p, tools: [...p.tools, { callId: e.data.callId, label: e.data.label, ok: null }] } };
+        case "tool.finished":
+          return { ...state, pending: { ...p, tools: p.tools.map((t) => (t.callId === e.data.callId ? { ...t, ok: e.data.ok } : t)) } };
+        case "card":
+          return { ...state, pending: { ...p, cards: [...p.cards, e.data.card] } };
+        case "facts":
+          return { ...state, pending: { ...p, chips: [...p.chips, ...e.data.chips] } };
+        case "turn.done":
+          return { ...state, chatVersion: Math.max(state.chatVersion, e.data.chatVersion), pending: { ...p, status: "ended" } };
+        case "turn.error":
+          return { ...state, pending: { ...p, status: "ended", error: { code: e.data.code, message: e.data.message } } };
+      }
+      return state;
+    }
+    case "failed":
+      return state.pending ? { ...state, pending: { ...state.pending, status: "ended", error: { code: action.code, message: action.message } } } : state;
+    case "settled": {
+      const p = state.pending;
+      const next = action.log === null ? state : { ...state, status: "ready" as const, chatVersion: action.log.chatVersion, messages: action.log.messages };
+      if (!p) return next;
+      const stored = p.userMessageId !== null && next.messages.some((m) => m.id === p.userMessageId);
+      if (stored) return { ...next, pending: null };
+      return { ...next, pending: { ...p, status: "ended", error: p.error ?? { code: "stream_cut", message: STREAM_CUT } } };
+    }
+    case "dismiss":
+      return { ...state, pending: null };
+  }
+}
+
+// True when the turn was not stored and the user's text should go back into
+// the composer.
+export const turnLost = (p: PendingTurn | null) => p !== null && p.status === "ended" && p.error !== null && p.error.code !== "out_of_scope";

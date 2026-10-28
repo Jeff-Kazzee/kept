@@ -1,0 +1,102 @@
+// The chat thread as the user sees it. Assistant text is labeled as model
+// output, the decline has its own style, user and model text is never
+// markup, cards render from the live case and errors say nothing was saved.
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import type { AppState } from "../api.ts";
+import { ChatView, turnErrorText, type ChatViewProps } from "./ChatView.tsx";
+import type { ChatState } from "./state.ts";
+
+const state = {
+  messages: [],
+  evidence: [],
+  proposals: [],
+  records: [],
+  case: { slots: [], conflicts: [], question: null, staleEvidenceIds: [], reply: { draft: null, sent: [], options: [], withheld: [], suggestion: null, version: 0 } },
+} as unknown as AppState;
+
+const render = (chat: ChatState, extra: Partial<ChatViewProps> = {}) =>
+  renderToStaticMarkup(
+    createElement(ChatView, {
+      state,
+      run: async () => {},
+      chat,
+      streaming: chat.pending?.status === "streaming",
+      scripted: false,
+      send: async () => {},
+      onShowSlot: () => {},
+      onLoadCalendar: async () => {},
+      onLoadDemo: async () => null,
+      fixtures: [],
+      ...extra,
+    }),
+  ).replaceAll("&#x27;", "'");
+
+const at = "2026-11-01T08:30:00.000Z";
+
+describe("chat view", () => {
+  it("an empty chat offers the three ways to start", () => {
+    const html = render({ status: "ready", chatVersion: 0, messages: [], pending: null });
+    for (const s of ["Paste a message from the office", "What is confirmed?", "Load the demo"]) expect(html).toContain(s);
+    expect(html).toContain('id="chat-input"');
+    expect(html).toContain('name="message"');
+    expect(html).toContain('<label for="chat-input" class="sr-only">Message</label>');
+  });
+
+  it("says the chat is not available when the route is missing, and disables the composer", () => {
+    const html = render({ status: "unavailable", chatVersion: 0, messages: [], pending: null });
+    expect(html).toContain("The chat is not available in this build yet.");
+    expect(html).toMatch(/<textarea[^>]*disabled=""/);
+  });
+
+  it("labels assistant text as model output, shows the decline in its own style, and never renders text as markup", () => {
+    const html = render({
+      status: "ready",
+      chatVersion: 2,
+      pending: null,
+      messages: [
+        { id: "u1", role: "user", text: "Hi <img src=x onerror=alert(1)>\nsecond line", createdAt: at, cards: [], chips: [] },
+        { id: "a1", role: "assistant", text: "Monday is <b>confirmed</b>.", createdAt: at, cards: [{ kind: "notice", text: "See the Checklist tab." }], chips: [{ slotKey: "2026-11-16T13:00", label: "Monday 11/16 1:00 PM", stateLabel: "Confirmed · office message", evidenceIds: ["m4-e1"] }] },
+        { id: "u2", role: "user", text: "Which dose?", createdAt: at, cards: [], chips: [] },
+        { id: "a2", role: "assistant", text: "This app only handles appointment times.", createdAt: at, cards: [], chips: [], declined: true },
+      ],
+    });
+    expect(html).toContain('<span class="model-tag">Model output</span>');
+    expect(html).toContain("Hi &lt;img src=x onerror=alert(1)&gt;\nsecond line");
+    expect(html).toContain("Monday is &lt;b&gt;confirmed&lt;/b&gt;.");
+    expect(html).not.toContain("<img");
+    expect(html).toContain("Outside this app's scope");
+    expect(html).toContain('aria-label="Monday 11/16 1:00 PM: Confirmed · office message. Show in schedule."');
+    expect(html).toContain("See the Checklist tab.");
+    // The 2026-11-01 08:30 UTC instant is 01:30 MST, after the change.
+    expect(html).toContain("Sun, Nov 1, 1:30 AM MST");
+  });
+
+  it("the scripted chat labels its text as scripted, not a model", () => {
+    const html = render({ status: "ready", chatVersion: 1, pending: null, messages: [{ id: "a1", role: "assistant", text: "Hello.", createdAt: at, cards: [], chips: [] }] }, { scripted: true });
+    expect(html).toContain("Scripted demo reply, not a model");
+    expect(html).not.toContain(">Model output<");
+  });
+
+  it("shows the tool line and typing while a turn streams, and a plain error when it fails", () => {
+    const streaming = render({
+      status: "ready",
+      chatVersion: 1,
+      messages: [],
+      pending: { turnId: "t1", userMessageId: "u1", userText: "What is confirmed?", createdAt: at, text: "", tools: [{ callId: "c1", label: "Reading your schedule", ok: null }], cards: [], chips: [], status: "streaming", error: null },
+    });
+    expect(streaming).toContain("Reading your schedule");
+    expect(streaming).toContain('aria-label="The assistant is typing"');
+    const failed = render({
+      status: "ready",
+      chatVersion: 1,
+      messages: [],
+      pending: { turnId: "t1", userMessageId: "u1", userText: "What is confirmed?", createdAt: at, text: "", tools: [], cards: [], chips: [], status: "ended", error: { code: "busy", message: "" } },
+    });
+    expect(failed).toContain('role="alert"');
+    expect(failed).toContain("The app is busy. Nothing was saved. Try again in a moment.");
+    expect(turnErrorText({ code: "model_unavailable", message: "The model did not answer." })).toBe("The model did not answer. Nothing was saved.");
+    expect(turnErrorText({ code: "ungrounded", message: "Check your schedule for the current state." })).toBe("Check your schedule for the current state.");
+  });
+});

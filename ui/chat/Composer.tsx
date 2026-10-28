@@ -1,0 +1,86 @@
+// The message box. Enter sends and Shift+Enter adds a line. A pasted
+// message keeps its lines. The calendar button loads a .ics file through
+// the existing calendar route.
+import { useLayoutEffect, useRef, type RefObject } from "react";
+import { Icon } from "../components/Icon.tsx";
+
+export const MAX_MESSAGE = 20000;
+
+export function Composer({
+  value,
+  onChange,
+  onSend,
+  disabled,
+  busy,
+  inputRef,
+  onLoadCalendar,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSend: () => void;
+  disabled: boolean;
+  busy: boolean;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  onLoadCalendar: (file: File) => Promise<void>;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  // Grow with the text, up to the CSS max height.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value, inputRef]);
+
+  return (
+    <form
+      className="composer"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSend();
+      }}
+    >
+      <input
+        ref={fileRef}
+        id="calendar-file"
+        name="calendar-file"
+        type="file"
+        accept=".ics,text/calendar"
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) await onLoadCalendar(file);
+        }}
+      />
+      <button type="button" className="btn btn-ghost btn-icon" onClick={() => fileRef.current?.click()} aria-label="Load a calendar file (.ics)" title="Load a calendar file (.ics)">
+        <Icon name="calendarPlus" />
+      </button>
+      <label htmlFor="chat-input" className="sr-only">
+        Message
+      </label>
+      <textarea
+        ref={inputRef}
+        id="chat-input"
+        name="message"
+        rows={1}
+        value={value}
+        maxLength={MAX_MESSAGE}
+        disabled={disabled}
+        placeholder={disabled ? "The chat is not available" : "Paste a message or ask about your schedule"}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            if (!busy) onSend();
+          }
+        }}
+      />
+      <button type="submit" className="btn btn-primary btn-icon" disabled={disabled || busy || value.trim() === ""} aria-label="Send">
+        <Icon name="send" />
+      </button>
+    </form>
+  );
+}

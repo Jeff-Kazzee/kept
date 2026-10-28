@@ -1,74 +1,48 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { DELETE_CONFIRMATION } from "../src/case/constants.ts";
-import { CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT, type Channel, type ClaimType, type Effort } from "../src/domain/claim.ts";
-import type { IcsTime } from "../src/domain/ics.ts";
-import { sourceLabel } from "../src/slots/labels.ts";
-import type { ConflictKind } from "../src/slots/types.ts";
-import {
-  ApiError,
-  api,
-  isNotPaired,
-  type AppState,
-  type CaseView,
-  type ChecklistItem,
-  type ConflictView,
-  type EvidenceView,
-  type FixtureScenario,
-  type HistoryEntry,
-  type MessageView,
-  type RecordView,
-} from "./api.ts";
-import { GrantPanel, PairingScreen, ProposalCard, RecordNotes, UntrustedText, useLiveRefresh } from "./AgentPanels.tsx";
-import { ReplyPanel, shortTime } from "./ReplyPanel.tsx";
-import { UntrustedBox } from "./Untrusted.tsx";
+// The app shell: the pairing screen until the browser is paired, then the
+// chat with the schedule beside it. Laptop (1024 px and up): the schedule
+// is a column on the right. Tablet (768 to 1023 px): a side sheet. Phone:
+// a tab bar switches between Chat and Schedule.
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, isNotPaired, type AppState, type FixtureScenario } from "./api.ts";
+import type { Run } from "./components/ActionButton.tsx";
+import { Icon } from "./components/Icon.tsx";
+import { ChatView } from "./chat/ChatView.tsx";
+import { DEMO_IDS } from "./chat/demo.ts";
+import { createMockTransport } from "./chat/mockStream.ts";
+import { realTransport } from "./chat/transport.ts";
+import type { ChatTransport } from "./chat/types.ts";
+import { useChat } from "./chat/useChat.ts";
+import { errorSentence } from "./format.ts";
+import { PairingScreen } from "./PairingScreen.tsx";
+import { SchedulePanel, waitingCount, type PanelTab } from "./schedule/SchedulePanel.tsx";
+import { slotElementId } from "./schedule/Agenda.tsx";
+import { useLiveRefresh } from "./useLiveRefresh.ts";
 
-type Run = (action: () => Promise<unknown>) => Promise<void>;
+type Toast = { id: number; kind: "error" | "info"; text: string };
 
-const CHANNELS: Channel[] = ["sms", "email", "portal", "voicemail_transcript", "user_report"];
-
-const slotText = (s: { date: string | null; time: string | null; location: string | null }) =>
-  [s.date ?? "no date", s.time ?? "no time", s.location ?? "no location"].join(" · ");
-
-// "reported by you through <grant name>" for a confirmed agent report. The
-// name is the grant's, stored on the evidence when the user confirmed it,
-// never a name the agent's client reported.
-const agentSource = (item: EvidenceView) => sourceLabel("reported_by_user_via_agent", item.claim.agent_name ?? null);
-
-// Where an evidence item came from, as the evidence list shows it.
-export function evidenceOrigin(item: EvidenceView): string {
-  switch (item.origin) {
-    case "model":
-      return "Model output, passed the quote check";
-    case "answer":
-      return "Your answer to a question";
-    case "reply":
-      return "Your approved reply (simulated send)";
-    case "agent": {
-      const label = agentSource(item);
-      return label.charAt(0).toUpperCase() + label.slice(1);
-    }
-    case "manual":
-      return "Entered by you";
-  }
-}
+const scriptedChat = () => new URLSearchParams(window.location.search).get("mockchat") === "1";
 
 export function App() {
   const [state, setState] = useState<AppState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // The fixed decline for a health question (S11). Shown as a notice, not
-  // as an error.
-  const [notice, setNotice] = useState<string | null>(null);
-  // True when the server answers not_paired: this browser has no session,
-  // or the app restarted. Only the pairing screen shows then.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [unpaired, setUnpaired] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastId = useRef(0);
+
+  const toast = useCallback((kind: Toast["kind"], text: string) => {
+    const id = ++toastId.current;
+    setToasts((t) => [...t.slice(-2), { id, kind, text }]);
+    if (kind === "info") setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 5000);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
       setState(await api.state());
       setUnpaired(false);
+      setLoadError(null);
     } catch (e) {
       if (isNotPaired(e)) setUnpaired(true);
-      else setError(e instanceof Error ? e.message : String(e));
+      else setLoadError(errorSentence(e));
     }
   }, []);
 
@@ -76,853 +50,202 @@ export function App() {
     void refresh();
   }, [refresh]);
 
-  // A change by an agent or another tab shows without a reload.
+  // A change by an agent, the chat or another tab shows without a reload.
   useLiveRefresh(state?.live ?? null, refresh);
 
-  // Runs an action, shows its error, and reloads state. A 409 means the
-  // record changed since it was shown, so the reload shows the current one.
-  const run = useCallback(
-    async (action: () => Promise<unknown>) => {
-      setError(null);
-      setNotice(null);
+  // Runs an action, says what went wrong in a plain sentence, and reloads
+  // the case. A 409 means the record changed since it was shown, so the
+  // reload shows the current one.
+  const run: Run = useCallback(
+    async (action) => {
       try {
         await action();
       } catch (e) {
-        if (e instanceof ApiError && e.body.error === "out_of_scope") setNotice(e.body.message ?? null);
-        else if (isNotPaired(e)) setUnpaired(true);
-        else if (e instanceof ApiError && e.body.error === "case_deleted") setError("The case was deleted. Nothing was saved. The empty case is loaded.");
-        else if (e instanceof ApiError && e.status === 409) setError("This record changed since it was shown. The current version is loaded.");
-        else setError(e instanceof Error ? e.message : String(e));
+        if (isNotPaired(e)) setUnpaired(true);
+        else toast("error", errorSentence(e));
       }
       await refresh();
     },
-    [refresh],
+    [refresh, toast],
   );
 
   if (unpaired) {
     return (
-      <>
-        <h1>Appointment change assistant</h1>
-        <PairingScreen
-          onPaired={() => {
-            setError(null);
-            void refresh();
-          }}
-        />
-      </>
-    );
-  }
-  if (!state) return <p>{error ?? "Loading…"}</p>;
-  const pending = state.evidence.filter((e) => e.status === "pending");
-  const decided = state.evidence.filter((e) => e.status !== "pending");
-  const pendingProposals = state.proposals.filter((p) => p.status === "pending");
-  const decidedProposals = state.proposals.filter((p) => p.status !== "pending");
-  const kase = state.case;
-
-  return (
-    <>
-      <h1>Appointment change assistant</h1>
-      <p>
-        Administrative facts only: times, places, confirmations and what the office asked you to bring or do. No inbox
-        access. All data here is synthetic. Model: <strong>{state.mode === "live" ? "live model" : "recorded responses"}</strong>.
-      </p>
-      {error && <p className="error" role="alert">{error}</p>}
-      {notice && <p className="notice" role="status">{notice}</p>}
-
-      <section>
-        <h2>1. Add messages</h2>
-        <PasteForm onAdd={(m) => run(() => api.addMessage(m))} />
-        <FixturePicker
-          imported={new Set(state.messages.map((m) => m.id))}
-          onAdd={(messages) => run(async () => {
-            for (const m of messages) await api.addMessage(m);
-          })}
-        />
-      </section>
-
-      <section>
-        <h2>2. Calendar</h2>
-        <CalendarPanel kase={kase} run={run} />
-      </section>
-
-      <section>
-        <h2>3. Messages and extraction</h2>
-        {state.messages.length === 0 && <p>No messages yet.</p>}
-        {state.messages.map((m) => (
-          <MessageCard key={m.id} view={m} run={run} />
-        ))}
-      </section>
-
-      <section>
-        <h2>4. Review queue ({pending.length + pendingProposals.length})</h2>
-        <p>Nothing counts as evidence until you accept it. Changes your agents propose wait here too.</p>
-        {pending.length + pendingProposals.length === 0 && <p>No claims wait for review.</p>}
-        {pending.map((e) => (
-          <EvidenceCard key={e.id} item={e} state={state} run={run} />
-        ))}
-        {pendingProposals.map((p) => (
-          <ProposalCard key={p.id} proposal={p} records={state.records} run={run} />
-        ))}
-      </section>
-
-      <section>
-        <h2>5. Appointment slots</h2>
-        <p>Built by code from accepted evidence only. Model output never changes a slot.</p>
-        <SlotsPanel state={state} run={run} />
-      </section>
-
-      <section>
-        <h2>6. What the office asked you to bring or do ({kase.checklist.length})</h2>
-        <ChecklistPanel items={kase.checklist} />
-      </section>
-
-      <section>
-        <h2>7. Question</h2>
-        <QuestionPanel state={state} run={run} />
-      </section>
-
-      <section>
-        <h2>8. Reply to the office</h2>
-        <ReplyPanel reply={kase.reply} run={run} />
-      </section>
-
-      <section>
-        <h2>9. Conflicts ({kase.conflicts.length})</h2>
-        {kase.conflicts.length === 0 && <p>No conflicts.</p>}
-        {kase.conflicts.map((c) => (
-          <ConflictCard key={c.id} conflict={c} state={state} run={run} />
-        ))}
-      </section>
-
-      <section>
-        <h2>10. Reviewed claims, your answers and your replies</h2>
-        {decided.length + decidedProposals.length === 0 && <p>None yet.</p>}
-        {decided.map((e) => (
-          <EvidenceCard key={e.id} item={e} state={state} run={run} />
-        ))}
-        {decidedProposals.map((p) => (
-          <ProposalCard key={p.id} proposal={p} records={state.records} run={run} />
-        ))}
-      </section>
-
-      <section>
-        <h2>11. Case history ({state.history.length})</h2>
-        <HistoryPanel entries={state.history} />
-      </section>
-
-      <section>
-        <h2>12. Agent access (MCP)</h2>
-        <GrantPanel grants={state.grants} run={run} />
-      </section>
-
-      <section>
-        <h2>13. Delete case</h2>
-        <DeleteCasePanel version={state.caseVersion} erasePending={state.erasePending} run={run} />
-      </section>
-    </>
-  );
-}
-
-function PasteForm({ onAdd }: { onAdd: (m: { channel: Channel; from: string; received_at: string; text: string }) => void }) {
-  const [channel, setChannel] = useState<Channel>("sms");
-  const [from, setFrom] = useState("");
-  const [receivedAt, setReceivedAt] = useState("");
-  const [text, setText] = useState("");
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    const at = receivedAt ? new Date(receivedAt) : new Date();
-    onAdd({ channel, from, received_at: at.toISOString(), text });
-    setText("");
-  };
-
-  return (
-    <form onSubmit={submit} className="card">
-      <div className="label">Paste a message</div>
-      <label>
-        Channel{" "}
-        <select value={channel} onChange={(e) => setChannel(e.target.value as Channel)}>
-          {CHANNELS.map((c) => (
-            <option key={c} value={c}>
-              {c === "user_report" ? "my own report (a call, a visit)" : c}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Sender <input value={from} onChange={(e) => setFrom(e.target.value)} required maxLength={200} />
-      </label>
-      <label>
-        Received <input type="datetime-local" value={receivedAt} onChange={(e) => setReceivedAt(e.target.value)} /> (empty means now)
-      </label>
-      <label>
-        Text
-        <br />
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} cols={80} required maxLength={20000} />
-      </label>
-      <button type="submit">Add message</button>
-    </form>
-  );
-}
-
-function FixturePicker({ imported, onAdd }: { imported: Set<string>; onAdd: (m: FixtureScenario["messages"]) => void }) {
-  const [scenarios, setScenarios] = useState<FixtureScenario[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    void api.fixtures().then(setScenarios);
-  }, []);
-
-  const all = new Map(scenarios.flatMap((s) => s.messages.map((m) => [m.id, m] as const)));
-  const toggle = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-  return (
-    <div className="card">
-      <div className="label">Or select synthetic fixture messages</div>
-      {scenarios.map((s) => (
-        <details key={s.id}>
-          <summary>
-            {s.id}: {s.title}
-          </summary>
-          {s.messages.map((m) => (
-            <label key={`${s.id}-${m.id}`}>
-              <input
-                type="checkbox"
-                checked={selected.has(m.id)}
-                disabled={imported.has(m.id)}
-                onChange={() => toggle(m.id)}
-              />{" "}
-              {m.id} · {m.channel} · {m.from} · {m.received_at}
-              {imported.has(m.id) && " (added)"}
-            </label>
-          ))}
-        </details>
-      ))}
-      <button
-        disabled={selected.size === 0}
-        onClick={() => {
-          onAdd([...selected].map((id) => all.get(id)!).sort((a, b) => a.received_at.localeCompare(b.received_at)));
-          setSelected(new Set());
+      <PairingScreen
+        onPaired={() => {
+          setToasts([]);
+          void refresh();
         }}
-      >
-        Add selected ({selected.size})
-      </button>
-    </div>
-  );
-}
-
-function icsTimeText(t: IcsTime | null): string {
-  if (!t) return "";
-  return `${t.time ?? "all day"} ${t.utc ? "UTC" : (t.tzid ?? "")}`.trim();
-}
-
-function CalendarPanel({ kase, run }: { kase: CaseView; run: Run }) {
-  const cal = kase.calendar;
-  const load = (name: string, text: string) => run(() => api.loadCalendar(name, text, kase.calendarVersion));
-
-  return (
-    <div className="card">
-      <label>
-        Load a synthetic .ics file{" "}
-        <input
-          type="file"
-          accept=".ics,text/calendar"
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            if (file) await load(file.name, await file.text());
-          }}
-        />
-      </label>
-      <button
-        onClick={() =>
-          run(async () => {
-            const demo = await api.calendar();
-            await api.loadCalendar(demo.name, demo.text, kase.calendarVersion);
-          })
-        }
-      >
-        Load demo calendar (dana.ics)
-      </button>
-      {!cal && <p>No calendar loaded. Clashes are not checked.</p>}
-      {cal && (
-        <>
-          <p>
-            {cal.name}: {cal.events.length} events. Times are {cal.timeZone}. For clash checks an appointment is assumed to last{" "}
-            {cal.assumedSlotMinutes} minutes, because messages do not state an end time.
-          </p>
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Start</th>
-                <th>End</th>
-                <th>Summary</th>
-              </tr>
-            </thead>
-            <tbody>
-              {cal.events.map((ev, i) => (
-                <tr key={ev.uid ?? i}>
-                  <td>{ev.start.date}</td>
-                  <td>{icsTimeText(ev.start)}</td>
-                  <td>{icsTimeText(ev.end)}</td>
-                  <td>
-                    {ev.summary}
-                    {ev.recurring && " (repeats, first instance shown)"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
-    </div>
-  );
-}
-
-// The latest archive of a record that is still in effect, which Undo
-// reverses.
-export function activeArchive(record: RecordView | undefined): number | null {
-  return record?.history.filter((h) => h.type === "record_archived" && !h.undone).at(-1)?.version ?? null;
-}
-
-// G-f: archived slots leave this list. "Show archived" lists them with Undo.
-export function SlotsPanel({ state, run, initialShowArchived = false }: { state: AppState; run: Run; initialShowArchived?: boolean }) {
-  const [showArchived, setShowArchived] = useState(initialShowArchived);
-  const kase = state.case;
-  if (kase.slots.length === 0) return <p>No slots yet. Accept claims in the review queue.</p>;
-  const records = new Map(state.records.map((r) => [r.id, r]));
-  const archivedCount = kase.slots.filter((s) => records.get(s.key)?.archived).length;
-  const shown = kase.slots.filter((s) => showArchived || !records.get(s.key)?.archived);
-  return (
-    <>
-      <label>
-        <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Show archived ({archivedCount})
-      </label>
-      <table>
-        <thead>
-          <tr>
-            <th>Slot</th>
-            <th>State</th>
-            <th>Place</th>
-            <th>Calendar</th>
-            <th>Notes and tags</th>
-            <th>Evidence</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {shown.map((s) => {
-            const record = records.get(s.key);
-            const archiveVersion = activeArchive(record);
-            return (
-              <tr key={s.key} className={record?.archived ? "archived" : undefined}>
-                <td>
-                  {s.label}
-                  {record?.archived && <div className="warn">Archived</div>}
-                </td>
-                <td>
-                  <strong>{s.stateLabel}</strong>
-                  <StateQuote id={s.stateEvidenceId} state={state} />
-                  {s.missing.length > 0 && <div className="warn">Incomplete: no {s.missing.map((m) => (m === "time" ? "time" : "place")).join(", no ")}</div>}
-                  {s.staleEvidenceIds.length > 0 && <div className="warn">Possibly stale reminder: {s.staleEvidenceIds.join(", ")}</div>}
-                </td>
-                <td>{s.locationDisputed ? <span className="warn">Sources disagree</span> : (s.location ?? "not stated")}</td>
-                <td>
-                  {s.clashes === null
-                    ? s.time === null || !kase.calendar
-                      ? "not checked"
-                      : "not checked (closed)"
-                    : s.clashes.length === 0
-                      ? "no clash"
-                      : s.clashes.map((c, i) => (
-                          <div key={i} className="warn">
-                            Clashes with {c.summary} ({icsTimeText(c.start)}
-                            {c.end ? ` to ${icsTimeText(c.end)}` : ""})
-                          </div>
-                        ))}
-                </td>
-                <td>
-                  <RecordNotes record={record} />
-                </td>
-                <td>{s.evidenceIds.join(", ")}</td>
-                <td>
-                  {record?.archived && archiveVersion !== null ? (
-                    <button onClick={() => run(() => api.undo(s.key, archiveVersion, record.version))}>Undo archive</button>
-                  ) : (
-                    <button onClick={() => run(() => api.archive(s.key, record?.version ?? 0))}>Archive</button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      {shown.length === 0 && <p>Every slot is archived. Tick Show archived to see them.</p>}
-    </>
-  );
-}
-
-// The quote of the evidence that set a slot's state, so the state and its
-// words are on screen together.
-function StateQuote({ id, state }: { id: string | null; state: AppState }) {
-  const item = id ? state.evidence.find((e) => e.id === id) : undefined;
-  const quote = item?.claim.quote;
-  if (!id || !item || !quote) return null;
-  if (item.origin === "agent") return <AgentQuote item={item} />;
-  return (
-    <div className="quote">
-      “{quote}” <code>{id}</code>
-    </div>
-  );
-}
-
-// The quote of a confirmed agent report is the agent's own statement, so it
-// stays labeled as untrusted text wherever it shows.
-function AgentQuote({ item }: { item: EvidenceView }) {
-  return <UntrustedText label={`${item.id} · words from ${item.claim.agent_name ?? "an agent"}`} text={item.claim.quote ?? ""} />;
-}
-
-// SP5.3: the office's requests, each with its quote and source. Built by
-// code from accepted evidence, so these are not model output.
-export function ChecklistPanel({ items }: { items: ChecklistItem[] }) {
-  if (items.length === 0) return <p>Nothing yet. Office requests you accept in review show here.</p>;
-  return (
-    <>
-      <p>From the office requests you accepted in review. Each item shows its quote and where it came from.</p>
-      <ul>
-        {items.map((item) => (
-          <li key={item.text}>
-            {item.untrustedLabel ? <UntrustedBox label={item.untrustedLabel} text={item.text} /> : <strong>{item.text}</strong>}
-            {item.sources.map((s) =>
-              s.untrustedLabel && s.quote ? (
-                <div key={s.evidenceId}>
-                  <UntrustedBox label={s.untrustedLabel} text={s.quote} />
-                  <div className="quote">
-                    {s.sourceLabel} · <code>{s.evidenceId}</code>
-                  </div>
-                </div>
-              ) : (
-                <div key={s.evidenceId} className="quote">
-                  {s.quote ? `“${s.quote}”` : "No quote."} · {s.sourceLabel} · <code>{s.evidenceId}</code>
-                </div>
-              ),
-            )}
-          </li>
-        ))}
-      </ul>
-    </>
-  );
-}
-
-// SP5.5: every event of the case in order.
-export function HistoryPanel({ entries }: { entries: HistoryEntry[] }) {
-  if (entries.length === 0) return <p>No events yet.</p>;
-  return (
-    <details>
-      <summary>Show all {entries.length} events, oldest first</summary>
-      <table>
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>When</th>
-            <th>Event</th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map((h) => (
-            <tr key={h.seq}>
-              <td>{h.seq}</td>
-              <td className="nowrap">{shortTime(h.at)}</td>
-              <td className={h.undone ? "undone" : undefined}>
-                {h.label}
-                {h.undone && " (undone)"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </details>
-  );
-}
-
-// SP5.4: Delete case. The only permanent deletion, with its own typed
-// confirmation. No agent can reach it.
-export function DeleteCasePanel({ version, erasePending = false, run }: { version: number; erasePending?: boolean; run: Run }) {
-  const [typed, setTyped] = useState("");
-  return (
-    <div className="card danger">
-      {erasePending && (
-        <p className="warn" role="alert">
-          A deleted case is not cleared from the database file yet, because another program kept the file busy. Close the MCP
-          client or other programs that use it, then run Delete case again.
-        </p>
-      )}
-      <p>
-        Delete case erases every message, claim, review, slot, question, explanation, reply, note, tag and proposal of this
-        case, and the log of agent calls. It also clears them from the database file. Grants stay, because they are app
-        settings. Revoke a grant separately. This cannot be undone.
-      </p>
-      <label>
-        Type {DELETE_CONFIRMATION} to confirm{" "}
-        <input value={typed} onChange={(e) => setTyped(e.target.value)} aria-label={`Type ${DELETE_CONFIRMATION} to confirm`} />
-      </label>
-      <button
-        disabled={typed !== DELETE_CONFIRMATION}
-        onClick={() =>
-          run(async () => {
-            await api.deleteCase(version, typed);
-            setTyped("");
-          })
-        }
-      >
-        Delete this case and all its data permanently. This cannot be undone.
-      </button>
-    </div>
-  );
-}
-
-// One evidence item as a source: its id, where it came from and its quote.
-export function SourceQuote({ id, state }: { id: string; state: AppState }) {
-  const item = state.evidence.find((e) => e.id === id);
-  if (!item) return <div className="card">Evidence {id} is not in the case.</div>;
-  const c = item.claim;
-  const message = state.messages.find((m) => m.id === item.messageId);
-  const source =
-    item.origin === "answer"
-      ? "your answer"
-      : item.origin === "reply"
-        ? "your approved reply"
-        : item.origin === "agent"
-          ? agentSource(item)
-          : c.source_type === "office_message"
-            ? "office message"
-            : "reported by you";
-  return (
-    <div className="card source">
-      <div className="label">
-        {id} · {source}
-        {message && (
-          <>
-            {" "}
-            · {message.message.from} · <span className="nowrap">{shortTime(message.message.received_at)}</span>
-          </>
-        )}
-        {state.case.staleEvidenceIds.includes(id) && " · possibly stale"}
-      </div>
-      <div>
-        {c.claim_type} · {slotText(c.slot)} · sender kind {c.sender_kind}
-      </div>
-      {c.quote ? item.origin === "agent" ? <AgentQuote item={item} /> : <pre>“{c.quote}”</pre> : <div>No quote.</div>}
-    </div>
-  );
-}
-
-const KIND_TITLES: Record<ConflictKind, string> = {
-  both_held: "Two slots are held",
-  change_proposed: "Change proposed",
-  unknown_order: "Order unknown",
-  ambiguous_date: "Date or slot is ambiguous",
-  possibly_stale: "Possibly stale reminder",
-  location_mismatch: "Places disagree",
-  incomplete_slot: "Missing detail",
-};
-
-function QuestionPanel({ state, run }: { state: AppState; run: Run }) {
-  const kase = state.case;
-  const q = kase.question;
-  if (!q) {
-    if (kase.waiting === 0) return <p>No question waits.</p>;
-    return (
-      <div className="card">
-        <p>
-          {kase.waiting} conflict{kase.waiting > 1 ? "s wait" : " waits"} for a question. The app asks one at a time.
-        </p>
-        <button onClick={() => run(() => api.nextQuestion(kase.questionsVersion))}>Ask the next question</button>
-      </div>
+      />
     );
   }
-  return (
-    <div className={`card ${q.origin === "model" ? "model" : ""}`}>
-      <div className="label">
-        {q.origin === "model"
-          ? "Model output: proposed question, passed the code checks"
-          : "Fixed wording: the model's question failed the code checks twice"}{" "}
-        · {KIND_TITLES[q.conflictKind]}
-      </div>
-      <div className="split">
-        <div>
-          <p>
-            <strong>{q.text}</strong>
-          </p>
-          <div className="label">Your answer (choices built by code, recorded as reported by you)</div>
-          {q.choices.map((c) => (
-            <button key={c.id} onClick={() => run(() => api.answer(q.id, c.id, kase.questionsVersion, kase.reply.version))}>
-              {c.label}
-            </button>
-          ))}
-          {q.conflictKind === "change_proposed" && (
-            <p>Choosing a time or keeping the original opens a reply draft. No slot changes until you approve the reply.</p>
-          )}
-        </div>
-        <div>
-          <div className="label">Cited quotes</div>
-          {q.citedEvidenceIds.map((id) => (
-            <SourceQuote key={id} id={id} state={state} />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ConflictCard({ conflict, state, run }: { conflict: ConflictView; state: AppState; run: Run }) {
-  const x = conflict.explanation;
-  return (
-    <div className="card">
-      <div className="label">
-        {KIND_TITLES[conflict.kind]} · {conflict.status}
-        {conflict.answer && `: ${conflict.answer.label}`}
-      </div>
-      <p>{conflict.summary}</p>
-      {conflict.archivedSlotKeys.length > 0 && (
-        <p className="warn">
-          Not asked while{" "}
-          {conflict.archivedSlotKeys.map((k) => state.case.slots.find((x) => x.key === k)?.label ?? k).join(" and ")}{" "}
-          {conflict.archivedSlotKeys.length > 1 ? "are" : "is"} archived. Undo the archive to answer it.
-        </p>
-      )}
-      <div className="label">Sources ({conflict.evidenceIds.length})</div>
-      <div className="sources">
-        {conflict.evidenceIds.map((id) => (
-          <SourceQuote key={id} id={id} state={state} />
-        ))}
-      </div>
-      {!x && (
-        <button onClick={() => run(() => api.explain(conflict.id, conflict.version))}>Explain with the model</button>
-      )}
-      {x?.outcome === "valid" && (
-        <div className="card model">
-          <div className="label">Model output: explanation ({x.model}, effort {x.effort}), passed the code checks</div>
-          <p>{x.text}</p>
-          <CitedQuotes cited={x.citedEvidenceIds} shown={conflict.evidenceIds} state={state} />
-        </div>
-      )}
-      {x?.outcome === "unavailable" && (
-        <div className="card rejected">
-          <div className="label">Explanation unavailable</div>
-          The model's explanation failed the code checks twice ({x.attempts.map((a) => a.problems.join(", ")).join("; ")}). The
-          sources above are shown without it.
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Citations of sources already on screen are listed by id. Only a cited
-// item that is not shown above gets its own card.
-function CitedQuotes({ cited, shown, state }: { cited: string[]; shown: string[]; state: AppState }) {
-  const above = cited.filter((id) => shown.includes(id));
-  const other = cited.filter((id) => !shown.includes(id));
-  return (
-    <div>
-      <div className="cited">
-        Cites {above.length > 0 ? `${above.join(", ")} (sources shown above)` : "no source shown above"}
-      </div>
-      {other.map((id) => (
-        <SourceQuote key={id} id={id} state={state} />
-      ))}
-    </div>
-  );
-}
-
-function MessageCard({ view, run }: { view: MessageView; run: Run }) {
-  const [effort, setEffort] = useState<Effort>(DEFAULT_EXTRACTION_EFFORT);
-  const [manualOpen, setManualOpen] = useState(false);
-  const m = view.message;
-
-  return (
-    <div className="card">
-      <div>
-        <strong>{m.from}</strong> · {m.channel} · received <span className="nowrap">{shortTime(m.received_at)}</span> ·{" "}
-        {view.sourceType === "reported_by_user" ? "reported by you" : "office message"}
-      </div>
-      <div className="label">Message text (shown as data, never followed)</div>
-      <pre>{m.text}</pre>
-      <div>Status: {statusText(view.status)}</div>
-
-      {view.status === "imported" && (
-        <div>
-          <select value={effort} onChange={(e) => setEffort(e.target.value as Effort)}>
-            <option value="minimal">effort minimal</option>
-            <option value="low">effort low</option>
-          </select>
-          <button onClick={() => run(() => api.extract(view.id, effort, view.version))}>Extract claims</button>
-        </div>
-      )}
-
-      {view.attempts.length > 0 && (
-        <ul>
-          {view.attempts.map((a) => (
-            <li key={a.attempt}>
-              Attempt {a.attempt} ({a.effort}, {a.latency_ms} ms): {a.outcome}
-              {a.problem && ` · ${a.problem}`}
-              {a.detail && ` · ${a.detail}`}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {view.rejections.length > 0 && (
-        <div>
-          <div className="label">Model output rejected by code checks</div>
-          {view.rejections.map((r, i) => (
-            <div key={i} className="card rejected">
-              Attempt {r.attempt}: {r.claim.claim_type} · {slotText(r.claim)} · problems: {r.problems.join(", ")}
-              <pre>Quote from model: {r.claim.quote}</pre>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {view.status === "manual_entry_needed" && <p>Extraction failed after one retry. Enter the claims by hand.</p>}
-      {(view.status === "manual_entry_needed" || manualOpen) && (
-        <ManualEntryForm messageId={view.id} version={view.version} run={run} onDone={() => setManualOpen(false)} />
-      )}
-      {view.status !== "manual_entry_needed" && !manualOpen && (
-        <button onClick={() => setManualOpen(true)}>Add a claim by hand</button>
-      )}
-    </div>
-  );
-}
-
-function statusText(status: MessageView["status"]): string {
-  switch (status) {
-    case "imported":
-      return "not extracted yet";
-    case "claims_pending":
-      return "claims extracted, waiting for your review";
-    case "no_claims":
-      return "no appointment facts found";
-    case "manual_entry_needed":
-      return "manual entry needed";
+  if (!state) {
+    return (
+      <main className="loading" aria-busy={loadError === null}>
+        <p role={loadError ? "alert" : "status"}>{loadError ?? "Loading your case…"}</p>
+      </main>
+    );
   }
+  return <Shell state={state} run={run} refresh={refresh} toast={toast} toasts={toasts} setToasts={setToasts} onNotPaired={() => setUnpaired(true)} />;
 }
 
-function ManualEntryForm({
-  messageId,
-  version,
-  run,
-  onDone,
-}: {
-  messageId: string;
-  version: number;
-  run: Run;
-  onDone: () => void;
-}) {
-  const [claimType, setClaimType] = useState<ClaimType>("offer");
-  const [date, setDate] = useState("");
-  const [time, setTime] = useState("");
-  const [location, setLocation] = useState("");
-  const [quote, setQuote] = useState("");
-  const [requestItem, setRequestItem] = useState("");
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    const orNull = (s: string) => (s.trim() ? s.trim() : null);
-    void run(async () => {
-      await api.manual(messageId, version, {
-        claim_type: claimType,
-        date: orNull(date),
-        time: orNull(time),
-        location: orNull(location),
-        quote: orNull(quote),
-        request_item: orNull(requestItem),
-      });
-      onDone();
-    });
-  };
-
-  return (
-    <form onSubmit={submit} className="card">
-      <div className="label">Manual entry (recorded as reported by you)</div>
-      <label>
-        Claim type{" "}
-        <select value={claimType} onChange={(e) => setClaimType(e.target.value as ClaimType)}>
-          {CLAIM_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Date <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-      </label>
-      <label>
-        Time <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
-      </label>
-      <label>
-        Location <input value={location} onChange={(e) => setLocation(e.target.value)} maxLength={300} />
-      </label>
-      {claimType === "office_request" && (
-        <label>
-          Item to bring or task <input value={requestItem} onChange={(e) => setRequestItem(e.target.value)} maxLength={300} />
-        </label>
-      )}
-      <label>
-        Quote from the message (optional, must match exactly){" "}
-        <input value={quote} onChange={(e) => setQuote(e.target.value)} size={60} />
-      </label>
-      <button type="submit">Save claim for review</button>
-    </form>
-  );
-}
-
-export function EvidenceCard({
-  item,
+function Shell({
   state,
   run,
+  refresh,
+  toast,
+  toasts,
+  setToasts,
+  onNotPaired,
 }: {
-  item: EvidenceView;
   state: AppState;
   run: Run;
+  refresh: () => Promise<void>;
+  toast: (kind: Toast["kind"], text: string) => void;
+  toasts: Toast[];
+  setToasts: (f: (t: Toast[]) => Toast[]) => void;
+  onNotPaired: () => void;
 }) {
-  const c = item.claim;
-  const source = state.messages.find((m) => m.id === item.messageId);
-  const origin = evidenceOrigin(item);
+  const scripted = useMemo(scriptedChat, []);
+  const transport: ChatTransport = useMemo(() => (scripted ? createMockTransport({ api, storage: sessionStorage }) : realTransport), [scripted]);
+  const { chat, send, streaming } = useChat(transport, `${state.live.generation}:${state.live.seq}`, onNotPaired, () => void refresh());
+  const [view, setView] = useState<"chat" | "schedule">("chat");
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [tab, setTab] = useState<PanelTab>("schedule");
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const [fixtures, setFixtures] = useState<FixtureScenario["messages"]>([]);
+  const sheetToggle = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    void api.fixtures().then(
+      (s) => setFixtures(s.flatMap((x) => x.messages).filter((m, i, all) => all.findIndex((y) => y.id === m.id) === i)),
+      () => setFixtures([]),
+    );
+  }, []);
+
+  // Escape closes the side sheet on a tablet.
+  useEffect(() => {
+    if (!sheetOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSheetOpen(false);
+        sheetToggle.current?.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [sheetOpen]);
+
+  const showSlot = (slotKey: string) => {
+    setTab("schedule");
+    setView("schedule");
+    setSheetOpen(true);
+    setHighlight(slotKey);
+    requestAnimationFrame(() => document.getElementById(slotElementId(slotKey))?.scrollIntoView({ block: "center" }));
+  };
+
+  const loadCalendar = async (file: File) => {
+    if (file.size > 1_000_000) {
+      toast("error", "That calendar file is larger than 1 MB. Nothing was loaded.");
+      return;
+    }
+    const text = await file.text();
+    await run(async () => {
+      await api.loadCalendar(file.name, text, state.case.calendarVersion);
+      toast("info", `Loaded the calendar ${file.name}. Clashes are checked against it.`);
+    });
+  };
+
+  // Loads the demo calendar if none is loaded, and gives the first demo
+  // message not yet in the case to the composer.
+  const loadDemo = async () => {
+    if (!state.case.calendar) {
+      await run(async () => {
+        const demo = await api.calendar();
+        await api.loadCalendar(demo.name, demo.text, state.case.calendarVersion);
+        toast("info", "Loaded the demo calendar. Press Enter to send the first demo message.");
+      });
+    }
+    const imported = new Set(state.messages.map((m) => m.id));
+    return fixtures.find((m) => DEMO_IDS.includes(m.id) && !imported.has(m.id)) ?? null;
+  };
+
+  const waiting = waitingCount(state);
+  const modeText = scripted ? "Scripted chat" : state.mode === "live" ? "Live model" : "Recorded responses";
+
   return (
-    <div className={`card ${item.origin === "model" ? "model" : ""}`}>
-      <div className="label">
-        {item.id} · {origin} · {item.status}
-        {state.case.staleEvidenceIds.includes(item.id) && " · possibly stale"}
-      </div>
-      <div>
-        <strong>{c.claim_type}</strong> · {slotText(c.slot)}
-        {c.request_item && ` · ${c.request_item}`}
-      </div>
-      {c.quote && (item.origin === "agent" ? <AgentQuote item={item} /> : <pre>“{c.quote}”</pre>)}
-      <div>
-        Source: {c.source_type.replaceAll("_", " ")} ·{" "}
-        <strong>sender kind: {c.sender_kind}</strong>
-        {item.origin === "model" && " (model judgment, not checked by code)"} · from {source?.message.from ??
-          item.messageId ??
-          (item.origin === "reply" ? "your reply" : item.origin === "agent" ? agentSource(item).replace("reported by ", "") : "your answer")}{" "}
-        · evidence time {c.evidence_time}
-        {c.event_time && ` · event time ${c.event_time}`}
-      </div>
-      {item.status === "pending" && (
-        <div>
-          <button onClick={() => run(() => api.accept(item.id, item.version))}>Accept</button>
-          <button onClick={() => run(() => api.reject(item.id, item.version))}>Reject</button>
+    <div className="app" data-view={view} data-panel={sheetOpen ? "open" : "closed"}>
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            <Icon name="calendar" />
+          </span>
+          <h1>Appointment assistant</h1>
         </div>
-      )}
-      {item.decidedAt && <div>Decided {item.decidedAt}</div>}
+        <span className="mode-pill" title="Where the assistant's answers come from">
+          <Icon name={scripted ? "chat" : "sparkle"} size="sm" />
+          <span className="mode-long">{modeText}</span>
+        </span>
+        <button
+          ref={sheetToggle}
+          type="button"
+          className="btn btn-ghost sheet-toggle"
+          aria-expanded={sheetOpen}
+          aria-controls="schedule-panel"
+          onClick={() => setSheetOpen((o) => !o)}
+        >
+          <Icon name="panel" /> Schedule
+          {waiting > 0 && <span className="count">{waiting}</span>}
+        </button>
+      </header>
+      <main className="main">
+        <ChatView
+          state={state}
+          run={run}
+          chat={chat}
+          streaming={streaming}
+          scripted={scripted}
+          send={send}
+          onShowSlot={showSlot}
+          onLoadCalendar={loadCalendar}
+          onLoadDemo={loadDemo}
+          fixtures={fixtures}
+        />
+        <button type="button" className="scrim" aria-label="Close the schedule" tabIndex={-1} onClick={() => setSheetOpen(false)} />
+        <aside id="schedule-panel" className="panel" aria-label="Schedule">
+          <SchedulePanel
+            state={state}
+            run={run}
+            tab={tab}
+            onTab={setTab}
+            highlight={highlight}
+            onClose={() => {
+              setSheetOpen(false);
+              sheetToggle.current?.focus();
+            }}
+          />
+        </aside>
+      </main>
+      <div className="tabbar" role="tablist" aria-label="Views">
+        <button type="button" role="tab" aria-selected={view === "chat"} onClick={() => setView("chat")}>
+          <Icon name="chat" /> Chat
+        </button>
+        <button type="button" role="tab" aria-selected={view === "schedule"} onClick={() => setView("schedule")}>
+          <Icon name="calendar" /> Schedule
+          {waiting > 0 && <span className="count">{waiting}</span>}
+        </button>
+      </div>
+      <div className="toasts" aria-live="polite">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast toast-${t.kind}`} role={t.kind === "error" ? "alert" : "status"}>
+            <Icon name={t.kind === "error" ? "alert" : "info"} />
+            <p>{t.text}</p>
+            <button type="button" className="btn btn-ghost btn-icon" aria-label="Dismiss" onClick={() => setToasts((all) => all.filter((x) => x.id !== t.id))}>
+              <Icon name="close" size="sm" />
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
