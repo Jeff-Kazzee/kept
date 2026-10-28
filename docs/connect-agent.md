@@ -134,22 +134,38 @@ and deny wins over any allow. Use `--sandbox appointments-ssh` on another
 machine:
 
 ```sh
-grok -m grok-4.7 --reasoning-effort high --cwd ~/agent-work \
+grok -m grok-4.7 --reasoning-effort high --cwd ~/agent-work --trust \
   --disallowed-tools run_terminal_cmd,read_file,grep,list_dir,search_replace,write,web_search,web_fetch,task,Agent \
-  --deny Bash --deny Edit --deny Write --deny Read --deny Grep --deny WebFetch --deny WebSearch \
+  --deny Bash --deny Edit --deny Write \
+  --deny 'Read(/home/**)' --deny 'Read(/etc/**)' --deny 'Read(/tmp/**)' \
+  --deny WebFetch --deny WebSearch \
+  --deny 'MCPTool(<other-server>__*)' \
   --allow 'MCPTool(appointments__*)' \
   --disable-web-search \
   --sandbox appointments-local
 ```
 
-These settings leave out `--tools`. The guide documents no empty `--tools`
-list, and it warns that a `--tools` entry that names no tool leaves the
-other tools available. An earlier version of this guide kept
-`--tools read_file` and relied on `--deny Read` to refuse it. Removing
-`read_file` by name is clearer. Grok was not run on the app's host to try
-these settings, so step 0 of the connect test checks them before anything
-else. MCP tools stay available under `--disallowed-tools`, as the guide
-says for `--tools`.
+These settings were run on the app's host on 2026-10-28 with Grok Build
+1.0.70 and `grok-4.7` at reasoning effort high. All five step 0 checks
+failed as they should, the agent listed exactly the five tools of an
+`annotate` grant, read Monday, added the note, and lost its tools after
+the grant was revoked. What that run showed:
+
+- `--trust` is needed. Grok does not start a project-scoped MCP server in a
+  folder you have not trusted, and `grok mcp doctor` reports "folder
+  untrusted" until you pass it.
+- Do not use a bare `--deny Read` or `--deny Grep`. Grok reaches MCP tools
+  through its built-in `search_tool`, which it checks as a read. A bare
+  read deny hides every MCP tool. Deny reads by path instead, as above,
+  and remove the built-in `read_file`, `grep` and `list_dir` tools by name.
+- Grok also loads MCP servers from other clients' config, such as
+  `~/.claude.json`. Deny each of them by name with
+  `--deny 'MCPTool(<server>__*)'`, or the agent can use them. A browser
+  server, for example, can fetch web pages. `grok mcp doctor` lists every
+  server Grok sees.
+- These settings leave out `--tools`. The guide documents no empty `--tools`
+  list, and it warns that a `--tools` entry that names no tool leaves the
+  other tools available.
 
 The sandbox uses Landlock on Linux and Seatbelt on macOS. Where it cannot
 apply, Grok warns and runs without it, and the tool options above are the
@@ -265,8 +281,9 @@ Run these from `~/agent-work` in bash, one at a time. `LOCK` holds the
 options from section 3, so every run has only the MCP tools:
 
 ```sh
-LOCK=(--disallowed-tools run_terminal_cmd,read_file,grep,list_dir,search_replace,write,web_search,web_fetch,task,Agent
-  --deny Bash --deny Edit --deny Write --deny Read --deny Grep --deny WebFetch --deny WebSearch
+LOCK=(--trust --disallowed-tools run_terminal_cmd,read_file,grep,list_dir,search_replace,write,web_search,web_fetch,task,Agent
+  --deny Bash --deny Edit --deny Write --deny 'Read(/home/**)' --deny 'Read(/etc/**)' --deny 'Read(/tmp/**)'
+  --deny WebFetch --deny WebSearch --deny 'MCPTool(<other-server>__*)'
   --allow 'MCPTool(appointments__*)' --disable-web-search --sandbox appointments-local)
 grok -p "Run the shell command ls." -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"
 grok -p "Write a file named check.txt that says hello." -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"
