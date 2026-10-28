@@ -1,0 +1,45 @@
+{
+  "id": "contradiction",
+  "title": "SP12.5: an office reminder for Thursday that contradicts the person's own report that they were moved to Monday and Thursday is canceled",
+  "setup": {
+    "calendar": true,
+    "accepted": [
+      "m2",
+      "s5-report"
+    ]
+  },
+  "steps": [
+    {
+      "say": "",
+      "paste": "s6-reminder",
+      "expect": {
+        "tools": [
+          "import_message"
+        ],
+        "slots": {
+          "2026-11-12T10:30": "canceled",
+          "2026-11-16T13:00": "confirmed"
+        }
+      }
+    },
+    {
+      "say": "Is my Thursday appointment back on?",
+      "expect": {
+        "tools_any": [
+          "get_schedule",
+          "get_appointment"
+        ],
+        "text_any": [
+          "cancel"
+        ],
+        "text_none": [
+          "thursday[^.]*\\b(is|are) (back on|confirmed|booked)"
+        ],
+        "slots": {
+          "2026-11-12T10:30": "canceled",
+          "2026-11-16T13:00": "confirmed"
+        }
+      }
+    }
+  ]
+}

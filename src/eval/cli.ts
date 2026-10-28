@@ -268,7 +268,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
     const chatClient = values.recorded
       ? RecordedChatClient.fromDirectory()
       : (chatGpt ?? (deps.createChatClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!));
-    chat = await runChatEval({ chatClient, client, scripts: loadChatScripts(), runs, effort: effort.data, model: evalModel, maxUsd: Math.max(0, maxUsd - spent), now, onProgress: log });
+    chat = await runChatEval({ chatClient, client, scripts: loadChatScripts(), runs, effort: effort.data, model: evalModel, maxUsd: Math.max(0, Math.floor((maxUsd - spent) * 1e4) / 1e4), now, onProgress: log });
   }
 
   // A report with extraction carries the D2, D3 and chat reports as fields.

@@ -1,0 +1,93 @@
+{
+  "id": "meaning-flips",
+  "title": "SP12.5: meaning flips: an office message that says Monday is not confirmed, times written before their dates, and a reschedule that cancels the old slot",
+  "setup": {
+    "calendar": true,
+    "accepted": [
+      "m2",
+      "m3"
+    ]
+  },
+  "steps": [
+    {
+      "say": "The office sent this:\n\nLantern Hill Clinic: Your Monday 11/16 1:00 PM visit is not confirmed yet. We will text you when it is.",
+      "expect": {
+        "tools": [
+          "import_message"
+        ],
+        "slots": {
+          "2026-11-16T13:00": "offered",
+          "2026-11-12T10:30": "change_proposed"
+        }
+      }
+    },
+    {
+      "say": "Is Monday confirmed now?",
+      "expect": {
+        "tools_any": [
+          "get_schedule",
+          "get_appointment"
+        ],
+        "text_any": [
+          "not (yet )?(booked|confirmed)",
+          "offered"
+        ],
+        "text_none": [
+          "monday[^.]*\\bis confirmed"
+        ],
+        "slots": {
+          "2026-11-16T13:00": "offered"
+        }
+      }
+    },
+    {
+      "say": "And this came after:\n\nLantern Hill Clinic: At 9:15 AM on Friday 11/13 or at 1:00 PM on Monday 11/16 we can still see you. Reply FRI or MON.",
+      "expect": {
+        "tools": [
+          "import_message"
+        ],
+        "slots": {
+          "2026-11-13T09:15": "offered",
+          "2026-11-16T13:00": "offered"
+        },
+        "slots_none": [
+          "2026-11-13T13:00",
+          "2026-11-16T09:15"
+        ]
+      }
+    },
+    {
+      "say": "",
+      "paste": "m4",
+      "expect": {
+        "tools": [
+          "import_message",
+          "accept_claim"
+        ],
+        "actions": [
+          "message_imported",
+          "claim_accepted"
+        ],
+        "slots": {
+          "2026-11-16T13:00": "confirmed",
+          "2026-11-12T10:30": "canceled"
+        }
+      }
+    },
+    {
+      "say": "Is my Thursday appointment still on?",
+      "expect": {
+        "tools_any": [
+          "get_schedule",
+          "get_appointment"
+        ],
+        "text_any": [
+          "cancel"
+        ],
+        "slots": {
+          "2026-11-12T10:30": "canceled"
+        }
+      }
+    }
+  ]
+}

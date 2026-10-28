@@ -1,0 +1,19 @@
+{
+  "message_id": "chat-a57326af",
+  "effort": "minimal",
+  "note": "SP12.5 probe, hand-written: an office message that says Monday is not confirmed yet. It states no confirmation, so the extraction holds no claim.",
+  "attempts": [
+    {
+      "output": {
+        "claims": []
+      },
+      "usage": {
+        "input": 700,
+        "cached_input": 0,
+        "output": 120,
+        "reasoning": 0
+      },
+      "latency_ms": 1100
+    }
+  ]
+}

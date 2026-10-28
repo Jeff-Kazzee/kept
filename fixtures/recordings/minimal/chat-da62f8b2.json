@@ -1,0 +1,40 @@
+{
+  "message_id": "chat-da62f8b2",
+  "effort": "minimal",
+  "note": "SP12.5 probe, hand-written: two offers, each time written before its date.",
+  "attempts": [
+    {
+      "output": {
+        "claims": [
+          {
+            "claim_type": "offer",
+            "date": "2026-11-13",
+            "time": "09:15",
+            "location": null,
+            "quote": "At 9:15 AM on Friday 11/13",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          },
+          {
+            "claim_type": "offer",
+            "date": "2026-11-16",
+            "time": "13:00",
+            "location": null,
+            "quote": "at 1:00 PM on Monday 11/16",
+            "sender_kind": "person",
+            "event_time": null,
+            "request_item": null
+          }
+        ]
+      },
+      "usage": {
+        "input": 700,
+        "cached_input": 0,
+        "output": 120,
+        "reasoning": 0
+      },
+      "latency_ms": 1100
+    }
+  ]
+}

@@ -32,12 +32,23 @@ async function runEval(obeyInjection = false, args: string[] = []) {
 }
 
 describe("G11: pnpm eval:live --chat", () => {
-  it("has the six scripts the sprint asked for", () => {
-    expect(loadChatScripts().map((s) => s.id)).toEqual(["accept-everything", "booked-monday", "cancel-thursday", "clinical", "demo-story", "injection"]);
+  it("has the six scripts sprint 7A asked for and sprint 12's three probes", () => {
+    expect(loadChatScripts().map((s) => s.id)).toEqual([
+      "accept-everything",
+      "booked-monday",
+      "cancel-thursday",
+      "clinical-evasions",
+      "clinical",
+      "contradiction",
+      "demo-story",
+      "injection",
+      "meaning-flips",
+    ]);
   });
 
+  // The probes have their own stand-in model (test/probes.test.ts).
   it("runs every script and reports tools, actions, cards, grounding, declines, injection, sends, states, latency and cost", async () => {
-    const { code, report, lines } = await runEval();
+    const { code, report, lines } = await runEval(false, ["--chat-script", "accept-everything,booked-monday,cancel-thursday,clinical,demo-story,injection"]);
     expect(code).toBe(0);
     expect(report.personOnlyChanges).toBe(0);
     expect(report.unsupportedStates).toBe(0);
@@ -158,5 +169,31 @@ describe("G11: pnpm eval:live --chat", () => {
       },
     ]);
     expect(unsupportedSlots(app)).toEqual(["2026-11-20T09:00"]);
+  });
+});
+
+// SP12.6: the full fixture suite in one command under one spend limit.
+describe("SP12.6: pnpm eval:live --all", () => {
+  it("runs extraction of every message in S1 to S19, the D2 and D3 calls and every chat script, and writes one report", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "eval-all-"));
+    dirs.push(dir);
+    const out = path.join(dir, "all.json");
+    const lines: string[] = [];
+    const code = await main(["--all", "--recorded", "--chat-runs", "1", "--max-usd", "5", "--out", out], {}, { log: (l) => lines.push(l), error: (l) => lines.push(l), now: () => "2026-10-28T12:00:00.000Z" });
+    expect(code).toBe(0);
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    expect(report.perEffort.map((e: { effort: string }) => e.effort)).toEqual(["minimal", "low"]);
+    expect(report.d2).not.toBeNull();
+    expect(report.d3).not.toBeNull();
+    expect(report.chat.scripts.map((s: { id: string }) => s.id)).toEqual(loadChatScripts().map((s) => s.id));
+    // The chat part gets what the other parts left of the one limit.
+    expect(report.chat.maxUsd).toBeLessThanOrEqual(5 - report.costUsdTotal - report.d2.costUsdTotal - report.d3.costUsd + 1e-4);
+    expect(lines.join("\n")).toMatch(/Fixture suite S1 to S19: \d+ messages extracted, D2 and D3 calls, 9 chat scripts\. Estimated cost \$[\d.]+ \(limit \$5\)/);
+  }, 120_000);
+
+  it("refuses --all with a part-only option", async () => {
+    const lines: string[] = [];
+    expect(await main(["--all", "--chat"], {}, { log: () => {}, error: (l) => lines.push(l) })).toBe(2);
+    expect(lines.join("\n")).toContain("--all runs every part.");
   });
 });

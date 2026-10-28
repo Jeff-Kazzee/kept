@@ -133,6 +133,8 @@ function tokenize(quote: string): Token[] {
 
 const ADJACENT = /^[\s,()]*$/;
 const CONNECTIVE = /^[\s,]*(?:on|for)?[\s,]*$/i;
+// "on" or "for" itself, not only a space or a comma.
+const LEADS = /^[\s,]*(?:on|for)[\s,]*$/i;
 
 // Groups tokens into mentions. A weekday and a date written next to each
 // other form one mention. A time belongs to the latest mention, however far
@@ -141,6 +143,13 @@ const CONNECTIVE = /^[\s,]*(?:on|for)?[\s,]*$/i;
 // and in "Tuesday at 2:00 PM or Thursday at 10:30 AM" 10:30 belongs only to
 // Thursday. A time before any date starts a mention that a following date
 // joins when only "on" or "for" sits between them.
+//
+// SP12.5, the time written before its date: a weekday and a date written
+// next to each other stay one mention when a time came before them, so
+// "At 9:15 AM on Friday 11/13" is one mention. And a time that comes after
+// a date, with only "on" or "for" between it and the next weekday or date,
+// starts that next mention instead of joining the one before, so in "Friday
+// 11/13 at 9:15 AM or at 1:00 PM on Monday 11/16" 1:00 PM belongs to Monday.
 export function parseMentions(quote: string): Mention[] {
   const mentions: Mention[] = [];
   let current = null as Mention | null;
@@ -152,14 +161,16 @@ export function parseMentions(quote: string): Mention[] {
   };
   const hasTime = (m: Mention) => m.times.length > 0 || m.ambiguousTimes.length > 0;
 
-  for (const t of tokenize(quote)) {
+  const tokens = tokenize(quote);
+  let prevKind: Token["kind"] | null = null;
+  for (const [i, t] of tokens.entries()) {
     const gap = quote.slice(prevEnd, t.start);
     const c: Mention | null = current;
     if (t.kind === "weekday") {
       const joins: boolean =
         c !== null &&
         c.weekday === null &&
-        ((c.monthDay !== null && !hasTime(c) && ADJACENT.test(gap)) ||
+        ((c.monthDay !== null && (!hasTime(c) || prevKind === "date") && ADJACENT.test(gap)) ||
           (c.monthDay === null && hasTime(c) && CONNECTIVE.test(gap)));
       current = joins && c ? c : start();
       current.weekday = t.weekday;
@@ -167,16 +178,20 @@ export function parseMentions(quote: string): Mention[] {
       const joins: boolean =
         c !== null &&
         c.monthDay === null &&
-        ((c.weekday !== null && !hasTime(c) && ADJACENT.test(gap)) ||
+        ((c.weekday !== null && (!hasTime(c) || prevKind === "weekday") && ADJACENT.test(gap)) ||
           (c.weekday === null && hasTime(c) && CONNECTIVE.test(gap)));
       current = joins && c ? c : start();
       current.monthDay = t.monthDay;
       current.year = t.year;
     } else {
-      current = c ?? start();
+      const next = tokens[i + 1];
+      const leadsNext = next !== undefined && next.kind !== "time" && LEADS.test(quote.slice(t.end, next.start));
+      const dated = c !== null && (c.monthDay !== null || c.weekday !== null);
+      current = c === null || (dated && leadsNext) ? start() : c;
       if (t.time !== null) current.times.push(t.time);
       current.ambiguousTimes.push(...t.ambiguous);
     }
+    prevKind = t.kind;
     prevEnd = t.end;
   }
   return mentions;
