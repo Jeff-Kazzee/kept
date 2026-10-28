@@ -77,6 +77,11 @@ describe("the secret scan", () => {
       `${name}=<your key>`,
       `${name}=short`,
       `${name}: "test-key-not-real"`,
+      // A JSON log escapes the newline after an empty template, and a log
+      // tool may have redacted a value already.
+      `"output":".env.schema:6:${name}=\\n573\\nfixtures/x.json"`,
+      `${name}=\\u003credacted\\u003e.txt`,
+      `${name}=REDACTED_VALUE_HERE`,
       `process.env.${name}`,
       "Authorization: `Bearer \${this.#apiKey}`",
       "Bearer server-key-1234567890-abcdef",

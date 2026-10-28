@@ -15,10 +15,12 @@
 // What it finds, on one line, in each of those:
 // - an assignment of MODEL_API_KEY with a value: `MODEL_API_KEY=value`,
 //   with optional spaces, `export` and quotes, as in an env file or a shell
-//   line. The value is at least 12 characters. A value that starts with $
-//   or <, such as $MODEL_API_KEY or <your key>, is a reference or a
-//   placeholder, not a key, and `MODEL_API_KEY=` with nothing after it, as
-//   in .env.schema, is the empty template.
+//   line. The value is at least 12 characters and ends at a space, a quote
+//   or a backslash, so an escaped newline in a JSON log ends it. A value
+//   that starts with $, < or REDACTED, such as $MODEL_API_KEY, <your key>
+//   or a log tool's redaction, is a reference or a placeholder, not a key,
+//   and `MODEL_API_KEY=` with nothing after it, as in .env.schema, is the
+//   empty template.
 // - a bearer token in a request header or log: `Bearer ` and a run of at
 //   least 24 token characters with an upper-case letter, a lower-case
 //   letter and a digit. `Bearer ${key}` in code is a template, and a
@@ -57,7 +59,9 @@ type Range = [number, number];
 
 // The value of a MODEL_API_KEY assignment, and a bearer token. Read on the
 // line's bytes as latin1, so string offsets are byte offsets.
-const ASSIGNMENT = /(?<![A-Za-z0-9_])MODEL_API_KEY[ \t]*=[ \t]*["']?([^\s"'`$<>]{12,})/g;
+const ASSIGNMENT = /(?<![A-Za-z0-9_])MODEL_API_KEY[ \t]*=[ \t]*["']?([^\s"'`$<>\\]{12,})/g;
+// A redaction a log tool already made is not a key.
+const PLACEHOLDER = /^redacted/i;
 const BEARER = /(?<![A-Za-z0-9_])Bearer[ \t]+([A-Za-z0-9._~+/=|-]{24,})/g;
 const MIXED = (v: string) => /[A-Z]/.test(v) && /[a-z]/.test(v) && /\d/.test(v);
 
@@ -69,6 +73,7 @@ export function lineSecrets(b: Buffer, start = 0, end = b.length): Range[] {
     for (const m of line.matchAll(re)) {
       const value = m[1]!;
       if (re === BEARER && !MIXED(value)) continue;
+      if (re === ASSIGNMENT && PLACEHOLDER.test(value)) continue;
       const at = m.index! + m[0].length - value.length;
       out.push([start + at, start + at + value.length]);
     }
