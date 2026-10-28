@@ -32,6 +32,29 @@ export class SecretFile<T> {
   // valid is an error with a fixed message, so its contents never reach a
   // log.
   read(): T | null {
+    const r = this.readChecked();
+    if ("invalid" in r) throw new SecretFileError(`${path.basename(this.path)} ${r.invalid}.`);
+    return r.value;
+  }
+
+  // Like read, but a file that is not valid JSON or not of the expected
+  // shape comes back as `invalid` instead of an error, with the parsed JSON
+  // when there is some, so the caller can still recover from it. A link, a
+  // FIFO or a file of another user is still an error.
+  readChecked(): { value: T | null } | { invalid: "is not valid JSON" | "does not have the expected fields"; json: unknown } {
+    const text = this.#readText();
+    if (text === null) return { value: null };
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return { invalid: "is not valid JSON", json: undefined };
+    }
+    const parsed = this.#schema.safeParse(json);
+    return parsed.success ? { value: parsed.data } : { invalid: "does not have the expected fields", json };
+  }
+
+  #readText(): string | null {
     const name = path.basename(this.path);
     let fd: number;
     try {
@@ -60,15 +83,7 @@ export class SecretFile<T> {
     } finally {
       closeSync(fd);
     }
-    let json: unknown;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      throw new SecretFileError(`${path.basename(this.path)} is not valid JSON.`);
-    }
-    const parsed = this.#schema.safeParse(json);
-    if (!parsed.success) throw new SecretFileError(`${path.basename(this.path)} does not have the expected fields.`);
-    return parsed.data;
+    return text;
   }
 
   write(value: T): void {

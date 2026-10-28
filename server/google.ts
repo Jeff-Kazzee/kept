@@ -168,12 +168,13 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
     },
 
     // GET /auth/google/callback. Returns where to send the browser and the
-    // cookies that clear the flow cookie. The __Host- cookie is read first,
-    // so over HTTPS a plain cookie set from another port is not used.
+    // cookies that clear the flow cookie. Only the cookie form the flow was
+    // started with is read: the __Host- one for an HTTPS flow, the plain one
+    // for a loopback flow.
     async callback(url: URL, cookieHeader: string | undefined): Promise<{ location: string; setCookie: string[] }> {
       const q = url.searchParams;
       const clear = [flowCookie(port, "", true, 0), flowCookie(port, "", false, 0)];
-      const cookie = cookieOf(cookieHeader, flowCookieName(port, true)) ?? cookieOf(cookieHeader, flowCookieName(port, false));
+      const cookie = (secure: boolean) => cookieOf(cookieHeader, flowCookieName(port, secure));
       try {
         await connection.finishConnect({ state: q.get("state"), code: q.get("code"), error: q.get("error"), cookie });
         return { location: "/?connected=google", setCookie: clear };

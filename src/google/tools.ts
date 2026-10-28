@@ -181,14 +181,19 @@ function syncSummary(o: SyncOutcome, slot: SlotView | null): string {
   }
 }
 
-async function calendarWrite(ctx: GoogleToolContext, name: "calendar_sync_slot" | "calendar_remove_slot", slotKey: string): Promise<GoogleToolResult> {
+async function calendarWrite(
+  ctx: GoogleToolContext,
+  name: "calendar_sync_slot" | "calendar_remove_slot",
+  slotKey: string,
+  restoreRemoved = false,
+): Promise<GoogleToolResult> {
   const slot = ctx.kase.view().slots.find((s) => s.key === slotKey) ?? null;
   const base = { tool: name, slotKey, messageId: null };
   // A slot that left the case may still have the app's event, which the
   // sync removes. Without one there is nothing to do.
   let outcome: SyncOutcome;
   try {
-    outcome = name === "calendar_sync_slot" ? await ctx.google.calendar.sync(slotKey, slot) : await ctx.google.calendar.remove(slotKey);
+    outcome = name === "calendar_sync_slot" ? await ctx.google.calendar.sync(slotKey, slot, { restoreRemoved }) : await ctx.google.calendar.remove(slotKey);
   } catch (err) {
     if (err instanceof GoogleError) return logged(ctx, { ...base, summary: `Google Calendar for ${keyLabel(slotKey)}: ${err.message}`, undo: null }, failure(err.code, err.message));
     throw err;
@@ -297,7 +302,11 @@ export const GOOGLE_TOOLS: GoogleToolSpec<unknown>[] = [
       const base = { tool: "gmail_import" as const, slotKey: null, messageId: id, undo: null };
       const fail = (code: string, message: string) => logged(ctx, { ...base, summary: `Gmail import: ${message}` }, failure(code, message));
       let message = intake.messages().find((m) => m.id === id) ?? null;
-      let status = "already_imported";
+      // True only when this call recorded the message (review round 2,
+      // finding 20). A message already there, or one another call recorded
+      // at the same moment, is not a new import, even when this call runs
+      // its extraction.
+      let created = false;
       try {
         if (message === null) {
           // The import shape first, so a subject-only email counts as text
@@ -307,17 +316,16 @@ export const GOOGLE_TOOLS: GoogleToolSpec<unknown>[] = [
           if (shaped.message.text.length > MAX_IMPORT_CHARS) return fail("too_long", "The email is longer than the app imports. Nothing was imported.");
           try {
             message = intake.importMessage(shaped.message, { suggested: [], note: "", importedFrom: "gmail" });
+            created = true;
           } catch (err) {
             // Imported at the same moment by another call.
             if (!(err instanceof StaleEditError)) throw err;
             message = intake.message(id);
           }
-          status = "imported";
         }
         if (message.status === "imported") {
           await intake.extract(id, { effort: ctx.extractionEffort ?? DEFAULT_EXTRACTION_EFFORT, expectedVersion: message.version });
           message = intake.message(id);
-          status = "imported";
         }
       } catch (err) {
         if (err instanceof GoogleError) return fail(err.code, err.message);
@@ -327,13 +335,14 @@ export const GOOGLE_TOOLS: GoogleToolSpec<unknown>[] = [
       }
       const ids = [...message.evidenceIds, ...message.manualEvidenceIds];
       const evidence = intake.evidence().filter((e) => ids.includes(e.id));
+      const status = created ? "imported" : "already_imported";
       const summary =
         status === "imported"
           ? `Imported an email from Gmail for review: ${evidence.length} claims wait for the person.`
           : "That Gmail message was already imported. Its claims are on the card.";
       return logged(
         ctx,
-        { ...base, summary, kind: status === "imported" ? "gmail_message_imported" : null },
+        { ...base, summary, kind: created ? "gmail_message_imported" : null },
         result(
           {
             message_id: id,
@@ -404,15 +413,19 @@ export const GOOGLE_TOOLS: GoogleToolSpec<unknown>[] = [
     label: "Updating your Google Calendar",
     description:
       "Bring the app's Google Calendar event for one appointment (slot_key from get_schedule) in line with its state: tentative while requested or while a change is proposed, confirmed when confirmed, removed when canceled or declined, none while only offered. " +
-      "The app changes only events it created. The person can undo the change in the activity list.",
+      "The app changes only events it created. The person can undo the change in the activity list. " +
+      "If the person removed the app's event in Google Calendar, the call reports it and adds nothing. Set restore_removed to true only after the person asked you to put that event back.",
     parameters: {
       type: "object",
-      properties: { slot_key: { type: "string", description: "The appointment's slot_key from get_schedule." } },
-      required: ["slot_key"],
+      properties: {
+        slot_key: { type: "string", description: "The appointment's slot_key from get_schedule." },
+        restore_removed: { type: ["boolean", "null"], description: "True only when the person asked to put back an event removed in Google Calendar. Otherwise null." },
+      },
+      required: ["slot_key", "restore_removed"],
       additionalProperties: false,
     },
-    input: z.object({ slot_key: AppointmentId }).strict(),
-    run: (ctx, input) => calendarWrite(ctx, "calendar_sync_slot", input.slot_key),
+    input: z.object({ slot_key: AppointmentId, restore_removed: z.boolean().nullable().optional().default(null) }).strict(),
+    run: (ctx, input) => calendarWrite(ctx, "calendar_sync_slot", input.slot_key, input.restore_removed === true),
   }),
   tool({
     name: "calendar_remove_slot",

@@ -49,6 +49,10 @@ export class FakeGoogle {
   refreshGate: Promise<void> | null = null;
   // A refresh answer rotates the refresh token and names this scope.
   refreshRotates: { scope: string } | null = null;
+  // GET answers leave out the event's etag.
+  omitEtags = false;
+  // A patch answer leaves out the event's private properties.
+  patchDropsProperties = false;
   // The account the next consent signs in as.
   account = { ...FAKE_ACCOUNT };
 
@@ -212,7 +216,11 @@ export class FakeGoogle {
     }
     const e = eventId ? cal.get(eventId) : undefined;
     if (!e) return json(404, { error: { code: 404 } });
-    if (method === "GET") return json(200, e);
+    if (method === "GET") {
+      if (!this.omitEtags) return json(200, e);
+      const { etag: _etag, ...rest } = e;
+      return json(200, rest);
+    }
     const ifMatch = headers["if-match"];
     if (ifMatch && ifMatch !== e.etag) return json(412, { error: { code: 412, errors: [{ reason: "conditionNotMet" }] } });
     if (method === "PATCH") {
@@ -222,6 +230,10 @@ export class FakeGoogle {
         else e[k] = v;
       }
       bump(e);
+      if (this.patchDropsProperties) {
+        const { extendedProperties: _p, ...rest } = e;
+        return json(200, rest);
+      }
       return json(200, e);
     }
     if (method === "DELETE") {

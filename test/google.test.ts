@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createGoogleRoutes, flowCookieName, googleRedirectUris, redirectUriFor } from "../server/google.ts";
 import { CaseService } from "../src/case/service.ts";
-import { GoogleCalendar, desiredEvent, eventIdFor, toIcsEvents, APP_PROPERTY, SLOT_PROPERTY } from "../src/google/calendar.ts";
+import { GoogleCalendar, desiredEvent, eventIdFor, toIcsEvents, ACCOUNT_PROPERTY, APP_PROPERTY, SLOT_PROPERTY } from "../src/google/calendar.ts";
 import { GoogleConnection } from "../src/google/connection.ts";
 import { Gmail, MAX_PARTS, appointmentQuery, htmlToText, parseMessage, toImport, decodeHeader } from "../src/google/gmail.ts";
 import { GoogleError, MAX_RESPONSE_BYTES, callGoogle, type FetchLike } from "../src/google/http.ts";
@@ -256,15 +256,15 @@ describe("tokens: refresh, reconnect and disconnect", () => {
     expect(statSync(s.file).mode & 0o777).toBe(0o600);
   });
 
-  it("a damaged token file is an error that does not quote the file", () => {
+  it("a token file that is not JSON reads as needing a reconnect, and nothing quotes it", async () => {
     const s = setup();
     writeFileSync(s.file, '{"version": 1, "connection": {"refreshToken": "fake-refresh-99"', { mode: 0o600 });
-    expect(() => s.connection.status()).toThrow(/google-secrets.json is not valid JSON/);
-    try {
-      s.connection.status();
-    } catch (err) {
-      expect(String((err as Error).message)).not.toContain("fake-refresh-99");
-    }
+    const status = s.connection.status();
+    expect(status).toMatchObject({ connected: false, needsReconnect: true, version: 0 });
+    expect(JSON.stringify(status)).not.toContain("fake-refresh-99");
+    const err = await new Gmail(s.connection).search({ days: 1 }).catch((e) => e);
+    expect(err).toMatchObject({ code: "google_reconnect_needed" });
+    expect(String(err.message)).not.toContain("fake-refresh-99");
   });
 });
 
@@ -896,15 +896,18 @@ describe("review round 1", () => {
     expect((await c.run("calendar_sync_slot", { slot_key: "2026-11-12T10:30" })).output.action).toBe("unchanged");
     expect((await c.run("calendar_remove_slot", { slot_key: "2026-11-12T10:30" })).output.action).toBe("deleted");
     expect(primary(s).filter((e) => e.status !== "cancelled" && String(e.summary).startsWith("Copy"))).toHaveLength(15);
-    expect(s.fake.calls.some((x) => x.url.searchParams.has("privateExtendedProperty"))).toBe(false);
+    // The one property lookup before the create filters on the account too,
+    // so the copies, which lack it, never come back.
+    const lookups = s.fake.calls.filter((x) => x.url.searchParams.has("privateExtendedProperty"));
+    expect(lookups).toHaveLength(1);
+    expect(lookups[0]!.url.searchParams.getAll("privateExtendedProperty")).toEqual([`${APP_PROPERTY}=1`, `${SLOT_PROPERTY}=2026-11-12T10:30`, `${ACCOUNT_PROPERTY}=${FAKE_ACCOUNT.sub}`]);
   });
 
   it("finding 6: an event at the app's id that is not the app's is refused and left alone", async () => {
     const s = setup();
     await connect(s);
     const c = await confirmedCase(s);
-    const { secret } = s.connection.calendar();
-    const squatter = s.fake.addForeignEvent("primary", { id: eventIdFor(secret, "2026-11-12T10:30"), summary: "Mine", start: { dateTime: "2026-11-12T17:30:00Z" }, end: { dateTime: "2026-11-12T18:30:00Z" } });
+    const squatter = s.fake.addForeignEvent("primary", { id: eventIdFor(FAKE_ACCOUNT.sub, "primary", "2026-11-12T10:30"), summary: "Mine", start: { dateTime: "2026-11-12T17:30:00Z" }, end: { dateTime: "2026-11-12T18:30:00Z" } });
     const before = JSON.stringify(squatter);
     expect((await c.run("calendar_sync_slot", { slot_key: "2026-11-12T10:30" })).code).toBe("google_not_app_event");
     expect(JSON.stringify(s.fake.calendars.get("primary")!.get(squatter.id))).toBe(before);
@@ -992,5 +995,225 @@ describe("review round 1", () => {
       ["calendar_undo", null],
       ["calendar_list", null],
     ]);
+  });
+});
+
+describe("review round 2", () => {
+  const SLOT = "2026-11-12T10:30";
+  const ownProps = (slotKey = SLOT) => ({ private: { [APP_PROPERTY]: "1", [SLOT_PROPERTY]: slotKey, [ACCOUNT_PROPERTY]: FAKE_ACCOUNT.sub } });
+  const live = (s: Setup) => primary(s).filter((e) => e.status !== "cancelled");
+  const writes = (s: Setup) => s.fake.calls.filter((x) => x.url.pathname.startsWith("/calendar/") && x.method !== "GET");
+
+  const legacyConnection = (refreshToken: string) => ({
+    sub: FAKE_ACCOUNT.sub,
+    email: FAKE_ACCOUNT.email,
+    scopes: ["openid", "email", GMAIL_SCOPE, CALENDAR_SCOPE],
+    calendarId: "primary",
+    refreshToken,
+    needsReconnect: false,
+    connectedAt: "2026-10-28T00:00:00.000Z",
+  });
+
+  it.each([
+    ["sprint 11 first build", { createdEvents: {} }],
+    ["review round 1", { eventSecrets: { [`${FAKE_ACCOUNT.sub}|primary`]: "a".repeat(64) } }],
+  ])("finding 10: a token file from the %s shape needs a reconnect, and connect replaces it", async (_name, extra) => {
+    const s = setup();
+    writeFileSync(s.file, JSON.stringify({ version: 3, connection: legacyConnection("fake-refresh-legacy"), ...extra }), { mode: 0o600 });
+    expect(s.connection.status()).toMatchObject({ connected: false, needsReconnect: true, email: null, version: 3 });
+    expect((await caseContext(s).run("calendar_list", { from: "2026-11-01", to: "2026-11-02" })).code).toBe("google_reconnect_needed");
+    const flow = s.connection.startConnect({ expectedVersion: 3, features: { gmail: true, calendar: true }, calendarId: "primary", redirectUri: REDIRECT });
+    const back = s.fake.consent(flow.authorizeUrl);
+    await s.connection.finishConnect({ state: back.searchParams.get("state"), code: back.searchParams.get("code"), error: null, cookie: flow.cookie });
+    expect(s.connection.status()).toMatchObject({ connected: true, needsReconnect: false, version: 4 });
+    const stored = JSON.parse(readFileSync(s.file, "utf8"));
+    expect(Object.keys(stored).sort()).toEqual(["connection", "version"]);
+    expect(readFileSync(s.file, "utf8")).not.toContain("fake-refresh-legacy");
+  });
+
+  it("finding 10: disconnect replaces a damaged file and revokes the token it could read", async () => {
+    const s = setup();
+    s.fake.grants.set("fake-refresh-legacy", { scope: "openid email", revoked: false });
+    writeFileSync(s.file, JSON.stringify({ version: 3, connection: legacyConnection("fake-refresh-legacy"), createdEvents: {} }), { mode: 0o600 });
+    const r = createGoogleRoutes({ connection: s.connection, generation: () => 0, port: 5192, extraHosts: [] });
+    const res = await r.api({ method: "POST", path: "/api/google/disconnect", body: { expectedVersion: 3 }, generation: 0, host: "127.0.0.1:5192", secure: false });
+    expect(res).toMatchObject({ status: 200, body: { connected: false, needsReconnect: false, revoked: true, version: 4 } });
+    expect(s.fake.revoked).toEqual(["fake-refresh-legacy"]);
+    expect(readFileSync(s.file, "utf8")).not.toContain("fake-refresh-legacy");
+    expect(statSync(s.file).mode & 0o777).toBe(0o600);
+  });
+
+  it("finding 11: after the token file is lost and the account reconnects, the slot's event is found, not doubled", async () => {
+    const s = setup();
+    await connect(s);
+    const c = await confirmedCase(s);
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    const id = live(s)[0]!.id;
+    expect(id).toBe(eventIdFor(FAKE_ACCOUNT.sub, "primary", SLOT));
+    rmSync(s.file);
+    await connect(s);
+    expect((await c.run("calendar_sync_slot", { slot_key: SLOT })).output.action).toBe("unchanged");
+    expect(live(s).map((e) => e.id)).toEqual([id]);
+  });
+
+  it("findings 12 and 16: an app event under a Google-assigned id is adopted and updated, not doubled", async () => {
+    const s = setup();
+    await connect(s);
+    const c = await confirmedCase(s);
+    const legacy = s.fake.addForeignEvent("primary", {
+      id: "legacy0001",
+      status: "tentative",
+      summary: "Appointment (requested, not confirmed)",
+      start: { dateTime: "2026-11-12T17:30:00.000Z" },
+      end: { dateTime: "2026-11-12T18:30:00.000Z" },
+      extendedProperties: ownProps(),
+    });
+    const r = await c.run("calendar_sync_slot", { slot_key: SLOT });
+    expect(r.output).toMatchObject({ action: "updated", event_status: "confirmed" });
+    expect(live(s).map((e) => e.id)).toEqual([legacy.id]);
+    expect(writes(s).filter((x) => x.method === "POST")).toHaveLength(0);
+    // Two verified events for one slot are refused, and neither is touched.
+    s.fake.addForeignEvent("primary", { id: "legacy0002", summary: "Appointment", start: { dateTime: "2026-11-12T17:30:00.000Z" }, end: { dateTime: "2026-11-12T18:30:00.000Z" }, extendedProperties: ownProps() });
+    const before = JSON.stringify(primary(s));
+    const sent = writes(s).length;
+    const slot = { ...c.kase.view().slots[0]!, state: "requested" as const };
+    expect(await c.ctx.google.calendar.sync(SLOT, slot).catch((e) => e)).toMatchObject({ code: "google_duplicate" });
+    expect(writes(s)).toHaveLength(sent);
+    expect(JSON.stringify(primary(s))).toBe(before);
+  });
+
+  it("finding 17: an undo record naming an event under an earlier id is checked by fetching it", async () => {
+    const s = setup();
+    await connect(s);
+    const c = await confirmedCase(s);
+    s.fake.addForeignEvent("primary", {
+      id: "apptoldscheme0001",
+      status: "tentative",
+      summary: "Appointment (requested, not confirmed)",
+      start: { dateTime: "2026-11-12T17:30:00.000Z" },
+      end: { dateTime: "2026-11-12T18:30:00.000Z" },
+      extendedProperties: ownProps(),
+    });
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    const undo = JSON.parse(JSON.stringify(c.entries.at(-1)!.undo));
+    expect(undo).toMatchObject({ action: "updated", eventId: "apptoldscheme0001" });
+    expect(await undoGoogleActivity(c.ctx, undo)).toMatchObject({ ok: true });
+    expect(s.fake.calendars.get("primary")!.get("apptoldscheme0001")).toMatchObject({ status: "tentative", summary: "Appointment (requested, not confirmed)" });
+    // A record naming an event that is not the app's for that slot is refused.
+    const foreign = s.fake.addForeignEvent("primary", { summary: "Mine", start: { dateTime: "2026-11-12T17:30:00Z" }, end: { dateTime: "2026-11-12T18:30:00Z" } });
+    expect(await undoGoogleActivity(c.ctx, { ...undo, eventId: foreign.id, etagAfter: foreign.etag })).toMatchObject({ ok: false, code: "google_not_app_event" });
+  });
+
+  it("finding 13: putting a removed event back sends the app's properties, and an answer without them is refused", async () => {
+    const s = setup();
+    await connect(s);
+    const c = await confirmedCase(s);
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    await c.run("calendar_remove_slot", { slot_key: SLOT });
+    const undo = c.entries.at(-1)!.undo!;
+    expect(await undoGoogleActivity(c.ctx, undo)).toMatchObject({ ok: true });
+    const restore = writes(s).at(-1)!;
+    expect(restore.method).toBe("PATCH");
+    expect(JSON.parse(restore.body).extendedProperties).toEqual(ownProps());
+    // Again, with Google's answer missing the properties.
+    await c.run("calendar_remove_slot", { slot_key: SLOT });
+    s.fake.patchDropsProperties = true;
+    expect(await undoGoogleActivity(c.ctx, c.entries.at(-1)!.undo!)).toMatchObject({ ok: false, code: "google_not_app_event" });
+  });
+
+  it("finding 14: an event read without an ETag is never patched or deleted", async () => {
+    const s = setup();
+    await connect(s);
+    const c = await confirmedCase(s);
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    const sent = writes(s).length;
+    s.fake.omitEtags = true;
+    const slot = { ...c.kase.view().slots[0]!, state: "requested" as const };
+    expect(await c.ctx.google.calendar.sync(SLOT, slot).catch((e) => e)).toMatchObject({ code: "google_changed" });
+    expect((await c.run("calendar_remove_slot", { slot_key: SLOT })).code).toBe("google_changed");
+    expect(writes(s)).toHaveLength(sent);
+    expect(live(s)).toHaveLength(1);
+  });
+
+  it("finding 15: an event removed in Google Calendar is reported, and put back only when asked", async () => {
+    const s = setup();
+    await connect(s);
+    const c = await confirmedCase(s);
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    const event = live(s)[0]!;
+    // The person deletes it in Google Calendar.
+    event.status = "cancelled";
+    event.etag = '"removed-by-person"';
+    const sent = writes(s).length;
+    const r = await c.run("calendar_sync_slot", { slot_key: SLOT });
+    expect(r).toMatchObject({ ok: false, code: "google_changed" });
+    expect(r.output.message).toContain("removed in Google Calendar");
+    expect(writes(s)).toHaveLength(sent);
+    expect(live(s)).toHaveLength(0);
+    const back = await c.run("calendar_sync_slot", { slot_key: SLOT, restore_removed: true });
+    expect(back.output).toMatchObject({ action: "created", undoable: true });
+    expect(live(s).map((e) => e.id)).toEqual([event.id]);
+    expect(c.entries.at(-1)).toMatchObject({ kind: "calendar_event_added" });
+  });
+
+  it("finding 18: the reader lock is released after a read error and after the cap", async () => {
+    const responses: Response[] = [];
+    const failing: FetchLike = async () => {
+      let n = 0;
+      const res = new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull(controller) {
+              if (n++ === 0) controller.enqueue(new Uint8Array(10));
+              else controller.error(new Error("connection reset"));
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+        { status: 200 },
+      );
+      responses.push(res);
+      return res;
+    };
+    await expect(callGoogle(failing, "https://gmail.googleapis.com/x", {})).rejects.toMatchObject({ code: "google_unavailable" });
+    expect(responses[0]!.body!.locked).toBe(false);
+    const big: FetchLike = async () => {
+      const res = new Response(new ReadableStream<Uint8Array>({ pull: (c) => c.enqueue(new Uint8Array(1024)) }, { highWaterMark: 0 }), { status: 200 });
+      responses.push(res);
+      return res;
+    };
+    await expect(callGoogle(big, "https://gmail.googleapis.com/x", {}, 5000, 4096)).rejects.toMatchObject({ code: "google_invalid_response" });
+    expect(responses[1]!.body!.locked).toBe(false);
+  });
+
+  it("finding 19: the callback reads only the cookie form the flow was started with", async () => {
+    const start = async (secure: boolean) => {
+      const s = setup();
+      const r = createGoogleRoutes({ connection: s.connection, generation: () => 0, port: 5192, extraHosts: ["box.tail1234.ts.net"] });
+      const res = await r.api({ method: "POST", path: "/api/google/connect", body: { expectedVersion: 0, gmail: true, calendar: true }, generation: 0, host: secure ? "box.tail1234.ts.net" : "127.0.0.1:5192", secure });
+      const value = res.setCookie!.split(";")[0]!.split("=")[1]!;
+      return { s, r, value, back: s.fake.consent((res.body as { authorizeUrl: string }).authorizeUrl) };
+    };
+    const https = await start(true);
+    expect((await https.r.callback(https.back, `${flowCookieName(5192, false)}=${https.value}`)).location).toBe("/?google_error=invalid_state");
+    const http = await start(false);
+    expect((await http.r.callback(http.back, `${flowCookieName(5192, true)}=${http.value}`)).location).toBe("/?google_error=invalid_state");
+    const ok = await start(false);
+    expect((await ok.r.callback(ok.back, `${flowCookieName(5192, false)}=${ok.value}`)).location).toBe("/?connected=google");
+  });
+
+  it("finding 20: a Gmail message already in the case is not logged as a new import", async () => {
+    const s = setup();
+    await connect(s);
+    addClinicEmail(s);
+    const c = caseContext(s, [recording("gmail-18f0a1", [CONFIRM])]);
+    // The message is in the case but was never extracted, as after a call
+    // that stopped between the import and the extraction.
+    const m = parseMessage(s.fake.messages.get("18f0a1"));
+    c.intake.importMessage(toImport(m).message, { suggested: [], note: "", importedFrom: "gmail" });
+    const r = await c.run("gmail_import", { message_id: "18f0a1" });
+    expect(r.code).toBe("already_imported");
+    expect(c.intake.message("gmail-18f0a1").status).toBe("claims_pending");
+    expect(c.entries.at(-1)).toMatchObject({ tool: "gmail_import", ok: true, kind: null });
   });
 });

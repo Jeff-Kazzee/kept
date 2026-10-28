@@ -4,7 +4,7 @@
 // refresh that Google refuses with invalid_grant marks the connection as
 // needing a reconnect. Nothing here logs, and no token leaves this module
 // except in the Authorization header of a call to Google.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { GoogleError, callGoogle, type FetchLike, type GoogleResponse } from "./http.ts";
 import {
@@ -45,14 +45,26 @@ const Stored = z
   .object({
     version: z.number().int().nonnegative(),
     connection: Connection.nullable(),
-    // A random secret per account and calendar, from which the app derives
-    // the id of each event it creates (calendar.ts). Kept after a
-    // disconnect, so after a reconnect the app still finds its own events
-    // and edits no other.
-    eventSecrets: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)),
   })
   .strict();
 type Stored = z.infer<typeof Stored>;
+
+// A token file that is not valid JSON or not of this shape, such as one
+// written by an earlier build (review round 2, finding 10). The app reads
+// it as no connection that needs a reconnect: status, connect and
+// disconnect still work, and a connect or a disconnect writes a new file in
+// its place. The version and the refresh token are kept when they can be
+// read, so a page's expected version still matches and a disconnect can
+// still revoke the grant.
+type Damaged = { version: number; refreshToken: string | null };
+
+function damagedOf(json: unknown): Damaged {
+  const o = json && typeof json === "object" ? (json as Record<string, unknown>) : {};
+  const version = Number.isSafeInteger(o.version) && (o.version as number) >= 0 ? (o.version as number) : 0;
+  const c = o.connection && typeof o.connection === "object" ? (o.connection as Record<string, unknown>) : {};
+  const refreshToken = typeof c.refreshToken === "string" && c.refreshToken.length > 0 && c.refreshToken.length <= 4096 ? c.refreshToken : null;
+  return { version, refreshToken };
+}
 
 // GET /api/google. The first five fields are the contract shared with
 // sprints 8, 9 and 10. The rest are added by this sprint. Never a token.
@@ -106,16 +118,28 @@ export class GoogleConnection {
     return this.#client !== null;
   }
 
+  // The stored state. A damaged file reads as no connection at its own
+  // version, with `damaged` set.
+  #state(): { stored: Stored; damaged: Damaged | null } {
+    const r = this.#file.readChecked();
+    if ("invalid" in r) {
+      const damaged = damagedOf(r.json);
+      return { stored: { version: damaged.version, connection: null }, damaged };
+    }
+    return { stored: r.value ?? { version: 0, connection: null }, damaged: null };
+  }
+
   #read(): Stored {
-    return this.#file.read() ?? { version: 0, connection: null, eventSecrets: {} };
+    return this.#state().stored;
   }
 
   #write(next: Stored) {
-    this.#file.write(next);
+    this.#file.write({ version: next.version, connection: next.connection });
   }
 
   status(): GoogleStatus {
-    const { version, connection: c } = this.#read();
+    const { stored, damaged } = this.#state();
+    const { version, connection: c } = stored;
     const features = grantedFeatures(c?.scopes.join(" "));
     return {
       connected: this.configured && c !== null && !c.needsReconnect,
@@ -124,7 +148,7 @@ export class GoogleConnection {
       calendar: c !== null && features.calendar,
       calendarId: c?.calendarId ?? null,
       configured: this.configured,
-      needsReconnect: c?.needsReconnect ?? false,
+      needsReconnect: damaged !== null || (c?.needsReconnect ?? false),
       version,
     };
   }
@@ -159,7 +183,7 @@ export class GoogleConnection {
   // The callback. Checks the state and the browser cookie, exchanges the
   // code, checks the ID token and stores the connection. Throws an
   // OAuthError with a fixed code.
-  async finishConnect(input: { state: string | null; code: string | null; error: string | null; cookie: string | null }): Promise<void> {
+  async finishConnect(input: { state: string | null; code: string | null; error: string | null; cookie: string | null | ((secure: boolean) => string | null) }): Promise<void> {
     const client = this.#requireClient();
     const flow = this.#flows.take(input.state, input.cookie);
     if (!flow) throw new OAuthError("invalid_state");
@@ -224,10 +248,16 @@ export class GoogleConnection {
   // token here, even when Google could not be reached.
   async disconnect(expectedVersion: number): Promise<{ revoked: boolean }> {
     this.#checkVersion(expectedVersion);
-    const before = this.#read();
+    const { stored: before, damaged } = this.#state();
     this.#access = null;
     // A Google sign-in still open in a browser cannot connect again.
     this.#flows.clear();
+    if (damaged) {
+      // A new file replaces the damaged one, and the grant is revoked when
+      // its token could be read.
+      this.#write({ version: before.version + 1, connection: null });
+      return { revoked: damaged.refreshToken !== null && (await revokeToken(this.#fetch, damaged.refreshToken)) };
+    }
     if (!before.connection) return { revoked: false };
     this.#write({ ...before, version: before.version + 1, connection: null });
     return { revoked: await revokeToken(this.#fetch, before.connection.refreshToken) };
@@ -235,7 +265,9 @@ export class GoogleConnection {
 
   #connection(feature: Feature): Connection {
     if (!this.#client) throw new GoogleError("google_not_configured");
-    const c = this.#read().connection;
+    const { stored, damaged } = this.#state();
+    if (damaged) throw new GoogleError("google_reconnect_needed");
+    const c = stored.connection;
     if (!c) throw new GoogleError("google_not_connected");
     if (c.needsReconnect) throw new GoogleError("google_reconnect_needed");
     if (!grantedFeatures(c.scopes.join(" "))[feature]) throw new GoogleError("google_scope_missing");
@@ -309,19 +341,11 @@ export class GoogleConnection {
     return res;
   }
 
-  // The calendar the person chose, the key of the account and calendar,
-  // and the secret the app derives its event ids from. The secret is made
-  // on first use and kept after a disconnect.
-  calendar(): { calendarId: string; key: string; secret: string } {
+  // The calendar the person chose, the account it belongs to, and the key
+  // of the two that undo records carry.
+  calendar(): { calendarId: string; sub: string; key: string } {
     const c = this.#connection("calendar");
-    const key = `${c.sub}|${c.calendarId}`;
-    const s = this.#read();
-    let secret = s.eventSecrets[key];
-    if (!secret) {
-      secret = randomBytes(32).toString("hex");
-      this.#write({ ...s, eventSecrets: { ...s.eventSecrets, [key]: secret } });
-    }
-    return { calendarId: c.calendarId, key, secret };
+    return { calendarId: c.calendarId, sub: c.sub, key: `${c.sub}|${c.calendarId}` };
   }
 }
 

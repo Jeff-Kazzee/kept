@@ -87,15 +87,18 @@ export class PendingFlows {
   }
 
   // The flow for `state`, removed so it cannot be used twice, when the
-  // cookie matches and it has not expired. Otherwise null.
-  take(state: string | null, cookie: string | null): Flow | null {
+  // cookie matches and it has not expired. Otherwise null. `cookie` may be
+  // a function of the flow's scheme, so only the cookie form the flow was
+  // started with is read (review round 2, finding 19).
+  take(state: string | null, cookie: string | null | ((secure: boolean) => string | null)): Flow | null {
     this.#sweep();
     if (!state || state.length > 200) return null;
     const key = sha256(state).toString("hex");
     const pending = this.#flows.get(key);
     if (!pending) return null;
     this.#flows.delete(key);
-    if (!cookie || !timingSafeEqual(sha256(cookie), pending.cookieHash)) return null;
+    const value = typeof cookie === "function" ? cookie(pending.redirectUri.startsWith("https://")) : cookie;
+    if (!value || !timingSafeEqual(sha256(value), pending.cookieHash)) return null;
     const { cookieHash: _c, expiresAt: _e, ...flow } = pending;
     return flow;
   }

@@ -19,6 +19,7 @@ export const GOOGLE_ERROR_CODES = [
   "google_not_app_event",
   "google_invalid_response",
   "google_stale",
+  "google_duplicate",
 ] as const;
 export type GoogleErrorCode = (typeof GOOGLE_ERROR_CODES)[number];
 
@@ -34,17 +35,27 @@ const MESSAGES: Record<GoogleErrorCode, string> = {
   google_not_app_event: "That calendar event was not created by this app, so the app does not change it.",
   google_invalid_response: "Google sent an answer the app could not read. Nothing changed.",
   google_stale: "The Google connection changed since the page read it. Reload and try again.",
+  google_duplicate: "Google Calendar has more than one event the app made for this appointment. Remove the extra one in Google Calendar, then try again.",
 };
+
+// A fixed sentence for one case of a code, chosen by code.
+const VARIANTS = {
+  removed: "The calendar event was removed in Google Calendar, so the app did not add it back. Undo the removal in the activity list, or ask the assistant to put it back.",
+} as const;
+export type GoogleErrorVariant = keyof typeof VARIANTS;
 
 export class GoogleError extends Error {
   override name = "GoogleError";
   readonly code: GoogleErrorCode;
   // Google's HTTP status, when there was one. Never the body.
   readonly status: number | null;
-  constructor(code: GoogleErrorCode, status: number | null = null) {
-    super(MESSAGES[code]);
+  // Set when the sentence is one of the VARIANTS.
+  readonly variant: GoogleErrorVariant | null;
+  constructor(code: GoogleErrorCode, status: number | null = null, variant: GoogleErrorVariant | null = null) {
+    super(variant ? VARIANTS[variant] : MESSAGES[code]);
     this.code = code;
     this.status = status;
+    this.variant = variant;
   }
 }
 
@@ -66,17 +77,23 @@ async function readCapped(res: Response, max: number): Promise<string | null> {
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > max) {
-      await reader.cancel().catch(() => {});
-      return null;
+  let finished = false;
+  // Past the cap, or on a read error, the stream is canceled. The reader's
+  // lock is always released (review round 2, finding 18).
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > max) return null;
+      chunks.push(value);
     }
-    chunks.push(value);
+    finished = true;
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    if (!finished) await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 export type GoogleResponse = { status: number; body: unknown; etag: string | null };
