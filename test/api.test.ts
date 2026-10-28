@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createApi } from "../server/api.ts";
+import { Pairing } from "../server/guard.ts";
 import { CaseService } from "../src/case/service.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
@@ -28,7 +29,7 @@ function setup() {
   const client = RecordedModelClient.fromDirectory();
   const service = new IntakeService(store, client);
   const kase = new CaseService(store, service, client, { userName: "Dana Reyes" });
-  return asFreshPage(createApi(service, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, service, kase)), kase);
+  return asFreshPage(createApi(service, kase, { mode: "recorded", pairing: new Pairing() }, new ReplyService(store, kase, client), agentAccess(store, service, kase)), kase);
 }
 
 describe("local API", () => {
@@ -212,7 +213,13 @@ describe("dev server", () => {
 
   const post = (port: number, p: string, body: unknown, generation: string | undefined) =>
     new Promise<{ status: number; body: any }>((resolve, reject) => {
-      const headers: Record<string, string> = { Host: `127.0.0.1:${port}`, "Content-Type": "application/json" };
+      // As the app's own page sends it (sprint 6 review, finding 1).
+      const headers: Record<string, string> = {
+        Host: `127.0.0.1:${port}`,
+        "Content-Type": "application/json",
+        Origin: `http://127.0.0.1:${port}`,
+        "X-Appointments-App": "1",
+      };
       if (generation !== undefined) headers["X-Case-Generation"] = generation;
       const req = request({ host: "127.0.0.1", port, path: p, method: "POST", headers }, (res) => {
         let text = "";

@@ -6,6 +6,7 @@ import { sourceLabel } from "../src/slots/labels.ts";
 import type { ConflictKind } from "../src/slots/types.ts";
 import {
   ApiError,
+  PAIRING_ERRORS,
   api,
   type AppState,
   type CaseView,
@@ -17,7 +18,7 @@ import {
   type MessageView,
   type RecordView,
 } from "./api.ts";
-import { GrantPanel, ProposalCard, RecordNotes, UntrustedText, useLiveRefresh } from "./AgentPanels.tsx";
+import { GrantPanel, PairingForm, ProposalCard, RecordNotes, UntrustedText, useLiveRefresh } from "./AgentPanels.tsx";
 import { ReplyPanel, shortTime } from "./ReplyPanel.tsx";
 
 type Run = (action: () => Promise<unknown>) => Promise<void>;
@@ -82,6 +83,7 @@ export function App() {
         await action();
       } catch (e) {
         if (e instanceof ApiError && e.body.error === "out_of_scope") setNotice(e.body.message ?? null);
+        else if (e instanceof ApiError && PAIRING_ERRORS.has(e.body.error ?? "")) setError(`${e.message} Enter the pairing code, then try again.`);
         else if (e instanceof ApiError && e.body.error === "case_deleted") setError("The case was deleted. Nothing was saved. The empty case is loaded.");
         else if (e instanceof ApiError && e.status === 409) setError("This record changed since it was shown. The current version is loaded.");
         else setError(e instanceof Error ? e.message : String(e));
@@ -139,6 +141,7 @@ export function App() {
         {pending.map((e) => (
           <EvidenceCard key={e.id} item={e} state={state} run={run} />
         ))}
+        {pendingProposals.length > 0 && <PairingForm />}
         {pendingProposals.map((p) => (
           <ProposalCard key={p.id} proposal={p} records={state.records} run={run} />
         ))}

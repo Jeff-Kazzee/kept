@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { RateLimiter } from "../mcp/rate-limit.ts";
 import { createMcpServer, type McpDeps } from "../mcp/server.ts";
 import { createApi } from "../server/api.ts";
+import { Pairing } from "../server/guard.ts";
 import { buildChecklist } from "../src/case/checklist.ts";
 import { caseHistory } from "../src/case/history.ts";
 import { CaseService } from "../src/case/service.ts";
@@ -176,7 +177,7 @@ describe("finding 1: a write that started before Delete case never lands in the 
   it("a page opened before Delete case cannot write into the empty case through the API", async () => {
     const store = new EventStore(":memory:", CLOCK);
     const app = services(store);
-    const api = createApi(app.intake, app.kase, { mode: "recorded" }, app.reply, app);
+    const api = createApi(app.intake, app.kase, { mode: "recorded", pairing: new Pairing() }, app.reply, app);
     const before = (await api({ method: "GET", path: "/api/state", body: undefined })).body as { generation: number; caseVersion: number };
     expect(before.generation).toBe(0);
     await api({ method: "POST", path: "/api/case/delete", body: { expectedVersion: before.caseVersion, confirmation: "DELETE" }, generation: 0 });
@@ -357,7 +358,7 @@ describe("review round 2, B1: every write states its case generation", () => {
   it("refuses a write with no generation or a malformed one, and writes nothing", async () => {
     const store = new EventStore(":memory:", CLOCK);
     const app = services(store);
-    const api = createApi(app.intake, app.kase, { mode: "recorded" }, app.reply, app);
+    const api = createApi(app.intake, app.kase, { mode: "recorded", pairing: new Pairing() }, app.reply, app);
     const calendar = { name: "dana.ics", text: readFixtureText("calendar/dana.ics"), expectedVersion: 0 };
     for (const generation of [undefined, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
       expect(await api({ method: "POST", path: "/api/calendar", body: calendar, generation }), String(generation)).toMatchObject({

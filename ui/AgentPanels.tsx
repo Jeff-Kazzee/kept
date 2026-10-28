@@ -4,7 +4,7 @@
 // them, and no MCP tool confirms a proposal.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { describeChange } from "../src/records/types.ts";
-import { api, versionChanged, type GrantInfo, type LiveVersion, type ProposalView, type RecordView, type Tier } from "./api.ts";
+import { api, pairing, versionChanged, type GrantInfo, type LiveVersion, type ProposalView, type RecordView, type Tier } from "./api.ts";
 
 type Run = (action: () => Promise<unknown>) => Promise<void>;
 
@@ -46,6 +46,37 @@ export function UntrustedText({ label, text }: { label: string; text: string }) 
       <div className="label">{label}. Untrusted text, shown as data.</div>
       <pre>{text}</pre>
     </div>
+  );
+}
+
+// Sprint 6 review, finding 1: creating a grant and confirming an agent's
+// proposal need the pairing code the app printed in its terminal at start.
+// Asked once per browser tab and kept in sessionStorage. A wrong code is
+// dropped, so this form shows again.
+export function PairingForm() {
+  const [code, setCode] = useState("");
+  const [, setStored] = useState(pairing.get());
+  if (pairing.get()) return null;
+  return (
+    <form
+      className="card token"
+      onSubmit={(e) => {
+        e.preventDefault();
+        pairing.set(code);
+        setStored(code);
+        setCode("");
+      }}
+    >
+      <div className="label">Pair this browser tab</div>
+      <p>
+        Creating a grant and confirming an agent's proposal need the pairing code the app printed in its terminal when it
+        started. An agent cannot see that terminal.
+      </p>
+      <label>
+        Pairing code <input name="pairing-code" value={code} onChange={(e) => setCode(e.target.value)} required maxLength={20} autoComplete="off" />
+      </label>
+      <button type="submit">Pair</button>
+    </form>
   );
 }
 
@@ -159,6 +190,7 @@ export function GrantPanel({ grants, run }: { grants: GrantInfo[]; run: Run }) {
         the lowest tier that does the job. An agent can never confirm, cancel or change a slot, contact the office, send a
         reply, delete the case or manage grants. {PROVIDER_NOTICE} Grants are app settings and stay after Delete case.
       </p>
+      <PairingForm />
       {created && (
         <div className="card token" role="status">
           <div className="label">New token for {created.name}</div>

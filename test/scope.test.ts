@@ -3,6 +3,7 @@
 // administrative scope, records nothing and makes no model call.
 import { describe, expect, it } from "vitest";
 import { createApi } from "../server/api.ts";
+import { Pairing } from "../server/guard.ts";
 import { CaseService } from "../src/case/service.ts";
 import { OutOfScopeError, SCOPE_DECLINE, hasClinicalContent, mixesScripts, normalizeForScope } from "../src/domain/scope.ts";
 import { loadScenarios } from "../src/fixtures/load.ts";
@@ -96,7 +97,7 @@ describe("SP3.9 S11: a clinical question gets the fixed decline", () => {
 
   it("returns the decline from the API as out_of_scope", async () => {
     const { store, intake: service, kase, reply } = await setup(["m1"]);
-    const api = asFreshPage(createApi(service, kase, { mode: "recorded" }, reply, agentAccess(store, service, kase)), kase);
+    const api = asFreshPage(createApi(service, kase, { mode: "recorded", pairing: new Pairing() }, reply, agentAccess(store, service, kase)), kase);
     const pasted = await api({ method: "POST", path: "/api/messages", body: fixtureMessage("s11-question") });
     expect(pasted).toEqual({ status: 422, body: { error: "out_of_scope", message: SCOPE_DECLINE } });
     const note = await api({ method: "POST", path: "/api/reply/suggest", body: { expectedVersion: 0, intent: S11_TEXT } });

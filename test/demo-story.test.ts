@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApi } from "../server/api.ts";
+import { Pairing } from "../server/guard.ts";
 import { CaseService } from "../src/case/service.ts";
 import type { CaseView } from "../src/case/types.ts";
 import { loadCaseProfile, readFixtureText } from "../src/fixtures/load.ts";
@@ -43,7 +44,7 @@ function start(file: string) {
   const client = RecordedModelClient.fromDirectory();
   const intake = new IntakeService(store, client);
   const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
-  const handle = asFreshPage(createApi(intake, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, intake, kase)), kase);
+  const handle = asFreshPage(createApi(intake, kase, { mode: "recorded", pairing: new Pairing() }, new ReplyService(store, kase, client), agentAccess(store, intake, kase)), kase);
   const call = async (method: string, p: string, body?: unknown) => {
     const res = await handle({ method, path: p, body });
     if (res.status !== 200) throw new Error(`${method} ${p}: ${res.status} ${JSON.stringify(res.body)}`);

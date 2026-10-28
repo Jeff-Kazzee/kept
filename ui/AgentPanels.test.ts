@@ -6,6 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { createApi } from "../server/api.ts";
+import { Pairing } from "../server/guard.ts";
 import { CaseService } from "../src/case/service.ts";
 import { GrantStore } from "../src/grants/grants.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
@@ -34,7 +35,7 @@ async function caseState(clock = () => "2026-11-06T17:00:00.000Z") {
   const agent = { kind: "agent" as const, grant_id: grant.id, grant_name: grant.name };
   records.addNote(THU, "Bring parking pass <b>now</b>", 0, agent);
   records.propose({ kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: "Dana says the office confirmed Monday by phone." }, grant);
-  const api = createApi(svc, kase, { mode: "recorded" }, new ReplyService(store, kase, client), { records, grants });
+  const api = createApi(svc, kase, { mode: "recorded", pairing: new Pairing() }, new ReplyService(store, kase, client), { records, grants });
   const state = async () => (await api({ method: "GET", path: "/api/state", body: undefined })).body as AppState;
   return { store, records, grants, state };
 }

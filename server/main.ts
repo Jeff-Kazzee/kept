@@ -21,6 +21,7 @@ import { RecordedModelClient } from "../src/model/recorded.ts";
 import { PACKAGE_ROOT, fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { createApi } from "./api.ts";
+import { APP_HEADER, PAIRING_HEADER, Pairing, requestSourceProblem } from "./guard.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.APP_PORT ?? 5180);
@@ -50,12 +51,15 @@ try {
 }
 const intake = new IntakeService(store, client);
 const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
-const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, new ReplyService(store, kase, client), {
+// Kept in memory only. A restart makes a new one.
+const pairing = new Pairing();
+const api = createApi(intake, kase, { mode: live ? "live" : "recorded", pairing }, new ReplyService(store, kase, client), {
   records: new RecordsService(store, intake, kase),
   grants: new GrantStore(store),
 });
 
 const allowedHosts = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]);
+const appOrigins = [...allowedHosts].map((h) => `http://${h}`);
 
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -100,6 +104,16 @@ server.on("request", async (req, res) => {
   if (!allowedHosts.has(req.headers.host ?? "")) return send(res, 403, { error: "forbidden_host" });
   const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
   if (!url.pathname.startsWith("/api/")) return vite.middlewares(req, res);
+  const headerOf = (name: string) => {
+    const v = req.headers[name];
+    return typeof v === "string" ? v : undefined;
+  };
+  // Defense in depth. See guard.ts.
+  const problem = requestSourceProblem(
+    { method: req.method ?? "GET", secFetchSite: headerOf("sec-fetch-site"), origin: headerOf("origin"), appHeader: headerOf(APP_HEADER) },
+    appOrigins,
+  );
+  if (problem) return send(res, 403, { error: "forbidden_source", message: problem });
   if (req.method === "POST" && !String(req.headers["content-type"] ?? "").startsWith("application/json")) {
     return send(res, 415, { error: "json_required" });
   }
@@ -113,12 +127,13 @@ server.on("request", async (req, res) => {
   // A missing or malformed header leaves it undefined, and the API refuses
   // the write.
   const generation = typeof header === "string" && /^\d{1,15}$/.test(header) ? Number(header) : undefined;
-  const result = await api({ method: req.method ?? "GET", path: url.pathname, body, generation });
+  const result = await api({ method: req.method ?? "GET", path: url.pathname, body, generation, pairing: headerOf(PAIRING_HEADER) });
   send(res, result.status, result.body);
 });
 
 server.listen(PORT, HOST, () => {
   console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? "live" : "recorded responses"})`);
+  console.log(`Pairing code for this run: ${pairing.code}. The app asks for it once per browser tab, to create a grant or confirm an agent's proposal.`);
 });
 
 const shutdown = async () => {

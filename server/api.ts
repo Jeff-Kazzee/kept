@@ -10,13 +10,16 @@ import { GrantStore } from "../src/grants/grants.ts";
 import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } from "../src/intake/service.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
+import { Pairing } from "./guard.ts";
 import { CaseDeletedError, CompactionError, StaleEditError, StoreBusyError } from "../src/store/event-log.ts";
 
 // `generation` is the case generation the page last read. Every request
 // that changes state must carry it, and a write from a page opened before a
 // Delete case is refused instead of landing in the empty case. Only GET may
 // leave it out.
-export type ApiRequest = { method: string; path: string; body: unknown; generation?: number };
+// `pairing` is the pairing code the page sends for the two actions that
+// need it (see guard.ts).
+export type ApiRequest = { method: string; path: string; body: unknown; generation?: number; pairing?: string };
 export type ApiResponse = { status: number; body: unknown };
 
 const PastedMessage = z
@@ -51,7 +54,7 @@ const CreateGrantBody = z.object({ name: z.string().max(200), tier: z.string().m
 const ConfirmProposalBody = z.object({ expectedVersion: Version, recordVersion: Version.optional() }).strict();
 const UndoBody = z.object({ expectedVersion: Version, version: Version }).strict();
 
-export type ApiOptions = { mode: "recorded" | "live" };
+export type ApiOptions = { mode: "recorded" | "live"; pairing: Pairing };
 
 // The records service and the grant store, which the MCP server also uses.
 export type AgentAccess = { records: RecordsService; grants: GrantStore };
@@ -59,6 +62,11 @@ export type AgentAccess = { records: RecordsService; grants: GrantStore };
 export function createApi(service: IntakeService, kase: CaseService, options: ApiOptions, reply: ReplyService, access: AgentAccess) {
   const scenarios = loadScenarios();
   const { records, grants } = access;
+
+  // Routes whose path is listed here also need the pairing code: creating a
+  // grant and confirming an agent's proposal, the two actions that would let
+  // an agent widen its own access or approve its own change.
+  const paired = [/^\/api\/grants$/, /^\/api\/proposals\/[^/]+\/confirm$/];
 
   const routes: Array<[string, RegExp, (m: RegExpExecArray, body: unknown) => Promise<unknown> | unknown]> = [
     ["GET", /^\/api\/state$/, () => {
@@ -186,6 +194,10 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
           body: { error: "generation_required", message: "This request does not say which case it was made for. Reload the page and try again. Nothing was saved." },
         };
       }
+      if (method !== "GET" && paired.some((p) => p.test(req.path))) {
+        const refused = pairingRefusal(options.pairing.check(req.pairing));
+        if (refused) return refused;
+      }
       try {
         // One command on the case: every write it makes checks the case
         // generation inside its transaction.
@@ -196,6 +208,25 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     }
     return { status: 404, body: { error: "not_found" } };
   };
+}
+
+function pairingRefusal(check: ReturnType<Pairing["check"]>): ApiResponse | null {
+  switch (check) {
+    case "ok":
+      return null;
+    case "missing":
+      return {
+        status: 403,
+        body: { error: "pairing_required", message: "Enter the pairing code the app printed in its terminal when it started. Nothing was saved." },
+      };
+    case "wrong":
+      return { status: 403, body: { error: "pairing_failed", message: "That pairing code is not right. Nothing was saved." } };
+    case "locked":
+      return {
+        status: 403,
+        body: { error: "pairing_locked", message: "Too many wrong pairing codes. Restart the app to get a new code. Nothing was saved." },
+      };
+  }
 }
 
 function toErrorResponse(err: unknown): ApiResponse {
