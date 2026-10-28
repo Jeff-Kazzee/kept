@@ -79,3 +79,6 @@ Notes:
   runtime dependencies. See `0004-mcp-core.md`.
 - After the sprint 4 install, a search of every installed `package.json`
   found no `preinstall`, `install` or `postinstall` script.
+- Sprint 7B (2026-10-28): no dependency added. Vite, already pinned, builds
+  the production bundle. Compression uses `node:zlib`. Tailwind was
+  considered and not added (see `0008-web-app.md`, B15).

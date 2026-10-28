@@ -17,7 +17,8 @@ in this repo is synthetic.
 - `src/extract/` runs one extraction with at most one retry.
 - `src/intake/` records extraction results and review decisions as events.
 - `src/eval/` and `scripts/eval-live.ts` run the live evaluation.
-- `server/` and `ui/` are the local server and the minimal UI.
+- `server/` and `ui/` are the local server and the web app: the chat
+  beside the schedule (sprint 7B, `docs/decisions/0008-web-app.md`).
 
 ## D2: slot states and conflict resolution
 
@@ -127,9 +128,10 @@ See `docs/decisions/0001-stack.md` for the stack and dependency checks,
 `docs/decisions/0004-mcp-core.md` for records, grants and the MCP server,
 `docs/decisions/0005-saved-outcome.md` for the saved case, the
 checklist and Delete case, `docs/decisions/0006-mcp-app.md` for agent
-access in the app, and `docs/decisions/0007-case-agent.md` for the case
-agent and the chat contract. `docs/diagrams.md` shows the slot states and the agent
-change flow.
+access in the app, `docs/decisions/0007-case-agent.md` for the case
+agent and the chat contract, and `docs/decisions/0008-web-app.md` for the
+web app. `docs/diagrams.md` shows the slot states and the agent change
+flow.
 
 ## Commands
 
@@ -140,8 +142,19 @@ pnpm install
 pnpm test        # offline, no key needed
 pnpm typecheck
 pnpm dev         # http://127.0.0.1:5180 with recorded model responses
+pnpm build       # production bundle in dist/ui, precompressed, budget checked
+pnpm start       # serves the production build on http://127.0.0.1:5180
 pnpm scan:secrets  # grant tokens in the repository, see "What the secret scan finds"
 ```
+
+Add `?mockchat=1` to the page address for the scripted chat, which plays
+the demo through the existing routes with no model. Its replies are
+labeled "Scripted demo reply, not a model".
+
+To reach the app through a private proxy on the same computer, such as
+Tailscale serve, list its host names in `APP_ALLOWED_HOSTS`
+(comma-separated). The app still binds 127.0.0.1. See
+`docs/decisions/0008-web-app.md`.
 
 Live model in the UI: set `APP_LIVE_MODEL=1` and provide `MODEL_API_KEY` in
 the environment.

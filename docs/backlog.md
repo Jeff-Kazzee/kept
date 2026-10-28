@@ -368,6 +368,25 @@ Sprint 7A tasks (branch `sprint/07a-case-agent`, decisions in
 - [ ] SP7A.12 Confirm or change the decisions marked "proposed, pending
   Jeff" in `docs/decisions/0007-case-agent.md`.
 
+Sprint 7B tasks (branch `sprint/07b-web-app`):
+
+- [x] SP7B.1 Chat and schedule layout for laptop, tablet and phone (W1, W2).
+- [x] SP7B.2 Thread, streaming, tool line, fact chips and cards from the
+  live case view (W3, W4), with a scripted mock chat until 7A merges.
+- [x] SP7B.3 Composer, calendar file button, suggestions and the demo path
+  (W5).
+- [x] SP7B.4 Design system, light and dark themes, accessibility (W6).
+- [x] SP7B.5 Old UI removed, its tests moved to the new parts (W7, W8).
+- [x] SP7B.6 `pnpm build` and `pnpm start` with precompression, cache
+  headers, a strict CSP and the 150 KB budget (P1, P2).
+- [x] SP7B.7 `APP_ALLOWED_HOSTS` and a Secure cookie over HTTPS (P3).
+- [x] SP7B.9 "Add an office message" outside the chat, under the scope
+  decline and in the composer (W9, proposed).
+- [ ] SP7B.8 After 7A merges, rebase and switch the page to the real
+  `/api/chat` route.
+- [ ] Confirm or change the decisions in `docs/decisions/0008-web-app.md`
+  (W1 to W9, P1 to P3, B1 to B18).
+
 ## Sprint 8: failure testing
 
 Branch `sprint/08-failure-testing`.
