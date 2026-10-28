@@ -138,7 +138,10 @@ async function runCall(deps: McpDeps, name: string, args: unknown, generation: n
     const ctx = mcpContext(deps.store, deps.services, now);
     const r = await tool.run(deps.messageIdFor ? { ...ctx, messageIdFor: deps.messageIdFor } : ctx, parsed.data);
     outcome = accessResult(r.ok, r.code);
-    result = r.ok ? { content: [{ type: "text" as const, text: JSON.stringify(r.output) }], structuredContent: r.output } : errorResult(r.output);
+    // Every string the agent reads passes the sanitizer here, once, and the
+    // text block is the same data as the structured result.
+    const output = sanitize(r.output);
+    result = r.ok ? { content: [{ type: "text" as const, text: JSON.stringify(output) }], structuredContent: output } : errorResult(output);
   } catch (err) {
     if (err instanceof CaseDeletedError) return errorResult(CASE_DELETED);
     if (err instanceof StoreBusyError) {

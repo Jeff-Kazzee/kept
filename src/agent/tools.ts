@@ -21,7 +21,7 @@ import { isValidDate, isValidTime, parseMentions, weekdayOf } from "../domain/da
 import type { IcsTime } from "../domain/ics.ts";
 import { normalizeWhitespace } from "../domain/quote.ts";
 import { OutOfScopeError } from "../domain/scope.ts";
-import { localDateTime, zonedIso } from "../domain/zone.ts";
+import { localDateTime, resolveWallClock, zonedIso } from "../domain/zone.ts";
 import type { EvidenceView } from "../intake/events.ts";
 import { InvalidRequestError, NotFoundError, type IntakeService } from "../intake/service.ts";
 import { shortHash } from "../conflicts/check.ts";
@@ -32,12 +32,20 @@ import type { ReplyService } from "../reply/service.ts";
 import { TEMPLATES, TEMPLATE_IDS } from "../reply/templates.ts";
 import { timezoneSettings } from "../settings/events.ts";
 import { findClashes, icsInstant } from "../slots/clash.ts";
-import { slotLabel, sourceLabel, stateLabel, stateMeaning } from "../slots/labels.ts";
+import { EXTERNAL_AGENT_NAME, slotLabel, sourceLabel, stateLabel, stateMeaning } from "../slots/labels.ts";
 import type { SlotView } from "../slots/types.ts";
 import { StaleEditError, type EventStore } from "../store/event-log.ts";
 import { canonicalDates } from "./dates.ts";
 import { checkAnswer, type Fact, type Grounds, type Status } from "./grounding.ts";
-import { DRAFT_OPEN_NOTICE, QUESTION_WITHHELD_NOTICE, SOURCE_SUGGESTED_LABEL, EXTERNAL_SOURCE_LABEL, type Card } from "./types.ts";
+import {
+  DRAFT_OPEN_NOTICE,
+  EXTERNAL_SOURCE_LABEL,
+  IMPORT_AFTER_ACTION_NOTICE,
+  PASTE_TURN_NOTICE,
+  QUESTION_WITHHELD_NOTICE,
+  SOURCE_SUGGESTED_LABEL,
+  type Card,
+} from "./types.ts";
 import type { FunctionTool } from "../model/responses.ts";
 
 export type ToolServices = {
@@ -70,7 +78,15 @@ export type ToolContext = ToolServices & {
   // the same transaction (review round 2, finding 10). Over MCP it only
   // runs `write`.
   recordImport: <T>(lines: ImportedLines, write: () => T) => T;
+  // What this chat turn did so far, for the paste rule (0009, D2). Absent
+  // over MCP.
+  turn?: ChatTurnState;
 };
+
+// `imported` holds the messages and lines this turn imported. `acted` is
+// true once the turn took an action other than the import and the review
+// of the imported message's claims.
+export type ChatTurnState = { imported: ImportedLines[]; acted: boolean };
 
 // Lines of the person's message that a tool imported, counted from 0 after
 // line endings are normalized.
@@ -283,6 +299,35 @@ export function senderAttributed(from: string, userText: string, first: number, 
   return false;
 }
 
+// 0009, D1: the imported lines are the person's own typed words, a report
+// of something that happened elsewhere, only when nothing marks them as a
+// message from someone else. Code reads the person's words outside the
+// import and the import's position:
+// - the words around it do not introduce a message ("I got this", "they
+//   texted", "below", a line ending with a colon),
+// - the import is not a block set off by a blank line under a lead-in,
+// - it has no header line (From:, Sent:, Subject:) and does not start with
+//   a sender's name and a colon,
+// - it speaks in the first person singular and does not address the
+//   reader as you.
+const INTRODUCES =
+  /\b(?:got|received|sent|texted|emailed|wrote|forwarded|message|text|email|mail|note|letter|voicemail|this came|came in|here is|here's|below|pasted?|copied|from)\b|:\s*$/i;
+const HEADER = /^(?:from|sent|to|subject|date|received|cc)\s*:/i;
+const SENDER_PREFIX = /^[\p{L}][\p{L}\p{N} .,'&-]{0,60}:\s/u;
+const FIRST_PERSON = /\b(?:i|i'm|i've|i'll|i'd|me|my|mine|myself)\b/i;
+const ADDRESSES_YOU = /\b(?:you|your|yours)\b/i;
+
+export function ownWords(userText: string, first: number, last: number, text: string): boolean {
+  const lines = userText.replace(/\r\n?/g, "\n").split("\n");
+  const outside = [...lines.slice(0, first), ...lines.slice(last + 1)].join("\n").trim();
+  if (outside !== "" && INTRODUCES.test(outside)) return false;
+  if (first > 0 && lines.slice(0, first).some((l) => l.trim() === "")) return false;
+  const imported = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (imported.some((l) => HEADER.test(l)) || SENDER_PREFIX.test(imported[0] ?? "")) return false;
+  const words = text.replace(/[’‘]/g, "'");
+  return FIRST_PERSON.test(words) && !ADDRESSES_YOU.test(words);
+}
+
 // Review round 2, finding 3: a send time comes only from a header line in
 // the paste (Sent:, Date:, Received:) or from the person's own words about
 // when it arrived ("this came yesterday at 3"). A date or time anywhere else
@@ -411,10 +456,15 @@ function decideClaims(decision: "accept" | "reject") {
     const decided: EvidenceView[] = [];
     for (const ref of input.claims) {
       const r = await guarded(async () => {
+        // D2: in a turn that imported a message, only that message's claims.
+        const from = ctx.intake.evidence().find((e) => e.id === ref.evidence_id)?.messageId ?? null;
+        const importedIds = ctx.turn?.imported.map((x) => x.message_id) ?? [];
+        if (importedIds.length > 0 && (from === null || !importedIds.includes(from))) return failure("waits_for_person", PASTE_TURN_NOTICE);
         const { value, entries } = await acting(ctx, (by) =>
           decision === "accept" ? ctx.actions.acceptClaim(by, ref.evidence_id, ref.expected_version) : ctx.actions.rejectClaim(by, ref.evidence_id, ref.expected_version),
         );
         decided.push(value);
+        if (ctx.turn && !importedIds.includes(from ?? "")) ctx.turn.acted = true;
         return result({ evidence_id: ref.evidence_id, status: value.status, activity: activityOut(entries[0], ctx.actions) });
       });
       done.push(r.ok ? r.output : { evidence_id: ref.evidence_id, ...r.output });
@@ -501,7 +551,53 @@ function recordResult(ctx: ToolContext, slot: string, entries: ActivityEntry[], 
   );
 }
 
-export const AGENT_TOOLS: ToolSpec<unknown>[] = [
+// 0009, D2: a turn that imports a pasted message may only import it and
+// accept or reject that message's claims. Text in the paste must not be
+// able to drive any other action. These actions also need words of the
+// person's own, outside any imported lines, in the turn.
+const PERSON_ASKED_TOOLS: ReadonlySet<string> = new Set([
+  "archive_appointment",
+  "unarchive_appointment",
+  "set_tags",
+  "add_note",
+  "set_timezone",
+  "answer_question",
+  "discard_draft",
+  "start_reply",
+  "undo",
+]);
+
+// The person's words in the turn, without the lines a tool imported.
+function ownText(userText: string, imported: ImportedLines[]): string {
+  return userText
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .filter((_, i) => !imported.some((x) => i >= x.first_line && i <= x.last_line))
+    .join("\n")
+    .trim();
+}
+
+function pasteTurnRefusal(ctx: ToolContext): ToolResult | null {
+  if (!ctx.turn || ctx.userText === null) return null;
+  if (ctx.turn.imported.length === 0 && ownText(ctx.userText, []) !== "") return null;
+  return failure("waits_for_person", PASTE_TURN_NOTICE, { cards: [{ kind: "notice", text: PASTE_TURN_NOTICE }] });
+}
+
+function gated(spec: ToolSpec<unknown>): ToolSpec<unknown> {
+  if (!PERSON_ASKED_TOOLS.has(spec.name)) return spec;
+  return {
+    ...spec,
+    run: async (ctx, input) => {
+      const refused = pasteTurnRefusal(ctx);
+      if (refused) return refused;
+      const r = await spec.run(ctx, input);
+      if (r.ok && ctx.turn) ctx.turn.acted = true;
+      return r;
+    },
+  };
+}
+
+const TOOL_SPECS: ToolSpec<unknown>[] = [
   tool({
     name: "get_schedule",
     label: "Reading your schedule",
@@ -717,6 +813,9 @@ export const AGENT_TOOLS: ToolSpec<unknown>[] = [
       const events = view.calendar.events;
       const that = events.filter((e) => caseLocal(e.start, zone).date === input.date);
       const clashes = input.time === null ? [] : findClashes(input.date, input.time, events, zone);
+      // A time the clock skips when daylight time starts is read as the
+      // first time after the gap, and the result says so.
+      const gap = input.time !== null && resolveWallClock(input.date, input.time, zone).kind === "gap";
       const eventFacts = [...that, ...clashes].flatMap((e) => [caseLocal(e.start, zone), ...(e.end ? [caseLocal(e.end, zone)] : [])]);
       return result(
         {
@@ -731,6 +830,7 @@ export const AGENT_TOOLS: ToolSpec<unknown>[] = [
           })),
           clashes_with_time: clashes.map((e) => ({ summary: untrustedText(e.summary), starts: localLabel(caseLocal(e.start, zone)) })),
           appointments_that_day: day,
+          ...(gap ? { time_note: `${input.time} does not happen on ${input.date} in ${zone}, because the clock moves forward. It was checked from the first time after the gap.` } : {}),
         },
         { slots: sameDay, facts: [...sameDay.map(slotFact), ...eventFacts] },
       );
@@ -1115,7 +1215,11 @@ export const AGENT_TOOLS: ToolSpec<unknown>[] = [
     run: (ctx, input) =>
       guarded(async () => {
         const { value, entries } = await acting(ctx, (b) => ctx.actions.setTimezone(b, input.timezone, input.expected_version));
-        return result({ time_zone: value.timezone, previous: value.previous, activity: activityOut(entries[0], ctx.actions) });
+        // Later tools in the turn, and the checks on the answer, read the
+        // new zone and its date.
+        ctx.zone = value.timezone;
+        ctx.today = zonedIso(ctx.sentAt, value.timezone).slice(0, 10);
+        return result({ time_zone: value.timezone, previous: value.previous, today: ctx.today, activity: activityOut(entries[0], ctx.actions) });
       }),
   }),
 ];
@@ -1126,6 +1230,8 @@ export const AGENT_TOOLS: ToolSpec<unknown>[] = [
 // external agent.
 async function importMessage(ctx: ToolContext, input: { text: string; channel: string | null; from: string | null; received_at: string | null }): Promise<ToolResult> {
   const { intake } = ctx;
+  // D2: a turn that already took another action does not import as well.
+  if (ctx.turn?.acted) return failure("waits_for_person", IMPORT_AFTER_ACTION_NOTICE, { cards: [{ kind: "notice", text: IMPORT_AFTER_ACTION_NOTICE }] });
   let text = input.text;
   let lines = { first: 0, last: 0 };
   let outside = "";
@@ -1152,7 +1258,12 @@ async function importMessage(ctx: ToolContext, input: { text: string; channel: s
   // and the ones an agent suggested are marked.
   const suggested: Array<"channel" | "from" | "received_at"> = [];
   const channel = Channel.safeParse(input.channel);
-  const pickedChannel = channel.success && channel.data !== "unknown" ? channel.data : "unknown";
+  // 0009, D1: user_report means the person's own words. In the chat it is
+  // kept only when the imported lines are what the person typed, not a
+  // paste they introduced as someone else's message. Over MCP it is kept,
+  // and the claims are reported through the external agent.
+  const ownReport = ctx.userText === null || ownWords(ctx.userText, lines.first, lines.last, text);
+  const pickedChannel = channel.success && channel.data !== "unknown" && (channel.data !== "user_report" || ownReport) ? channel.data : "unknown";
   if (pickedChannel !== "unknown") suggested.push("channel");
   const trimmed = input.from?.trim() ?? "";
   const fromOk = trimmed.length > 0 && trimmed.length <= 200 && (ctx.userText === null || senderAttributed(trimmed, ctx.userText, lines.first, lines.last));
@@ -1175,7 +1286,7 @@ async function importMessage(ctx: ToolContext, input: { text: string; channel: s
         ctx.actions.importMessage(
           { actor: ctx.by.actor, onEntry: ctx.by.onEntry },
           { id, channel: pickedChannel, from: from ?? "Unknown sender", received_at: stated ? iso! : zonedIso(ctx.sentAt, ctx.zone), text },
-          { suggested, note },
+          { suggested, note, ...(ctx.userText === null && pickedChannel === "user_report" ? { agentName: EXTERNAL_AGENT_NAME } : {}) },
         ),
       );
       status = "imported";
@@ -1185,8 +1296,12 @@ async function importMessage(ctx: ToolContext, input: { text: string; channel: s
     }
     // Reading the message is part of adding it: the import's activity
     // entry covers both, and its undo removes the message and its facts.
+    // A message that was already in the case and never read is read now as
+    // its own action, with its own entry.
     if (message.status === "imported") {
-      await intake.extract(id, { effort: ctx.extractionEffort, expectedVersion: message.version });
+      const m = message;
+      if (status === "already_imported") await acting(ctx, (b) => ctx.actions.extract(b, id, { effort: ctx.extractionEffort, expectedVersion: m.version }));
+      else await intake.extract(id, { effort: ctx.extractionEffort, expectedVersion: m.version });
       message = intake.message(id);
       status = "imported";
     }
@@ -1222,6 +1337,8 @@ async function importMessage(ctx: ToolContext, input: { text: string; channel: s
     },
   );
 }
+
+export const AGENT_TOOLS: ToolSpec<unknown>[] = TOOL_SPECS.map(gated);
 
 export const AGENT_TOOL_NAMES = AGENT_TOOLS.map((t) => t.name);
 

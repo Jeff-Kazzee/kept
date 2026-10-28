@@ -59,14 +59,34 @@ function offsetMs(utcMs: number, zone: string): number {
 // The zone to compute in: `zone` when it is known, otherwise `fallback`.
 export const knownZoneOr = (zone: string | null | undefined, fallback: string): string => (zone && isTimeZone(zone) ? zone : fallback);
 
-// The UTC instant of a wall-clock time in a zone, found in two steps from
-// the zone's offset near that time.
-export function wallClockToUtc(date: string, time: string, zone: string): number {
+// The UTC instant of a wall-clock time in a zone. A time that happens twice
+// when daylight time ends is the first of the two. A time that does not
+// happen, because daylight time starts and the clock skips it (02:30 on
+// 2026-03-08 in America/Denver), rolls forward to the first time that
+// does (03:00), and `kind` says "gap" so a caller can tell the person.
+export function resolveWallClock(date: string, time: string, zone: string): { utc: number; kind: "exact" | "gap" } {
   const [y, m, d] = date.split("-").map(Number) as [number, number, number];
   const [h, mi] = time.split(":").map(Number) as [number, number];
   const guess = Date.UTC(y, m - 1, d, h, mi);
-  const first = guess - offsetMs(guess, zone);
-  return guess - offsetMs(first, zone);
+  const target = `${date}T${time}`;
+  // The zone's offsets a day before and a day after cover both sides of
+  // any change near the time.
+  const offsets = [...new Set([offsetMs(guess - 86_400_000, zone), offsetMs(guess, zone), offsetMs(guess + 86_400_000, zone)])];
+  const exact = offsets.map((o) => guess - o).filter((t) => wallClockOf(t, zone) === target);
+  if (exact.length > 0) return { utc: Math.min(...exact), kind: "exact" };
+  // In a gap: the first minute whose wall clock is at or after the time.
+  let lo = guess - Math.max(...offsets);
+  let hi = guess - Math.min(...offsets);
+  while (hi - lo > 60_000) {
+    const mid = lo + Math.floor((hi - lo) / 120_000) * 60_000;
+    if (wallClockOf(mid, zone) >= target) hi = mid;
+    else lo = mid;
+  }
+  return { utc: wallClockOf(lo, zone) >= target ? lo : hi, kind: "gap" };
+}
+
+export function wallClockToUtc(date: string, time: string, zone: string): number {
+  return resolveWallClock(date, time, zone).utc;
 }
 
 const pad = (n: number, w = 2) => String(n).padStart(w, "0");

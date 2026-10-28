@@ -81,5 +81,11 @@ export const SOURCE_SUGGESTED_LABEL = "Source suggested by the assistant";
 // Shown beside a message an external agent added over MCP (0009, design 4).
 export const EXTERNAL_SOURCE_LABEL = "Added by an external agent";
 export const QUESTION_WITHHELD_NOTICE = "The question's wording did not pass the chat checks. Answer it in the schedule panel.";
+// 0009, D2: an action that came with a pasted message waits for a turn
+// where the person asks for it in their own words.
+export const PASTE_TURN_NOTICE =
+  "I did not do that, because it came with a pasted message. Ask me in your own words, in a new message, and I will.";
+export const IMPORT_AFTER_ACTION_NOTICE =
+  "I did not add the pasted message, because this message already changed something else. Paste it in its own message.";
 export const DRAFT_OPEN_NOTICE = "A reply draft is already open. Finish or discard it before starting another.";
 export const WITHHELD_USER_TEXT = "Not saved: this message asked about health, which this app does not handle.";

@@ -17,7 +17,7 @@ import type { CaseView, ConflictView } from "../case/types.ts";
 import type { Effort, EvidenceClaim, Message } from "../domain/claim.ts";
 import { zonedIso } from "../domain/zone.ts";
 import type { EvidenceView, MessageView } from "../intake/events.ts";
-import { InvalidRequestError, NotFoundError, type IntakeService, type ManualClaimInput } from "../intake/service.ts";
+import { InvalidRequestError, NotFoundError, type ImportSource, type IntakeService, type ManualClaimInput } from "../intake/service.ts";
 import { actorFor, type RecordView } from "../records/events.ts";
 import type { RecordsService } from "../records/service.ts";
 import type { ReplyService } from "../reply/service.ts";
@@ -98,6 +98,9 @@ const NOT_UNDOABLE = {
   undo: "An undo cannot be undone. Make the change again instead.",
   recordUndo: "This undo cannot be undone. Make the change again instead.",
 } as const;
+
+// An undo that would throw away the person's own edit of a draft.
+const editedDraft = (id: string) => `You edited draft ${id} after it was started, so undo would throw your edit away. Discard the draft yourself if you no longer want it.`;
 
 export class CaseActions {
   readonly #store: EventStore;
@@ -190,7 +193,7 @@ export class CaseActions {
 
   // Messages and extraction.
 
-  importMessage(by: By, message: Message, source?: { suggested: Array<"channel" | "from" | "received_at">; note: string }): MessageView {
+  importMessage(by: By, message: Message, source?: ImportSource): MessageView {
     return this.#act(
       by,
       () => this.#intake.importMessage(message, source),
@@ -536,8 +539,20 @@ export class CaseActions {
       return `A reply for ${listLabels(approved.slot_keys)} was approved after this and depends on it. A sent reply cannot be unsent, so this cannot be undone.`;
     }
     switch (spec.kind) {
-      case "message_import":
+      case "message_import": {
+        const m = this.#intake.messages().find((x) => x.id === spec.message_id);
+        if (!m) return `Message ${spec.message_id} is no longer in the case.`;
+        if (m.manualEvidenceIds.length > 0) {
+          const typed = later.find((r) => r.kind === "claim_entered" && m.manualEvidenceIds.includes(r.target?.id ?? ""));
+          return `A fact was entered by hand for message ${m.id}${typed ? ` (${typed.id})` : ""} after this, and depends on it. Reject that fact instead.`;
+        }
+        const ids = new Set([...m.evidenceIds, ...m.manualEvidenceIds]);
+        const settledBy = this.#kase
+          .questions()
+          .find((q) => q.status === "answered" && q.choices.find((c) => c.id === q.answer!.choiceId)?.settles.some((id) => ids.has(id)));
+        if (settledBy) return `The answer to question ${settledBy.id} settled a fact from message ${m.id} after this. Undo that answer first.`;
         return null;
+      }
       case "claim_decision": {
         const current = this.#intake.evidence().find((e) => e.id === spec.evidence_id);
         if (!current || current.version !== spec.version) return "This fact was reviewed again since. Undo the later review instead.";
@@ -552,6 +567,10 @@ export class CaseActions {
         if (!q || q.status !== "answered") return "This question is no longer answered.";
         const open = this.#kase.questions().find((x) => x.status === "open");
         if (open) return `Question ${open.id} is open now. Answer or undo it first.`;
+        if (spec.draft_id) {
+          const d = this.#kase.replyState().log.drafts.find((x) => x.id === spec.draft_id);
+          if (d && d.status === "open" && d.edited) return editedDraft(d.id);
+        }
         return null;
       }
       case "question_ask": {
@@ -566,6 +585,7 @@ export class CaseActions {
         if (!d) return "This draft is gone.";
         if (d.status === "approved") return NOT_UNDOABLE.approve;
         if (d.status === "discarded") return `Draft ${d.id} was already discarded.`;
+        if (d.edited) return editedDraft(d.id);
         return null;
       }
       case "draft_discard": {

@@ -42,7 +42,7 @@ import { SETTINGS_STREAM } from "../settings/events.ts";
 import { CHAT_STREAM, projectChat, type AssistantOutcome, type ChatCallRecord, type ChatEventData, type ChatLog } from "./events.ts";
 import { checkAnswer, chipsFor, type Fact, type Status, type TextProblem } from "./grounding.ts";
 import { defaultMessageId, functionTools, parseCall, toolLabel, type ToolContext, type ToolResult, type ToolServices } from "./tools.ts";
-import type { ImportedLines } from "./tools.ts";
+import type { ChatTurnState, ImportedLines } from "./tools.ts";
 import {
   MALFORMED_TEXT,
   MODEL_UNAVAILABLE_TEXT,
@@ -261,6 +261,8 @@ export class CaseAgent {
 
     // Each action's entry goes to the page at once, as an `action` event.
     const actions: ActivityEntry[] = [];
+    // What the turn imported and did, for the paste rule (0009, D2).
+    const turn: ChatTurnState = { imported: [], acted: false };
     const ctx: ToolContext = {
       ...this.#services,
       store: this.#store,
@@ -278,13 +280,17 @@ export class CaseAgent {
       today,
       messageIdFor: this.#messageIdFor,
       extractionEffort: this.#extractionEffort,
-      recordImport: (lines, write) =>
-        this.#store.transaction(() => {
-          const result = write();
+      recordImport: (lines, write) => {
+        const result = this.#store.transaction(() => {
+          const written = write();
           this.#append(chatVersion, [{ type: "chat_lines_imported", data: { turn_id: turnId, user_message_id: userId, ...lines } }]);
           chatVersion++;
-          return result;
-        }),
+          return written;
+        });
+        turn.imported.push(lines);
+        return result;
+      },
+      turn,
     };
     const items: InputItem[] = [...history.map((m) => historyItem(m, log.imported.get(m.id))), { role: "user", content: text }];
     const cards: Card[] = [];
@@ -378,7 +384,8 @@ export class CaseAgent {
         }
 
         // G4 and G5 on the final text, with one retry.
-        const grounds = () => ({ facts, statuses, today, scheduleRead, done: new Set(actions.map((a) => a.kind)) });
+        // The turn's date as the tools last read it: set_timezone moves it.
+        const grounds = () => ({ facts, statuses, today: ctx.today, scheduleRead, done: new Set(actions.map((a) => a.kind)) });
         finalText = cleanText(outputText(output)).trim();
         let problems = checkAnswer(finalText, grounds());
         report.problems.push(problems);
@@ -417,7 +424,7 @@ export class CaseAgent {
     }
     wrote();
 
-    const chips = chipsFor(slots, outcome === "answered" ? finalText : null, today);
+    const chips = chipsFor(slots, outcome === "answered" ? finalText : null, ctx.today);
     const answerId = `cm${chatVersion + 1}`;
     this.#append(chatVersion, [this.#assistantEvent(answerId, turnId, finalText, outcome, cards, chips, report.tools, report.problems, report.calls, actions.map((a) => a.id))]);
     report.outcome = outcome;
