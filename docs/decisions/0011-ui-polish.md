@@ -90,11 +90,13 @@ Code: `ui/contract.ts` (the contract types), `ui/agentApi.ts` (its routes),
 - U8. A fact no one has decided (a message added through the import sheet,
   or the base back end) keeps small Accept and Reject buttons in its row,
   so the case never stalls.
-- U9. Undo of a receipt with several entries undoes them newest first. The
-  first sends the activity version the page showed. Each later one sends
-  the version read after the previous undo. A refusal stops the run, and
-  its reason shows beside the receipt and the Activity row until the next
-  undo.
+- U9. Undo of a receipt with several entries undoes them newest first,
+  sorted in one place (`ui/agent/undo.ts`). The activity is read again
+  right before the first undo, each later one sends the version read after
+  the one before, and an entry already undone is skipped. One undo runs at
+  a time, and Undo waits while a turn streams. A refusal stops the run,
+  and its reason shows beside the receipt and the Activity row until the
+  next undo.
 - U10. The shell reads the case, settings, activity and Google together and
   applies only its latest read, so a refresh started by a card mid-turn
   cannot replace a newer one with older data. An `action` event refreshes
@@ -222,6 +224,34 @@ mountains, rivers, creeks, hot springs and wildlife, at a high-end polish.
   and fold toggles, and no tab icons, so the tab labels fit.
 - U36. The explanation in "Waiting for you" keeps its sources folded, so
   the panel stays an agenda first.
+
+## Review round 1 (Muse, 2fc3063..ae0dd84)
+
+- R1-1 and R1-2. Unpaired browsers and MCP proposals with no screen come
+  from the base, which still has pairing and proposals. Resolved by the
+  sprint 8 merge, which removes both, and this branch rebases onto it
+  before merge. Until then any refused read, an unexpected 401 included,
+  shows the reason and a working Try again (`LoadError`).
+- R1-3 and R1-4. Undo order, serialization and the fresh read: see U9.
+- R1-5. A failed read of settings, activity or Google keeps the last good
+  value, so times keep their zone, and a quiet notice says the app shows
+  the last settings it read. Only a 404 means the route is missing.
+- R1-6. The shell checks that a read is still the latest after every
+  wait, the one after Delete case included.
+- R1-7. Saving and removing the Meta key and signing out of ChatGPT send
+  `expectedVersion` (the settings version). Google disconnect sends the
+  connection's `version`, a new field of `GET /api/google`.
+- R1-8. The first device-zone send counts as done when it is sent or
+  refused for a version. Any other failure is tried again at the next read.
+- R1-9. Undo links, tabs, the model pill, info buttons, summaries and the
+  new-messages pill have 44 px hit areas at every width.
+- R1-10. A menu choice gives focus back to the menu's button before it runs.
+- R1-11. Closing the sheet gives focus back to what opened it, such as the
+  model pill that opened Settings.
+- R1-12. Calendar event and clash titles render as labeled data
+  (`UntrustedInline`). The clash marker's own text no longer repeats them.
+- R1-13. A wall time the clocks skip is refused after a round trip, and
+  the import sheet says to pick a time an hour later.
 
 ## Measured on the production build
 
