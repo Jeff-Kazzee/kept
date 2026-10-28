@@ -12,6 +12,7 @@ import { ActionButton } from "../components/ActionButton.tsx";
 import { ReplyPanel } from "../case/ReplyCard.tsx";
 import { zoneWithShortName } from "../format.ts";
 import { Agenda } from "./Agenda.tsx";
+import { InfoTip } from "../components/InfoTip.tsx";
 import { ActivityTab, ChecklistPanel } from "./CaseTabs.tsx";
 import { SettingsPanel } from "./Settings.tsx";
 
@@ -102,7 +103,6 @@ export function SchedulePanel({
             tabIndex={tab === t.id ? 0 : -1}
             onClick={() => onTab(t.id)}
           >
-            <Icon name={t.icon} size="sm" />
             {t.label}
             {t.id === "schedule" && waiting > 0 && (
               <span className="count" aria-label={`${waiting} waiting for you`}>
@@ -112,7 +112,8 @@ export function SchedulePanel({
           </button>
         ))}
       </div>
-      <div className="panel-body" role="tabpanel" id={`tabpanel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
+      {/* Keyed by tab, so each tab opens at its top with a short fade. */}
+      <div key={tab} className="panel-body" role="tabpanel" id={`tabpanel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
         {tab === "schedule" && <ScheduleTab state={state} run={run} highlight={highlight} />}
         {tab === "checklist" && <ChecklistPanel items={state.case.checklist} />}
         {tab === "activity" && <ActivityTab history={state.history} />}
@@ -138,12 +139,12 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
             <EvidenceCard key={e.id} item={e} state={state} run={run} />
           ))}
           {kase.question && kase.conflicts.find((c) => c.id === kase.question!.conflictId)?.explanation && (
-            <ExplanationCard conflictId={kase.question.conflictId} state={state} run={run} />
+            <ExplanationCard conflictId={kase.question.conflictId} state={state} run={run} compact />
           )}
           {kase.question && <QuestionCard conflictId={kase.question.conflictId} state={state} run={run} showDraft={false} />}
           {conflict && (
             <>
-              <ExplanationCard conflictId={conflict.id} state={state} run={run} />
+              <ExplanationCard conflictId={conflict.id} state={state} run={run} compact />
               <div className="btn-row">
                 <ActionButton run={run} variant="primary" action={() => api.nextQuestion(kase.questionsVersion)}>
                   Ask me the question about this
@@ -156,11 +157,15 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
       )}
       <section className="stack" aria-labelledby="appointments">
         <div className="section-head">
-          <h3 id="appointments">Appointments</h3>
-          <span className="small muted">Times in {zoneWithShortName()}</span>
+          <h3 id="appointments">
+            Appointments
+            <InfoTip label="How appointments are built">
+              <p>{SLOTS_NOTE}</p>
+              <p>{calendarNote(state)}</p>
+            </InfoTip>
+          </h3>
+          <span className="small muted tabular">{zoneWithShortName()}</span>
         </div>
-        <p className="small muted">Built by code from the accepted facts. Model text never changes an appointment.</p>
-        <CalendarLine state={state} />
         <Agenda state={state} run={run} highlight={highlight} />
       </section>
       {reply.sent.length > 0 && (
@@ -173,12 +178,12 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
   );
 }
 
-function CalendarLine({ state }: { state: AppState }) {
+// The fine print behind the Appointments info button, and in Settings,
+// About this app.
+export const SLOTS_NOTE = "Built by code from the accepted facts. Model text never changes an appointment.";
+
+export function calendarNote(state: AppState): string {
   const cal = state.case.calendar;
-  if (!cal) return <p className="small muted">No calendar loaded, so clashes are not checked. Load one from the chat.</p>;
-  return (
-    <p className="small muted">
-      Calendar {cal.name}: {cal.events.length} events. A clash check assumes an appointment lasts {cal.assumedSlotMinutes} minutes, because messages do not state an end time.
-    </p>
-  );
+  if (!cal) return "No calendar is loaded, so clashes are not checked. Attach one from the chat.";
+  return `Calendar ${cal.name}: ${cal.events.length} events. A clash check assumes an appointment lasts ${cal.assumedSlotMinutes} minutes, because messages do not state an end time.`;
 }

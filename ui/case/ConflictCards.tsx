@@ -108,7 +108,8 @@ export function QuestionCard({ conflictId, state, run, showDraft = true }: { con
   );
 }
 
-export function ExplanationCard({ conflictId, state, run }: { conflictId: string; state: AppState; run: Run }) {
+// `compact` keeps the sources folded, for the schedule panel.
+export function ExplanationCard({ conflictId, state, run, compact = false }: { conflictId: string; state: AppState; run: Run; compact?: boolean }) {
   const conflict = state.case.conflicts.find((c) => c.id === conflictId);
   if (!conflict) {
     return (
@@ -130,13 +131,13 @@ export function ExplanationCard({ conflictId, state, run }: { conflictId: string
         <>
           <p className="assistant-text">{x.text}</p>
           <p className="small muted">Every source it cites is shown below. Read them before you decide.</p>
-          <Sources ids={x.citedEvidenceIds} state={state} open />
+          <Sources ids={x.citedEvidenceIds} state={state} open={!compact} />
         </>
       ) : x?.outcome === "unavailable" ? (
         <>
           <p className="warn-box">The model's explanation failed the code checks twice. The sources are shown without it.</p>
           <p>{conflict.summary}</p>
-          <Sources ids={conflict.evidenceIds} state={state} open />
+          <Sources ids={conflict.evidenceIds} state={state} open={!compact} />
         </>
       ) : (
         <>
@@ -146,7 +147,7 @@ export function ExplanationCard({ conflictId, state, run }: { conflictId: string
               <Icon name="sparkle" size="sm" /> Explain with the model
             </ActionButton>
           </div>
-          <Sources ids={conflict.evidenceIds} state={state} open />
+          <Sources ids={conflict.evidenceIds} state={state} open={!compact} />
         </>
       )}
     </section>

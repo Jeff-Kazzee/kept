@@ -73,17 +73,19 @@ export function Agenda({
 
   return (
     <div className="stack">
-      <label className="check" htmlFor="show-archived">
-        <input id="show-archived" name="show-archived" type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
-        <span>Show archived ({archivedCount})</span>
-      </label>
+      {(archivedCount > 0 || showArchived) && (
+        <label className="check small" htmlFor="show-archived">
+          <input id="show-archived" name="show-archived" type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+          <span>Show archived ({archivedCount})</span>
+        </label>
+      )}
       {[...byDay].map(([date, dayRows]) => {
         const n = dayRows.filter((r) => r.kind === "slot").length;
         return (
         <section key={date} className="day" aria-label={dateLabel(date)}>
           <h3 className="day-head">
             {dateLabel(date)}
-            <span className="day-count">
+            <span className="day-count tabular">
               {n} appointment{n === 1 ? "" : "s"}
             </span>
           </h3>
@@ -105,13 +107,13 @@ export function Agenda({
 function CalendarRow({ event }: { event: IcsEvent }) {
   return (
     <div className="slot calendar">
-      <div className="slot-time">{icsTimeText(event.start)}</div>
+      <div className="slot-time tabular">{icsTimeText(event.start)}</div>
       <div className="slot-body">
         <div className="slot-line">
+          <span className="slot-title">{event.summary}</span>
           <span className="badge badge-calendar">Your calendar</span>
-          <span>{event.summary}</span>
         </div>
-        <span className="small muted">
+        <span className="small muted tabular">
           {icsTimeText(event.start)}
           {event.end ? ` to ${icsTimeText(event.end)}` : ""}
           {event.recurring && " · repeats, first time shown"}
@@ -121,75 +123,94 @@ function CalendarRow({ event }: { event: IcsEvent }) {
   );
 }
 
+// One appointment as a compact agenda row: the time, a colored rail by
+// state, the place, the state pill and small markers for a clash and Google
+// Calendar. The quote, notes, Archive and replies are behind Details.
 function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; record: RecordView | undefined; state: AppState; run: Run; highlight: boolean }) {
   const kase = state.case;
-  const archiveVersion = activeArchive(record);
   const { activity } = useAgent();
+  const archiveVersion = activeArchive(record);
   const options = kase.reply.options.filter((o) => o.slotKey === s.key);
   const clashes = s.clashes ?? [];
   const onGoogle = onGoogleCalendar(activity, s.key);
+  const clashWords = clashes.map((c) => `Clashes with ${c.summary} (${icsTimeText(c.start)}${c.end ? ` to ${icsTimeText(c.end)}` : ""})`);
   return (
-    <article id={slotElementId(s.key)} tabIndex={-1} data-state={s.state} className={["slot", record?.archived ? "archived" : "", highlight ? "highlight" : ""].filter(Boolean).join(" ")} aria-label={`${s.label}: ${s.stateLabel}`}>
-      <div className="slot-time">{s.time ? timeLabel(s.time) : "No time"}</div>
+    <article
+      id={slotElementId(s.key)}
+      tabIndex={-1}
+      data-state={s.state}
+      className={["slot", record?.archived ? "archived" : "", highlight ? "highlight" : ""].filter(Boolean).join(" ")}
+      aria-label={`${s.label}: ${s.stateLabel}`}
+    >
+      <div className="slot-time tabular">{s.time ? timeLabel(s.time) : "No time"}</div>
       <div className="slot-body">
         <div className="slot-line">
-          <StateBadge state={s.state} />
-          <span className="small muted">{s.sourceLabel}</span>
-          {clashes.length > 0 && <span className="badge badge-clash">Clash</span>}
+          <span className="slot-title">{s.locationDisputed ? "Place disputed" : (s.location ?? "Place not stated")}</span>
+          {clashes.length > 0 && (
+            <span className="marker marker-clash" title={clashWords.join(". ")}>
+              <Icon name="alert" size="sm" />
+              <span>Clash</span>
+              <span className="sr-only">: {clashWords.join(". ")}</span>
+            </span>
+          )}
           {onGoogle && (
-            <span className="gcal-mark" title="The assistant added this to Google Calendar">
+            <span className="marker marker-gcal" title="The assistant added this to Google Calendar">
               <Icon name="google" size="sm" />
-              <span>On Google Calendar</span>
+              <span className="sr-only">On Google Calendar</span>
             </span>
           )}
           {record?.archived && <span className="badge">Archived</span>}
         </div>
-        <span className="slot-place">
-          {s.locationDisputed ? <span className="warn">The sources disagree on the place</span> : (s.location ?? <span className="muted">Place not stated</span>)}
-        </span>
-        <StateQuote id={s.stateEvidenceId} state={state} />
+        <div className="slot-meta">
+          <StateBadge state={s.state} />
+          <span className="small muted">{s.sourceLabel}</span>
+        </div>
         {s.missing.length > 0 && (
           <p className="warn">
             <Icon name="alert" size="sm" /> Incomplete: no {s.missing.map((m) => (m === "time" ? "time" : "place")).join(", no ")}
           </p>
         )}
-        {s.staleEvidenceIds.length > 0 && <p className="warn">A reminder for this time may be out of date: {s.staleEvidenceIds.join(", ")}</p>}
-        {clashes.length > 0
-          ? clashes.map((c, i) => (
-              <p key={i} className="clash">
-                <Icon name="alert" size="sm" /> Clashes with {c.summary} ({icsTimeText(c.start)}
-                {c.end ? ` to ${icsTimeText(c.end)}` : ""})
-              </p>
-            ))
-          : (
-              <span className="small muted">
-                {s.clashes === null ? (s.time === null || !kase.calendar ? "Calendar not checked" : "Calendar not checked (closed)") : "No calendar clash"}
-              </span>
+        <details className="slot-more">
+          <summary className="small">Details</summary>
+          <div className="stack-sm">
+            {s.locationDisputed && <span className="warn">The sources disagree on the place</span>}
+            <StateQuote id={s.stateEvidenceId} state={state} />
+            {s.staleEvidenceIds.length > 0 && <p className="warn">A reminder for this time may be out of date: {s.staleEvidenceIds.join(", ")}</p>}
+            {clashes.length > 0 ? (
+              clashWords.map((w) => (
+                <p key={w} className="clash">
+                  <Icon name="alert" size="sm" /> {w}
+                </p>
+              ))
+            ) : (
+              <span className="small muted">{s.clashes === null ? (s.time === null || !kase.calendar ? "Calendar not checked" : "Calendar not checked (closed)") : "No calendar clash"}</span>
             )}
-        <RecordNotes record={record} />
-        <div className="btn-row">
-          {record?.archived && archiveVersion !== null ? (
-            <ActionButton run={run} variant="ghost" action={() => api.undo(s.key, archiveVersion, record.version)}>
-              <Icon name="undo" size="sm" /> Undo archive
-            </ActionButton>
-          ) : (
-            <ActionButton run={run} variant="ghost" action={() => api.archive(s.key, record?.version ?? 0)}>
-              <Icon name="archive" size="sm" /> Archive
-            </ActionButton>
-          )}
-        </div>
-        {options.length > 0 && !kase.reply.draft && (
-          <details className="stack-sm">
-            <summary className="small">Reply to the office about this time</summary>
-            <div className="choices">
-              {options.map((o) => (
-                <ActionButton key={o.template} run={run} action={() => api.startDraft(o.template, o.slotKey, kase.reply.version)}>
-                  {o.title}
+            <RecordNotes record={record} />
+            <div className="btn-row">
+              {record?.archived && archiveVersion !== null ? (
+                <ActionButton run={run} variant="ghost" action={() => api.undo(s.key, archiveVersion, record.version)}>
+                  <Icon name="undo" size="sm" /> Undo archive
                 </ActionButton>
-              ))}
+              ) : (
+                <ActionButton run={run} variant="ghost" action={() => api.archive(s.key, record?.version ?? 0)}>
+                  <Icon name="archive" size="sm" /> Archive
+                </ActionButton>
+              )}
             </div>
-          </details>
-        )}
+            {options.length > 0 && !kase.reply.draft && (
+              <div className="stack-sm">
+                <span className="small muted">Reply to the office about this time</span>
+                <div className="choices">
+                  {options.map((o) => (
+                    <ActionButton key={o.template} run={run} action={() => api.startDraft(o.template, o.slotKey, kase.reply.version)}>
+                      {o.title}
+                    </ActionButton>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </details>
       </div>
     </article>
   );

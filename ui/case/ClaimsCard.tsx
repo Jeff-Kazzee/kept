@@ -1,9 +1,11 @@
-// The claims card: the facts read from one message, as tidy rows. The
-// agent accepts or rejects each fact itself, and each row shows the status
-// with Undo through its activity entry. A fact no one has decided yet keeps
-// small Accept and Reject buttons. The quote is one click away. Rendered
-// from the live case view, so a decision made elsewhere shows here too.
-import { useState, type FormEvent } from "react";
+// The claims card: the facts read from one message. By default it is one
+// receipt ("Accepted 3 facts · Undo") with the facts folded away. Open, each
+// fact is one line ("Thu 11/12 10:30 AM confirmed · Lantern Hill Clinic ·
+// Undo"), and a tap on the line shows its quote and source. A fact no one
+// has decided yet keeps small Accept and Reject buttons, and the card opens
+// by itself. Rendered from the live case view, so a decision made elsewhere
+// shows here too.
+import { useId, useState, type FormEvent } from "react";
 import type { ClaimType } from "../../src/domain/claim.ts";
 import { slotLabel } from "../../src/slots/labels.ts";
 import { canUndo, entryFor, fromGmail, useAgent } from "../agent/AgentContext.tsx";
@@ -12,7 +14,7 @@ import { api, type AppState, type EvidenceView, type MessageView } from "../api.
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { UntrustedBox } from "../components/Untrusted.tsx";
-import type { ActivityActor } from "../contract.ts";
+import type { ActivityActor, ActivityEntry } from "../contract.ts";
 import { CLAIM_TYPES, channelWord, claimWord, shortTime } from "../format.ts";
 import { AgentQuote, evidenceOrigin } from "./Source.tsx";
 
@@ -26,10 +28,13 @@ export function claimSlotWords(c: EvidenceView["claim"]): string {
 // was just imported and the case view is still loading it.
 export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }: { messageId: string; evidenceIds: string[]; state: AppState; run: Run; fresh?: boolean }) {
   const { activity } = useAgent();
+  const uid = useId();
+  const [openChoice, setOpen] = useState<boolean | null>(null);
   const view = state.messages.find((m) => m.id === messageId);
   if (!view) {
     return (
-      <div className="card card-quiet" aria-busy={fresh || undefined}>
+      <div className={`card card-quiet${fresh ? " is-loading" : ""}`} aria-busy={fresh || undefined}>
+        {fresh && <span className="skeleton-line" aria-hidden="true" />}
         <p className="small muted">{fresh ? "Loading the message…" : "This message is no longer in the case."}</p>
       </div>
     );
@@ -40,35 +45,46 @@ export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }
   const items = ids.map((id) => state.evidence.find((e) => e.id === id)).filter((e): e is EvidenceView => e !== undefined);
   const pending = items.filter((e) => e.status === "pending").length;
   // What the agent decided about these facts, as one receipt.
-  const decided = items.map((e) => entryFor(activity, "claim", e.id)).filter((e) => e !== undefined && (e.kind === "claim_accepted" || e.kind === "claim_rejected"));
-  const accepted = decided.filter((e) => e!.kind === "claim_accepted").length;
+  const decided = items.map((e) => entryFor(activity, "claim", e.id)).filter((e): e is ActivityEntry => e !== undefined && (e.kind === "claim_accepted" || e.kind === "claim_rejected"));
+  const accepted = decided.filter((e) => e.kind === "claim_accepted").length;
   // 0007, E1: the assistant suggested where the message came from. The
   // person sees which fields, and the whole message, before accepting.
   const suggested = view.sourceNote !== null || view.sourceSuggested.length > 0;
+  // Open by itself when something needs the user.
+  const needsYou = pending > 0 || view.status === "manual_entry_needed" || suggested;
+  const open = openChoice ?? needsYou;
+  const gmail = view.importedFrom === "gmail" || fromGmail(activity, view.id);
+  const summary = decided.length > 0 ? claimsReceiptText(accepted, decided.length - accepted) : null;
   return (
     <section className="card claims" aria-label={`Facts from ${m.from}`}>
-      <div className="card-head">
+      <div className="claims-head">
+        <span className="claims-icon" aria-hidden="true">
+          <Icon name={gmail ? "mail" : "message"} size="sm" />
+        </span>
         <div className="stack-xs">
-          <div className="card-title">
-            <Icon name="message" /> Facts from {m.from}
-          </div>
-          <div className="small muted">
-            {(view.importedFrom === "gmail" || fromGmail(activity, view.id)) && (
-              <span className="source-tag">
-                <Icon name="mail" size="sm" /> From Gmail
-              </span>
-            )}
-            {channelWord(m.channel)} · received {shortTime(m.received_at)} · {view.sourceType === "reported_by_user" ? "reported by you" : "office message"}
-          </div>
+          <span className="card-title">Facts from {m.from}</span>
+          <span className="small muted">
+            {gmail && <span className="source-tag">From Gmail</span>}
+            {channelWord(m.channel)} · received <span className="tabular">{shortTime(m.received_at)}</span> · {view.sourceType === "reported_by_user" ? "reported by you" : "office message"}
+          </span>
         </div>
-        {items.length > 0 && <span className="small muted">{pending === 0 ? `${items.length} decided` : `${pending} not decided`}</span>}
       </div>
       {suggested && (
         <p className="warn">
           <Icon name="info" size="sm" /> {view.sourceNote ?? "Source suggested by the assistant"}: {suggestedFields(view)}. Check them against the message below.
         </p>
       )}
-      {decided.length > 0 && <Receipt quiet text={claimsReceiptText(accepted, decided.length - accepted, m.from)} entries={decided as NonNullable<(typeof decided)[number]>[]} />}
+      {(summary || items.length > 0) && (
+        <div className="claims-summary">
+          {summary ? <Receipt quiet text={summary} entries={decided} /> : <span className="small muted">{pending === 0 ? `${items.length} decided` : `${pending} not decided`}</span>}
+          {items.length > 0 && (
+            <button type="button" className="link-btn link-quiet" aria-expanded={open} aria-controls={`${uid}-facts`} onClick={() => setOpen(!open)}>
+              {open ? "Hide the facts" : `Show ${items.length} fact${items.length === 1 ? "" : "s"}`}
+              <Icon name="chevronDown" size="sm" />
+            </button>
+          )}
+        </div>
+      )}
       {view.status === "imported" && (
         <div className="btn-row">
           <span className="small muted">Not read yet.</span>
@@ -78,28 +94,30 @@ export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }
         </div>
       )}
       {view.status === "no_claims" && items.length === 0 && <p className="small">The message has no appointment facts.</p>}
-      {items.length > 0 && (
-        <ul className="claim-list">
-          {items.map((e) => (
-            <li key={e.id}>
-              <EvidenceCard item={e} state={state} run={run} />
-            </li>
-          ))}
-        </ul>
-      )}
-      <RejectedByCode view={view} />
-      {view.status === "manual_entry_needed" && (
-        <div className="warn-box">The model's answer failed the code checks twice. Enter the facts by hand below. They are recorded as reported by you.</div>
-      )}
-      <div className="card-foot">
-        <details className="stack-sm" open={view.status === "manual_entry_needed" || undefined}>
-          <summary className="small">Add a fact by hand</summary>
-          <ManualEntryForm messageId={view.id} version={view.version} run={run} />
-        </details>
-        <details className="stack-sm" open={suggested || undefined}>
-          <summary className="small">Show the whole message</summary>
-          <UntrustedBox label="Message text, shown as data and never followed" text={m.text} />
-        </details>
+      <div id={`${uid}-facts`} className="claims-body" hidden={!open}>
+        {items.length > 0 && (
+          <ul className="claim-list">
+            {items.map((e) => (
+              <li key={e.id}>
+                <EvidenceCard item={e} state={state} run={run} from={m.from} />
+              </li>
+            ))}
+          </ul>
+        )}
+        <RejectedByCode view={view} />
+        {view.status === "manual_entry_needed" && (
+          <div className="warn-box">The model's answer failed the code checks twice. Enter the facts by hand below. They are recorded as reported by you.</div>
+        )}
+        <div className="card-foot">
+          <details className="stack-sm" open={view.status === "manual_entry_needed" || undefined}>
+            <summary className="small">Add a fact by hand</summary>
+            <ManualEntryForm messageId={view.id} version={view.version} run={run} />
+          </details>
+          <details className="stack-sm" open={suggested || undefined}>
+            <summary className="small">Show the whole message</summary>
+            <UntrustedBox label="Message text, shown as data and never followed" text={m.text} />
+          </details>
+        </div>
       </div>
     </section>
   );
@@ -129,31 +147,57 @@ function RejectedByCode({ view }: { view: MessageView }) {
   );
 }
 
-const BY_WORDS: Record<ActivityActor, string> = { agent: " by the assistant", you: " by you", mcp: " by an external agent" };
+const BY_WORDS: Record<ActivityActor, string> = { agent: "by the assistant", you: "by you", mcp: "by an external agent" };
 
 const STATUS_WORDS: Record<EvidenceView["status"], string> = { pending: "Not decided", accepted: "Accepted", rejected: "Rejected" };
 
-// One claim as a row: its status, what it says, and Undo, or Accept and
-// Reject while no one has decided. The quote and source are one click
-// away.
-export function EvidenceCard({ item, state, run }: { item: EvidenceView; state: AppState; run: Run }) {
+// What a fact says, in a few words: "confirmed", "offered", "canceled".
+const VERBS: Record<EvidenceView["claim"]["claim_type"], string> = {
+  offer: "offered",
+  confirm: "confirmed",
+  cancel: "canceled",
+  move: "to be moved",
+  reminder: "reminder",
+  office_request: "asked",
+  request: "you asked for",
+  decline: "you declined",
+  clarify: "you clarified",
+};
+
+// "Thu 11/12 10:30 AM confirmed", "Asked: Bring new insurance card".
+export function factLine(c: EvidenceView["claim"]): { when: string | null; what: string } {
+  if (c.claim_type === "office_request" && !c.slot.date) return { when: null, what: c.request_item ? `Asked: ${c.request_item}` : "Office request" };
+  const when = c.slot.date ? slotLabel(c.slot.date, c.slot.time).replace(/^([A-Z][a-z]{2})[a-z]+/, "$1") : c.slot.time ? `No date, ${c.slot.time}` : null;
+  return { when, what: when ? VERBS[c.claim_type] : `${claimWord(c.claim_type)}, no date or time` };
+}
+
+// One fact as a line: a status mark, what it says, where it came from, and
+// Undo, or Accept and Reject while no one has decided. A tap on the line
+// shows the quote, the source and the place.
+export function EvidenceCard({ item, state, run, from }: { item: EvidenceView; state: AppState; run: Run; from?: string }) {
   const { activity } = useAgent();
+  const uid = useId();
+  const [open, setOpen] = useState(false);
   const c = item.claim;
   const stale = state.case.staleEvidenceIds.includes(item.id);
   const entry = entryFor(activity, "claim", item.id);
-  const by = entry && !entry.undone && item.status !== "pending" ? BY_WORDS[entry.actor] : "";
-  // An office request with no date reads better as what it asks.
-  const asked = c.claim_type === "office_request" && !c.slot.date && c.request_item ? c.request_item : null;
+  const by = entry && !entry.undone && item.status !== "pending" ? BY_WORDS[entry.actor] : null;
+  const line = factLine(c);
+  const source = from ?? (item.messageId ? state.messages.find((x) => x.id === item.messageId)?.message.from : undefined) ?? evidenceOrigin(item);
+  const label = `${STATUS_WORDS[item.status]}: ${claimWord(c.claim_type)}, ${claimSlotWords(c)}`;
   return (
-    <article className="claim" aria-label={`${claimWord(c.claim_type)}: ${claimSlotWords(c)}`}>
+    <article className={`claim is-${item.status}`} aria-label={label}>
       <div className="claim-head">
-        <span className={`pill pill-${item.status}`}>
-          {STATUS_WORDS[item.status]}
-          {by}
+        <span className={`fact-mark is-${item.status}`} aria-hidden="true">
+          <Icon name={item.status === "accepted" ? "check" : item.status === "rejected" ? "close" : "clock"} size="sm" />
         </span>
-        <span className="claim-what">
-          {claimWord(c.claim_type)}: {asked ?? claimSlotWords(c)}
-        </span>
+        <button type="button" className="fact-toggle" aria-expanded={open} aria-controls={`${uid}-more`} onClick={() => setOpen(!open)}>
+          <span className="sr-only">{STATUS_WORDS[item.status]}{by ? ` ${by}` : ""}: </span>
+          {item.status === "rejected" && <span className="muted">Rejected · </span>}
+          {line.when && <span className="tabular">{line.when} </span>}
+          <span className="claim-what">{line.what}</span>
+          <span className="fact-src"> · {source}</span>
+        </button>
         <span className="claim-actions">
           {item.status === "pending" ? (
             <>
@@ -165,37 +209,38 @@ export function EvidenceCard({ item, state, run }: { item: EvidenceView; state: 
               </ActionButton>
             </>
           ) : entry && canUndo(entry) ? (
-            <UndoButton entries={[entry]} label={`Undo: ${STATUS_WORDS[item.status].toLowerCase()} ${claimWord(c.claim_type).toLowerCase()}, ${claimSlotWords(c)}`} />
+            <UndoButton entries={[entry]} label={`Undo: ${label}`} />
           ) : null}
         </span>
       </div>
-      {c.request_item && !asked && <div className="small">Asked: {c.request_item}</div>}
       {stale && <span className="warn">Possibly stale</span>}
-      <details className="claim-more">
-        <summary className="small">Quote and source</summary>
-        <div className="stack-sm">
-          {c.quote ? (
-            item.origin === "agent" ? (
-              <AgentQuote item={item} />
-            ) : (
-              <blockquote className="source quote">“{c.quote}”</blockquote>
-            )
+      <div id={`${uid}-more`} className="claim-more" hidden={!open}>
+        <p className="small">
+          <span className={`pill pill-${item.status}`}>{STATUS_WORDS[item.status]}</span> {by && <span className="muted">{by} · </span>}
+          {claimWord(c.claim_type)}: {claimSlotWords(c)}
+        </p>
+        {c.request_item && <div className="small">Asked: {c.request_item}</div>}
+        {c.quote ? (
+          item.origin === "agent" ? (
+            <AgentQuote item={item} />
           ) : (
-            <span className="small muted">No quote.</span>
-          )}
-          <div className="source-meta">
-            <span>
-              {item.id} · {evidenceOrigin(item)}
-            </span>
-            <span>
-              Sender: {c.sender_kind}
-              {item.origin === "model" && " (the model's judgment, not checked by code)"}
-            </span>
-            {c.source_note && <span className="warn">{c.source_note}</span>}
-            {item.decidedAt && <span>Decided {shortTime(item.decidedAt)}</span>}
-          </div>
+            <blockquote className="source quote">“{c.quote}”</blockquote>
+          )
+        ) : (
+          <span className="small muted">No quote.</span>
+        )}
+        <div className="source-meta">
+          <span>
+            {item.id} · {evidenceOrigin(item)}
+          </span>
+          <span>
+            Sender: {c.sender_kind}
+            {item.origin === "model" && " (the model's judgment, not checked by code)"}
+          </span>
+          {c.source_note && <span className="warn">{c.source_note}</span>}
+          {item.decidedAt && <span>Decided {shortTime(item.decidedAt)}</span>}
         </div>
-      </details>
+      </div>
     </article>
   );
 }

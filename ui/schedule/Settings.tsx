@@ -14,13 +14,13 @@ import { Icon, type IconName } from "../components/Icon.tsx";
 import { readTheme, saveTheme, type ThemeChoice } from "../theme.ts";
 
 const THEMES: Array<{ value: ThemeChoice; label: string; icon: IconName }> = [
-  { value: "system", label: "System", icon: "monitor" },
-  { value: "light", label: "Light", icon: "sun" },
   { value: "dark", label: "Dark", icon: "moon" },
+  { value: "light", label: "Light", icon: "sun" },
+  { value: "system", label: "System", icon: "monitor" },
 ];
 
 export function ThemeSetting() {
-  const [choice, setChoice] = useState<ThemeChoice>(() => (typeof localStorage === "undefined" ? "system" : readTheme()));
+  const [choice, setChoice] = useState<ThemeChoice>(() => (typeof localStorage === "undefined" ? "dark" : readTheme()));
   return (
     <fieldset className="stack-sm">
       <legend className="field-label">Theme</legend>
@@ -82,6 +82,7 @@ export function SettingsPanel({ mode, modelClient, version, erasePending, run }:
           Administrative facts only: times, places, confirmations and what the office asked you to bring or do. It reads your email only when you connect Google, and then only to
           search for appointment messages. Sending a reply is simulated. All data here is synthetic.
         </p>
+        <p className="small muted">Appointments are built by code from the accepted facts. Model text never changes an appointment. A clash check assumes a length for each appointment, because messages do not state an end time. The info button beside Appointments shows it.</p>
       </section>
       <DeleteCasePanel version={version} erasePending={erasePending} run={run} />
     </div>
@@ -214,7 +215,7 @@ export function ProviderSetting({ settings, run }: { settings: Settings; run: Ru
                 <label className="check" htmlFor={id}>
                   <input id={id} type="radio" name="provider" value={p.id} checked={current === p.id} disabled={!ready} onChange={() => void pick(p.id)} />
                   <span id={`${id}-title`} className="provider-title">
-                    {p.title}
+                    <span className="nowrap">{p.title}</span>
                     {i === 0 && <span className="model-tag">Default</span>}
                   </span>
                 </label>

@@ -10,7 +10,8 @@ import { CLAIM_TYPES as DOMAIN_CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT as DOMAIN_
 import type { AppState, EvidenceView } from "../api.ts";
 import { SOURCE_SUGGESTED_LABEL } from "../../src/agent/types.ts";
 import { CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT } from "../format.ts";
-import { ClaimsCard, EvidenceCard } from "./ClaimsCard.tsx";
+import { ClaimsCard, EvidenceCard, factLine } from "./ClaimsCard.tsx";
+import { AgentContext, DEFAULT_AGENT } from "../agent/AgentContext.tsx";
 import { SourceQuote, evidenceOrigin } from "./Source.tsx";
 
 const item: EvidenceView = {
@@ -84,7 +85,9 @@ describe("claims card", () => {
     const html = renderToStaticMarkup(createElement(ClaimsCard, { messageId: "m9", evidenceIds: ["m9-e1"], state: st, run: async () => {} }));
     expect(html).toContain("Facts from Lantern Hill Clinic");
     // Received 2026-11-01 07:30 UTC is 01:30 MDT, before the clocks change.
-    expect(html).toContain("received Sun, Nov 1, 1:30 AM MDT");
+    expect(html).toContain('received <span class="tabular">Sun, Nov 1, 1:30 AM MDT</span>');
+    // A fact no one has decided opens the card, as one line with Accept and Reject.
+    expect(html).toContain('<span class="tabular">Mon 11/16 1:00 PM </span><span class="claim-what">confirmed</span><span class="fact-src"> · Lantern Hill Clinic</span>');
     expect(html).toContain("Confirmation: Monday 11/16 1:00 PM");
     expect(html).toContain("“See you Monday”");
     expect(html).toContain("Model output, passed the quote check");
@@ -123,5 +126,28 @@ describe("claims card", () => {
     // On the claim too, and the whole message is open.
     expect(html.split(SOURCE_SUGGESTED_LABEL).length - 1).toBe(2);
     expect(html).toMatch(/<details class="stack-sm" open="">\s*<summary class="small">Show the whole message<\/summary>/);
+  });
+
+  it("v2: a decided card is one receipt with the facts folded away, each fact one line with its quote behind a tap", () => {
+    const accepted = { ...pending, status: "accepted" as const, decidedAt: "2026-11-01T08:00:00Z" };
+    const st3 = { ...st, evidence: [accepted] } as unknown as AppState;
+    const activity = { activityVersion: 1, entries: [{ id: "a1", at: "2026-11-01T08:00:00Z", actor: "agent" as const, kind: "claim_accepted", summary: "Accepted.", target: { type: "claim" as const, id: "m9-e1" }, undoable: true, undone: false }] };
+    const html = renderToStaticMarkup(createElement(AgentContext.Provider, { value: { ...DEFAULT_AGENT, activity } }, createElement(ClaimsCard, { messageId: "m9", evidenceIds: ["m9-e1"], state: st3, run: async () => {} })));
+    expect(html).toContain("Accepted 1 fact");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("Show 1 fact");
+    expect(html).toMatch(/class="claims-body" hidden=""/);
+    expect(html).toContain('aria-label="Undo: Accepted 1 fact"');
+    // The line's quote panel is hidden until the line is tapped.
+    expect(html).toMatch(/class="claim-more" hidden="">/);
+    expect(html).not.toContain(" Accept</button>");
+  });
+
+  it("v2: writes each fact in a few words", () => {
+    const base = pending.claim;
+    expect(factLine({ ...base, claim_type: "confirm", slot: { date: "2026-11-12", time: "10:30", location: null } })).toEqual({ when: "Thu 11/12 10:30 AM", what: "confirmed" });
+    expect(factLine({ ...base, claim_type: "offer", slot: { date: "2026-11-13", time: "09:15", location: null } })).toEqual({ when: "Fri 11/13 9:15 AM", what: "offered" });
+    expect(factLine({ ...base, claim_type: "office_request", slot: { date: null, time: null, location: null }, request_item: "Bring new insurance card" })).toEqual({ when: null, what: "Asked: Bring new insurance card" });
+    expect(factLine({ ...base, claim_type: "cancel", slot: { date: null, time: null, location: null } })).toEqual({ when: null, what: "Cancellation, no date or time" });
   });
 });

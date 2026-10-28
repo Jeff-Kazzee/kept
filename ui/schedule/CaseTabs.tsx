@@ -6,7 +6,9 @@ import { dateLabel } from "../../src/slots/labels.ts";
 import { ACTOR_WORDS, useAgent } from "../agent/AgentContext.tsx";
 import { BlockedReason, UndoButton } from "../agent/Receipts.tsx";
 import type { ChecklistItem, HistoryEntry } from "../api.ts";
+import { Fox } from "../components/Art.tsx";
 import { Icon, type IconName } from "../components/Icon.tsx";
+import { InfoTip } from "../components/InfoTip.tsx";
 import { UntrustedBox } from "../components/Untrusted.tsx";
 import type { ActivityActor, ActivityEntry } from "../contract.ts";
 import { clockTime, shortTime, stampTime, wallParts } from "../format.ts";
@@ -24,7 +26,14 @@ export function ChecklistPanel({ items }: { items: ChecklistItem[] }) {
   }
   return (
     <div className="stack">
-      <p className="small muted">From the office requests you accepted. Each item shows its quote and where it came from.</p>
+      <div className="section-head">
+        <h3>
+          To bring or do
+          <InfoTip label="About the checklist">
+            <p>From the office requests that were accepted. Each item shows its quote and where it came from.</p>
+          </InfoTip>
+        </h3>
+      </div>
       <ul className="stack">
         {items.map((item) => (
           <li key={item.text} className="card">
@@ -92,8 +101,9 @@ export function ActivityPanel({ entries }: { entries: ActivityEntry[] }) {
   if (entries.length === 0) {
     return (
       <div className="empty">
-        <Icon name="activity" />
-        <p>Nothing yet. Each thing the assistant, an external agent or you do to this case shows here, with Undo.</p>
+        <Fox />
+        <p className="empty-title">Quiet so far</p>
+        <p>Each thing the assistant, an external agent or you do to this case shows here, with Undo.</p>
       </div>
     );
   }
@@ -104,7 +114,14 @@ export function ActivityPanel({ entries }: { entries: ActivityEntry[] }) {
   }
   return (
     <div className="stack">
-      <p className="small muted">Every action on this case, newest first. The sentences are written by code.</p>
+      <div className="section-head">
+        <h3>
+          Everything that happened
+          <InfoTip label="About the activity">
+            <p>Every action on this case, newest first, by the assistant, an external agent over MCP or you. The sentences are written by code.</p>
+          </InfoTip>
+        </h3>
+      </div>
       {[...days].map(([day, list]) => (
         <section key={day} className="stack-sm" aria-label={dateLabel(day)}>
           <h3 className="day-head">{dateLabel(day)}</h3>

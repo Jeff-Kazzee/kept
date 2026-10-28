@@ -16,9 +16,11 @@ const facts = (n: number) => `${n} fact${n === 1 ? "" : "s"}`;
 
 // "Accepted 2 facts from Lantern Hill Clinic", "Accepted 1 fact and
 // rejected 1 from Lantern Hill Clinic".
-export function claimsReceiptText(accepted: number, rejected: number, from: string): string {
-  if (accepted > 0 && rejected > 0) return `Accepted ${facts(accepted)} and rejected ${rejected} from ${from}`;
-  return accepted > 0 ? `Accepted ${facts(accepted)} from ${from}` : `Rejected ${facts(rejected)} from ${from}`;
+// Without a sender, as on the card that already names it: "Accepted 2 facts".
+export function claimsReceiptText(accepted: number, rejected: number, from?: string): string {
+  const tail = from ? ` from ${from}` : "";
+  if (accepted > 0 && rejected > 0) return `Accepted ${facts(accepted)} and rejected ${rejected}${tail}`;
+  return accepted > 0 ? `Accepted ${facts(accepted)}${tail}` : `Rejected ${facts(rejected)}${tail}`;
 }
 
 // Groups a turn's entries into receipts, in the order they happened.
