@@ -1,5 +1,5 @@
-// Small inline SVG icons, drawn with strokes in the current text color. No
-// icon font and no image requests.
+// Small inline SVG icons on one 24 px grid, all drawn with the same 1.75
+// stroke in the current text color. No icon font and no image requests.
 const PATHS = {
   chat: "M4 5h16v11H8l-4 4z",
   calendar: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4",
@@ -31,6 +31,9 @@ const PATHS = {
   undo: "M9 7L4 12l5 5M4 12h10a6 6 0 0 1 0 12h-2",
   copy: "M8 8h12v12H8zM4 16V4h12",
   plus: "M12 5v14M5 12h14",
+  stop: "M7 7h10v10H7z",
+  arrowDown: "M12 5v14M5 12l7 7 7-7",
+  wifiOff: "M3 3l18 18M8.5 16.5a5 5 0 0 1 7 0M5 12.5a10 10 0 0 1 4-2.4M19 12.5a10 10 0 0 0-3-2M2 8.8a15 15 0 0 1 5-3M22 8.8A15 15 0 0 0 12 5M12 20h.01",
   chevron: "M9 6l6 6-6 6",
   chevronDown: "M6 9l6 6 6-6",
   google: "M20 12a8 8 0 1 1-2.6-5.9M20 12h-7.5",
@@ -44,7 +47,7 @@ export type IconName = keyof typeof PATHS;
 
 export function Icon({ name, size }: { name: IconName; size?: "sm" }) {
   return (
-    <svg className={size === "sm" ? "icon icon-sm" : "icon"} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <svg className={size === "sm" ? "icon icon-sm" : "icon"} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
       <path d={PATHS[name]} />
     </svg>
   );
