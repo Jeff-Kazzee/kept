@@ -77,8 +77,9 @@ the wiring in `server/main.ts`. Tests: `test/google.test.ts` and
    "an HTTPS page gets a Secure flow cookie", the server test.
 3. Secrets: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from the
    environment, declared optional and sensitive in `.env.schema`. The
-   refresh token is in its own file, `google-secrets.json` beside the event
-   log, mode 600, written atomically (new file, fsync, rename). Refresh a
+   refresh token was first in its own file, `google-secrets.json` beside
+   the event log. Since the integration it is the `google` row of sprint
+   10's secrets database (see "Integration" below). Refresh a
    minute before expiry. `invalid_grant` on refresh, or a second 401 after
    a refresh, marks the connection as needing a reconnect. Tests: "refreshes
    a minute before expiry, and once after a 401", "a refresh Google refuses
@@ -238,9 +239,8 @@ the wiring in `server/main.ts`. Tests: `test/google.test.ts` and
 - G20 (proposed). The Google tools take their own context
   (`GoogleToolContext`: the Google services, intake, the case, the
   activity log, the extraction effort) and return the fields of
-  `ToolResult`. The coordinator adapts them to sprint 8's registry and
-  passes sprint 8's case time zone to `GoogleCalendar` (`timeZone`
-  option, America/Denver until then).
+  `ToolResult`. Since the integration they take sprint 8's `ToolContext`
+  and join its registry (see "Integration" below).
 - G21 (proposed). A Gmail import is recorded with `imported_from: "gmail"`
   on its `message_imported` event, and the message view has
   `importedFrom: "gmail"`, as sprint 9's U15 assumes. A paste has no such
@@ -300,13 +300,71 @@ Findings 1 to 9 were confirmed. New items:
 - 20. The import kind was set when an existing message was extracted. It
   is set only when this call recorded the message.
 
+## Integration with sprints 8, 9 and 10 (2026-10-28, on dev 2db4521)
+
+- I1. The five tools are in sprint 8's shared registry
+  (`AGENT_TOOLS` in `src/agent/tools.ts`), so the in-app agent and the MCP
+  server both list them. They take sprint 8's `ToolContext`. The Google
+  services ride in `ToolServices.google`. Without them a tool answers
+  `google_not_configured`. `gmail_search` and `calendar_list` are read
+  only. Labels follow sprint 8's form ("Searching your email").
+- I2. Activity. A change goes through `CaseActions` and writes one entry
+  with sprint 9's kind. `gmail_import` uses the same import as a paste,
+  with kind `gmail_message_imported` and the paste's undo (it removes the
+  message and its facts). A new message is read as part of the import, as
+  for a paste, and one already in the case is read as its own
+  `message_read` entry. A calendar write is recorded by
+  `CaseActions.recordGoogle` with kind `calendar_event_added`,
+  `calendar_event_updated` or `calendar_event_removed`, target the slot,
+  and an undo spec `google_calendar` that holds the undo record. Reads,
+  no-ops and refused calls write no entry (proposed: sprint 8 logs
+  actions, not reads).
+- I3. Undo. `CaseActions.undoEntry` serves sprint 8's undo route and its
+  `undo` tool. For a `google_calendar` entry it checks the activity
+  version and that the entry is in effect, refuses while a later Google
+  entry for the same appointment is in effect, reverses the write at
+  Google with `undoGoogleActivity` outside the store transaction (a
+  network call), then writes sprint 8's `undo` entry and marks the entry
+  undone in one transaction. A Google refusal is `undo_blocked` with its
+  sentence. Any other entry goes to sprint 8's `undo` unchanged.
+- I4. Time zone. `GoogleCalendar` takes the case's zone
+  (`kase.timeZone()`) at each call. The America/Denver default is gone.
+  Event times, list windows and labels use it, through sprint 8's
+  `src/domain/zone.ts`.
+- I5. Clashes. `CaseService` takes an `externalCalendar` source. The
+  Google Calendar events the app last fetched, without the app's own,
+  join the loaded `.ics` events in the case view, so `get_schedule`,
+  `check_calendar` and the slots' clashes read both. The view names both
+  ("dana.ics and Google Calendar"). The events are read at start when a
+  calendar connection exists, after a connect, by `calendar_list`, and by
+  `POST /api/google/calendar/refresh`, for 31 days from the earliest of
+  today and the case's appointments. A disconnect clears them (proposed).
+- I6. Sprint 8's rules. In a paste turn (D2') `gmail_import` counts as an
+  import, and its claims may be reviewed in that turn
+  (`ChatTurnState.gmailImported`). `calendar_sync_slot` and
+  `calendar_remove_slot` are refused that turn with `waits_for_person`.
+  Gmail messages keep their header sender and sent time, are office
+  messages and are never offered as the person's own report (D1').
+  Grounding counts `gmail_message_imported` for "I imported" and
+  `calendar_event_removed` for "I removed".
+- I7. Secrets. The Google state moved from its own JSON file into sprint
+  10's `app-secrets.sqlite`, as the `google` row of a new `rows` table
+  (`SecretsStore.readRow` and `updateRow`). It gets that file's mode 600,
+  link and owner checks, WAL and busy timeout, and every Google write is
+  one BEGIN IMMEDIATE read-check-write, so the app and the MCP server,
+  which share the file, do not lose each other's refresh or disconnect.
+  `src/google/secrets.ts` is removed. A row that is not valid JSON or of
+  the current shape still reads as needing a reconnect (G22).
+- I8. Routes. No pairing or session (sprint 8). `/api/google` and its
+  writes are behind the host allowlist, the same-origin guard and the app
+  header, and the writes need the case generation. Connect accepts the
+  page's `{}`: both permissions and the primary calendar, and the version
+  is optional (the flow still keeps the version it started at).
+  Disconnect needs `expectedVersion`, which the page sends from
+  `GET /api/google`.
+
 ## Not done here
 
-- No UI. Sprint 9 builds the Google settings on these routes.
-- The tools are not in the agent's registry yet. The coordinator adds them
-  after sprints 8 and 11 merge, with the activity log behind
-  `GoogleActivityLog`.
-- Google Calendar events are not loaded into the case's clash view
-  automatically. `toIcsEvents` turns them into the shape the clash check
-  reads, for the coordinator to wire.
 - No real Google account was used. Every test runs against the fake.
+  Restoring a deleted event by patching its status still needs Jeff's
+  real connect test.

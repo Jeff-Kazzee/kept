@@ -50,7 +50,7 @@ Rules:
 | 8 (agent-first) | Agent-first back end: actions, activity log, undo, case time zone | Chat app | Oct 28 | In review (`sprint/08-agent-first`) |
 | 8 | Failure testing | All | Oct 30 to 31 | Planned |
 | 9 | Submission build | All | Nov 1 to 3 | Planned |
-| 11 | Gmail and Google Calendar connection | Chat app | Oct 28 | In review on `sprint/11-google` |
+| 11 | Gmail and Google Calendar connection | Chat app | Oct 28 | Integrated on `sprint/11-google`, in review |
 
 On 2026-10-28 the plan changed to an agent-first app: sprint 8 is the
 agent-first back end and time zone, sprint 9 the polished agent UI
@@ -486,7 +486,7 @@ Branch `sprint/10-providers`. See `docs/decisions/0010-providers.md`.
 Design: `docs/decisions/0012-google.md`. Setup: `docs/google.md`.
 
 - [x] SP11.1 OAuth with PKCE and state, ID token checks, refresh and
-  revoke, the token in a mode 600 file.
+  revoke, the token in the secrets database.
 - [x] SP11.2 Gmail read-only search and import as a paste.
 - [x] SP11.3 Calendar list, sync and remove per slot, only the app's own
   events, with Undo.
@@ -494,8 +494,10 @@ Design: `docs/decisions/0012-google.md`. Setup: `docs/google.md`.
   interface.
 - [ ] SP11.5 Jeff creates the demo Google account and the OAuth client
   (`docs/google.md`), then a real connect test.
-- [ ] SP11.6 The coordinator adds the Google tools to sprint 8's registry
-  and activity log, and sprint 9 adds the Google settings to the page.
+- [x] SP11.6 The Google tools in sprint 8's registry and activity log,
+  Undo through the undo route, the case time zone, Google events in the
+  clash checks, the token in sprint 10's secrets database (0012, I1 to
+  I8). Sprint 9's page has the Google settings.
 - [ ] SP11.7 Confirm the added status fields `configured`,
   `needsReconnect` and `version` (0012, G1) and the decisions marked
   proposed.

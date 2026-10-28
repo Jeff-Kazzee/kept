@@ -34,6 +34,14 @@ The design and its reasons are in `docs/decisions/0012-google.md`.
   Google Calendar after the app wrote it, the app leaves your version and
   says so. If you deleted it there, the app does not add it back until you
   undo the removal or ask the assistant to put it back.
+- The assistant in the app and an agent connected over MCP have the same
+  Google tools: `gmail_search`, `gmail_import`, `calendar_list`,
+  `calendar_sync_slot` and `calendar_remove_slot`. In a chat message that
+  may contain a paste, the assistant may import from Gmail but makes no
+  calendar change until your next message. The clash checks read the
+  Google Calendar events the app last fetched, beside a loaded `.ics`
+  file: at start, after Connect, after `calendar_list`, and on
+  `POST /api/google/calendar/refresh`.
 
 The app asks Google only for the permissions you turn on: Gmail, Calendar,
 or both. It also asks for your email address, to show which account is
@@ -44,11 +52,12 @@ connected.
 - The Google client id and secret come from the environment
   (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`), loaded through varlock from
   `.env.local`.
-- The refresh token is stored in `data/google-secrets.json` (beside the
-  event log, or beside `APP_DB` if you set it), readable only by the
-  server's user (mode 600). It is not in the event log, so it is never
-  part of a case, a Delete case or an export. The short-lived access
-  token stays in memory.
+- The refresh token is stored in the app's secrets database,
+  `data/app-secrets.sqlite` (beside the event log, or beside `APP_DB` if you
+  set it), as its own `google` row. That is the same file, mode 600 and
+  transactions as the model provider settings (`docs/sign-in.md`). It is
+  not in the event log, so it is never part of a case, a Delete case or an
+  export. The short-lived access token stays in memory.
 - No token, secret or email body is written to a log, an error message or
   the browser. The page sees only the status: whether Google is connected,
   the account's email, which permissions are on and the calendar id.
@@ -179,7 +188,7 @@ Cancel),
 
 Choose Disconnect in the app's Google settings
 (`POST /api/google/disconnect`). The app revokes the grant at Google and
-deletes the token from `data/google-secrets.json`, even when Google cannot
+deletes the token from the secrets database, even when Google cannot
 be reached. You can also remove the app's access in the demo account at
 <https://myaccount.google.com/permissions>.
 

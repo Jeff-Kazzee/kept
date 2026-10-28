@@ -145,8 +145,11 @@ in this repo is synthetic.
   office confirms, edits only events it created, and every change has Undo.
 - `GET /api/google`, `POST /api/google/connect` and
   `POST /api/google/disconnect`, with the callback at
-  `/auth/google/callback`. The refresh token stays on the server in a
-  mode 600 file outside the event log.
+  `/auth/google/callback`. The refresh token is a row of the secrets
+  database (`data/app-secrets.sqlite`), outside the event log.
+- The assistant and the MCP server share the Google tools. Each change is
+  in the activity log with Undo, and Google Calendar events join the
+  clash checks.
 - Setup, testing-mode limits and the agent's own connectors:
   `docs/google.md`. Design: `docs/decisions/0012-google.md`.
 
