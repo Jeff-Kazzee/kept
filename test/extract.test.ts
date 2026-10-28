@@ -5,6 +5,7 @@ import { MetaResponsesClient, ModelCallError } from "../src/model/client.ts";
 import { RecordedModelClient, readRecording, type Recording } from "../src/model/recorded.ts";
 import { CLAIM_JSON_SCHEMA, INSTRUCTIONS, buildRequestBody, MODEL } from "../src/model/request.ts";
 import { wordsAppearIn } from "../src/domain/quote.ts";
+import { runEval, scoreMessage } from "../src/eval/eval.ts";
 import { fromPackage } from "../src/paths.ts";
 import type { Message } from "../src/domain/claim.ts";
 import { NETWORK_BLOCKED } from "./setup.ts";
@@ -275,5 +276,51 @@ describe("O-g: one office request per instruction", () => {
     expect(wordsAppearIn("complete the online check-in form", "complete the online check-in form")).toBe(true);
     // The schema, the quote check and the scoring are unchanged.
     expect(CLAIM_JSON_SCHEMA.properties.claims.items.required).toEqual(["claim_type", "date", "time", "location", "quote", "sender_kind", "event_time", "request_item"]);
+  });
+});
+
+describe("C2: how to answer a message is not an office request", () => {
+  it("tells the model so, with one neutral example of each kind that no fixture uses", () => {
+    expect(INSTRUCTIONS).toContain("(something the office asked the person to bring or do for the appointment)");
+    expect(INSTRUCTIONS).toContain("How to answer the message itself is not an office request.");
+    expect(INSTRUCTIONS).toContain('"Text Y to keep this time." gives no office_request claim.');
+    for (const m of corpusMessages(loadScenarios())) expect(m.text.toLowerCase(), m.id).not.toContain("text y to keep this time");
+    // O-g still holds.
+    expect(INSTRUCTIONS).toContain("Return a separate office_request claim for each separate thing the office asks the person to bring or do");
+  });
+
+  it("a recorded reply-mechanics claim for s6-reminder passes the quote check and the scoring counts it as extra", async () => {
+    const fault = readRecording(fromPackage("fixtures/recordings/faults/extract-reply-mechanics.json"));
+    const reminder = corpusMessages(loadScenarios()).find((m) => m.id === "s6-reminder")!;
+    const { expected, ...message } = reminder;
+    // The fixture expects the reminder only.
+    expect(expected.map((e) => e.claim_type)).toEqual(["reminder"]);
+    const client = RecordedModelClient.withOverrides([fault], RecordedModelClient.fromDirectory());
+    const result = await extractClaims(message, client, { effort: "minimal" });
+    expect(result.passed.map((c) => [c.claim_type, c.quote])).toEqual([
+      ["reminder", "you have an appointment at Lantern Hill Clinic on Thu 11/12 at 10:30 AM"],
+      ["office_request", "Reply C to confirm."],
+    ]);
+    const score = scoreMessage(expected, result.passed);
+    expect(score.matched).toBe(1);
+    expect(score.missed).toEqual([]);
+    expect(score.extra.map((c) => c.quote)).toEqual(["Reply C to confirm."]);
+
+    // The same recording through the evaluation run: one extra claim, so
+    // the run's precision falls below 100%.
+    const s8 = corpusMessages(loadScenarios()).find((m) => m.id === "s8-offer")!;
+    const report = await runEval({
+      client,
+      messages: [reminder],
+      efforts: ["minimal"],
+      runs: 1,
+      maxUsd: 1,
+      model: MODEL,
+      fabricated: { message: s8, recording: readRecording(fromPackage("fixtures/recordings/faults/s8-offer-fabricated.json")) },
+    });
+    const run = report.perEffort[0]!.runs[0]!;
+    expect(run).toMatchObject({ matched: 1, missed: 0, extra: 1 });
+    expect(run.precision).toBe(0.5);
+    expect(run.messages[0]!.extraClaims).toEqual([{ claim_type: "office_request", slot: { date: null, time: null, location: null }, quote: "Reply C to confirm." }]);
   });
 });

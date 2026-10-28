@@ -1,6 +1,7 @@
 {
   "message_id": "m1",
   "effort": "minimal",
+  "note": "Checked against the extraction instructions: how to answer the message (Reply 1 or 2) is not an office request, so the two offers are the only claims.",
   "attempts": [
     {
       "output": {

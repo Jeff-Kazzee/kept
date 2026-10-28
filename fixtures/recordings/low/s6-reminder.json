@@ -1,6 +1,7 @@
 {
   "message_id": "s6-reminder",
   "effort": "low",
+  "note": "Checked against the extraction instructions: how to answer the message (Reply C to confirm) is not an office request, so the reminder is the only claim.",
   "attempts": [
     {
       "output": {

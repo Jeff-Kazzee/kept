@@ -169,6 +169,17 @@ Code: `src/store/event-log.ts` (`eraseCase`), `src/case/service.ts`
   either end of the request, so "Bring new insurance card?" and "Bring new
   insurance card" are one item.
 
+## Live evaluation finding
+
+- C2. In the second live run of the O-g change, effort `minimal` once
+  extracted "Reply C to confirm." from s6-reminder as an office request.
+  The instructions now say that an office request is something to bring or
+  do for the appointment, and that how to answer the message is not one,
+  with the neutral example "Text Y to keep this time." The schema, the
+  quote check and the scoring are unchanged. The recorded fault
+  `faults/extract-reply-mechanics.json` holds that claim, and an offline
+  test shows it passes the quote check and counts as extra in the scoring.
+
 ## Known limits
 
 - VACUUM rewrites the whole file, so Delete case takes longer as the file
