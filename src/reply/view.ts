@@ -71,6 +71,11 @@ export function invalidNotice(d: DraftRecord, ctx: ReplyContext, valid: boolean)
 function draftView(d: DraftRecord, ctx: ReplyContext): DraftView {
   const def = TEMPLATES[d.template];
   const validity = draftValidity(d, ctx);
+  // The readback shows the fields as code builds them from the case now, so
+  // their sources and labels are current even for a draft stored earlier.
+  // A draft whose stored fields differ is not valid and cannot be approved.
+  const rebuilt = buildDraft(d.template, d.slotKey, ctx);
+  const fields = rebuilt.ok ? rebuilt.content.fields : d.fields;
   return {
     id: d.id,
     template: d.template,
@@ -81,7 +86,7 @@ function draftView(d: DraftRecord, ctx: ReplyContext): DraftView {
     origin: d.origin,
     questionId: d.questionId,
     suggestionId: d.suggestionId,
-    fields: d.fields,
+    fields,
     renderedText: d.renderedText,
     text: d.text,
     edited: d.edited,

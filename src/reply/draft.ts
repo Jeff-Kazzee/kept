@@ -160,10 +160,23 @@ export function replyOptions(ctx: ReplyContext): { options: ReplyOption[]; withh
   return { options, withheld };
 }
 
-const signature = (fields: FieldView[]) => JSON.stringify(fields.map((f) => [f.name, f.value]));
+// A field's value, display, sources and labels. A draft stored before
+// sources carried labels lacks those keys, which count as null, so its
+// agent sources differ from the ones code builds now.
+const signature = (fields: FieldView[]) =>
+  JSON.stringify(
+    fields.map((f) => [
+      f.name,
+      f.value,
+      f.display,
+      f.untrustedLabel ?? null,
+      f.sources.map((s) => [s.kind, s.evidenceId, s.text, s.agentName ?? null, s.untrustedLabel ?? null]),
+    ]),
+  );
 
 // True when a stored draft's fields still equal what code builds from the
-// current case.
+// current case: values, the words shown for them, their sources and their
+// labels. Any difference makes the draft stale.
 export function sameFields(a: FieldView[], b: FieldView[]): boolean {
   return signature(a) === signature(b);
 }

@@ -20,6 +20,8 @@ import { RecordedModelClient } from "../src/model/recorded.ts";
 import type { ProposalView, RecordView } from "../src/records/events.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { describeChange } from "../src/records/types.ts";
+import { buildDraft } from "../src/reply/draft.ts";
+import { REPLY_STREAM, draftEvents } from "../src/reply/events.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { fixtureMessage } from "./helpers.ts";
@@ -425,5 +427,83 @@ describe("G-f: archive in the app", () => {
     expect(s.case.reply.draft).toMatchObject({ valid: true });
     await app.call("POST", `/api/reply/drafts/${draft.id}/approve`, { expectedVersion: s.case.reply.version, confirmedFields: draft.fields.map((f) => f.name) });
     expect(labels(await app.state())[MON]).toBe("Requested · reported by you");
+  });
+});
+
+describe("review round 2, B6: a stored draft's field sources and labels", () => {
+  const MON_KEY = MON;
+
+  it("a draft stored before sources carried labels shows the current labels and is stale until made again", async () => {
+    const file = tempFile();
+    const app = appOn(new EventStore(file));
+    await demoToQuestion(app);
+    const { token } = (await app.call("POST", "/api/grants", { name: "Phone helper", tier: "propose" })) as { token: string };
+    const r = structured(
+      await callTool(mcpOn(file, token), "propose_change", {
+        change: { kind: "detail_edit", appointment_id: MON_KEY, expected_version: 0, location: "Suite 9, 400 Elm Street", statement: "Dana says Monday is in Suite 9." },
+      }),
+    );
+    await app.call("POST", `/api/proposals/${r.proposal_id}/confirm`, { expectedVersion: 1, recordVersion: 0 });
+    // The failing case: a draft written by the sprint 5 code, whose fields
+    // carry no agent name and no label.
+    const { context, log } = app.kase.replyState();
+    const built = buildDraft("accept_offer", MON_KEY, context);
+    if (!built.ok) throw new Error("draft not built");
+    const old = built.content.fields.map(({ untrustedLabel: _l, ...f }) => ({ ...f, sources: f.sources.map(({ agentName: _a, untrustedLabel: _u, ...src }) => src) }));
+    const events = draftEvents(log, {
+      template: "accept_offer",
+      slot_key: MON_KEY,
+      slot_label: built.content.slot.label,
+      origin: "manual",
+      question_id: null,
+      suggestion_id: null,
+      fields: old,
+      declines: [],
+      text: built.content.text,
+    });
+    app.store.append(REPLY_STREAM, log.version, events.map((e) => ({ type: e.type, data: e.data })));
+
+    let s = await app.state();
+    const draft = s.case.reply.draft!;
+    expect(draft).toMatchObject({ valid: false, problems: ["case_changed"] });
+    // The readback shows the labels built from the case now.
+    expect(draft.fields.find((f) => f.name === "location")).toMatchObject({
+      untrustedLabel: "Reported only by Phone helper. Untrusted text, shown as data.",
+      sources: [expect.objectContaining({ untrustedLabel: "Words from Phone helper. Untrusted text, shown as data." })],
+    });
+    const refused = await app.raw("POST", `/api/reply/drafts/${draft.id}/approve`, { expectedVersion: s.case.reply.version, confirmedFields: draft.fields.map((f) => f.name) });
+    expect(refused).toMatchObject({ status: 422, body: { message: expect.stringContaining("case_changed") } });
+    expect(s.case.reply.sent).toEqual([]);
+
+    // Made again, the draft is valid.
+    await app.call("POST", "/api/reply/drafts", { expectedVersion: s.case.reply.version, template: "accept_offer", slotKey: MON_KEY });
+    s = await app.state();
+    expect(s.case.reply.draft).toMatchObject({ valid: true });
+  });
+
+  it("a draft whose place gains an agent's source, with the same value, is stale", async () => {
+    const file = tempFile();
+    const app = appOn(new EventStore(file));
+    await addAndAccept(app, "m2");
+    let s = await app.state();
+    const thu = s.case.slots.find((x) => x.key === THU)!;
+    await app.call("POST", "/api/reply/drafts", { expectedVersion: s.case.reply.version, template: "ask_still_stands", slotKey: THU });
+    s = await app.state();
+    expect(s.case.reply.draft).toMatchObject({ valid: true });
+    const { token } = (await app.call("POST", "/api/grants", { name: "Phone helper", tier: "propose" })) as { token: string };
+    const r = structured(
+      await callTool(mcpOn(file, token), "propose_change", {
+        change: { kind: "detail_edit", appointment_id: THU, expected_version: 0, location: thu.location!, statement: "Dana says the place is the same." },
+      }),
+    );
+    await app.call("POST", `/api/proposals/${r.proposal_id}/confirm`, { expectedVersion: 1, recordVersion: 0 });
+    s = await app.state();
+    // The value did not change, but the sources did.
+    expect(s.case.slots.find((x) => x.key === THU)!.location).toBe(thu.location);
+    expect(s.case.reply.draft).toMatchObject({ valid: false, problems: ["case_changed"] });
+    const place = s.case.reply.draft!.fields.find((f) => f.name === "location")!;
+    expect(place.sources.map((x) => x.evidenceId)).toContain(`${r.proposal_id}-1`);
+    // An office message also states the place, so the value is not labeled.
+    expect(place.untrustedLabel ?? null).toBeNull();
   });
 });
