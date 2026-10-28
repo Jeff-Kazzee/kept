@@ -42,8 +42,14 @@
 //   line or with "key" on the line after "meta": {. Every .json file up to
 //   8 MB, on disk or in history, is also read as JSON for those fields, so
 //   a renamed copy of the settings file is found whatever its layout.
+//   Only an exact placeholder such as "<ACCESS_TOKEN>" is skipped.
+// - a SQLite file, under any name, whose settings rows hold those fields:
+//   the app's settings database (app-secrets.sqlite) or a copy of it. Every
+//   file and blob up to 8 MB that starts with the SQLite header is opened
+//   from a private read-only copy.
 // - a file or folder name that is the app's settings file
-//   (app-secrets.json, or its temporary .app-secrets.json.<id>.tmp) or a
+//   (app-secrets.sqlite and its -wal, -shm and -journal files, or the
+//   older app-secrets.json and its temporary file) or a
 //   local env file (.env.local, .env.<name>.local), in the working tree or
 //   in any tree in history.
 // The key's own shape is not known to this scan, so it does not look for a
@@ -70,8 +76,10 @@
 //
 //   pnpm scan:secrets [--repo <dir>]
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readlinkSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdtempSync, openSync, readSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 
 const NEWLINE = 10;
@@ -86,15 +94,29 @@ const PLACEHOLDER = /^redacted/i;
 const BEARER = /(?<![A-Za-z0-9_])Bearer[ \t]+([A-Za-z0-9._~+/=|-]{24,})/g;
 const MIXED = (v: string) => /[A-Z]/.test(v) && /[a-z]/.test(v) && /\d/.test(v);
 
-// Provider secrets as the settings file writes them (0010). Read as latin1,
-// so each character is one byte and a match index is a byte offset.
-const FIELD_SECRET = /"(?:accessToken|refreshToken|access_token|refresh_token|id_token)"\s*:\s*"([A-Za-z0-9._~+\/=-]{20,})"|"meta"\s*:\s*\{\s*"key"\s*:\s*"([\x21\x23-\x3b\x3d\x3f-\x5b\x5d-\x7e]{8,})"/g;
+// Provider secrets as the settings file writes them (0010). The value
+// shape is what the app accepts: a Meta key is 8 or more printable ASCII
+// characters with no space, and a token is any such run of 20 or more. In
+// JSON text a quote or a backslash in it is escaped. Only an exact
+// placeholder such as <META_KEY> or <ACCESS_TOKEN> is skipped. Read as
+// latin1, so each character is one byte and a match index is a byte offset.
+const JSON_VALUE = String.raw`((?:[\x21\x23-\x5b\x5d-\x7e]|\\["\\])+)`;
+const FIELD_SECRET = new RegExp(
+  String.raw`"(?:accessToken|refreshToken|access_token|refresh_token|id_token)"\s*:\s*"${JSON_VALUE}"|"meta"\s*:\s*\{\s*"key"\s*:\s*"${JSON_VALUE}"`,
+  "g",
+);
+const FIELD_PLACEHOLDER = /^<[A-Z][A-Z0-9_]*>$/;
+export const KEY_MIN = 8;
+export const TOKEN_MIN = 20;
+const unescapeJson = (v: string) => v.replace(/\\(["\\])/g, "$1");
+const isSecretValue = (value: string, min: number) => value.length >= min && !FIELD_PLACEHOLDER.test(value);
 
 function fieldSecrets(line: string, start: number, out: Range[]): void {
   for (const m of line.matchAll(FIELD_SECRET)) {
-    const value = (m[1] ?? m[2])!;
-    const at = start + m.index + m[0].lastIndexOf(value);
-    out.push([at, at + value.length]);
+    const raw = (m[1] ?? m[2])!;
+    if (!isSecretValue(unescapeJson(raw), m[1] !== undefined ? TOKEN_MIN : KEY_MIN)) continue;
+    const at = start + m.index + m[0].lastIndexOf(raw);
+    out.push([at, at + raw.length]);
   }
 }
 
@@ -102,13 +124,15 @@ function fieldSecrets(line: string, start: number, out: Range[]): void {
 // at the end of one line and "key": "..." at the start of the next. Bounded
 // to those two lines.
 const META_OPEN = /"meta"\s*:\s*\{\s*$/;
-const KEY_LINE = /^\s*"key"\s*:\s*"([\x21\x23-\x3b\x3d\x3f-\x5b\x5d-\x7e]{8,})"/;
+const KEY_LINE = new RegExp(String.raw`^\s*"key"\s*:\s*"${JSON_VALUE}"`);
+const keyLine = (text: string) => {
+  const m = KEY_LINE.exec(text);
+  return m !== null && isSecretValue(unescapeJson(m[1]!), KEY_MIN);
+};
 
 const TOKEN_FIELDS = new Set(["accessToken", "refreshToken", "access_token", "refresh_token", "id_token"]);
-const TOKEN_VALUE = /^[A-Za-z0-9._~+/=-]{20,}$/;
-// Printable, with no quote, backslash or angle brackets, so a placeholder
-// such as <META_KEY> is not a key.
-const KEY_VALUE = /^[\x21\x23-\x3b\x3d\x3f-\x5b\x5d-\x7e]{8,}$/;
+const PRINTABLE = /^[\x21-\x7e]+$/;
+const isStoredSecret = (v: unknown, min: number): boolean => typeof v === "string" && PRINTABLE.test(v) && isSecretValue(v, min);
 // A .json file up to this size is also read as JSON, so a token or key is
 // found however the file is laid out.
 export const JSON_SCAN_BYTES = 8 << 20;
@@ -128,10 +152,10 @@ export function jsonSecretFields(text: string): string[] {
     if (depth > 64 || v === null || typeof v !== "object") return;
     for (const [k, child] of Object.entries(v as Record<string, unknown>)) {
       const here = at === "" ? k : `${at}.${k}`;
-      if (TOKEN_FIELDS.has(k) && typeof child === "string" && TOKEN_VALUE.test(child)) out.push(here);
+      if (TOKEN_FIELDS.has(k) && isStoredSecret(child, TOKEN_MIN)) out.push(here);
       if (k === "meta" && child && typeof child === "object") {
         const key = (child as Record<string, unknown>).key;
-        if (typeof key === "string" && KEY_VALUE.test(key)) out.push(`${here}.key`);
+        if (isStoredSecret(key, KEY_MIN)) out.push(`${here}.key`);
       }
       walk(child, here, depth + 1);
     }
@@ -141,7 +165,38 @@ export function jsonSecretFields(text: string): string[] {
 }
 
 // The app's settings file and local env files must never be tracked.
-const SECRET_FILE_NAME = /^(?:app-secrets\.json|\.app-secrets\.json\..*\.tmp|\.env\.local|\.env\.[^/]+\.local)$/;
+const SECRET_FILE_NAME = /^(?:app-secrets\.sqlite(?:-wal|-shm|-journal)?|app-secrets\.json|\.app-secrets\.json\..*\.tmp|\.env\.local|\.env\.[^/]+\.local)$/;
+
+const SQLITE_MAGIC = Buffer.from("SQLite format 3\0", "latin1");
+export const isSqlite = (b: Buffer) => b.length >= SQLITE_MAGIC.length && b.subarray(0, SQLITE_MAGIC.length).equals(SQLITE_MAGIC);
+
+// The secret fields in the settings rows of a SQLite file, such as the
+// app's settings database under any name. Read from a private copy, read
+// only. A file that is not one, or holds no settings table, gives none.
+export function sqliteSecretFields(bytes: Buffer): string[] {
+  if (!isSqlite(bytes)) return [];
+  const dir = mkdtempSync(path.join(tmpdir(), "scan-sqlite-"));
+  try {
+    const file = path.join(dir, "copy.sqlite");
+    writeFileSync(file, bytes, { mode: 0o600 });
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings'").get();
+      if (!table) return [];
+      const out: string[] = [];
+      for (const row of db.prepare("SELECT data FROM settings").all() as Array<{ data: unknown }>) {
+        if (typeof row.data === "string") out.push(...jsonSecretFields(row.data));
+      }
+      return out;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 export const isSecretFileName = (name: string) => SECRET_FILE_NAME.test(name.split("/").at(-1) ?? name);
 
 // Every secret in bytes [start, end) of `b`, one line.
@@ -214,7 +269,7 @@ export class LineScanner {
     if (lineHasSecret(b, start, end)) this.#hit(this.#line);
     // The Meta key split over two lines, "meta": { and then "key": "...".
     if (!this.#headChecked) {
-      if (this.#previous && META_OPEN.test(this.#previous.toString("latin1")) && KEY_LINE.test(b.toString("latin1", start, Math.min(end, start + 4096)))) {
+      if (this.#previous && META_OPEN.test(this.#previous.toString("latin1")) && keyLine(b.toString("latin1", start, Math.min(end, start + 4096)))) {
         this.#hit(this.#line);
       }
       this.#headChecked = true;
@@ -317,14 +372,19 @@ function scanWorkingTree(repo: string, hit: Hit, note: (text: string) => void): 
         continue;
       }
       const buffer = Buffer.alloc(READ_BYTES);
-      const json = isJsonPath(file) && fstatSync(fd).size <= JSON_SCAN_BYTES ? ([] as Buffer[]) : null;
+      // Kept whole, up to a size, to read it as JSON or as a SQLite file.
+      const json = fstatSync(fd).size <= JSON_SCAN_BYTES ? ([] as Buffer[]) : null;
       for (let n = readSync(fd, buffer, 0, READ_BYTES, null); n > 0; n = readSync(fd, buffer, 0, READ_BYTES, null)) {
         const chunk = Buffer.from(buffer.subarray(0, n));
         scanner.push(chunk);
         json?.push(chunk);
       }
       scanner.end();
-      if (json) for (const field of jsonSecretFields(Buffer.concat(json).toString("utf8"))) hit(`${name} (JSON field ${redact(field)})`);
+      if (json) {
+        const whole = Buffer.concat(json);
+        if (isJsonPath(file)) for (const field of jsonSecretFields(whole.toString("utf8"))) hit(`${name} (JSON field ${redact(field)})`);
+        for (const field of sqliteSecretFields(whole)) hit(`${name} (settings database field ${redact(field)})`);
+      }
     } finally {
       closeSync(fd);
     }
@@ -417,7 +477,7 @@ async function scanObjects(repo: string, refs: string[], hit: Hit): Promise<{ co
 
   let commits = 0;
   let objects = 0;
-  type Body = { id: string; type: string; remaining: number; scanner: LineScanner | null; tree: Buffer[]; json?: string };
+  type Body = { id: string; type: string; remaining: number; scanner: LineScanner | null; tree: Buffer[]; whole?: { where: string; json: boolean } };
   let state: "header" | "body" | "newline" = "header";
   let body: Body | null = null;
   let pending: Buffer = Buffer.alloc(0);
@@ -425,8 +485,9 @@ async function scanObjects(repo: string, refs: string[], hit: Hit): Promise<{ co
   const open = (id: string, type: string, size: number): Body => {
     if (type === "blob") {
       const name = redact(paths.get(id) ?? "(path unknown)");
-      const json = isJsonPath(paths.get(id) ?? "") && size <= JSON_SCAN_BYTES ? `blob ${id.slice(0, 12)} ${name}` : undefined;
-      return { id, type, remaining: size, scanner: new LineScanner(lineHits((line) => `blob ${id.slice(0, 12)} ${name}:${line}`, hit)), tree: [], json };
+      // Kept whole, up to a size, to read it as JSON or as a SQLite file.
+      const whole = size <= JSON_SCAN_BYTES ? { where: `blob ${id.slice(0, 12)} ${name}`, json: isJsonPath(paths.get(id) ?? "") } : undefined;
+      return { id, type, remaining: size, scanner: new LineScanner(lineHits((line) => `blob ${id.slice(0, 12)} ${name}:${line}`, hit)), tree: [], whole };
     }
     if (type === "tree") return { id, type, remaining: size, scanner: null, tree: [] };
     if (type === "commit" || type === "tag") {
@@ -438,7 +499,11 @@ async function scanObjects(repo: string, refs: string[], hit: Hit): Promise<{ co
     objects++;
     if (b.type === "tree") return scanTreeObject(b.id, Buffer.concat(b.tree), raw, paths, hit);
     b.scanner!.end();
-    if (b.json !== undefined) for (const field of jsonSecretFields(Buffer.concat(b.tree).toString("utf8"))) hit(`${b.json} (JSON field ${redact(field)})`);
+    if (b.whole) {
+      const bytes = Buffer.concat(b.tree);
+      if (b.whole.json) for (const field of jsonSecretFields(bytes.toString("utf8"))) hit(`${b.whole.where} (JSON field ${redact(field)})`);
+      for (const field of sqliteSecretFields(bytes)) hit(`${b.whole.where} (settings database field ${redact(field)})`);
+    }
     if (b.type === "commit") {
       commits++;
       // The commit's root tree has the root path.
@@ -470,7 +535,7 @@ async function scanObjects(repo: string, refs: string[], hit: Hit): Promise<{ co
         const part = data.subarray(pos, pos + take);
         // Trees are parsed whole. A commit is kept whole too, small as it
         // is, to read the root tree it names.
-        if (body!.type === "tree" || body!.type === "commit" || body!.json !== undefined) body!.tree.push(Buffer.from(part));
+        if (body!.type === "tree" || body!.type === "commit" || body!.whole !== undefined) body!.tree.push(Buffer.from(part));
         if (body!.type !== "tree" && take > 0) body!.scanner!.push(part);
         pos += take;
         body!.remaining -= take;
