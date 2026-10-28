@@ -1,9 +1,6 @@
 // Sprint 12 review round 1 (Muse Wonder): one test per finding, each
 // failing before its fix.
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { callTool } from "../mcp/server.ts";
 import { RateLimiter } from "../mcp/rate-limit.ts";
@@ -21,7 +18,6 @@ import { EventStore } from "../src/store/event-log.ts";
 import { processIdentity, stopChild } from "../scripts/demo-check.ts";
 import { CLOCK, agentFor, fixtureMessage, message, reply, say, sequence, services } from "./agent-helpers.ts";
 import { tempStore } from "./provider-fakes.ts";
-import { acceptMessages } from "./helpers.ts";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -225,10 +221,3 @@ describe("review round 1, finding 7: demo:check stops only the process it starte
     expect(processIdentity(child.pid!)).toBeNull();
   });
 });
-
-// Keeps the shared helpers in use when a finding's test changes.
-void acceptMessages;
-void mkdtempSync;
-void rmSync;
-void tmpdir;
-void path;
