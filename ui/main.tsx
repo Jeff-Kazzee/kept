@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App.tsx";
+import { Root } from "./App.tsx";
 import "./styles.css";
 import { applyTheme, readTheme } from "./theme.ts";
 
@@ -12,6 +12,6 @@ matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <Root />
   </StrictMode>,
 );

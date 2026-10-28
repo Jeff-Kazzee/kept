@@ -90,7 +90,7 @@ export function ModelPicker({ fallback, scripted = false }: { fallback: string; 
                 </span>
                 <span>
                   {m.label}
-                  {costWords(m) && <small>{costWords(m)}</small>}
+                  {(m.turnCost ?? costWords(m)) && <small>{m.turnCost ?? costWords(m)}</small>}
                 </span>
               </button>
             ))}
@@ -133,7 +133,7 @@ export function ModelSelect() {
           {settings.models.map((m) => (
             <option key={m.id} value={m.id}>
               {m.label}
-              {costWords(m) ? ` (${costWords(m)!.toLowerCase()})` : ""}
+              {m.turnCost ? ` (${m.turnCost})` : costWords(m) ? ` (${costWords(m)!.toLowerCase()})` : ""}
             </option>
           ))}
         </select>

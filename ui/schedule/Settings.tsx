@@ -12,6 +12,7 @@ import { zoneWithShortName } from "../format.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon, type IconName } from "../components/Icon.tsx";
 import { readTheme, saveTheme, type ThemeChoice } from "../theme.ts";
+import { DeleteAccountPanel, HostedProviderSetting, UsageSection } from "../hosted/Usage.tsx";
 
 const THEMES: Array<{ value: ThemeChoice; label: string; icon: IconName }> = [
   { value: "dark", label: "Dark", icon: "moon" },
@@ -47,7 +48,7 @@ export function ThemeSetting() {
 }
 
 export function SettingsPanel({ modelClient, version, erasePending, run }: { modelClient: string; version: number; erasePending: boolean; run: Run }) {
-  const { settings, settingsAvailable } = useAgent();
+  const { settings, settingsAvailable, hosted, signedOut } = useAgent();
   return (
     <div className="stack settings">
       <section className="card stack-sm" aria-labelledby="set-zone">
@@ -58,7 +59,7 @@ export function SettingsPanel({ modelClient, version, erasePending, run }: { mod
         <h3 id="set-model">Model provider</h3>
         {settingsAvailable ? (
           <>
-            <ProviderSetting settings={settings} run={run} />
+            {hosted ? <HostedProviderSetting /> : <ProviderSetting settings={settings} run={run} />}
             <ModelSelect />
           </>
         ) : (
@@ -67,6 +68,7 @@ export function SettingsPanel({ modelClient, version, erasePending, run }: { mod
           </p>
         )}
       </section>
+      {hosted && <UsageSection run={run} />}
       <section className="card stack-sm" aria-labelledby="set-google">
         <h3 id="set-google">
           <Icon name="google" size="sm" /> Google
@@ -85,6 +87,7 @@ export function SettingsPanel({ modelClient, version, erasePending, run }: { mod
         <p className="small muted">Appointments are built by code from the accepted facts. Model text never changes an appointment. A clash check assumes a length for each appointment, because messages do not state an end time. The info button beside Appointments shows it.</p>
       </section>
       <DeleteCasePanel version={version} erasePending={erasePending} run={run} />
+      {hosted && <DeleteAccountPanel run={run} onDeleted={signedOut} />}
     </div>
   );
 }

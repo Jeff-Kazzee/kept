@@ -4,6 +4,7 @@
 import { createContext, useContext } from "react";
 import type { AgentBackend } from "../agentApi.ts";
 import { CALENDAR_KINDS, DEFAULT_SETTINGS, GOOGLE_OFF, type ActivityEntry, type ActivityLog, type GoogleStatus, type Settings } from "../contract.ts";
+import type { SignedInSession } from "../hosted/session.ts";
 
 export type AgentState = {
   backend: AgentBackend;
@@ -28,6 +29,12 @@ export type AgentState = {
   report: (e: unknown) => void;
   // A plain note from the server, such as the sign-out notice (a toast).
   notify: (text: string) => void;
+  // The hosted site's session (0014). Null in local mode.
+  hosted: SignedInSession | null;
+  // Opens Settings at Usage, on the hosted site.
+  openUsage: () => void;
+  // The session ended, or the account was deleted: back to sign-in.
+  signedOut: () => void;
 };
 
 const noop = async () => {};
@@ -62,6 +69,9 @@ export const DEFAULT_AGENT: AgentState = {
   openSettings: () => {},
   report: () => {},
   notify: () => {},
+  hosted: null,
+  openUsage: () => {},
+  signedOut: () => {},
 };
 
 export const AgentContext = createContext<AgentState>(DEFAULT_AGENT);

@@ -503,7 +503,8 @@ export class CaseAgent {
       finalText = stop.code === "credits_exhausted" || stop.code === "usage_paused" ? stop.text : wrote() ? PARTIAL_TEXT : stop.text;
       outcome = stop.outcome;
       code = stop.code;
-      if (outcome === "stopped") addCard({ kind: "notice", text: finalText });
+      // A usage stop shows its own notice, with the way to Usage (0014).
+      if (outcome === "stopped" && code !== "credits_exhausted" && code !== "usage_paused") addCard({ kind: "notice", text: finalText });
     }
     wrote();
 

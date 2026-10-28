@@ -15,7 +15,9 @@ export type ActivityLog = ActivityView;
 
 export type Provider = "meta" | "chatgpt";
 
-export type ModelOption = { id: string; label: string; costHint: "lower" | "higher" | null };
+// `turnCost`: on the hosted site, a rough cost of one chat turn at the
+// person's price, such as "about $0.08 a turn" (0014).
+export type ModelOption = { id: string; label: string; costHint: "lower" | "higher" | null; turnCost?: string | null };
 
 // What GET /api/settings answers (0009 and 0010). One settingsVersion
 // covers the time zone and the provider part, and every settings and
@@ -34,6 +36,9 @@ export type Settings = {
   provider: Provider | null;
   meta: { keySet: boolean; source: "you" | "server" | null };
   chatgpt: { signedIn: boolean; name: string | null; email: string | null; planUsage: boolean };
+  // Set on the hosted site (0014): the server key is reached through usage
+  // credits, and ChatGPT is not offered there yet.
+  hosted?: { chatgptAvailable: boolean; chatgptText: string };
 };
 
 // The zone the app uses until settings say otherwise, the server's own

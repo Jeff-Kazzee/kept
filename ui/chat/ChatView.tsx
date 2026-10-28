@@ -8,6 +8,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Mark, RidgeScene } from "../components/Art.tsx";
 import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
+import { usageStopText } from "../../src/model/usage-text.ts";
 import type { AppState, FixtureScenario } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
@@ -422,6 +423,8 @@ function MessageItem({
     <article className="msg msg-assistant" aria-label="Assistant">
       {m.declined ? (
         <Declined text={m.text} onImport={onImport} />
+      ) : usageStopText(m.text, PARTIAL_TEXT) ? (
+        <UsageNotice text={m.text} credits={usageStopText(m.text, PARTIAL_TEXT) === "credits_exhausted"} />
       ) : isCodeSentence(m.text) ? (
         <CodeNotice text={m.text} at={m.createdAt} onImport={onImport} />
       ) : (
@@ -469,6 +472,13 @@ function PendingItem({
           // J12: refused before it started. Code wrote the sentence, and no
           // model ran.
           <SetupNotice text={turnErrorText(err)} />
+        ) : err?.code === "credits_exhausted" || err?.code === "usage_paused" ? (
+          // 0014: the hosted site's usage stopped the turn. Code wrote the
+          // sentence.
+          <>
+            {turn.status === "streaming" ? <ToolLines tools={turn.tools} /> : <ToolSummary tools={turn.tools} />}
+            <UsageNotice text={turnErrorText(err)} credits={err.code === "credits_exhausted"} />
+          </>
         ) : (
           <>
             {codeText === null && <AssistantHead scripted={scripted} />}
@@ -495,7 +505,7 @@ function PendingItem({
             <span>{turnErrorText(err)}</span>
           </p>
         )}
-        {err && err.code !== "out_of_scope" && err.code !== "stopped" && err.code !== "provider_not_ready" && !fixed && (
+        {err && err.code !== "out_of_scope" && err.code !== "stopped" && err.code !== "provider_not_ready" && err.code !== "credits_exhausted" && err.code !== "usage_paused" && !fixed && (
           <div className="turn-error" role="alert">
             <Icon name="alert" />
             <div className="stack-sm">
@@ -524,6 +534,29 @@ function SetupNotice({ text }: { text: string }) {
         <button type="button" className="btn btn-sm" onClick={openSettings}>
           <Icon name="settings" size="sm" /> Open Settings
         </button>
+      </div>
+    </div>
+  );
+}
+
+// 0014: a hosted site usage stop, written by code. Credits that ran out
+// link to Usage.
+function UsageNotice({ text, credits }: { text: string; credits: boolean }) {
+  const { openUsage } = useAgent();
+  return (
+    <div className="notice" role="alert">
+      <Icon name="info" />
+      <div className="stack-sm">
+        <div className="msg-meta">
+          <span className="msg-who">Assistant</span>
+          <span className="model-tag">Written by code</span>
+        </div>
+        <p>{text}</p>
+        {credits && (
+          <button type="button" className="btn btn-sm" onClick={openUsage}>
+            <Icon name="activity" size="sm" /> Open Usage
+          </button>
+        )}
       </div>
     </div>
   );
@@ -627,8 +660,9 @@ export function turnErrorText(err: { code: string; message: string }): string {
   // A stopped turn may still be saved by the server, so it does not say
   // that nothing was.
   if (err.code === "stopped") return base;
-  // J12: the setup sentence already says nothing changed.
-  if (err.code === "provider_not_ready" && base !== "") return base;
+  // J12: the setup sentence already says nothing changed. So do the
+  // hosted site's usage sentences (0014).
+  if ((err.code === "provider_not_ready" || err.code === "credits_exhausted" || err.code === "usage_paused") && base !== "") return base;
   if (base !== "") return err.code === "ungrounded" || base.includes("Nothing was saved") ? base : `${base} Nothing was saved.`;
   switch (err.code) {
     case "case_deleted":

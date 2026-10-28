@@ -98,7 +98,27 @@ export const channelWord = (c: string) => CHANNEL_WORDS[c] ?? c;
 const NOTHING_SAVED = "Nothing was saved.";
 
 // Codes whose message is shown as the server wrote it.
-const SERVER_SENTENCE_CODES = new Set(["provider_not_ready", "unknown_model", "invalid_key", "settings_busy", "settings_unreadable", "sign_in_unavailable", "redirect_unavailable", "google_busy"]);
+const SERVER_SENTENCE_CODES = new Set([
+  "provider_not_ready",
+  "unknown_model",
+  "invalid_key",
+  "settings_busy",
+  "settings_unreadable",
+  "sign_in_unavailable",
+  "redirect_unavailable",
+  "google_busy",
+  // The hosted site (0014). Each sentence says what changed.
+  "credits_exhausted",
+  "daily_cap",
+  "server_key_off",
+  "not_offered",
+  "chatgpt_unavailable",
+  "signed_out",
+  "rate_limited",
+  "confirmation_mismatch",
+  "account_busy",
+  "accounts_busy",
+]);
 
 // A failed ChatGPT sign-in comes back to /?signInError=<code> (0010). The
 // code is the server's, the sentence the page's. An unknown code gets the
@@ -160,6 +180,8 @@ export function signInReturn(params: URLSearchParams): { kind: "info" | "error";
         ? googleErrorSentence(googleFailed)
         : params.get("signedIn") === "chatgpt"
           ? "Signed in with ChatGPT. Settings shows it under Model provider."
+          : params.get("signedIn") === "google"
+            ? "Signed in with Google."
           : params.get("connected") === "google"
             ? "Connected Google. Settings lists what the assistant may use."
             : null;
@@ -185,7 +207,7 @@ export function errorSentence(e: unknown): string {
     // sentence, which already says what was changed (0010).
     // So do Google's refusals (0012, G18), a connect from an address
     // Google cannot return to, and a Google change still in progress.
-    if (code && (SERVER_SENTENCE_CODES.has(code) || code.startsWith("google_")) && typeof e.body.message === "string" && e.body.message.trim() !== "") return e.body.message.trim();
+    if (code && (SERVER_SENTENCE_CODES.has(code) || code.startsWith("google_") || code.startsWith("judge_")) && typeof e.body.message === "string" && e.body.message.trim() !== "") return e.body.message.trim();
     if (code === "case_deleted") return "The case was deleted in another tab or window. Nothing was saved. The empty case is loaded.";
     if (code === "stale_edit" || e.status === 409) return "This changed since it was shown. Nothing was saved. The current version is loaded.";
     if (code === "busy") return "The app is busy with another change. Nothing was saved. Try again in a moment.";

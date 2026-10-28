@@ -25,12 +25,15 @@ import { SchedulePanel, TABS, waitingCount, type PanelTab } from "./schedule/Sch
 import { slotElementId } from "./schedule/Agenda.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
 import { LAPTOP, chipRef, findChip, useMedia, type ChipRef } from "./layout.ts";
+import { AccountMenu } from "./hosted/AccountMenu.tsx";
+import { SignIn } from "./hosted/SignIn.tsx";
+import { hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
 
 // `settings`: the toast links to Settings, for the setup sentence (J12).
 type Toast = { id: number; kind: "error" | "info"; text: string; settings?: boolean };
 
 // J12: the server refused a model step because no provider is ready.
-const needsSetup = (e: unknown) => e instanceof ApiError && e.body.error === "provider_not_ready";
+const needsSetup = (e: unknown) => e instanceof ApiError && (e.body.error === "provider_not_ready" || e.body.error === "credits_exhausted");
 
 // The scripted chat is a development tool. It makes real case writes, so
 // only a development build has it (or a check build made with
@@ -41,8 +44,99 @@ const needsSetup = (e: unknown) => e instanceof ApiError && e.body.error === "pr
 const fakesBuilt = import.meta.env.DEV || import.meta.env.APP_FAKES === true;
 const scriptedChat = () => fakesBuilt && new URLSearchParams(window.location.search).get("mockchat") === "1";
 
-export function App() {
+// The page first asks which mode the server runs in (0014). Local mode is
+// the app as it was. The hosted site shows the sign-in screen until a
+// session is open, and the app after.
+export function Root() {
+  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      setSession(await hostedApi.session());
+      setFailed(null);
+    } catch (e) {
+      setFailed(errorSentence(e));
+    }
+  }, []);
+  const toSignIn = useCallback((text: string | null) => {
+    setNotice(text);
+    setSession((s) => (s && s.mode === "hosted" ? { mode: "hosted", signedIn: false, googleSignIn: s.googleSignIn } : s));
+  }, []);
+  useEffect(() => {
+    // A failed Sign in with Google comes back as /?signInError=<code>.
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("signInError");
+    void hostedApi.session().then(
+      (s) => {
+        if (s.mode === "hosted" && code !== null) {
+          setNotice(hostedSignInError(code));
+          params.delete("signInError");
+          window.history.replaceState(null, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
+        }
+        if (s.mode === "hosted" && params.get("signedIn") === "google") {
+          params.delete("signedIn");
+          window.history.replaceState(null, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
+        }
+        setSession(s);
+      },
+      (e) => setFailed(errorSentence(e)),
+    );
+  }, []);
+  if (failed) return <LoadError message={failed} onRetry={() => void load()} />;
+  return <RootView session={session} notice={notice} setNotice={setNotice} setSession={setSession} toSignIn={toSignIn} />;
+}
+
+function RootView({
+  session,
+  notice,
+  setNotice,
+  setSession,
+  toSignIn,
+}: {
+  session: SessionInfo | null;
+  notice: string | null;
+  setNotice: (t: string | null) => void;
+  setSession: (s: SessionInfo) => void;
+  toSignIn: (text: string | null) => void;
+}) {
+  if (!session) {
+    return (
+      <main className="loading" aria-busy="true">
+        <p className="sr-only" role="status">
+          Loading…
+        </p>
+      </main>
+    );
+  }
+  if (session.mode === "hosted" && !session.signedIn) {
+    return (
+      <SignIn
+        googleSignIn={session.googleSignIn}
+        notice={notice}
+        onSignedIn={(s) => {
+          setNotice(null);
+          setSession(s);
+        }}
+      />
+    );
+  }
+  return <App hosted={session.mode === "hosted" ? session : null} onSession={setSession} onSignedOut={toSignIn} />;
+}
+
+export function App({
+  hosted = null,
+  onSession = () => {},
+  onSignedOut = () => {},
+}: { hosted?: SignedInSession | null; onSession?: (s: SessionInfo) => void; onSignedOut?: (text: string | null) => void } = {}) {
   const scripted = useMemo(scriptedChat, []);
+  // Read through refs, so a new balance does not start another read.
+  const hostedRef = useRef(hosted);
+  hostedRef.current = hosted;
+  const onSessionRef = useRef(onSession);
+  onSessionRef.current = onSession;
+  const onSignedOutRef = useRef(onSignedOut);
+  onSignedOutRef.current = onSignedOut;
   const backend: AgentBackend = realBackend;
   const [state, setState] = useState<AppState | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -74,6 +168,8 @@ export function App() {
     try {
       const [next, sRead, aRead, gRead] = await Promise.all([api.state(), settle(() => backend.settings()), settle(() => backend.activity()), settle(() => backend.google())]);
       if (stale()) return;
+      // The balance moves with every turn on the hosted site.
+      if (hostedRef.current) void hostedApi.session().then((x) => onSessionRef.current(x), () => {});
       const s = keep(sRead, last.current.settings);
       const a = keep(aRead, last.current.activity);
       const g = keep(gRead, last.current.google);
@@ -101,6 +197,7 @@ export function App() {
         else if (!stale()) void refreshRef.current();
       }
     } catch (e) {
+      if (signedOut(e)) return onSignedOutRef.current("Your session ended. Sign in again.");
       if (!stale()) setLoadError(errorSentence(e));
     }
   }, [backend]);
@@ -127,6 +224,7 @@ export function App() {
       try {
         await action();
       } catch (e) {
+        if (signedOut(e)) return onSignedOutRef.current("Your session ended. Sign in again.");
         toast("error", errorSentence(e), needsSetup(e));
       }
       await refresh();
@@ -199,6 +297,8 @@ export function App() {
       blocked={blocked}
       undoing={undoing}
       degraded={degraded}
+      hosted={hosted}
+      onSignedOut={onSignedOut}
     />
   );
 }
@@ -219,7 +319,11 @@ function Shell({
   blocked,
   undoing,
   degraded,
+  hosted,
+  onSignedOut,
 }: {
+  hosted: SignedInSession | null;
+  onSignedOut: (text: string | null) => void;
   state: AppState;
   run: Run;
   refresh: () => Promise<void>;
@@ -368,6 +472,26 @@ function Shell({
     notify: (text) => toast("info", text),
     reload: refresh,
     openSettings: () => openPanel("settings"),
+    hosted,
+    openUsage: () => {
+      openPanel("settings");
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const el = document.getElementById("set-usage");
+          el?.scrollIntoView({ block: "start" });
+          el?.focus({ preventScroll: true });
+        }),
+      );
+    },
+    signedOut: () => onSignedOut(null),
+  };
+  const signOut = async () => {
+    try {
+      await hostedApi.signOut();
+      onSignedOut(null);
+    } catch (e) {
+      toast("error", errorSentence(e));
+    }
   };
 
   return (
@@ -380,6 +504,7 @@ function Shell({
             </span>
             <h1>Appointment assistant</h1>
           </div>
+          {hosted && <AccountMenu session={hosted} onUsage={agent.openUsage} onSignOut={() => void signOut()} />}
           <button
             ref={sheetToggle}
             type="button"
