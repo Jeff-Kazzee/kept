@@ -2,7 +2,7 @@
 // sentences. The zone is America/Denver until settings set another.
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api.ts";
-import { clockTime, errorSentence, getCaseZone, setCaseZone, shortTime, signInErrorSentence, stampTime, wallNow, wallSkipped, wallToIso, zoneShortName } from "./format.ts";
+import { clockTime, errorSentence, getCaseZone, googleErrorSentence, setCaseZone, shortTime, signInErrorSentence, signInReturn, stampTime, wallNow, wallSkipped, wallToIso, zoneShortName } from "./format.ts";
 
 // The demo's zone. The app's own default is UTC, as the server's.
 setCaseZone("America/Denver");
@@ -72,6 +72,42 @@ describe("format", () => {
     expect(errorSentence(new ApiError(400, { error: "invalid_body", issues: [{ path: "expectedVersion", message: "Send the settingsVersion" }] }))).toBe("The page sent a request the app could not read. Nothing was saved.");
     expect(signInErrorSentence("access_denied")).toBe("ChatGPT sign-in was canceled. Nothing changed. You can try again in Settings.");
     expect(signInErrorSentence("something_new")).toBe("The ChatGPT sign-in did not finish. Nothing changed. Try again in Settings.");
+  });
+
+  it("sprint 11: each Google callback code has its own plain sentence, and an unknown code the general one", () => {
+    const codes = ["invalid_state", "stale_flow", "access_denied", "no_permission_granted", "code_exchange_failed", "google_unavailable", "no_id_token", "no_refresh_token", "id_token_audience", "id_token_issuer", "id_token_expired", "id_token_nonce", "email_unverified"];
+    const general = googleErrorSentence("something_new");
+    expect(general).toBe("The Google sign-in did not finish. Nothing changed. Try again in Settings.");
+    const sentences = codes.map(googleErrorSentence);
+    expect(new Set(sentences).size).toBe(codes.length);
+    for (const [i, text] of sentences.entries()) {
+      expect(text, codes[i]).not.toBe(general);
+      expect(text, codes[i]).toMatch(/^[A-Z].*\.$/);
+      expect(text, codes[i]).not.toMatch(/[;\u2014]/);
+      expect(text, codes[i]).not.toContain(codes[i]);
+    }
+    expect(googleErrorSentence("access_denied")).toBe("Google sign-in was canceled. Nothing changed. You can connect again in Settings.");
+  });
+
+  it("a sign-in return says what happened and leaves the rest of the address", () => {
+    expect(signInReturn(new URLSearchParams("connected=google"))).toEqual({ kind: "info", text: "Connected Google. Settings lists what the assistant may use.", rest: "" });
+    expect(signInReturn(new URLSearchParams("google_error=email_unverified&mockchat=1"))).toEqual({ kind: "error", text: googleErrorSentence("email_unverified"), rest: "mockchat=1" });
+    expect(signInReturn(new URLSearchParams("signedIn=chatgpt"))?.kind).toBe("info");
+    expect(signInReturn(new URLSearchParams("signInError=expired"))).toEqual({ kind: "error", text: signInErrorSentence("expired"), rest: "" });
+    expect(signInReturn(new URLSearchParams("mockchat=1"))).toBeNull();
+    expect(signInReturn(new URLSearchParams(""))).toBeNull();
+  });
+
+  it("sprint 11: a Google refusal reads as the server wrote it, and a stale connection as the page's sentence", () => {
+    const redirect = "Google can return only to this app on 127.0.0.1, localhost or an HTTPS address in APP_ALLOWED_HOSTS. Open the app at one of those and try again.";
+    expect(errorSentence(new ApiError(422, { error: "redirect_unavailable", message: redirect }))).toBe(redirect);
+    expect(errorSentence(new ApiError(503, { error: "google_unavailable", message: "Google did not answer. Nothing changed. Try again in a moment." }))).toBe("Google did not answer. Nothing changed. Try again in a moment.");
+    expect(errorSentence(new ApiError(503, { error: "google_not_configured", message: "Google is not set up on this server. See docs/google.md." }))).toBe("Google is not set up on this server. See docs/google.md.");
+    const busy = "A Google Calendar change for Thursday 11/12 10:30 AM is still in progress. Try again in a moment.";
+    expect(errorSentence(new ApiError(409, { error: "google_busy", message: busy }))).toBe(busy);
+    expect(errorSentence(new ApiError(409, { error: "google_stale", message: "The Google connection changed since the page read it. Reload and try again." }))).toBe(
+      "The Google connection changed since it was shown. Nothing changed. Settings now shows the current connection.",
+    );
   });
 
   it("an undo the server refused shows the server's reason as it is", () => {

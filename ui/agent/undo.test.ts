@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../api.ts";
 import { LoadError } from "../components/LoadError.tsx";
+import { errorSentence } from "../format.ts";
 import { DEFAULT_SETTINGS, type ActivityEntry, type ActivityLog } from "../contract.ts";
 import { keep, sendDeviceZone, settle } from "./reads.ts";
 import { newestFirst, runUndo, serialUndo } from "./undo.ts";
@@ -56,6 +57,21 @@ describe("undo", () => {
     const out = await runUndo(backend, ["a1", "a2"]);
     expect(out.done).toEqual(["a2"]);
     expect(out.blocked?.id).toBe("a1");
+  });
+
+  it("sprint 11: a Google Calendar entry refused while Google is busy or blocked shows its plain reason beside it", async () => {
+    const cal = (id: string) => entry(id, { kind: "calendar_event_added", target: { type: "slot", id: "2026-11-12T10:30" } });
+    for (const refusal of [
+      new ApiError(409, { error: "google_busy", message: "A Google Calendar change for Thursday 11/12 10:30 AM is still in progress. Try again in a moment." }),
+      new ApiError(409, { error: "undo_blocked", message: "The calendar event changed at Google since the app wrote it, so the app left it as it is." }),
+    ]) {
+      const backend = stubBackend({ activityVersion: 4, entries: [cal("g1")] }, () => refusal);
+      const out = await runUndo(backend, ["g1"]);
+      expect(out.done).toEqual([]);
+      expect(out.error).toBeNull();
+      expect(out.blocked?.id).toBe("g1");
+      expect(errorSentence(out.blocked!.error)).toBe(refusal.body.message);
+    }
   });
 
   it("finding 4: runs one undo at a time and refuses a second while the first runs", async () => {

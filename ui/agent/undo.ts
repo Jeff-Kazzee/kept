@@ -34,7 +34,9 @@ export async function runUndo(backend: Pick<AgentBackend, "activity" | "undo">, 
       out.done.push(id);
       log = await backend.activity();
     } catch (e) {
-      if (e instanceof ApiError && e.body.error === "undo_blocked") out.blocked = { id, error: e };
+      // A refusal with a reason: a later action depends on this one, or a
+      // Google Calendar change for the appointment is still running (0012).
+      if (e instanceof ApiError && (e.body.error === "undo_blocked" || e.body.error === "google_busy")) out.blocked = { id, error: e };
       else out.error = e;
       break;
     }

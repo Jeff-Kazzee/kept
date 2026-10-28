@@ -98,7 +98,7 @@ export const channelWord = (c: string) => CHANNEL_WORDS[c] ?? c;
 const NOTHING_SAVED = "Nothing was saved.";
 
 // Codes whose message is shown as the server wrote it.
-const SERVER_SENTENCE_CODES = new Set(["provider_not_ready", "unknown_model", "invalid_key", "settings_busy", "settings_unreadable", "sign_in_unavailable"]);
+const SERVER_SENTENCE_CODES = new Set(["provider_not_ready", "unknown_model", "invalid_key", "settings_busy", "settings_unreadable", "sign_in_unavailable", "redirect_unavailable", "google_busy"]);
 
 // A failed ChatGPT sign-in comes back to /?signInError=<code> (0010). The
 // code is the server's, the sentence the page's. An unknown code gets the
@@ -120,6 +120,56 @@ const SIGN_IN_ERRORS: Record<string, string> = {
 
 export const signInErrorSentence = (code: string) => SIGN_IN_ERRORS[code] ?? "The ChatGPT sign-in did not finish. Nothing changed. Try again in Settings.";
 
+// A failed Google connect comes back to /?google_error=<code> (0012, G8).
+// The code is the server's, the sentence the page's. An unknown code gets
+// the general sentence.
+const GOOGLE_ERRORS: Record<string, string> = {
+  invalid_state: "That Google sign-in did not match one this app started, or it was already used. Nothing changed. Connect again in Settings.",
+  stale_flow: "Google was connected or disconnected while that sign-in was open, so it was not used. Nothing changed. Connect again in Settings.",
+  access_denied: "Google sign-in was canceled. Nothing changed. You can connect again in Settings.",
+  no_permission_granted: "Google gave neither Gmail nor Calendar access, so nothing was connected. Connect again and leave at least one box checked on Google's page.",
+  code_exchange_failed: "Google did not complete the sign-in. Nothing changed. Try again in a moment.",
+  google_unavailable: "Google did not answer. Nothing changed. Try again in a moment.",
+  no_id_token: "Google did not say which account signed in, so nothing was connected. Try again in a moment.",
+  no_refresh_token: "Google did not give the app lasting access, so nothing was connected. Try again in a moment.",
+  id_token_audience: "Google answered for a different app, so nothing was connected. Check the Google client in docs/google.md.",
+  id_token_issuer: "The sign-in answer did not come from Google, so nothing was connected. Try again in a moment.",
+  id_token_expired: "The Google sign-in answer was too old, so nothing was connected. Check this computer's clock, then try again.",
+  id_token_nonce: "The Google sign-in answer did not match the one this app asked for, so nothing was connected. Connect again in Settings.",
+  id_token_invalid: "Google sent a sign-in answer the app could not read, so nothing was connected. Try again in a moment.",
+  email_unverified: "That Google account has no verified email address, so nothing was connected. Verify it with Google, or use another account.",
+  google_error: "Google ended the sign-in with an error. Nothing changed. Try again in a moment.",
+  no_code: "Google came back without a sign-in code. Nothing changed. Connect again in Settings.",
+  google_not_configured: "This server has no Google client yet, so nothing was connected. docs/google.md says how to set one up.",
+  server_error: "The app could not finish the Google sign-in. Nothing changed. Try again in a moment.",
+};
+
+export const googleErrorSentence = (code: string) => GOOGLE_ERRORS[code] ?? "The Google sign-in did not finish. Nothing changed. Try again in Settings.";
+
+// Where a sign-in sent the browser back: the ChatGPT sign-in to
+// /?signedIn=chatgpt or /?signInError=<code> (0010), Google to
+// /?connected=google or /?google_error=<code> (0012, G8). Answers the
+// sentence to show and the query without those keys, or null.
+export function signInReturn(params: URLSearchParams): { kind: "info" | "error"; text: string; rest: string } | null {
+  const chatgptFailed = params.get("signInError");
+  const googleFailed = params.get("google_error");
+  const text =
+    chatgptFailed !== null
+      ? signInErrorSentence(chatgptFailed)
+      : googleFailed !== null
+        ? googleErrorSentence(googleFailed)
+        : params.get("signedIn") === "chatgpt"
+          ? "Signed in with ChatGPT. Settings shows it under Model provider."
+          : params.get("connected") === "google"
+            ? "Connected Google. Settings lists what the assistant may use."
+            : null;
+  if (text === null) return null;
+  const rest = new URLSearchParams(params);
+  for (const key of ["signedIn", "connected", "signInError", "google_error"]) rest.delete(key);
+  return { kind: chatgptFailed !== null || googleFailed !== null ? "error" : "info", text, rest: rest.toString() };
+}
+
+
 // What went wrong, as a plain sentence that says nothing was saved. Never
 // shows a raw response body.
 export function errorSentence(e: unknown): string {
@@ -128,9 +178,14 @@ export function errorSentence(e: unknown): string {
     // Undo refused because a later action depends on this one. The
     // server's sentence says why.
     if (code === "undo_blocked" && typeof e.body.message === "string" && e.body.message.trim() !== "") return e.body.message.trim();
+    // The Google connection moved since the page read it (0012, G2). The
+    // reload after every action shows the current one.
+    if (code === "google_stale") return "The Google connection changed since it was shown. Nothing changed. Settings now shows the current connection.";
     // Sprint 10's settings and sign-in refusals carry their own plain
     // sentence, which already says what was changed (0010).
-    if (code && SERVER_SENTENCE_CODES.has(code) && typeof e.body.message === "string" && e.body.message.trim() !== "") return e.body.message.trim();
+    // So do Google's refusals (0012, G18), a connect from an address
+    // Google cannot return to, and a Google change still in progress.
+    if (code && (SERVER_SENTENCE_CODES.has(code) || code.startsWith("google_")) && typeof e.body.message === "string" && e.body.message.trim() !== "") return e.body.message.trim();
     if (code === "case_deleted") return "The case was deleted in another tab or window. Nothing was saved. The empty case is loaded.";
     if (code === "stale_edit" || e.status === 409) return "This changed since it was shown. Nothing was saved. The current version is loaded.";
     if (code === "busy") return "The app is busy with another change. Nothing was saved. Try again in a moment.";
