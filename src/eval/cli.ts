@@ -25,12 +25,22 @@
 //   --chat-effort <minimal|low>  reasoning effort for the agent (default low)
 //   --record-chat  write each live agent reply as a recording in
 //                  fixtures/recordings/chat/. For the coordinator's live runs.
+//   --provider <meta|chatgpt>  the live provider (default meta, 0010). meta
+//                  uses MODEL_API_KEY. chatgpt uses the ChatGPT connection
+//                  saved by the app (sign in in the app first), from the
+//                  settings file beside APP_DB. The spend guard still
+//                  prices tokens at the Meta rates: ChatGPT plan usage has
+//                  no per-token price.
+//   --model <id>   the model on that provider. meta: muse-spark-1.3 (default)
+//                  or muse-wonder-1.0. chatgpt: a model the saved connection
+//                  lists (default: the app's choice for that connection).
 //
 // The spend limit covers the whole command. The D2 calls get what the
 // extraction runs left, and the D3 call what the D2 calls left.
 //
 // Exit codes: 0 target met, 1 extraction target missed or S8 failed, 2 bad
-// usage or MODEL_API_KEY missing, 3 stopped by the spend guard. The D2 and
+// usage, MODEL_API_KEY missing or no ChatGPT connection, 3 stopped by the
+// spend guard. The D2 and
 // D3 calls have no pass criterion yet. Their reports state the rates.
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -47,10 +57,17 @@ import { formatReplySummary, runReplyEval, type ReplyEvalReport } from "./reply-
 import { formatChatSummary, loadChatScripts, runChatEval } from "./chat-eval.ts";
 import { RecordedChatClient, RecordingChatClient } from "../agent/recorded.ts";
 import type { ToolModelClient } from "../model/responses.ts";
+import { ChatGptAuth } from "../model/providers/chatgpt-auth.ts";
+import { ChatGptResponsesClient } from "../model/providers/chatgpt-client.ts";
+import { META_MODELS, chatGptModel, modelOptions } from "../model/providers/models.ts";
+import { SecretsFileError, SecretsStore, appSecretsPath } from "../model/providers/secrets.ts";
+import type { FetchLike } from "../model/providers/oidc.ts";
 
 export type CliDeps = {
   createClient?: (apiKey: string) => ModelClient;
   createChatClient?: (apiKey: string) => ToolModelClient;
+  // For tests of --provider chatgpt: the fetch the ChatGPT client uses.
+  chatGptFetch?: FetchLike;
   log?: (line: string) => void;
   error?: (line: string) => void;
   now?: () => string;
@@ -75,6 +92,8 @@ export async function main(argv: string[], env: Record<string, string | undefine
     "chat-script"?: string;
     "chat-effort"?: string;
     "record-chat"?: boolean;
+    provider?: string;
+    model?: string;
   };
   try {
     ({ values } = parseArgs({
@@ -94,6 +113,8 @@ export async function main(argv: string[], env: Record<string, string | undefine
         "chat-script": { type: "string" },
         "chat-effort": { type: "string" },
         "record-chat": { type: "boolean" },
+        provider: { type: "string" },
+        model: { type: "string" },
       },
       strict: true,
       allowPositionals: false,
@@ -118,7 +139,31 @@ export async function main(argv: string[], env: Record<string, string | undefine
     error("--d3-effort must be minimal or low.");
     return 2;
   }
-  if (values.chat) return runChat(values, maxUsd, env, deps, log, error);
+  const provider = values.provider ?? "meta";
+  if (provider !== "meta" && provider !== "chatgpt") {
+    error("--provider must be meta or chatgpt.");
+    return 2;
+  }
+  if (provider === "chatgpt" && values.recorded) {
+    error("--provider chatgpt calls the live model. It cannot run with --recorded.");
+    return 2;
+  }
+  let chatGpt: ChatGptResponsesClient | null = null;
+  let evalModel = values.model ?? MODEL;
+  if (provider === "meta" && !META_MODELS.some((m) => m.id === evalModel)) {
+    error(`--model for meta must be one of ${META_MODELS.map((m) => m.id).join(", ")}.`);
+    return 2;
+  }
+  if (provider === "chatgpt") {
+    const made = chatGptClient(env, deps, values.model);
+    if (typeof made === "string") {
+      error(made);
+      return 2;
+    }
+    chatGpt = made.client;
+    evalModel = made.model;
+  }
+  if (values.chat) return runChat(values, maxUsd, env, deps, log, error, chatGpt, evalModel);
 
   const d2Only = values["d2-only"] === true;
   const d3Only = values["d3-only"] === true;
@@ -127,7 +172,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
   const skipExtraction = d2Only || d3Only;
 
   const apiKey = env.MODEL_API_KEY;
-  if (!apiKey && !values.recorded) {
+  if (!apiKey && !values.recorded && !chatGpt) {
     error("MODEL_API_KEY is not set. Provide it in the environment, for example through varlock.");
     return 2;
   }
@@ -151,14 +196,14 @@ export async function main(argv: string[], env: Record<string, string | undefine
 
   const client = values.recorded
     ? RecordedModelClient.fromDirectory()
-    : (deps.createClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!);
+    : (chatGpt ?? (deps.createClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!));
   const report: EvalReport | null = skipExtraction
     ? null
     : await runEval({
         client,
         messages,
         maxUsd,
-        model: MODEL,
+        model: evalModel,
         fabricated,
         now,
         onProgress: log,
@@ -170,7 +215,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
       scenarios,
       effort: d2Effort.data,
       maxUsd: Math.max(0, maxUsd - (report?.costUsdTotal ?? 0)),
-      model: MODEL,
+      model: evalModel,
       now,
       onProgress: log,
     });
@@ -183,7 +228,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
       scenarios,
       effort: d3Effort.data,
       maxUsd: Math.max(0, maxUsd - (report?.costUsdTotal ?? 0) - (d2?.costUsdTotal ?? 0)),
-      model: MODEL,
+      model: evalModel,
       now,
       onProgress: log,
     });
@@ -212,6 +257,8 @@ async function runChat(
   deps: CliDeps,
   log: (line: string) => void,
   error: (line: string) => void,
+  chatGpt: ChatGptResponsesClient | null,
+  model: string,
 ): Promise<number> {
   const runs = values["chat-runs"] === undefined ? 3 : Number(values["chat-runs"]);
   if (!Number.isSafeInteger(runs) || runs < 1 || runs > 20) {
@@ -236,17 +283,19 @@ async function runChat(
   }
   const scripts = wanted ? all.filter((s) => wanted.includes(s.id)) : all;
   const apiKey = env.MODEL_API_KEY;
-  if (!apiKey && !values.recorded) {
+  if (!apiKey && !values.recorded && !chatGpt) {
     error("MODEL_API_KEY is not set. Provide it in the environment, for example through varlock.");
     return 2;
   }
   const now = deps.now ?? (() => new Date().toISOString());
-  const client = values.recorded ? RecordedModelClient.fromDirectory() : (deps.createClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!);
+  const client = values.recorded
+    ? RecordedModelClient.fromDirectory()
+    : (chatGpt ?? (deps.createClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!));
   const base = values.recorded
     ? RecordedChatClient.fromDirectory()
-    : (deps.createChatClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!);
+    : (chatGpt ?? (deps.createChatClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!));
   const chatClient = values["record-chat"] ? new RecordingChatClient(base) : base;
-  const report = await runChatEval({ chatClient, client, scripts, runs, effort: effort.data, model: MODEL, maxUsd, now, onProgress: log });
+  const report = await runChatEval({ chatClient, client, scripts, runs, effort: effort.data, model, maxUsd, now, onProgress: log });
   const out = path.resolve(PACKAGE_ROOT, values.out ?? path.join("eval-results", `eval-chat-${report.startedAt.replace(/[:.]/g, "-")}.json`));
   mkdirSync(path.dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify(report, null, 2) + "\n");
@@ -255,4 +304,31 @@ async function runChat(
   log(`Report: ${out}`);
   if (report.stoppedBySpendGuard) return 3;
   return report.personOnlyChanges === 0 && report.unsupportedStates === 0 ? 0 : 1;
+}
+
+// The ChatGPT client on the connection the app saved, or why there is none.
+function chatGptClient(
+  env: Record<string, string | undefined>,
+  deps: CliDeps,
+  wanted: string | undefined,
+): { client: ChatGptResponsesClient; model: string } | string {
+  const store = new SecretsStore(appSecretsPath(env as NodeJS.ProcessEnv));
+  let view: ReturnType<typeof ChatGptAuth.view>;
+  try {
+    view = ChatGptAuth.view(store.read());
+  } catch (err) {
+    if (err instanceof SecretsFileError) return err.message;
+    throw err;
+  }
+  if (!view.signedIn) return "No ChatGPT connection is saved. Start the app, sign in with ChatGPT in its settings, then run this again.";
+  if (!view.planUsage) return "The saved ChatGPT connection may not use the ChatGPT plan. Sign in with ChatGPT again in the app and allow plan usage.";
+  const settings = store.read();
+  const options = modelOptions(settings, "chatgpt");
+  if (wanted !== undefined && !options.some((m) => m.id === wanted)) {
+    return `--model for chatgpt must be a model the connection lists: ${options.map((m) => m.id).join(", ")}.`;
+  }
+  const model = wanted ?? chatGptModel(settings);
+  const port = Number(env.APP_PORT ?? 5180);
+  const auth = new ChatGptAuth({ store, port, fetch: deps.chatGptFetch });
+  return { client: new ChatGptResponsesClient({ auth, model: () => model, fetch: deps.chatGptFetch }), model };
 }
