@@ -5,7 +5,7 @@
 // checked against its cited evidence. The text also must not be clinical
 // and must not say the agent changed anything, because no tool can.
 import { parseMentions, weekdayOf, type Mention } from "../domain/datetime.ts";
-import { hasClinicalContent } from "../domain/scope.ts";
+import { hasClinicalContent, normalizeForScope } from "../domain/scope.ts";
 import { timeLabel } from "../slots/labels.ts";
 import type { SlotView } from "../slots/types.ts";
 import type { FactChip } from "./types.ts";
@@ -50,14 +50,17 @@ const ACTION_CLAIM =
   /\bI(?:'ve|’ve| have| just)?\s+(?:already\s+)?(?:accepted|approved|confirmed|canceled|cancelled|sent|rejected|declined|booked|rescheduled|moved|archived|deleted|answered|submitted)\b/i;
 
 export function claimsAction(text: string): boolean {
-  return ACTION_CLAIM.test(text.normalize("NFKC"));
+  return ACTION_CLAIM.test(normalizeForScope(text));
 }
 
+// Every check reads the text as the scope check does: compatibility forms
+// folded, so fullwidth digits are digits, and format characters removed.
 export function checkAnswer(text: string, facts: Fact[]): TextProblem[] {
   const problems: TextProblem[] = [];
-  if (text.trim() === "") return ["empty"];
+  const normalized = normalizeForScope(text);
+  if (normalized.trim() === "") return ["empty"];
   if (hasClinicalContent(text)) problems.push("clinical_content");
-  if (!grounded(text, facts) || text.length > MAX_ANSWER_CHARS) problems.push("ungrounded");
+  if (!grounded(normalized, facts) || text.length > MAX_ANSWER_CHARS) problems.push("ungrounded");
   if (claimsAction(text)) problems.push("claims_action");
   return problems;
 }

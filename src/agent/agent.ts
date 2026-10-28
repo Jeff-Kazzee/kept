@@ -10,7 +10,8 @@
 // 2. Saves the person's message, then calls the model with the last 20 chat
 //    messages and the tools. Each tool call is checked and run by code, and
 //    its cards go to the page at once.
-// 3. Checks the final text (G4): dates, weekdays and times against the
+// 3. Drops hidden control and direction characters from the final text,
+//    then checks it (G4): dates, weekdays and times against the
 //    turn's tool results, the scope, and no claim that the agent changed
 //    anything. One retry, then code replaces the text. Only checked or
 //    fixed text reaches the page or the store.
@@ -18,6 +19,7 @@
 // Every write runs in the command's case generation, so a turn that
 // crosses a Delete case is refused (G9).
 import { randomUUID } from "node:crypto";
+import { cleanText } from "../../mcp/sanitize.ts";
 import { DEFAULT_EXTRACTION_EFFORT, type Effort } from "../domain/claim.ts";
 import { OutOfScopeError, SCOPE_DECLINE, hasClinicalContent } from "../domain/scope.ts";
 import { InvalidRequestError } from "../intake/service.ts";
@@ -283,7 +285,7 @@ export class CaseAgent {
       }
 
       // G4 and G5 on the final text, with one retry.
-      finalText = outputText(output).trim();
+      finalText = cleanText(outputText(output)).trim();
       let problems = checkAnswer(finalText, facts);
       report.problems.push(problems);
       for (let retry = 0; problems.length > 0 && retry < this.#limits.answerRetries; retry++) {
@@ -296,7 +298,7 @@ export class CaseAgent {
         });
         output = await call("none");
         items.push(...output);
-        finalText = outputText(output).trim();
+        finalText = cleanText(outputText(output)).trim();
         problems = checkAnswer(finalText, facts);
         report.problems.push(problems);
       }
