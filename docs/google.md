@@ -32,7 +32,8 @@ The design and its reasons are in `docs/decisions/0012-google.md`.
   edits only events it created. Every change appears in the activity list
   with Undo, which reverses it at Google. If you changed the event in
   Google Calendar after the app wrote it, the app leaves your version and
-  says so.
+  says so. If you deleted it there, the app does not add it back until you
+  undo the removal or ask the assistant to put it back.
 
 The app asks Google only for the permissions you turn on: Gmail, Calendar,
 or both. It also asks for your email address, to show which account is

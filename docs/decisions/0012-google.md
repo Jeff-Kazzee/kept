@@ -141,7 +141,9 @@ the wiring in `server/main.ts`. Tests: `test/google.test.ts` and
   over HTTPS. The callback reads the `__Host-` name first. Cookies are not
   separated by port, so another page on the same host can still set the
   plain name. The server's state is the second factor, and the cookie is
-  not tied to pairing or a session, which sprint 8 removes. Each flow also
+  not tied to pairing or a session, which sprint 8 removes. The flow
+  records its scheme, and the callback reads only the cookie form the flow
+  started with. Each flow also
   keeps the connection version it started at. The callback refuses a flow
   whose version moved (`stale_flow`), and a disconnect drops every open
   flow.
@@ -164,29 +166,44 @@ the wiring in `server/main.ts`. Tests: `test/google.test.ts` and
   `http` is refused, because Google allows `http` only for loopback.
 - G10 (proposed). The access token is kept in memory only. A restart
   refreshes it.
-- G11 (proposed). Each event's id is `appt` and the base32hex of an HMAC
-  of the slot key under a random secret, 56 characters from a to v and 0
-  to 9, which Google accepts as a client id. The secret is kept in the
-  connection file per account and calendar, and kept after a disconnect.
-  The app looks its event up by that id, never by a list, and counts an
-  event as its own only when the id is the one it derives and the private
-  property names the same slot. An event that copies the property, or sits
-  at the app's id without it, is left alone (`google_not_app_event`).
-  Every patch and delete sends `If-Match` with the ETag, so a change at
-  Google wins.
+- G11 (proposed, coordinator decision in review round 2). Each event's id
+  is `appt` and the base32hex of a SHA-256 over a fixed app namespace, the
+  account's Google id (`sub`), the calendar id and the slot key: 56
+  characters from a to v and 0 to 9, which Google accepts as a client id.
+  No secret is stored, so the id is the same after the token file is lost
+  or the account reconnects. Only someone who can write to the calendar
+  could predict an id and take it, and the property check refuses such an
+  event. Each event carries three private properties: `apptAssistant=1`,
+  `apptSlotKey` and `apptAccount=<sub>`. An event is the app's only when all
+  three match. The app reads the slot's id first. Without a live event
+  there, it asks Google once by all three properties (at most 10 results)
+  and adopts a verified event under another id, so an event made under an
+  earlier id scheme is updated, not doubled. More than one verified event
+  is `google_duplicate`, and the person removes the extra one. An event
+  that copies only the first two properties, or sits at the app's id
+  without them, is left alone (`google_not_app_event`). Every patch and
+  delete sends `If-Match` with the ETag, and one without an ETag is refused
+  as `google_changed`, never sent. Every patch sends the three properties
+  again and its answer must pass the same check.
 - G12 (proposed). Creates are idempotent. A create that gets 409 reads the
   event at that id: a live one is taken as the slot's event and brought in
   line, so two syncs at once or a retry after a timed-out create make one
-  event, and a deleted one is put back with the new fields. Undo of a
-  create deletes the event, undo of an update patches the earlier fields
-  back, undo of a delete puts the event back under the same id. Each is
-  refused when the event changed at Google since the write
-  (`google_changed`), when it is not the app's, when the connection now
-  points at another account or calendar, or, for a delete, when the slot
-  already has a live event. An undo records its own activity entry with no
-  undo. Putting a deleted event back with a patch of its status follows
-  Google's 409 rule for taken ids, and is checked only against the fake
-  until Jeff's real connect test.
+  event. An event of the app's that was removed in Google Calendar is not
+  put back by a sync: the sync reports `google_changed` ("removed in
+  Google Calendar") and writes nothing. It comes back only through Undo or
+  `calendar_sync_slot` with `restore_removed: true`, which the agent sets
+  only after the person asks. Undo of a create deletes the event, undo of
+  an update patches the earlier fields back, undo of a delete puts the
+  event back (by patching the removed event, or by a new create at the
+  slot's id when Google no longer has it). Undo finds the event by the id
+  in its record and checks its properties, so a record from an earlier id
+  scheme still works. Each is refused when the event changed at Google
+  since the write (`google_changed`), when it is not the app's for that
+  slot, when the connection now points at another account or calendar,
+  or, for a delete, when the slot already has a live event. An undo
+  records its own activity entry with no undo. Putting a removed event
+  back with a patch of its status is checked only against the fake until
+  Jeff's real connect test.
 - G13 (proposed). A slot in state `change_proposed` keeps a tentative
   event. `offered` and `declined` get none, the same as `canceled`. A slot
   with no time gets an all-day event. A timed event lasts 60 minutes, the
@@ -216,18 +233,27 @@ the wiring in `server/main.ts`. Tests: `test/google.test.ts` and
   has a `kind`, matching sprint 9's U15: `calendar_event_added`,
   `calendar_event_updated`, `calendar_event_removed` for a calendar write
   or an undo that did one, `gmail_message_imported` for a new Gmail
-  import, and null for reads, no-ops and failed calls.
-- G21 (proposed). A Gmail import is recorded with `imported_from: "gmail"`
-  on its `message_imported` event, and the message view has
-  `importedFrom: "gmail"`, as sprint 9's U15 assumes. A paste has no such
-  field. It is not read from the message id, because a pasted message may
-  also have an id that starts with `gmail-`.
+  import (only when this call recorded the message), and null for reads,
+  no-ops and failed calls.
 - G20 (proposed). The Google tools take their own context
   (`GoogleToolContext`: the Google services, intake, the case, the
   activity log, the extraction effort) and return the fields of
   `ToolResult`. The coordinator adapts them to sprint 8's registry and
   passes sprint 8's case time zone to `GoogleCalendar` (`timeZone`
   option, America/Denver until then).
+- G21 (proposed). A Gmail import is recorded with `imported_from: "gmail"`
+  on its `message_imported` event, and the message view has
+  `importedFrom: "gmail"`, as sprint 9's U15 assumes. A paste has no such
+  field. It is not read from the message id, because a pasted message may
+  also have an id that starts with `gmail-`.
+- G22 (proposed). A token file that is not JSON or not of the current
+  shape, such as one from an earlier build, reads as no connection that
+  needs a reconnect, at the version it states. Status, connect and
+  disconnect still work. A connect writes a new file in its place, and a
+  disconnect writes a new empty file in its place and revokes the refresh
+  token when it can read one. No real token file exists yet, so no
+  migration is written. A link, a FIFO or a file of another user is still
+  refused.
 
 ## Review round 1 (Muse Wonder, xhigh, 2fc3063..3801bb3)
 
@@ -254,6 +280,25 @@ the wiring in `server/main.ts`. Tests: `test/google.test.ts` and
    reading a message is `google_invalid_response`.
 9. A subject-only email was refused as empty. The import shape is built
    first and checked for text and length.
+
+## Review round 2 (Muse Wonder, 3801bb3..141c1b0)
+
+Findings 1 to 9 were confirmed. New items:
+
+- 10. A token file of another shape broke status, connect and
+  disconnect. See G22.
+- 11, 12, 16, 17. The stored HMAC secret made ids unrecoverable after the
+  file was lost, and events under other ids were not found. Coordinator
+  decision, see G11 and G12.
+- 13. The restore patch did not resend the properties. Every patch sends
+  them, and its answer is checked.
+- 14. A missing ETag led to an unguarded write. It is now `google_changed`.
+- 15. A removed event was put back silently. See G12.
+- 18. The reader lock was not released on a read error. A try and finally
+  cancels on error and always releases it.
+- 19. The callback took either cookie form. It reads only the flow's own.
+- 20. The import kind was set when an existing message was extracted. It
+  is set only when this call recorded the message.
 
 ## Not done here
 
