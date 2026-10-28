@@ -131,6 +131,15 @@ describe("G11: pnpm eval:live --chat", () => {
     expect(s.stateChangesWithoutUser).toBe(0);
   });
 
+  it("stops at the spend guard with exit 3 and a report", async () => {
+    const { code, report, lines } = await runEval(false, ["--max-usd", "0.002", "--chat-script", "demo-story"]);
+    expect(code).toBe(3);
+    expect(report.stoppedBySpendGuard).toBe(true);
+    expect(report.scripts[0]!.runsCompleted).toBe(0);
+    expect(report.costUsdTotal).toBeGreaterThanOrEqual(0.002);
+    expect(lines.join("\n")).toContain("Chat eval stopped early: Spend guard reached");
+  });
+
   it("refuses bad options", async () => {
     const lines: string[] = [];
     const run = (args: string[]) => main(["--chat", ...args], { MODEL_API_KEY: "k" }, { log: () => {}, error: (l) => lines.push(l) });

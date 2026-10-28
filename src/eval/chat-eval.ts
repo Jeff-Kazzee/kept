@@ -291,6 +291,7 @@ export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalRep
           model: options.model,
           now: clock,
           messageIdFor: fixtureMessageIds(defaultMessageId),
+          rethrow: (err) => err instanceof SpendGuardError,
         });
         for (const [i, step] of script.steps.entries()) {
           if ("do" in step) {

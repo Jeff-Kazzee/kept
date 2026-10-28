@@ -486,8 +486,9 @@ export const AGENT_TOOLS: ToolSpec<unknown>[] = [
           throw err;
         }
       }
-      const q = view.question!;
-      const conflict = view.conflicts.find((c) => c.id === q.conflictId)!;
+      const q = view.question;
+      const conflict = q ? view.conflicts.find((c) => c.id === q.conflictId) : undefined;
+      if (!q || !conflict) return result({ asked: false, reason: "no_open_question", note: "No question is open." });
       const effectFacts = conflict.choices.flatMap((c) => c.effects.map((e) => ({ date: e.date, time: e.time })));
       return result(
         {

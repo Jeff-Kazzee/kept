@@ -88,6 +88,9 @@ export type AgentOptions = {
   newTurnId?: () => string;
   messageIdFor?: (text: string) => string;
   limits?: Partial<AgentLimits>;
+  // Errors the caller handles itself instead of a turn.error, such as the
+  // eval's spend guard.
+  rethrow?: (err: unknown) => boolean;
 };
 
 export type TurnInput = { text: string; expectedVersion: number; generation: number };
@@ -131,6 +134,7 @@ export class CaseAgent {
   readonly #newTurnId: () => string;
   readonly #messageIdFor: (text: string) => string;
   readonly #limits: AgentLimits;
+  readonly #rethrow: (err: unknown) => boolean;
   #busy = false;
 
   constructor(store: EventStore, services: ToolServices, client: ToolModelClient, options: AgentOptions = {}) {
@@ -144,6 +148,7 @@ export class CaseAgent {
     this.#newTurnId = options.newTurnId ?? (() => randomUUID());
     this.#messageIdFor = options.messageIdFor ?? defaultMessageId;
     this.#limits = { ...DEFAULT_LIMITS, ...options.limits };
+    this.#rethrow = options.rethrow ?? (() => false);
   }
 
   get modelLabel(): string {
@@ -159,8 +164,9 @@ export class CaseAgent {
     return { chatVersion: log.version, messages: log.messages };
   }
 
-  // Runs one turn and sends its events through `emit`. Never throws for a
-  // turn that failed: the failure is a turn.error event.
+  // Runs one turn and sends its events through `emit`. A turn that failed
+  // is a turn.error event. Only an error the `rethrow` option names is
+  // thrown.
   async turn(input: TurnInput, emit: Emit): Promise<TurnReport> {
     const turnId = this.#newTurnId();
     const report: TurnReport = { turnId, outcome: "refused", errorCode: null, tools: [], cards: [], problems: [], calls: [], modelCalls: 0 };
@@ -176,6 +182,7 @@ export class CaseAgent {
     try {
       await this.#store.inCase(() => this.#turn(turnId, input, emit, report), input.generation);
     } catch (err) {
+      if (this.#rethrow(err)) throw err;
       fail(errorCode(err));
     } finally {
       this.#busy = false;
