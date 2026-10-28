@@ -1,8 +1,9 @@
 // The hosted site's pages as a person sees them (0014, design item 6, and
-// 0015): the sign-in screen, the sidebar's account menu, Connections with
-// usage credits in place of a key, the model costs, Usage, Delete account
-// in Settings, and the usage stop in the chat. Rendered to static markup with the server renderer. Local
-// mode shows none of it.
+// 0015): the sign-in screen, Connections with usage credits in place of a
+// key, the model costs, Usage, Delete account in Settings, and the usage
+// stop in the chat. Rendered to static markup with the server renderer.
+// Local mode shows none of it. The account menu is opened and clicked in
+// ui/shell/AccountMenu.dom.test.ts.
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -15,8 +16,6 @@ import { DEFAULT_SETTINGS, type Settings } from "../contract.ts";
 import { errorSentence } from "../format.ts";
 import { ApiError } from "../api.ts";
 import { ConnectionsPage, SettingsPage, UsagePage } from "../pages/Settings.tsx";
-import { AccountMenu } from "../shell/AccountMenu.tsx";
-import { person } from "../shell/shell.ts";
 import { SignIn, judgePath } from "./SignIn.tsx";
 import { accountLabel, hostedSignInError, type SignedInSession } from "./session.ts";
 
@@ -63,27 +62,8 @@ describe("the hosted site", () => {
     expect(hostedSignInError("anything")).toMatch(/did not finish/);
   });
 
-  it("the sidebar's account menu names the account and its balance, with Settings, Usage, the theme and Sign out", () => {
-    const menu = html(createElement(AccountMenu, { mode: "hosted", who: person(session, null), session, compact: false, onOpen: () => {}, onSignOut: () => {} }));
-    expect(menu).toContain('aria-label="Account: Dana Demo, Balance $4.87"');
-    expect(menu).toContain(">DD</span>");
-    expect(menu).toContain("dana@example.com");
-    for (const item of ["Settings", "Usage", ">Theme</legend>", "Sign out"]) expect(menu).toContain(item);
+  it("the account label names a judge account for what it is", () => {
     expect(accountLabel({ kind: "judge", email: null, name: null })).toBe("Judge account");
-    // A judge account is named for what it is.
-    const judge: SignedInSession = { ...session, account: { kind: "judge", email: null, name: null } };
-    const judgeMenu = html(createElement(AccountMenu, { mode: "hosted", who: person(judge, null), session: judge, compact: false, onOpen: () => {}, onSignOut: () => {} }));
-    expect(judgeMenu).toContain("Judge access");
-  });
-
-  it("local mode's account menu has Settings and the theme, and no Usage, Sign out or balance", () => {
-    const menu = html(createElement(AccountMenu, { mode: "local", who: person(null, null), session: null, compact: false, onOpen: () => {}, onSignOut: () => {} }));
-    expect(menu).toContain('aria-label="Account: You, This computer"');
-    expect(menu).toContain("Settings");
-    expect(menu).toContain(">Theme</legend>");
-    expect(menu).not.toContain("Usage");
-    expect(menu).not.toContain("Sign out");
-    expect(menu).not.toContain("Balance");
   });
 
   it("Connections shows usage credits in place of a key and ChatGPT as not available here, Usage is its own page, and Settings has Delete account", () => {

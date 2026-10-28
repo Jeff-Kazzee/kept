@@ -520,7 +520,7 @@ function PendingItem({
 }
 
 // J12: the setup sentence, written by code, with a link to Connections.
-function SetupNotice({ text }: { text: string }) {
+export function SetupNotice({ text }: { text: string }) {
   const { openConnections } = useAgent();
   return (
     <div className="notice" role="alert">
@@ -541,7 +541,7 @@ function SetupNotice({ text }: { text: string }) {
 
 // 0014: a hosted site usage stop, written by code. Credits that ran out
 // link to Usage.
-function UsageNotice({ text, credits }: { text: string; credits: boolean }) {
+export function UsageNotice({ text, credits }: { text: string; credits: boolean }) {
   const { openUsage } = useAgent();
   return (
     <div className="notice" role="alert">

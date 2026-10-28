@@ -24,6 +24,10 @@ export const TABS: Array<{ id: PanelTab; label: string; icon: IconName }> = [
   { id: "activity", label: "Activity", icon: "activity" },
 ];
 
+// The name of a tab's button on the laptop's folded rail. The Schedule
+// button says how many things wait, as its badge shows (review R4).
+export const railLabel = (t: { id: PanelTab; label: string }, waiting: number) => `Open ${t.label}${t.id === "schedule" && waiting > 0 ? `, ${waiting} waiting for you` : ""}`;
+
 // A conflict that waits to be asked about, when no question is open. The
 // chat usually asks it. Without the chat, or when the chat cannot answer,
 // the Schedule tab offers it (0008, B19).

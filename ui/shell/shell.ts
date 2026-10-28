@@ -52,6 +52,44 @@ export const VIEW_TITLES: Record<View, string> = {
   usage: "Usage",
 };
 
+// Which parts of the shell are modal and which are inert (S5, S7, R1).
+// Below a laptop the schedule is a sheet: at the side on a tablet, at the
+// bottom on a phone, a modal dialog while open (review 2, B4). On a phone
+// the sidebar is a modal drawer the same way. While either is open every
+// other part is inert, the toasts included, so the keyboard stays inside.
+// A sidebar page covers the case, which is inert under it.
+export type ShellFlags = { laptop: boolean; phone: boolean; sheetOpen: boolean; drawerOpen: boolean; railed: boolean; view: View };
+
+export function shellModes(f: ShellFlags) {
+  const pageOpen = f.view !== "case";
+  const sheetModal = !f.laptop && f.sheetOpen && !pageOpen;
+  const drawerModal = f.phone && f.drawerOpen;
+  const panelShown = f.laptop ? !f.railed : f.sheetOpen;
+  const modal = sheetModal || drawerModal;
+  return {
+    pageOpen,
+    sheetModal,
+    drawerModal,
+    inert: {
+      sidebar: sheetModal || (f.phone && !f.drawerOpen),
+      topbar: modal,
+      chat: modal || pageOpen,
+      rail: pageOpen,
+      panel: (!f.laptop && !panelShown) || pageOpen || drawerModal,
+      page: drawerModal,
+      toasts: modal,
+    },
+  };
+}
+
+// What the page's openers do (S8): the composer's model pill and the setup
+// notice open Connections, and Open Usage opens Usage. The shell passes
+// its openView, so a test can pass a recorder.
+export const openersFor = (openView: (view: View) => void) => ({
+  openConnections: () => openView("connections"),
+  openUsage: () => openView("usage"),
+});
+
 // Where a toast's button goes (S8): Connections for the setup sentence
 // when no provider is ready (J12), Usage when the credit ran out (0014).
 export type ToastLink = "connections" | "usage";
