@@ -6,6 +6,7 @@
 // agent did shows as receipts with Undo. Every card renders from the live
 // case view.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Mark, RidgeScene } from "../components/Art.tsx";
 import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
 import type { AppState, FixtureScenario } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
@@ -31,6 +32,8 @@ export type ChatViewProps = {
   streaming: boolean;
   scripted: boolean;
   send: (text: string) => Promise<void>;
+  // Stops following the running turn.
+  onStop?: () => void;
   onShowSlot: (slotKey: string, from?: HTMLElement) => void;
   onLoadCalendar: (file: File) => Promise<void>;
   onLoadDemo: () => Promise<FixtureScenario["messages"][number] | null>;
@@ -40,7 +43,7 @@ export type ChatViewProps = {
 };
 
 export function ChatView(props: ChatViewProps) {
-  const { state, run, chat, streaming, scripted, send, onShowSlot, onLoadCalendar, onLoadDemo, fixtures, modelLabel = null } = props;
+  const { state, run, chat, streaming, scripted, send, onStop, onShowSlot, onLoadCalendar, onLoadDemo, fixtures, modelLabel = null } = props;
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
@@ -64,11 +67,23 @@ export function ChatView(props: ChatViewProps) {
   }, [lostTurn]);
 
   // Follow the newest content while the user is at the bottom.
-  const content = `${chat.messages.length}:${chat.pending?.text.length ?? 0}:${chat.pending?.cards.length ?? 0}:${chat.pending?.tools.length ?? 0}:${chat.pending?.status ?? ""}`;
+  // Scrolled up, new content shows a "New messages" pill instead.
+  const content = `${chat.messages.length}:${chat.pending?.text.length ?? 0}:${chat.pending?.cards.length ?? 0}:${chat.pending?.tools.length ?? 0}:${chat.pending?.actions.length ?? 0}:${chat.pending?.status ?? ""}`;
+  const [unseen, setUnseen] = useState(false);
   useLayoutEffect(() => {
     const el = threadRef.current;
-    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (pinned.current) el.scrollTop = el.scrollHeight;
+    else setUnseen(true);
   }, [content]);
+  const toBottom = () => {
+    const el = threadRef.current;
+    if (!el) return;
+    pinned.current = true;
+    setUnseen(false);
+    const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollTo({ top: el.scrollHeight, behavior: still ? "auto" : "smooth" });
+  };
 
   const submit = async (text: string) => {
     if (text.trim() === "" || streaming || unavailable) return;
@@ -106,6 +121,7 @@ export function ChatView(props: ChatViewProps) {
         onScroll={(e) => {
           const el = e.currentTarget;
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          if (pinned.current) setUnseen(false);
         }}
       >
         <div className="thread-inner">
@@ -148,6 +164,11 @@ export function ChatView(props: ChatViewProps) {
       </div>
       <div className="composer-wrap">
         <div className="composer-inner">
+          {unseen && (
+            <button type="button" className="new-pill" onClick={toBottom}>
+              <Icon name="arrowDown" size="sm" /> New messages
+            </button>
+          )}
           {!empty && suggestions.length > 0 && !streaming && (
             <div className="chips" aria-label="Suggestions">
               {suggestions.slice(0, 3).map((s) => (
@@ -169,6 +190,7 @@ export function ChatView(props: ChatViewProps) {
               openImport(draft);
             }}
             model={<ModelPicker fallback={modelLabel ?? "Recorded responses"} scripted={scripted} />}
+            onStop={onStop}
           />
           <p className="composer-hint">Enter sends. Shift+Enter adds a line. The assistant acts on your case, and every action has Undo.</p>
         </div>
@@ -198,11 +220,12 @@ export const STARTERS = ["What is confirmed?", "What should I bring?"];
 function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean; onPaste: () => void; onAsk: (q: string) => void; onDemo: () => void }) {
   return (
     <div className="welcome">
+      <RidgeScene />
       <span className="welcome-mark" aria-hidden="true">
-        <Icon name="calendar" />
+        <Mark size={24} />
       </span>
       <h2>What changed with your appointments?</h2>
-      <p>Paste a message from the office. The assistant reads it, keeps your schedule up to date and shows you each thing it did, with Undo.</p>
+      <p>Paste a message from the office. The assistant keeps your schedule up to date and shows each thing it did, with Undo.</p>
       {unavailable ? (
         <p className="notice">
           <Icon name="info" />
@@ -227,7 +250,7 @@ function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean
           <div className="demo-offer">
             <div className="stack-xs">
               <strong>New here?</strong>
-              <span className="small muted">Try the demo: a synthetic case with four messages from Lantern Hill Clinic and a calendar.</span>
+              <span className="small muted">Try the demo: four synthetic messages from Lantern Hill Clinic and a calendar.</span>
             </div>
             <button type="button" className="btn btn-primary" onClick={onDemo}>
               <Icon name="sparkle" size="sm" /> Try the demo
@@ -246,7 +269,15 @@ function AssistantHead({ scripted, at }: { scripted: boolean; at?: string }) {
         <Icon name="sparkle" size="sm" />
       </span>
       <span className="msg-who">Assistant</span>
-      <span className="model-tag">{scripted ? "Scripted demo reply, not a model" : "Model output"}</span>
+      {/* Only the scripted chat says scripted. Its full words stay for
+          screen readers and on hover. */}
+      {scripted ? (
+        <span className="model-tag" title="Scripted demo reply, not a model">
+          Scripted<span className="sr-only"> demo reply, not a model</span>
+        </span>
+      ) : (
+        <span className="model-tag">Model output</span>
+      )}
       {at && <time dateTime={at}>{shortTime(at)}</time>}
     </div>
   );
@@ -341,15 +372,16 @@ function Extras({
           {chips.map((c, i) => {
             const live = liveChip(c, state);
             return live.gone ? (
-              <button key={`${c.slotKey}:${i}`} type="button" className="chip fact-chip" data-chip-message={messageId} data-chip-slot={c.slotKey} disabled aria-label={`${c.label}: no longer on your schedule. At the time: ${c.stateLabel}.`}>
+              <button key={`${c.slotKey}:${i}`} type="button" className="chip fact-chip" data-chip-message={messageId} data-chip-slot={c.slotKey} disabled>
                 <span>{c.label}</span>
                 <small>No longer on your schedule</small>
                 <small className="muted">At the time: {c.stateLabel}</small>
               </button>
             ) : (
-              <button key={`${c.slotKey}:${i}`} type="button" className="chip fact-chip" data-chip-message={messageId} data-chip-slot={c.slotKey} onClick={(e) => onShowSlot(c.slotKey, e.currentTarget)} aria-label={`${live.label}: ${live.stateLabel}. Show in schedule.`}>
+              <button key={`${c.slotKey}:${i}`} type="button" className="chip fact-chip" data-chip-message={messageId} data-chip-slot={c.slotKey} onClick={(e) => onShowSlot(c.slotKey, e.currentTarget)}>
                 <span>{live.label}</span>
                 <small>{live.stateLabel}</small>
+                <span className="sr-only">Show in schedule.</span>
                 {live.stateLabel !== c.stateLabel && <small className="muted">At the time: {c.stateLabel}</small>}
               </button>
             );
@@ -449,7 +481,13 @@ function PendingItem({
           </>
         )}
         <Extras messageId={PENDING_MESSAGE} fresh cards={turn.cards} chips={turn.chips} actions={turn.actions} state={state} run={run} onShowSlot={onShowSlot} />
-        {err && err.code !== "out_of_scope" && !fixed && (
+        {err?.code === "stopped" && (
+          <p className="notice" role="status">
+            <Icon name="stop" />
+            <span>{turnErrorText(err)}</span>
+          </p>
+        )}
+        {err && err.code !== "out_of_scope" && err.code !== "stopped" && !fixed && (
           <div className="turn-error" role="alert">
             <Icon name="alert" />
             <div className="stack-sm">
@@ -556,6 +594,9 @@ export function liveChip(chip: FactChip, state: Pick<AppState, "case" | "records
 // plain sentence. A code with no message gets one here.
 export function turnErrorText(err: { code: string; message: string }): string {
   const base = err.message.trim();
+  // A stopped turn may still be saved by the server, so it does not say
+  // that nothing was.
+  if (err.code === "stopped") return base;
   if (base !== "") return err.code === "ungrounded" || base.includes("Nothing was saved") ? base : `${base} Nothing was saved.`;
   switch (err.code) {
     case "case_deleted":

@@ -38,6 +38,7 @@ export function Composer({
   onLoadCalendar,
   onAddOfficeMessage,
   model = null,
+  onStop,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -49,6 +50,8 @@ export function Composer({
   onAddOfficeMessage: () => void;
   // The model and provider indicator with its picker.
   model?: ReactNode;
+  // While a turn runs, the send button becomes Stop.
+  onStop?: () => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const menuId = useId();
@@ -140,9 +143,15 @@ export function Composer({
           </div>
         </div>
         {model}
-        <button type="submit" className="send-btn" disabled={disabled || busy || value.trim() === ""} aria-label="Send">
-          {busy ? <span className="spinner spinner-on-accent" aria-hidden="true" /> : <Icon name="send" />}
-        </button>
+        {busy && onStop ? (
+          <button type="button" className="send-btn is-stop" onClick={onStop} aria-label="Stop the answer" title="Stop">
+            <Icon name="stop" />
+          </button>
+        ) : (
+          <button type="submit" className="send-btn" disabled={disabled || busy || value.trim() === ""} aria-label="Send">
+            <Icon name="send" />
+          </button>
+        )}
       </div>
     </form>
   );

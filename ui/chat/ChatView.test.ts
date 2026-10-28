@@ -179,7 +179,8 @@ describe("chat view", () => {
       { state: live },
     );
     // Live label and state, with the old state as a muted line.
-    expect(html).toContain('aria-label="Thursday 11/12 10:30 AM: Canceled · office message. Show in schedule."');
+    expect(html).toContain('<span>Thursday 11/12 10:30 AM</span><small>Canceled · office message</small>');
+    expect(html).toContain('<span class="sr-only">Show in schedule.</span>');
     expect(html).toContain('<small class="muted">At the time: Confirmed · office message</small>');
     expect(html).not.toContain(">Confirmed · office message</small><small");
     // Archived and missing slots: disabled, said plainly.
@@ -294,7 +295,9 @@ describe("chat view", () => {
       { settings, settingsAvailable: true },
     );
     expect(html).toContain('<summary class="small">Worked through 1 step</summary>');
-    expect(html).toContain("<span>Meta · Muse Spark 1.3</span>");
+    expect(html).toContain('<span class="model-long">Meta · Muse Spark 1.3</span>');
+    // A phone shows the short form.
+    expect(html).toContain('<span class="model-short" aria-hidden="true">Meta · Spark 1.3</span>');
     expect(html).toContain("Muse Wonder<small>Higher cost</small>");
     expect(html).toMatch(/aria-pressed="true"[^>]*>.*Muse Spark 1\.3<small>Lower cost<\/small>/);
   });

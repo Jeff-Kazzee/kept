@@ -7,6 +7,7 @@ import type { DraftView, ReplyView, SentView, SuggestionView } from "../../src/r
 import { api, type AppState } from "../api.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
+import { CopyButton } from "../components/CopyButton.tsx";
 import { UntrustedBox } from "../components/Untrusted.tsx";
 import { shortTime } from "../format.ts";
 
@@ -79,6 +80,9 @@ export function SentCard({ sent }: { sent: SentView }) {
       {sent.edited && <p className="warn">{EDITED_LABEL}</p>}
       {sent.claims === "not_confirmed" && <p className="warn">No appointment change was recorded. You edited the text and did not confirm what it asserts.</p>}
       <pre className="reply-text">{sent.text}</pre>
+      <div>
+        <CopyButton text={sent.text} label="Copy the reply" />
+      </div>
     </section>
   );
 }
@@ -180,8 +184,14 @@ export function DraftCard({ draft, version, run }: { draft: DraftView; version: 
         </ul>
       </div>
 
+      <div className="field-head">
+        <label className="field-label" htmlFor={`${uid}-text`}>
+          Reply text
+        </label>
+        <CopyButton text={text} label="Copy the reply" />
+      </div>
       <label className="field" htmlFor={`${uid}-text`}>
-        <span>Reply text</span>
+        <span className="sr-only">Reply text</span>
         {draft.edited && <span className="warn">{EDITED_LABEL}</span>}
         <textarea id={`${uid}-text`} name="reply-text" className="textarea" value={text} onChange={(e) => setText(e.target.value)} rows={7} maxLength={2000} />
       </label>

@@ -8,6 +8,7 @@ import { realBackend, type AgentBackend } from "./agentApi.ts";
 import { AgentContext, type AgentState } from "./agent/AgentContext.tsx";
 import { ApiError, api, type AppState, type FixtureScenario } from "./api.ts";
 import type { Run } from "./components/ActionButton.tsx";
+import { Mark } from "./components/Art.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { DEFAULT_SETTINGS, deviceZone, type ActivityLog, type GoogleStatus, type Settings } from "./contract.ts";
 import { ChatView } from "./chat/ChatView.tsx";
@@ -162,12 +163,35 @@ export function App() {
   );
 
   if (!state) {
-    return (
-      <main className="loading" aria-busy={loadError === null}>
+    // Loading: a skeleton of the chat and the schedule. A failed load: the
+    // reason in a sentence and Try again.
+    return loadError ? (
+      <main className="loading">
         <span className="welcome-mark" aria-hidden="true">
-          <Icon name="calendar" />
+          <Mark size={24} />
         </span>
-        <p role={loadError ? "alert" : "status"}>{loadError ?? "Loading your case…"}</p>
+        <h1 className="loading-title">The app did not answer</h1>
+        <p role="alert">{loadError}</p>
+        <button type="button" className="btn btn-primary" onClick={() => void refresh()}>
+          Try again
+        </button>
+      </main>
+    ) : (
+      <main className="skeleton" aria-busy="true">
+        <p className="sr-only" role="status">
+          Loading your case…
+        </p>
+        <div className="skeleton-chat" aria-hidden="true">
+          <span className="skeleton-line w-40" />
+          <span className="skeleton-line w-80" />
+          <span className="skeleton-line w-60" />
+          <span className="skeleton-block" />
+        </div>
+        <div className="skeleton-panel" aria-hidden="true">
+          <span className="skeleton-line w-40" />
+          <span className="skeleton-block short" />
+          <span className="skeleton-block short" />
+        </div>
       </main>
     );
   }
@@ -223,7 +247,7 @@ function Shell({
     () => (fakesBuilt && scripted ? createMockTransport({ api, storage: sessionStorage, agent: backend.kind === "fake" ? (backend as FakeBackend) : null }) : realTransport),
     [scripted, backend],
   );
-  const { chat, send, streaming } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh());
+  const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh());
   const [sheetOpen, setSheetOpen] = useState(false);
   const [railed, setRailed] = useState(false);
   const [tab, setTab] = useState<PanelTab>("schedule");
@@ -231,6 +255,7 @@ function Shell({
   const [fixtures, setFixtures] = useState<FixtureScenario["messages"]>([]);
   const sheetToggle = useRef<HTMLButtonElement>(null);
   const laptop = useMedia(LAPTOP);
+  const online = useOnline();
   // Below a laptop the schedule is a sheet: at the side on a tablet, at the
   // bottom on a phone. It is a modal dialog while open (review 2, B4).
   const sheetModal = !laptop && sheetOpen;
@@ -345,7 +370,7 @@ function Shell({
         <header className="topbar" inert={sheetModal}>
           <div className="brand">
             <span className="brand-mark" aria-hidden="true">
-              <Icon name="calendar" size="sm" />
+              <Mark size={20} />
             </span>
             <h1>Appointment assistant</h1>
           </div>
@@ -365,6 +390,11 @@ function Shell({
             )}
           </button>
         </header>
+        {!online && (
+          <p className="offline" role="status">
+            <Icon name="wifiOff" size="sm" /> You are offline. Nothing can be saved until the connection is back.
+          </p>
+        )}
         <main className="main">
           <div className="chat-slot" inert={sheetModal}>
             <ChatView
@@ -374,6 +404,7 @@ function Shell({
               streaming={streaming}
               scripted={scripted}
               send={send}
+              onStop={stop}
               onShowSlot={showSlot}
               onLoadCalendar={loadCalendar}
               onLoadDemo={loadDemo}
@@ -404,7 +435,7 @@ function Shell({
             aria-modal={sheetModal || undefined}
             inert={!laptop && !panelShown}
           >
-            {!laptop && <span className="sheet-handle" aria-hidden="true" />}
+            {!laptop && <SheetHandle onClose={closeSchedule} />}
             <SchedulePanel
               state={state}
               run={run}
@@ -429,5 +460,42 @@ function Shell({
         </div>
       </div>
     </AgentContext.Provider>
+  );
+}
+
+// True while the browser says it is online.
+function useOnline(): boolean {
+  const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
+  return online;
+}
+
+// The bottom sheet's handle: a tap or a downward drag closes the sheet.
+function SheetHandle({ onClose }: { onClose: () => void }) {
+  const start = useRef<number | null>(null);
+  return (
+    <button
+      type="button"
+      className="sheet-handle"
+      aria-label="Close the schedule"
+      onClick={onClose}
+      onPointerDown={(e) => {
+        start.current = e.clientY;
+      }}
+      onPointerUp={(e) => {
+        if (start.current !== null && e.clientY - start.current > 48) onClose();
+        start.current = null;
+      }}
+    >
+      <span aria-hidden="true" />
+    </button>
   );
 }

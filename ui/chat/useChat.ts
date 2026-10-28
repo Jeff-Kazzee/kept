@@ -1,6 +1,10 @@
 // The chat hook: loads the stored chat, sends a message and follows its
 // stream, then reads the stored chat again.
 import { useCallback, useEffect, useReducer, useRef } from "react";
+
+// Shown when the user stops following a turn. The server may still finish
+// and save it, and the chat is read again either way.
+export const STOPPED_TEXT = "You stopped this answer. The app may still save what it finished.";
 import { errorSentence } from "../format.ts";
 import { chatReducer, initialChat } from "./state.ts";
 import type { ChatTransport } from "./types.ts";
@@ -30,18 +34,24 @@ export function useChat(transport: ChatTransport, reloadKey: string, onTurnEnd: 
     if (!streamingRef.current) void load();
   }, [load, reloadKey]);
 
+  const controller = useRef<AbortController | null>(null);
   const send = useCallback(
     async (text: string): Promise<void> => {
       dispatch({ type: "start", text, at: new Date().toISOString() });
+      const abort = new AbortController();
+      controller.current = abort;
       try {
         await transport.send(text, versionRef.current, (event) => {
+          if (abort.signal.aborted) return;
           dispatch({ type: "event", event });
           // A card or an action names something a tool just wrote.
           if (event.event === "card" || event.event === "action") onCard();
-        });
+        }, abort.signal);
       } catch (e) {
-        dispatch({ type: "failed", code: "request_failed", message: errorSentence(e) });
+        if (abort.signal.aborted) dispatch({ type: "failed", code: "stopped", message: STOPPED_TEXT });
+        else dispatch({ type: "failed", code: "request_failed", message: errorSentence(e) });
       }
+      controller.current = null;
       let log = null;
       try {
         log = await transport.load();
@@ -55,5 +65,7 @@ export function useChat(transport: ChatTransport, reloadKey: string, onTurnEnd: 
   );
 
   const dismiss = useCallback(() => dispatch({ type: "dismiss" }), []);
-  return { chat, send, streaming, dismiss };
+  // Stops following the running turn. The page then reads the chat again.
+  const stop = useCallback(() => controller.current?.abort(), []);
+  return { chat, send, streaming, dismiss, stop };
 }

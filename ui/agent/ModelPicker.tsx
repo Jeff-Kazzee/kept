@@ -21,6 +21,9 @@ export function modelLabel(s: Settings): string | null {
   return model ? `${PROVIDER_SHORT[s.provider]} · ${model.label}` : PROVIDER_SHORT[s.provider];
 }
 
+// The short form a phone shows: "Meta · Spark 1.3".
+export const shortModelLabel = (label: string) => label.replace(/\bMuse /, "").replace(/ \(sample connection\)/, "");
+
 // `fallback` names what answers when the build has no settings route or no
 // provider is set, such as "Recorded responses".
 export function ModelPicker({ fallback, scripted = false }: { fallback: string; scripted?: boolean }) {
@@ -55,7 +58,10 @@ export function ModelPicker({ fallback, scripted = false }: { fallback: string; 
         onClick={() => menu.setOpen((o) => !o)}
       >
         <Icon name="sparkle" size="sm" />
-        <span>{label}</span>
+        <span className="model-long">{label}</span>
+        <span className="model-short" aria-hidden="true">
+          {shortModelLabel(chosen ?? fallback)}
+        </span>
         <Icon name="chevronDown" size="sm" />
       </button>
       <div ref={menu.menuRef} id={id} className="menu menu-wide" hidden={!menu.open}>

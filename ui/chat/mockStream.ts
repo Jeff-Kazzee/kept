@@ -93,9 +93,13 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
       persist();
       return structuredClone(log);
     },
-    async send(text, expectedVersion, onEvent) {
+    async send(text, expectedVersion, onEvent, signal) {
       const turnId = nextId("turn");
-      const emit = (e: ChatEvent) => onEvent(e);
+      // A stopped turn stops sending events, as a closed stream would.
+      const emit = (e: ChatEvent) => {
+        if (signal?.aborted) throw new DOMException("Stopped", "AbortError");
+        onEvent(e);
+      };
       // A turn refused before it starts sends only turn.error (0007, C4).
       if (expectedVersion !== log.chatVersion) {
         emit({ event: "turn.error", data: { turnId, code: "stale_edit", message: "The chat changed in another tab. It is reloaded. Your message was not sent. Nothing was saved." } });
@@ -217,7 +221,7 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
               ? view.status === "manual_entry_needed"
                 ? "I could not read facts from this message. You can enter them by hand below."
                 : "I read the message. It has no appointment facts."
-              : `I read the message from ${view.message.from} and accepted ${accepted} fact${accepted === 1 ? "" : "s"}. Each one is below with its quote and Undo.`,
+              : `I read the message from ${view.message.from} and accepted ${accepted} fact${accepted === 1 ? "" : "s"}.`,
         };
       };
 
