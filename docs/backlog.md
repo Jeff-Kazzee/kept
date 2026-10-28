@@ -51,6 +51,11 @@ Rules:
 | 8 | Failure testing | All | Oct 30 to 31 | Planned |
 | 9 | Submission build | All | Nov 1 to 3 | Planned |
 
+On 2026-10-28 the plan changed to an agent-first app: sprint 8 is the
+agent-first back end and time zone, sprint 9 the polished agent UI
+(`sprint/09-polish`, in review, `docs/decisions/0011-ui-polish.md`) and
+sprint 10 model providers and sign-in.
+
 Milestone checkpoint: Oct 31, after sprint 2. If sprint 2 is not merged by
 then, cut the MCP slice in this order: `propose_change`, then the annotate
 tier. Read-only MCP is the floor.

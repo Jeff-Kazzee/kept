@@ -142,8 +142,9 @@ See `docs/decisions/0001-stack.md` for the stack and dependency checks,
 checklist and Delete case, `docs/decisions/0006-mcp-app.md` for agent
 access in the app, `docs/decisions/0007-case-agent.md` for the case
 agent and the chat contract, `docs/decisions/0008-web-app.md` for the
-web app, and `docs/decisions/0009-agent-first.md` for the agent that acts,
-the activity log and the case time zone. `docs/diagrams.md` shows the slot states and the agent change
+web app, `docs/decisions/0009-agent-first.md` for the agent that acts,
+the activity log and the case time zone, and
+`docs/decisions/0011-ui-polish.md` for the agent UI. `docs/diagrams.md` shows the slot states and the agent change
 flow.
 
 ## Commands
@@ -162,9 +163,13 @@ pnpm scan:secrets  # the model API key in the repository, see "What the secret s
 
 With `pnpm dev`, add `?mockchat=1` to the page address for the scripted
 chat, which plays the demo through the existing routes with no model. Its
-replies are labeled "Scripted demo reply, not a model". The production
-build (`pnpm build`, `pnpm start`) leaves it out and ignores the
-parameter.
+replies are labeled "Scripted demo reply, not a model". It also turns on a
+development fake of the settings, activity, sign-in and Google routes, so
+receipts, Undo and Settings work before their back ends exist
+(`docs/decisions/0011-ui-polish.md`). The production build (`pnpm build`,
+`pnpm start`) leaves both out and ignores the parameter.
+`APP_UI_FAKES=1 pnpm build` makes a check build with them, for a browser
+check of the minified bundle. Never ship that build.
 
 To reach the app through a private proxy on the same computer, such as
 Tailscale serve, list its host names in `APP_ALLOWED_HOSTS`
