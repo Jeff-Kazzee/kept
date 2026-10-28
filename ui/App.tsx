@@ -368,7 +368,9 @@ function Shell({
 
   const waiting = waitingCount(state);
   // What the composer's indicator says when no provider is picked.
-  const modelLabel = scripted ? "Scripted demo, no model" : settings ? "No model set" : state.mode === "live" ? "Live model" : "Recorded responses";
+  // A server without the provider routes (sprint 8 alone) answers with the
+  // live model or recorded responses, so the label says which.
+  const modelLabel = scripted ? "Scripted demo, no model" : settings?.providersInBuild ? "No model set" : state.mode === "live" ? "Live model" : "Recorded responses";
 
   const agent: AgentState = {
     backend,
