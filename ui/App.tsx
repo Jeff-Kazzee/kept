@@ -17,7 +17,7 @@ import {
   type MessageView,
   type RecordView,
 } from "./api.ts";
-import { GrantPanel, ProposalCard, RecordNotes, useLiveRefresh } from "./AgentPanels.tsx";
+import { GrantPanel, ProposalCard, RecordNotes, UntrustedText, useLiveRefresh } from "./AgentPanels.tsx";
 import { ReplyPanel, shortTime } from "./ReplyPanel.tsx";
 
 type Run = (action: () => Promise<unknown>) => Promise<void>;
@@ -450,13 +450,21 @@ export function SlotsPanel({ state, run, initialShowArchived = false }: { state:
 // The quote of the evidence that set a slot's state, so the state and its
 // words are on screen together.
 function StateQuote({ id, state }: { id: string | null; state: AppState }) {
-  const quote = id ? state.evidence.find((e) => e.id === id)?.claim.quote : null;
-  if (!id || !quote) return null;
+  const item = id ? state.evidence.find((e) => e.id === id) : undefined;
+  const quote = item?.claim.quote;
+  if (!id || !item || !quote) return null;
+  if (item.origin === "agent") return <AgentQuote item={item} />;
   return (
     <div className="quote">
       “{quote}” <code>{id}</code>
     </div>
   );
+}
+
+// The quote of a confirmed agent report is the agent's own statement, so it
+// stays labeled as untrusted text wherever it shows.
+function AgentQuote({ item }: { item: EvidenceView }) {
+  return <UntrustedText label={`${item.id} · words from ${item.claim.agent_name ?? "an agent"}`} text={item.claim.quote ?? ""} />;
 }
 
 // SP5.3: the office's requests, each with its quote and source. Built by
@@ -580,7 +588,7 @@ export function SourceQuote({ id, state }: { id: string; state: AppState }) {
       <div>
         {c.claim_type} · {slotText(c.slot)} · sender kind {c.sender_kind}
       </div>
-      {c.quote ? <pre>“{c.quote}”</pre> : <div>No quote.</div>}
+      {c.quote ? item.origin === "agent" ? <AgentQuote item={item} /> : <pre>“{c.quote}”</pre> : <div>No quote.</div>}
     </div>
   );
 }
@@ -653,7 +661,11 @@ function ConflictCard({ conflict, state, run }: { conflict: ConflictView; state:
       </div>
       <p>{conflict.summary}</p>
       {conflict.archivedSlotKeys.length > 0 && (
-        <p className="warn">Not asked while {conflict.archivedSlotKeys.join(" and ")} is archived. Undo the archive to answer it.</p>
+        <p className="warn">
+          Not asked while{" "}
+          {conflict.archivedSlotKeys.map((k) => state.case.slots.find((x) => x.key === k)?.label ?? k).join(" and ")}{" "}
+          {conflict.archivedSlotKeys.length > 1 ? "are" : "is"} archived. Undo the archive to answer it.
+        </p>
       )}
       <div className="label">Sources ({conflict.evidenceIds.length})</div>
       <div className="sources">
@@ -864,7 +876,7 @@ export function EvidenceCard({
         <strong>{c.claim_type}</strong> · {slotText(c.slot)}
         {c.request_item && ` · ${c.request_item}`}
       </div>
-      {c.quote && <pre>“{c.quote}”</pre>}
+      {c.quote && (item.origin === "agent" ? <AgentQuote item={item} /> : <pre>“{c.quote}”</pre>)}
       <div>
         Source: {c.source_type.replaceAll("_", " ")} ·{" "}
         <strong>sender kind: {c.sender_kind}</strong>

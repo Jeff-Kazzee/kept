@@ -183,11 +183,11 @@ export function GrantPanel({ grants, run }: { grants: GrantInfo[]; run: Run }) {
       <form onSubmit={submit} className="card">
         <div className="label">Create a grant</div>
         <label>
-          Name <input value={name} onChange={(e) => setName(e.target.value)} required minLength={1} maxLength={60} aria-label="Grant name" />
+          Name <input name="grant-name" value={name} onChange={(e) => setName(e.target.value)} required minLength={1} maxLength={60} aria-label="Grant name" />
         </label>
         <label>
           Tier{" "}
-          <select value={tier} onChange={(e) => setTier(e.target.value as Tier)} aria-label="Grant tier">
+          <select name="grant-tier" value={tier} onChange={(e) => setTier(e.target.value as Tier)} aria-label="Grant tier">
             {(Object.keys(TIER_TEXT) as Tier[]).map((t) => (
               <option key={t} value={t}>
                 {TIER_TEXT[t]}

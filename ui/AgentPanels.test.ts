@@ -99,6 +99,18 @@ describe("sprint 6 panels", () => {
     expect(activeArchive(s.records.find((r) => r.id === THU))).toBe(2);
   });
 
+  it("a confirmed agent report shows its statement as untrusted text in the slot list", async () => {
+    const { state, records } = await caseState();
+    const p = (await state()).proposals[0]!;
+    records.confirmProposal(p.id, p.version);
+    const html = renderToStaticMarkup(createElement(SlotsPanel, { state: await state(), run }));
+    expect(html).toContain("Confirmed · reported by you through Phone helper");
+    expect(html).toContain(
+      `<div class="untrusted"><div class="label">${p.id}-1 · words from Phone helper. Untrusted text, shown as data.</div><pre>Dana says the office confirmed Monday by phone.</pre></div>`,
+    );
+    expect(html).not.toContain("“Dana says");
+  });
+
   it("times show in America/Denver across the 2026-11-01 change", () => {
     expect(denverTime("2026-11-01T07:30:00.000Z")).toBe("2026-11-01 01:30 MDT");
     expect(denverTime("2026-11-01T08:30:00.000Z")).toBe("2026-11-01 01:30 MST");
