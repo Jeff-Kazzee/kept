@@ -84,6 +84,13 @@ describe("G-g: token file for the stdio server", () => {
     expect(() => takeGrantToken({ APPT_GRANT_TOKEN_FILE: dir })).toThrow("not a regular file");
     expect(() => takeGrantToken({ APPT_GRANT_TOKEN_FILE: path.join(dir, "missing") })).toThrow("ENOENT");
     expect(() => takeGrantToken({})).toThrow(TokenSourceError);
+    // Review round 1, finding 8: a FIFO with no writer would block a plain
+    // open forever. It is refused at once.
+    const fifo = path.join(dir, "fifo");
+    expect(spawnSync("mkfifo", ["-m", "600", fifo]).status).toBe(0);
+    const started = Date.now();
+    expect(() => takeGrantToken({ APPT_GRANT_TOKEN_FILE: fifo })).toThrow("not a regular file");
+    expect(Date.now() - started).toBeLessThan(1000);
     for (const env of [{ APPT_GRANT_TOKEN_FILE: file, APPT_GRANT_TOKEN: token }, {}]) {
       try {
         takeGrantToken(env);

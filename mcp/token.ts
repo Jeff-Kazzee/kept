@@ -4,7 +4,7 @@
 // a regular file that only its owner can read, because anyone who can read
 // it can use the grant. Both variables are removed from the environment, so
 // nothing this process starts inherits them. No message names the token.
-import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 
 // A token is 48 characters. Anything much longer is not a token file.
 const MAX_FILE_BYTES = 1024;
@@ -16,7 +16,10 @@ export class TokenSourceError extends Error {
 function readTokenFile(file: string): string {
   let fd: number;
   try {
-    fd = openSync(file, "r");
+    // O_NONBLOCK, so a FIFO or a device at the path cannot hang the start.
+    // The checks below refuse anything but a regular file. On a regular
+    // file the flag changes nothing.
+    fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch (err) {
     throw new TokenSourceError(`Could not open the token file ${file}: ${(err as { code?: string }).code ?? "error"}.`);
   }
