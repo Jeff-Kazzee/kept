@@ -74,3 +74,12 @@ export async function apiPreamble(req: IncomingMessage, res: ServerResponse, app
   const generation = typeof header === "string" && /^\d{1,15}$/.test(header) ? Number(header) : undefined;
   return { body, generation };
 }
+
+const LOOPBACK = /^(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3})$/;
+
+// Hosted mode's view of the scheme (final review, finding 3): HTTPS only
+// when a proxy on this server says so. Tailscale serve and cloudflared
+// both connect from loopback and set X-Forwarded-Proto. A header from any
+// other socket, and the page's Origin, which any client can write, decide
+// nothing.
+export const trustedSecure = (req: IncomingMessage) => LOOPBACK.test(req.socket.remoteAddress ?? "") && headerOf(req)("x-forwarded-proto") === "https";

@@ -157,7 +157,9 @@ export class GoogleSignIn {
   }
 
   // The callback. Throws an OAuthError with a fixed code.
-  async finish(input: { state: string | null; code: string | null; error: string | null; cookie: string | null }): Promise<SignedIn> {
+  // `cookie` may list both cookie forms the browser sent. The flow
+  // finishes when any of them matches (final review, finding 3).
+  async finish(input: { state: string | null; code: string | null; error: string | null; cookie: string | null | Array<string | null> }): Promise<SignedIn> {
     if (!this.#client) throw new OAuthError("google_not_configured");
     this.#sweep();
     if (!input.state || input.state.length > 200) throw new OAuthError("invalid_state");
@@ -165,7 +167,8 @@ export class GoogleSignIn {
     const pending = this.#flows.get(key);
     if (!pending) throw new OAuthError("invalid_state");
     this.#flows.delete(key);
-    if (!input.cookie || !timingSafeEqual(sha256(input.cookie), pending.cookieHash)) throw new OAuthError("invalid_state");
+    const cookies = (Array.isArray(input.cookie) ? input.cookie : [input.cookie]).filter((c): c is string => typeof c === "string" && c.length > 0 && c.length <= 200);
+    if (!cookies.some((c) => timingSafeEqual(sha256(c), pending.cookieHash))) throw new OAuthError("invalid_state");
     if (input.error !== null) throw new OAuthError(input.error === "access_denied" ? "access_denied" : "google_error");
     if (!input.code || input.code.length > 2048) throw new OAuthError("no_code");
     const flow: Flow = { verifier: pending.verifier, nonce: pending.nonce, redirectUri: pending.redirectUri, features: { gmail: false, calendar: false }, calendarId: "primary", version: 0 };
