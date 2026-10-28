@@ -47,6 +47,7 @@ Rules:
 | 6 | MCP in the app and connect test | D5, part 2 | Oct 28 | Done (`2bc8384`), real client run open |
 | 7A | Case agent: chat tool loop on Muse Spark | Chat app | Oct 28 to 29 | Next |
 | 7B | Web app: chat and schedule UI, production build, mobile | Chat app | Oct 28 to 29 | Next, beside 7A |
+| 8 (agent-first) | Agent-first back end: actions, activity log, undo, case time zone | Chat app | Oct 28 | In review (`sprint/08-agent-first`) |
 | 8 | Failure testing | All | Oct 30 to 31 | Planned |
 | 9 | Submission build | All | Nov 1 to 3 | Planned |
 
@@ -386,6 +387,34 @@ Sprint 7B tasks (branch `sprint/07b-web-app`):
   `/api/chat` route.
 - [ ] Confirm or change the decisions in `docs/decisions/0008-web-app.md`
   (W1 to W9, P1 to P3, B1 to B23).
+
+## Sprint 8: agent-first back end
+
+Branch `sprint/08-agent-first`, decisions in
+`docs/decisions/0009-agent-first.md`. Jeff decided on 2026-10-28 that the
+agent does the work and the person undoes (J1 to J3, J5). Sprint 9 builds
+the UI and sprint 10 the model providers and sign-in, to the same
+contract.
+
+- [x] SP8A.1 One set of action tools for the in-app agent and the MCP
+  server, through one actions service with the app's checks and expected
+  versions. No tool approves a reply or deletes the case.
+- [x] SP8A.2 Activity log with a code-written entry per action, undo with
+  reversing events, and `undo_blocked` with a reason when a later action
+  depends on it. `GET /api/activity` and `POST /api/activity/:id/undo`.
+- [x] SP8A.3 Grants, tokens, tiers, proposals and pairing removed. Their
+  routes answer 404. Old grant and proposal events are skipped.
+- [x] SP8A.4 The case time zone in settings, `set_timezone`, `GET
+  /api/settings` and `PUT /api/settings/timezone`. No zone is built in
+  outside the demo fixtures. Tests in America/Denver, Asia/Tokyo and
+  Europe/London.
+- [x] SP8A.5 Chat stream `action` events and `ChatMessage.actions`. The
+  action-claim check reads the turn's activity entries.
+- [x] SP8A.6 Secret scan retargeted to `MODEL_API_KEY`.
+- [x] SP8A.7 Chat eval scripts updated for an agent that acts.
+- [ ] SP8A.8 Live chat eval and review. The coordinator runs them.
+- [ ] SP8A.9 The sprint 7B UI still reads grants and proposals from
+  `/api/state`. Sprint 9 replaces it.
 
 ## Sprint 8: failure testing
 

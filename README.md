@@ -64,19 +64,19 @@ in this repo is synthetic.
   fits." and cannot be approved.
 - The checklist lists what the office asked you to bring or do. It is
   built by code from the office requests you accepted, and each item shows
-  its quote and its source: "office message", "reported by you" or
-  "reported by you through <grant name>". Requests in the same words are
-  one item with every source.
+  its quote and its source: "office message", "reported by you" or "added
+  by the assistant". Requests in the same words are one item with every
+  source.
 - The case history lists every event of the case in order, including undo,
   with labels built by code.
 - Delete case is the only permanent deletion. It runs only from the app,
   after you type DELETE. It erases every message, claim, review, slot,
-  question, explanation, reply, note, tag and proposal of the case, the log
-  of agent calls and the rate-limit counters. It then rewrites the database
-  file and empties its WAL, so the removed text is gone from disk, not only
-  hidden. Grants stay, because they are app settings. Revoke them in the
-  app's grant screen or with `pnpm grant revoke`. An MCP server that has the file open keeps running
-  and finds no case. No MCP tool can delete a case. A command that started
+  question, explanation, reply, note and tag of the case, the activity log
+  and the log of agent calls. It then rewrites the database file and
+  empties its WAL, so the removed text is gone from disk, not only hidden.
+  Settings, such as the time zone, stay. An MCP server that has the file
+  open keeps running and finds no case. No agent or MCP tool can delete a
+  case. A command that started
   before the delete, such as a model call, a page opened earlier or an
   agent's call, saves nothing afterwards. If the app stops before the file
   is cleared, the app or the MCP server finishes clearing it at the next
@@ -85,52 +85,58 @@ in this repo is synthetic.
 ## D5: records and the MCP server
 
 - `src/records/` is the one domain service for appointment records: notes,
-  tags, archive, undo and changes proposed by agents. The app and the MCP
-  server both call it.
-- `src/grants/` holds grants and the `pnpm grant` command.
-- `mcp/` is the MCP server. It runs over stdio and opens no network port.
-  `scripts/mcp-stdio.sh` starts it with a token file, for a client that
-  runs it locally or through `ssh`.
-- The app's "Agent access (MCP)" panel creates, lists and revokes grants.
-  A new token is shown once.
-- Changes an agent proposes wait in the app's review queue beside the
-  extracted claims, labeled with the grant's name. Only you confirm or
-  reject them, in the app.
+  tags, archive and undo.
+- `src/actions/` is where every action on the case is defined, for you in
+  the app, the assistant and an external agent over MCP. Each one runs the
+  domain command with its checks and expected versions and writes an
+  activity entry you can undo (`docs/decisions/0009-agent-first.md`).
+- `mcp/` is the MCP server. It runs over stdio, opens no network port and
+  offers the same tools as the assistant, with the same rules.
+  `scripts/mcp-stdio.sh` starts it with `APP_DB`. There is no token or
+  grant: whoever can start it can already open the database file.
 - The open app checks every 2 seconds for changes by the MCP server or
   another tab and reloads the case view, so an agent's note shows without
   a restart.
 - Archive hides an appointment from the slot list, the question queue and
-  the reply panel. "Show archived" lists it with Undo.
-- `pnpm scan:secrets` checks the repository for grant tokens. See "What
-  the secret scan finds" below for exactly what it covers.
-- The app prints a pairing code in its terminal when it starts. A browser
-  enters it once and gets a session that lasts until the app restarts.
-  Every route of the app's web API, reads included, needs that session,
-  and every change must also come from the app's own page.
+  the reply panel. Undo brings it back.
+- `pnpm scan:secrets` checks the repository for the model API key. See
+  "What the secret scan finds" below for exactly what it covers.
+- The app has no pairing code. It answers only to its own host names and
+  takes a change only from its own page, and it is reachable only from this
+  computer and, through a private proxy, your own devices.
 
 ## The case agent (chat)
 
-- `src/agent/` is the agent: a tool loop on Muse Spark that reads the
-  case, imports messages you paste, explains a conflict, opens the next
-  question and drafts a reply. It never changes a slot. Every change is a
-  card you act on.
+- `src/agent/` is the agent: a tool loop on Muse Spark that works the case
+  for you. It imports messages you paste and accepts or rejects their
+  facts, answers the open question, archives, notes, tags, sets the time
+  zone, and starts or discards a reply draft. Each action shows in the
+  chat as it happens and in the activity log with Undo. Only you approve a
+  reply (the simulated send) and only you delete the case.
+- Code still enforces every rule: the quote and extraction checks, the
+  slot rules (a slot's state comes only from an office message or your own
+  report), expected versions, and the checks on every answer: each date,
+  weekday and time must come from the turn's tool results, the text must
+  stay administrative, and it may say the agent did something only when
+  the activity log shows it did. After one retry, code replaces an answer
+  that fails.
 - `POST /api/chat` answers with server-sent events and `GET /api/chat`
-  returns the chat. Both need the paired session.
-- Code checks every answer before you see it: each date, weekday and
-  time must come from the turn's tool results, the text must stay
-  administrative, and it must not say the agent changed anything. After
-  one retry, code replaces an answer that fails.
+  returns the chat.
+- Every time is in the case's time zone, which you or the assistant set.
+  Loading the demo sets America/Denver, the demo clinic's zone, as an
+  action you can undo.
 - The chat is saved with the case. Delete case erases it.
 
 See `docs/decisions/0001-stack.md` for the stack and dependency checks,
 `docs/decisions/0002-slot-states.md` for the slot rules,
 `docs/decisions/0003-reply-templates.md` for the reply rules, and
-`docs/decisions/0004-mcp-core.md` for records, grants and the MCP server,
+`docs/decisions/0004-mcp-core.md` for records and the MCP server,
 `docs/decisions/0005-saved-outcome.md` for the saved case, the
 checklist and Delete case, `docs/decisions/0006-mcp-app.md` for agent
 access in the app, `docs/decisions/0007-case-agent.md` for the case
-agent and the chat contract, and `docs/decisions/0008-web-app.md` for the
-web app. `docs/diagrams.md` shows the slot states and the agent change
+agent and the chat contract, `docs/decisions/0008-web-app.md` for the
+web app, and `docs/decisions/0009-agent-first.md` for the agent that acts,
+the activity log and the case time zone. `docs/diagrams.md` shows the slot states and the agent change
 flow.
 
 ## Commands
@@ -144,7 +150,7 @@ pnpm typecheck
 pnpm dev         # http://127.0.0.1:5180 with recorded model responses
 pnpm build       # production bundle in dist/ui, precompressed, budget checked
 pnpm start       # serves the production build on http://127.0.0.1:5180
-pnpm scan:secrets  # grant tokens in the repository, see "What the secret scan finds"
+pnpm scan:secrets  # the model API key in the repository, see "What the secret scan finds"
 ```
 
 With `pnpm dev`, add `?mockchat=1` to the page address for the scripted
@@ -198,9 +204,11 @@ location and sender kind match where the fixture states them.
 
 `--chat` runs only the chat eval: the scripted conversations in
 `fixtures/chat/`, three runs each (`--chat-runs`, `--chat-script`,
-`--chat-effort`). The report gives, per script, tools and cards against
-expected, grounding failures, declines, injection outcomes, state changes
-made without a user action (it exits 1 if any), latency, tokens and cost.
+`--chat-effort`). The report gives, per script, tools, actions and cards
+against expected, grounding failures, declines, injection outcomes,
+actions that cannot be undone, replies sent without you and slots whose
+state no office message or report of yours supports (it exits 1 if either
+of the last two happens), latency, tokens and cost.
 `--record-chat` writes each live answer as a recording in
 `fixtures/recordings/chat/`. `pnpm recording:key <request.json>` prints
 the key a request is recorded under.
@@ -213,80 +221,26 @@ analytics.
 
 ## Use your appointments from an agent (MCP)
 
-The MCP server lets an agent you already use read your appointment records
-and, if you allow it, add notes and propose changes. Nothing is shared until
-you create a grant. `docs/connect-agent.md` is the full guide, with the
-client entries for Grok Build, OpenCode and Claude Code and the connect
-test.
+The MCP server lets an agent you already use work your case with the same
+tools and rules as the in-app assistant. `docs/connect-agent.md` gives the
+one command for Grok Build, OpenCode and Claude Code.
 
-Run the agent with only the MCP tools. An agent that runs as your OS user
-and has a shell or file tools can read and change the app's files, its
-database included, whatever its grant allows. The app's paired session
-and its web API checks raise the bar, but a process with a shell can open
-the database file directly. The agent client's own tool permissions are the
-real control. `docs/connect-agent.md` gives the exact settings for each
-client.
+Run the agent with only the tools it needs. An agent that runs as your OS
+user and has a shell or file tools can read and change the app's files,
+its database included. The agent client's own tool permissions are the
+real control.
 
-1. Create a grant. Pick a name you will recognize and the lowest tier that
-   does the job. In the app, use "Agent access (MCP)". Or, on the app's
-   host:
-
-   ```sh
-   pnpm grant create --name "Laptop assistant" --tier read --token-file ~/.config/appointments/grant-token
-   ```
-
-   | Tier | The agent can |
-   |---|---|
-   | `read` | List appointments, read one appointment with its evidence and history, list open questions |
-   | `annotate` | Everything in `read`, plus add notes and set tags |
-   | `propose` | Everything in `annotate`, plus send proposed changes to your review queue |
-
-   A token is `appt_` and 43 more characters. The app shows it once. The
-   command writes it to the file, readable by you only, and does not print
-   it. Only its hash is stored. Treat it like a password. Do not paste it
-   into a chat, a screenshot or a file in this repository.
-
-2. Add the server to your MCP client's config as a local command. The
-   launcher reads the token file, by default
-   `~/.config/appointments/grant-token`, so no token is in the config or on
-   a command line:
-
-   ```json
-   {
-     "mcpServers": {
-       "appointments": {
-         "command": "/path/to/meta-hackathon-appointments/scripts/mcp-stdio.sh"
-       }
-     }
-   }
-   ```
-
-   From another machine, the command is
-   `ssh <host> /path/to/meta-hackathon-appointments/scripts/mcp-stdio.sh`.
-   The server can also read the token itself from `APPT_GRANT_TOKEN`, or a
-   file named by `APPT_GRANT_TOKEN_FILE`. It refuses a token file that other
-   users can read. It opens the app's event log (`data/app.sqlite`, or
-   `APP_DB` if you set it for the app). Use the same file as the app, or
-   revoking a grant will not reach the agent.
-
-3. To stop an agent, revoke its grant in the app, or with
-   `pnpm grant list` and `pnpm grant revoke <id>`. Its next call fails,
-   even if the client is still running.
-
-What an agent can never do, under any tier: confirm, cancel or change an
-appointment's state, date, time or place directly, contact an office, send
-or approve a reply, confirm its own proposals, delete the case, or manage
-grants. Notes, tags and proposals hold administrative content only. A
-clinical one is refused with the tool error `out_of_scope` and nothing is
-written. A proposed change waits in your review queue until you confirm it
-in the app. A confirmed change shows "reported by you through" the grant's
-name. Every call is logged in the case history with the grant name, the
-tool and the result.
+What an agent can never do: approve or send a reply, edit a reply's text,
+enter a fact by hand, delete the case, or set a slot's state from its own
+words. A slot's state comes only from an office message or your own
+report. Notes and tags hold administrative content only. A clinical one is
+refused with the tool error `out_of_scope` and nothing is written. Every
+action is in the activity log as "an external agent", with Undo, and every
+call is in the case history.
 
 Your agent's model provider may receive the case data the agent reads.
 Appointment times, places, notes and quotes from your messages go to that
-provider under its own terms, not this app's. Grant only what you are
-comfortable sharing with it.
+provider under its own terms, not this app's.
 
 Text from imported messages is returned to the agent only inside fields
 named `untrusted_quote` or `untrusted_text`, and the tool descriptions tell
@@ -305,7 +259,7 @@ checks the output, and you review what is left.
 | Explains a conflict | Every cited evidence id must exist and belong to the conflict. After two failures the conflict shows with its quotes and no explanation. | Read the sources beside it. |
 | Proposes the next question | The question must name an open conflict and no invented date. After two failures code uses a fixed wording. Code builds the answer choices. | Tap a choice. |
 | Picks a reply template and a slot | The template must fit the slot's state, and every field comes from the case, not the model. C1: when your note states a date or time, the picked slot must match it. The model may also answer that no template fits (`time_not_offered` or `template_not_allowed`), and you pick by hand. | Read back every field and approve. |
-| Answers in the chat and calls tools | No tool changes a slot. Imported text must be whole lines of your message, and the source fields the assistant suggests are marked. Every date, weekday and time in the answer must come from the turn's tool results, the answer must stay administrative and must not claim the agent changed anything. After one retry code replaces the answer. | Act on each card: review claims, answer the question, read back and approve the reply. |
+| Answers in the chat and acts on the case | Every action runs the app's own checks: imported text must be whole lines of your message, a claim it accepts must pass the quote and extraction checks again, an answer it gives may not set a slot's state, and every write states its expected version. Every date, weekday and time in the answer must come from the turn's tool results, the answer must stay administrative and may claim only the actions the activity log shows. After one retry code replaces the answer. | Undo any action from the activity log. Read back and approve a reply. |
 
 Slot states come only from accepted evidence by a fixed table of rules. No
 model output changes a slot. A schema-valid answer can still change the
@@ -316,12 +270,11 @@ did not state, or whose order is unknown, are never treated as known. The
 app raises a conflict instead. Health questions get a fixed decline and
 never reach a model.
 
-Agents reach the case only through the MCP server, and the same split
-applies. Code checks the grant on every call, writes the agent's name from
-the grant and not from the client, and sends every change to a slot to
-your review queue. Notes and tags are the only direct agent writes, and
-clinical text is refused there too. Every write states the version it
-expects, and a stale one writes nothing.
+Agents act through the same actions as you, and the same split applies.
+Code names the agent (the assistant, or an external agent over MCP), never
+the client. An agent's answer to a question that would set a slot's state
+is refused, and you answer it. Every write states the version it expects,
+and a stale one writes nothing.
 
 ## What the server cannot control
 
@@ -334,19 +287,15 @@ app's hands:
   `untrusted_quote` and `untrusted_text` tell it that message text is data,
   but a model can still follow an instruction hidden in a message. The
   server's own checks do not depend on the agent obeying the labels, so a
-  steered agent still cannot change a slot, send a reply, delete the case
-  or widen its grant through MCP.
+  steered agent still cannot send a reply, delete the case or set a slot's
+  state from its own words. It can accept or reject facts, archive or
+  note, and each of those is in the activity log for you to undo.
 - An agent with a shell or file tools on the app's host, or one that can
-  `ssh` to it, is not limited by its grant. It can open the database file
-  and change the app's other files. The paired session keeps it
-  out of the app's web API only while it cannot read the app's terminal.
-  Give agents only the MCP tools.
-- Anyone who holds the token can use the grant until you revoke it. The
-  token file must stay readable by you only. Revoking stops the next call,
-  not data already read.
-- The rate limit (60 calls a minute) and the access log in the case
-  history show what an agent did. They do not stop an agent that stays
-  under the limit from reading everything its tier allows.
+  `ssh` to it, is not limited by the MCP tools. It can open the database
+  file and change the app's other files. Give agents only the MCP tools.
+- The rate limit (60 calls a minute in each server process) and the
+  access log in the case history show what an agent did. They do not stop
+  an agent that stays under the limit.
 
 `docs/diagrams.md` shows the agent change flow.
 
@@ -358,18 +307,20 @@ ones included, the text of every commit and tag, and every file and folder
 name in every tree), and every ref name. That covers old versions, merge
 results and other branches, including session checkpoint refs.
 
-In each of those it finds:
+In each of those it finds, on one line:
 
-- A grant token, `appt_` and 43 base64url characters, on one line or split
-  across two adjacent lines at a line break.
-- The same token in hexadecimal, on one line.
-- A run of exactly 43 base64url characters with an upper-case letter, a
-  lower-case letter and a digit, the shape of a token made before tokens
-  had a prefix.
+- An assignment of `MODEL_API_KEY` with a value of at least 12
+  characters, as in an env file or a shell line. `MODEL_API_KEY=` with
+  nothing after it, as in `.env.schema`, a reference such as
+  `$MODEL_API_KEY` and a placeholder such as `<your key>` or a log tool's
+  `REDACTED` do not count. The value ends at a space, a quote or a
+  backslash.
+- A bearer token: `Bearer ` and at least 24 token characters with an
+  upper-case letter, a lower-case letter and a digit.
 
-It does not find a token in any other encoding (base64 of the token, URL
-encoding, UTF-16, compression or encryption), split into more than two
-parts or with other text between them, a hex or unprefixed token split
-across lines, or anything outside this repository: other clones, the
-database file, logs and screenshots elsewhere. It prints where a hit is,
-never the matched text, and exits 1 on any hit.
+The key's own shape is not known to the scan, so it does not find a bare
+key written without its name or `Bearer`, a key in another encoding (base64,
+URL encoding, UTF-16, compression or encryption) or split across lines, or
+anything outside this repository: other clones, `.env.local`, the database
+file, logs and screenshots elsewhere. It prints where a hit is, never the
+matched text, and exits 1 on any hit.
