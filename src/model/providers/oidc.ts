@@ -76,6 +76,7 @@ export class OpenAiIdentity {
   #keys: Map<string, { key: KeyObject; kty: string; alg: string | null }> | null = null;
   #keysFetchedAt = 0;
   #keysExpireAt = 0;
+  #loading: Promise<void> | null = null;
 
   constructor(options: { fetch?: FetchLike; now?: () => number } = {}) {
     this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
@@ -128,7 +129,16 @@ export class OpenAiIdentity {
     };
   }
 
-  async #loadKeys(): Promise<void> {
+  // One key load at a time: calls that need the keys while a load runs
+  // share it.
+  #loadKeys(): Promise<void> {
+    this.#loading ??= this.#fetchKeys().finally(() => {
+      this.#loading = null;
+    });
+    return this.#loading;
+  }
+
+  async #fetchKeys(): Promise<void> {
     const { jwks_uri } = await this.discovery();
     let body: { keys?: unknown };
     let lifetime: number;
