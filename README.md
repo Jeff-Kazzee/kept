@@ -329,11 +329,20 @@ app's hands:
 
 ## What the secret scan finds
 
-`pnpm scan:secrets` reads every tracked file on disk and every tracked
-path, every object reachable from any ref (the bytes of every blob, binary
-ones included, the text of every commit and tag, and every file and folder
-name in every tree), and every ref name. That covers old versions, merge
-results and other branches, including session checkpoint refs.
+`pnpm scan:secrets` guards what can be published. It reads every tracked
+file on disk and every tracked path, every blob staged in the index, every
+object reachable from a branch, a tag, a remote-tracking ref or HEAD (the
+bytes of every blob, binary ones included, the text of every commit and
+tag, and every file and folder name in every tree), and the name of every
+branch, tag and remote-tracking ref. That covers old versions, merge
+results and other branches.
+
+It skips every other ref, such as the local checkpoint refs that Entire
+(`refs/entire/*`) and T3 (`refs/t3/*`) keep, and `refs/stash`. These are
+never pushed. Its summary line names each skipped prefix and how many refs
+it holds, for example "Skipped local refs: refs/entire (138), refs/t3
+(156).". An object reachable only from a skipped ref is not read, so those
+refs must never be published.
 
 In each of those it finds, on one line:
 
@@ -355,7 +364,8 @@ In each of those it finds, on one line:
 The key's own shape is not known to the scan, so it does not find a bare
 key written without its name or `Bearer`, a provider key or token outside
 those field shapes, a key in another encoding (base64, URL encoding,
-UTF-16, compression or encryption) or split across lines, or anything
-outside this repository: other clones, `.env.local`, the database file,
-logs and screenshots elsewhere. It prints where a hit is, never the
-matched text, and exits 1 on any hit.
+UTF-16, compression or encryption) or split across lines, objects
+reachable only from skipped refs, or anything outside this repository:
+other clones, `.env.local`, the database file, logs and screenshots
+elsewhere. It prints where a hit is, never the matched text, and exits 1
+on any hit.

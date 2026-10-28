@@ -7,7 +7,7 @@ Meta's Model API is the main way to use the app and the default
 everywhere. Sign in with ChatGPT is the alternative, so people without a
 Meta key can use the app too. Later the same day he added that the user
 also chooses the model, per provider. Items 1 to 7 and M1 to M4 came with
-the sprint. P1 to P24 are choices the writer made while building it. All
+the sprint. P1 to P25 are choices the writer made while building it. All
 are proposed until Jeff confirms them.
 
 Code: `src/model/providers/` (the secrets file, the OpenID Connect checks,
@@ -284,6 +284,18 @@ runs it. The spend guard still prices tokens at the Meta rates (P22).
   `refresh_token_reused`, which signs the user out.
 - **P24.** A Meta key is one run of 8 to 512 printable characters with no
   spaces. Nothing more is known about its format.
+- **P25.** The secret scan guards what can be published, set by the
+  coordinator on 2026-10-28. It reads the working tree, the index, and
+  every object reachable from `refs/heads/*`, `refs/tags/*`,
+  `refs/remotes/*` and HEAD, and the names of those refs. It skips every
+  other ref, such as Entire's `refs/entire/*` and T3's `refs/t3/*`
+  checkpoint refs and `refs/stash`, which are local and never pushed. Its
+  summary line names each skipped prefix with its ref count, for example
+  "Skipped local refs: refs/entire (138), refs/t3 (156).", so the gap
+  stays visible. Before this, the scan read every ref. That made a test's
+  sample values, captured by those tools from the working tree, fail the
+  scan after the branch's own history no longer held them. Publishing must
+  still never push a skipped ref.
 
 ## What the server cannot control
 

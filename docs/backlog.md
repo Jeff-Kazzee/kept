@@ -467,7 +467,9 @@ Branch `sprint/10-providers`. See `docs/decisions/0010-providers.md`.
   problems named in settings.
 - [x] SP10.6 `pnpm eval:live --provider meta|chatgpt --model <id>`.
 - [x] SP10.7 Secret scan covers the settings file name and its token
-  fields.
+  fields, and scans what can be published: the working tree, the index,
+  branches, tags, remote-tracking refs and HEAD, naming the local refs it
+  skips (P25).
 - [x] SP10.8 `docs/sign-in.md` for judges running the app locally.
 - [ ] SP10.9 Live sign-in with ChatGPT and a live eval on each provider
   (coordinator and Jeff).
@@ -476,4 +478,4 @@ Branch `sprint/10-providers`. See `docs/decisions/0010-providers.md`.
   link, the first-sign-in confirmation, and the `signedIn` and
   `signInError` query codes.
 - [ ] Confirm or change the decisions in
-  `docs/decisions/0010-providers.md` (P1 to P24).
+  `docs/decisions/0010-providers.md` (P1 to P25).
