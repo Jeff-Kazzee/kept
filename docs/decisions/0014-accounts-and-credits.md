@@ -1,11 +1,12 @@
 # 0014: Accounts, judge access and usage credits
 
-Status: proposed, pending Jeff (2026-10-28). J13 to J17 are Jeff's
+Status: proposed, pending Jeff (2026-10-28). J13 to J20 are Jeff's
 decisions. A1 to A32 are the writer's choices and are proposed.
 
 Sprint 13 builds the hosted site's accounts, judge access and usage
-credits, offline. Sprint 14 adds the paid plans through Stripe, and sprint
-15 puts the site on the public internet. How to run it: `docs/hosted.md`.
+credits, offline. Sprint 15 puts the site on the public internet. The paid
+plans (sprint 14) wait until after the hackathon (J18). How to run it:
+`docs/hosted.md`.
 
 Code: `src/hosted/` (`config.ts`, `prices.ts`, `store.ts`, `metered.ts`,
 `signin.ts`, `rate-limit.ts`), `src/model/usage.ts` and `usage-text.ts`,
@@ -32,6 +33,28 @@ Code: `src/hosted/` (`config.ts`, `prices.ts`, `store.ts`, `metered.ts`,
 - **J17.** The public site runs on this server through a Cloudflare Tunnel
   (sprint 15). Sprint 13 builds everything it needs offline.
 
+Jeff changed the plan on 2026-10-28, after the coordinator's live check:
+
+- **J18.** Stripe and the paid plans wait until after the hackathon. The
+  plan buttons stay "coming soon", with no payment code. Billing starts
+  in the Stripe sandbox when it resumes. The order is sprint 13, hosting
+  (sprint 15), testing, then the submission (sprint 16).
+- **J19.** The $20 daily and $100 judge total defaults are not approved
+  amounts, so neither cap has a default. In hosted mode
+  `APP_DAILY_COST_CAP_USD` and `APP_JUDGE_TOTAL_CAP_USD` must both be set.
+  While either is missing the server key is off: the start log names the
+  missing setting, and every model step answers the plain usage-paused
+  sentence. `pnpm admin judges create` and `grant` refuse while the total
+  cap is unset.
+- **J20.** Sign in with ChatGPT on the hosted site stays "not available
+  here yet". Nothing depends on OpenAI's approval.
+
+The coordinator's live check of `016be1b` (hosted mode, Jeff's Meta key, a
+$1 judge code, one chat turn of two Spark calls): each charge matched
+Meta's reported usage times 3 exactly, cached input included, and Meta
+accepted `max_output_tokens`. The holds were about 10 times the real cost
+(A20), which stays.
+
 ## Design item 1: two modes
 
 `APP_MODE=local`, the default, keeps the app as it was: one case, no
@@ -42,10 +65,12 @@ ChatGPT. Every test from before this sprint passes unchanged.
 - A1. In hosted mode a person's own Meta key is not offered.
   `POST /api/auth/meta-key` answers 403 `not_offered`, and the server key is
   reached only through credits. (proposed in the handoff)
-- A2. A bad `APP_MODE`, `APP_MARKUP`, cap or `APP_SERVER_KEY` value stops
-  the app at start with exit code 2, so a typo cannot widen a cap or turn
+- A2. A bad `APP_MODE` stops the app at start with exit code 2 in either
+  mode. In hosted mode a bad `APP_MARKUP`, cap, `APP_SERVER_KEY` or
+  `APP_TRUSTED_PROXY` value does too, so a typo cannot widen a cap or turn
   a guard off. A markup below 1 is refused, because it would sell usage
-  below cost.
+  below cost. Local mode does not read the hosted-only settings, as before
+  sprint 13 (review round 1, finding 7).
 - A3. `GET /api/session` answers `{ mode: "local" }` in local mode too, so
   the page learns the mode with one read. It is the only route local mode
   gained.
@@ -66,7 +91,9 @@ per account at `data/accounts/<account id>/`.
   and closes one idle for 30 minutes, longer than a Google connect flow's
   10 minutes, whose state lives in the workspace's memory. A full cache
   closes the least recently used idle one. A workspace with a request in
-  progress is never closed.
+  progress is never closed. Review round 1, finding 5: nor is one used in
+  the last 10 minutes, or one with a Google connect waiting for its
+  callback. A full cache with none to close grows past 64 instead.
 - A6. A workspace is reached only through the account id of the request's
   session. The id must match `^a[0-9a-f]{32}$`, and its folder must sit
   directly inside the accounts folder. A symbolic link in its place is
@@ -113,15 +140,20 @@ change one `BEGIN IMMEDIATE` transaction, as the secrets store does.
   out deletes it.
 - A12. A session lasts 30 days from sign-in and is not extended by use.
   A judge account's session also ends when its code is revoked or expires.
+  Review round 1, finding 6: sign-in and sign-out do not let the request's
+  claim of HTTPS pick the cookie. They end the session of either cookie
+  form the browser sent, and clear both forms.
 - A13. HTTPS is read from the page's Origin or `X-Forwarded-Proto: https`,
   which the tunnel sets.
 - The host allowlist, the same-origin guard and the app header run on
   every route (`server/http.ts`).
 - A14. Sign-in starts are limited to 10 per address in 10 minutes. Judge
-  code tries, right or wrong, to 10 per address in 15 minutes. The address
-  is `CF-Connecting-IP`, else the first `X-Forwarded-For` entry, else the
-  socket's. The app binds 127.0.0.1, so these headers come from a proxy on
-  this server. The counts live in memory.
+  code tries, right or wrong, to 10 per address in 15 minutes. The counts
+  live in memory. Review round 1, finding 4: the address is the socket's,
+  unless `APP_TRUSTED_PROXY=cloudflare` is set. Then it is
+  `CF-Connecting-IP`, and only from a loopback socket, since cloudflared
+  runs on this server. `X-Forwarded-For` is never read. The default is
+  `none`, and sprint 15 sets `cloudflare`.
 - Delete account (`POST /api/account/delete` with `DELETE`) revokes the
   account's Google grant when there is one, removes the workspace folder
   and the account's sessions. Ledger rows stay for accounting. The account
@@ -129,23 +161,26 @@ change one `BEGIN IMMEDIATE` transaction, as the secrets store does.
   subject are removed, so the same Google account signs up fresh next
   time.
 - A15. Delete account is refused with 409 `account_busy` while a request
-  of the account still runs, such as a chat turn.
+  of the account still runs, such as a chat turn. Review round 1, finding
+  3: it finds that out first, and claims the workspace so no other request
+  of the account starts. Only then does it revoke the Google grant, remove
+  the folder and the sessions. A refusal changes nothing.
 
 ## Design item 4: usage credits
 
 The ledger is in the accounts database. Amounts are integers in
 micro-dollars, and every product is taken in BigInt.
 
-- Rows: `grant` (a judge code or, in sprint 14, a purchase, with its
+- Rows: `grant` (a judge code or, once billing resumes, a purchase, with its
   source), `hold` (before a model call), `charge` (after it), `release`
   (the unused part of a hold), and `refund` and `adjust` (admin only).
 - The balance is grants, refunds and adjustments, minus charges, minus
   open holds. A hold is taken only in the same transaction that checks the
   balance covers it.
-- A16. A charge never takes more than the balance and its own hold. A
-  charge the usage puts above that is cut to what is there, and the rest
-  is kept on the row as `uncollected`, with the model's real cost, so
-  Jeff's cost stays on record. The balance never goes below zero.
+- A16. A charge never takes more than its own hold, and its cost never
+  more than the hold's cost (review round 1, finding 1). It never takes
+  more than the balance either. A charge cut short keeps the rest on the
+  row as `uncollected`. The balance never goes below zero.
 - A17. A negative adjustment takes no more than the balance.
 - A release is a record only. The balance counts the hold until it
   closes, then the charge.
@@ -155,8 +190,13 @@ micro-dollars, and every product is taken in BigInt.
   Muse Wonder 1.0 is $4.00, $0.20 and $20.00 (Jeff's handoff, as the eval
   has no Wonder price yet).
 - A18. Reasoning tokens count as output. The Responses API counts them
-  inside `output_tokens`. A report whose reasoning count is above its
-  output count is read as counting them apart, and both are charged.
+  inside `output_tokens`, as the live rows show (output 67 with reasoning
+  13, output 62 with reasoning 40), so `output_tokens` alone is billed.
+  Review round 1, finding 1: the hold and the charge use one rule
+  (`usageBeyondHold` in `prices.ts`). A usage report the hold did not
+  bound is charged the whole hold: reasoning above output, output above
+  the call's `max_output_tokens`, input above the request's byte bound,
+  cached input above input, or no input at all (this replaces A23).
 - A19. A cost is rounded up to the next micro-dollar once, over the whole
   product with the markup, so rounding never sells below cost and is off
   by at most one micro-dollar.
@@ -187,8 +227,7 @@ micro-dollars, and every product is taken in BigInt.
   keeps. A call refused with any other 4xx answer did not run, and is
   released. So is a call the turn's token meter stopped before it was
   sent.
-- A23. A reply that reports no input tokens is charged the whole hold: a
-  real call always has input.
+- A23. Folded into A18.
 - A24. A hold left open by a process that stopped mid-call is charged in
   full after 10 minutes. The app checks at start and every minute.
 - Every charge carries the account, the workspace, the route, the chat
@@ -200,12 +239,13 @@ micro-dollars, and every product is taken in BigInt.
 - Calls through a person's ChatGPT sign-in or their own Meta key in local
   mode are not charged: local mode has no metered client.
 - Guards on every server-key call, whatever the balances say: a daily
-  ceiling on Jeff's real model cost (`APP_DAILY_COST_CAP_USD`, default 20)
-  and an off switch (`APP_SERVER_KEY=off`). When either stops a call, the
+  ceiling on Jeff's real model cost (`APP_DAILY_COST_CAP_USD`, no default,
+  J19) and an off switch (`APP_SERVER_KEY=off`). When either stops a call, the
   person gets a plain sentence.
 - A26. The daily ceiling counts every charge's real cost in the UTC day
   and every open hold's upper bound, across all accounts, in the same
-  transaction as the hold. A server with no `MODEL_API_KEY` acts as off.
+  transaction as the hold. A server with no `MODEL_API_KEY`, or with
+  either cap unset (J19), acts as off.
 - A27. Before a chat turn saves the person's message, the agent asks the
   hosted guards once (`AgentOptions.admit`): off, no key, the ceiling
   already reached, or a balance of zero refuse the turn with nothing
@@ -236,8 +276,9 @@ streams that fail with and without usage.
   and its id is `j` and 12 hex characters. The secret scan knows the
   code's shape. Lookup is by hash, with a constant-time compare of the
   found hash.
-- A total cap across all judge grants (`APP_JUDGE_TOTAL_CAP_USD`, default
-  100) refuses new codes and grants beyond it.
+- A total cap across all judge grants (`APP_JUDGE_TOTAL_CAP_USD`, no
+  default, J19) refuses new codes and grants beyond it. While it is unset,
+  `create` and `grant` refuse.
 - A30. The total counts each standing code's cap, and what a revoked code
   already spent. A code works through the end of its expiry day, UTC.
 - The code can be the judge's sign-in on its own (proposed in the
@@ -248,7 +289,10 @@ streams that fail with and without usage.
 - A31. Each account takes one code, and a judge account takes none. A
   code attached to a Google account does not sign in on its own. Revoke
   ends the judge account's sessions and removes the code's unspent credit
-  from the account. An expired code no longer signs in, and a judge
+  from the account. Review round 1, finding 2: the part of it inside open
+  holds is owed (`revoke_due`). No new hold may draw on it, and it leaves
+  the balance as those holds close, so the revoked credit is fully gone
+  once they settle. Other credit on the account stays usable. An expired code no longer signs in, and a judge
   account's session ends with it. Credit already on a Google account
   stays after expiry.
 - A32. "Spent" for a code is its account's charges, up to the code's cap.
@@ -290,9 +334,32 @@ repository. The secret scan now also finds judge codes, the accounts
 database by name (`accounts.sqlite` and its WAL, shared memory and
 journal files) and a copy of it under any name.
 
+## Review round 1 (Muse Wonder, 2026-10-28)
+
+Seven findings, each fixed with a test that failed before the fix, in
+`test/hosted-review1.test.ts`:
+
+1. High: a reasoning count above output was billed past the hold. Now
+   `output_tokens` alone is billed, any count the hold did not bound is
+   charged the whole hold, and the store caps every charge at its hold
+   (A16, A18). A property test of 300 random reports, malformed ones
+   included, checks that no charge or its cost exceeds its hold.
+2. High: a revoke left credit inside open holds to come back on release.
+   Now it is owed, refused to new holds and taken as the holds close (A31).
+3. Medium: Delete account revoked Google before it found the account
+   busy. Now the busy check and a claim come first (A15).
+4. Medium: forwarding headers were trusted from any client. Now only
+   behind `APP_TRUSTED_PROXY=cloudflare`, from a loopback socket (A14).
+5. Low: eviction could drop a waiting Google connect. Now a workspace with
+   one, or used in the last 10 minutes, stays (A5).
+6. Low: sign-out read the cookie a header picked. Now both forms are ended
+   and cleared (A12).
+7. Low: local mode exited on hosted-only settings. Now they are read only
+   in hosted mode (A2).
+
 ## Not done in this sprint
 
-- Live checks: a real Google sign-in, a real Meta call with
-  `max_output_tokens`, and the usage Meta reports for it (coordinator).
-- Stripe and the plans (sprint 14), and the tunnel and public host names
-  (sprint 15).
+- Live checks: a real Google sign-in and a Gmail connect inside a hosted
+  account (coordinator). The live Meta check is done (above).
+- Stripe and the plans, deferred until after the hackathon (J18), and the
+  tunnel and public host names (sprint 15).

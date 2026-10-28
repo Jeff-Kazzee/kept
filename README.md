@@ -158,8 +158,9 @@ in this repo is synthetic.
 `APP_MODE=hosted` runs the public site: accounts that sign in with Google
 or a judge code, one private workspace each, and Meta usage on the
 server's key, paid from usage credit at 3 times the model's token cost.
-Judges get capped codes from `pnpm admin judges create`. Local mode, the
-default, is unchanged. How to run it, the caps, the off switch and how
+Judges get capped codes from `pnpm admin judges create`. The daily cost
+cap and the judge total cap have no defaults: until both are set, the
+server key stays off. Local mode, the default, is unchanged. How to run it, the caps, the off switch and how
 credits are priced: `docs/hosted.md`. Design:
 `docs/decisions/0014-accounts-and-credits.md`.
 

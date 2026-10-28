@@ -22,6 +22,7 @@ The MCP server runs in local mode only.
 
 ```sh
 APP_MODE=hosted MODEL_API_KEY=... GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... \
+  APP_DAILY_COST_CAP_USD=<amount> APP_JUDGE_TOTAL_CAP_USD=<amount> \
   APP_ALLOWED_HOSTS=appointments.example.com pnpm start
 ```
 
@@ -32,11 +33,15 @@ APP_MODE=hosted MODEL_API_KEY=... GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... 
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | Sign in with Google, and the Gmail and Calendar connection. Without them only judge codes sign in. |
 | `APP_ALLOWED_HOSTS` | none | The site's public host name, for the host check and the HTTPS redirect URIs. |
 | `APP_MARKUP` | `3` | What a person pays per unit of model cost. At least 1, at most two decimals. |
-| `APP_DAILY_COST_CAP_USD` | `20` | The most the server key may cost in one UTC day, across all accounts. |
-| `APP_JUDGE_TOTAL_CAP_USD` | `100` | The most all judge codes together may grant. |
+| `APP_DAILY_COST_CAP_USD` | none, required | The most the server key may cost in one UTC day, across all accounts. |
+| `APP_JUDGE_TOTAL_CAP_USD` | none, required | The most all judge codes together may grant. |
 | `APP_SERVER_KEY` | `on` | `off` stops every call on the server key, whatever the balances say. |
+| `APP_TRUSTED_PROXY` | `none` | `cloudflare` reads the client's address from `CF-Connecting-IP`, only on a connection from this server, as cloudflared makes. `none` uses the connection's own address, and no forwarding header counts. |
 
-A value that does not parse stops the app at start.
+Neither cap has a default (J19). While either is unset the server key is
+off: the start log names the missing setting, and every assistant step
+answers that Meta usage is paused. A value that does not parse stops the
+app at start. Local mode reads none of these settings but `APP_MODE`.
 
 At start the app prints the Google redirect URIs to register in the OAuth
 client: `/auth/signin/callback` for sign-in and `/auth/google/callback` for
@@ -73,14 +78,19 @@ pnpm admin judges revoke --id j0123456789ab
   total cap is committed. Never a code.
 - `grant` raises a code's cap. A redeemed code's account gets the credit
   at once.
+- `create` and `grant` refuse while `APP_JUDGE_TOTAL_CAP_USD` is unset.
 - `revoke` stops a code: it no longer signs in, its judge account is
-  signed out, and its unspent credit is removed.
+  signed out, and its unspent credit is removed. Credit held for a step
+  already running is removed as that step finishes, and no new step may
+  use it.
 - The total cap counts each standing code's cap and what revoked codes
   already spent. A new code or a grant past it is refused.
 
 Judges open the site, choose "I have a judge code", or go straight to
 `/judge`. Code tries are limited to 10 per address in 15 minutes, and
-Google sign-in starts to 10 per address in 10 minutes.
+Google sign-in starts to 10 per address in 10 minutes. Behind the tunnel,
+set `APP_TRUSTED_PROXY=cloudflare`, or every visitor shares the tunnel's
+one address.
 
 ## How credits are priced
 
@@ -92,17 +102,19 @@ token cost, from the usage Meta reports. Prices are per million tokens:
 | Muse Spark 1.3 | $1.25 | $0.15 | $4.25 |
 | Muse Wonder 1.0 | $4.00 | $0.20 | $20.00 |
 
-Reasoning tokens count as output. Amounts are kept as whole micro-dollars,
-and a cost is rounded up once.
+Output is billed from `output_tokens`, which counts the reasoning tokens
+inside it. Amounts are kept as whole micro-dollars, and a cost is rounded
+up once.
 
 Before each call the app holds the most the call can cost: the request's
 size as an upper bound on its input, plus its `max_output_tokens` (4,096
 for a JSON step, 8,192 for a chat step), at the person's price. If the
 balance cannot cover it, the call is not made, and the person reads that
 their credit has run out and how to get more. After the call the app
-charges what Meta reported and gives back the rest. A call that may have
-run but reported no usage, such as one that timed out, is charged the
-whole hold. A call Meta refused before it ran is not charged. The balance
+charges what Meta reported and gives back the rest. A charge never exceeds
+its hold. A call that may have run but reported no usage, such as one that
+timed out, is charged the whole hold, and so is a usage report the hold
+did not bound, such as more output than `max_output_tokens`. A call Meta refused before it ran is not charged. The balance
 never goes below zero.
 
 The daily cap counts the real model cost of every charge that day and
@@ -110,12 +122,13 @@ every hold still open. When it is reached, or the server key is off, every
 step is refused with a plain message and nothing is charged.
 
 The usage page in Settings shows the balance, each recent charge (a chat
-turn is one line with its calls), the $20 and $100 plans (coming in sprint
-14) and a rough cost per turn for each model.
+turn is one line with its calls), the $20 and $100 plans (coming soon:
+billing waits until after the hackathon) and a rough cost per turn for each model.
 
 ## Delete account
 
 Settings, Delete account, erases the account's workspace (its case, chat,
 activity, settings and Google connection, after revoking the Google grant)
-and every session. The ledger keeps its rows for accounting, with the
+and every session. It is refused, with nothing changed, while a step of
+the account is still running. The ledger keeps its rows for accounting, with the
 email, name and Google subject removed.

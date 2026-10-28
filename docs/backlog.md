@@ -481,12 +481,21 @@ public site runs on this server through a Cloudflare Tunnel.
 - [x] SP13.5 Judge access codes with a cap each, a total cap and an off
   switch. An admin command creates and lists them.
 - [x] SP13.6 Usage page: balance, what each turn cost, and the plan.
-- [ ] SP13.7 Live checks (coordinator): a real Sign in with Google, a real
-  Meta call with `max_output_tokens`, and the usage Meta reports for it.
+- [ ] SP13.7 Live checks (coordinator): a real Sign in with Google and a
+  Gmail connect inside a hosted account. The live Meta check on `016be1b`
+  passed: charges matched Meta's usage times 3, and `max_output_tokens`
+  was accepted.
 - [ ] Confirm or change the decisions in
-  `docs/decisions/0014-accounts-and-credits.md` (A1 to A32).
+  `docs/decisions/0014-accounts-and-credits.md` (A1 to A32). Jeff's J18
+  to J20 are recorded there.
 
-## Sprint 14: paid plans with Stripe
+## Sprint 14: paid plans with Stripe (deferred until after the hackathon)
+
+Deferred by Jeff on 2026-10-28 (J18 in
+`docs/decisions/0014-accounts-and-credits.md`). The plan buttons stay
+"coming soon" with no payment code, and billing starts in the Stripe
+sandbox when it resumes. The order until the submission is sprint 13,
+hosting (sprint 15), testing, then sprint 16.
 
 Branch `sprint/14-billing`. Stripe Checkout for the $20 and $100 plans in
 test mode first, a signed webhook that grants credits once per payment,
