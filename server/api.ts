@@ -22,6 +22,7 @@ import { NO_PROVIDER_TEXT } from "../src/model/providers/messages.ts";
 import { GoogleError } from "../src/google/http.ts";
 import { GoogleBusyError } from "../src/google/intents.ts";
 import { SETTINGS_BUSY_TEXT, SETTINGS_UNREADABLE_TEXT } from "./auth.ts";
+import { UsageRefusedError } from "../src/model/usage.ts";
 
 // `generation` is the case generation the page last read. Every request
 // that changes state must carry it, and a write from a page opened before a
@@ -233,6 +234,9 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
 }
 
 export function toErrorResponse(err: unknown): ApiResponse {
+  // Hosted mode (0014): the call on the server key was refused before it
+  // ran. Nothing was written.
+  if (err instanceof UsageRefusedError) return { status: err.code === "credits_exhausted" ? 402 : 503, body: { error: err.code, message: err.userText } };
   if (err instanceof UndoBlockedError) return { status: 409, body: { error: "undo_blocked", message: err.message } };
   // An Undo of a Google Calendar entry (0012): another change for the same
   // appointment is in progress, or Google refused or did not answer. The

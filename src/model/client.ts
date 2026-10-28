@@ -3,7 +3,7 @@
 import type { Effort } from "../domain/claim.ts";
 import { assertAllowedModel, parseResponseBody, type ResponsesRequestBody, type TokenUsage } from "./request.ts";
 import { meterAdd, meterCheck } from "./meter.ts";
-import { readCompletedBody, readSse, type ToolCall, type ToolModelClient, type ToolReply } from "./responses.ts";
+import { parseUsage, readCompletedBody, readSse, type ToolCall, type ToolModelClient, type ToolReply } from "./responses.ts";
 
 export { assertAllowedModel };
 
@@ -41,6 +41,10 @@ export class ModelCallError extends Error {
   // in again (0010). Null when the generic sentence fits. Never holds a
   // key, a token or response text.
   readonly userText: string | null;
+  // The token usage the API reported for a call that failed after it ran,
+  // such as a stream that ended with response.incomplete. Null when it
+  // reported none. Hosted mode charges it (0014).
+  usage: TokenUsage | null = null;
 
   constructor(
     message: string,
@@ -219,8 +223,11 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
           return { ...readCompletedBody(data.response), latencyMs: elapsed(started), firstByteMs };
         }
         if (event.event === "response.failed" || event.event === "response.incomplete" || event.event === "error") {
-          const err = apiError(parseJson(event.data));
-          throw new ModelCallError(`Model stream ended with ${event.event}.`, res.status, elapsed(started), { type: err.type ?? event.event, code: err.code });
+          const data = parseJson(event.data);
+          const err = apiError(data);
+          const failed = new ModelCallError(`Model stream ended with ${event.event}.`, res.status, elapsed(started), { type: err.type ?? event.event, code: err.code });
+          failed.usage = reportedUsage(data);
+          throw failed;
         }
       }
     } catch (err) {
@@ -229,6 +236,17 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
       throw new ModelCallError(`Model stream could not be read (${reason}).`, res.status, elapsed(started));
     }
     throw new ModelCallError("Model stream ended before response.completed.", res.status, elapsed(started));
+  }
+}
+
+// The usage in a failed stream event's response, when it has one.
+function reportedUsage(data: unknown): TokenUsage | null {
+  const usage = ((data ?? {}) as { response?: { usage?: unknown } }).response?.usage;
+  if (!usage || typeof usage !== "object") return null;
+  try {
+    return parseUsage(usage);
+  } catch {
+    return null;
   }
 }
 

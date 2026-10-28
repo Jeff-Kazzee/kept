@@ -53,6 +53,11 @@ export const CHAT_ERROR_CODES = [
   // J12: no provider is ready. The turn is refused before it starts, and
   // the page links to Settings.
   "provider_not_ready",
+  // Hosted mode (0014): the person's usage credit ran out, or the site's
+  // daily limit or off switch stopped the call. The message says which,
+  // and the page links to Usage for the first.
+  "credits_exhausted",
+  "usage_paused",
 ] as const;
 export type ChatErrorCode = (typeof CHAT_ERROR_CODES)[number];
 

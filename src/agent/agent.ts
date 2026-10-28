@@ -35,6 +35,7 @@ import type { SlotView } from "../slots/types.ts";
 import { CaseDeletedError, StaleEditError, StoreBusyError, type EventStore, type StoredEvent } from "../store/event-log.ts";
 import { ACCESS_LOG_STREAM } from "../records/events.ts";
 import { BudgetError, UsageMeter, withMeter } from "../model/meter.ts";
+import { USAGE_TEXT, UsageRefusedError } from "../model/usage.ts";
 import { CaseActions } from "../actions/service.ts";
 import type { ActivityEntry } from "../activity/types.ts";
 import { ACTIVITY_STREAM } from "../activity/events.ts";
@@ -99,7 +100,12 @@ const ERROR_MESSAGES: Record<ChatErrorCode, string> = {
   invalid_request: "That message could not be sent. Nothing was saved.",
   server_error: "The server could not complete the request. Nothing in your case changed.",
   provider_not_ready: NO_PROVIDER_TEXT,
+  credits_exhausted: USAGE_TEXT.credits_exhausted.text,
+  usage_paused: USAGE_TEXT.server_key_off.text,
 };
+
+// The chat code of a hosted mode refusal (0014).
+const usageCode = (err: UsageRefusedError): ChatErrorCode => (err.code === "credits_exhausted" ? "credits_exhausted" : "usage_paused");
 
 // J12: the chosen provider cannot take a call. The turn is refused before
 // the person's message is saved.
@@ -130,6 +136,10 @@ export type AgentOptions = {
   // problems, for `pnpm demo:check` only (sprint 12, L2). The page never
   // gets them.
   onRejected?: (info: { turnId: string; rejected: TurnReport["rejected"] }) => void;
+  // Hosted mode (0014): throws a UsageRefusedError when the person's
+  // credit or the site's guards stop every call, so the turn is refused
+  // before the person's message is saved.
+  admit?: () => void;
 };
 
 export type CallErrorInfo = { turnId: string; call: number; kind: "loop" | "retry"; status: number | null; type: string | null; code: string | null };
@@ -193,6 +203,7 @@ export class CaseAgent {
   readonly #onCallError: (info: CallErrorInfo) => void;
   readonly #ready: () => boolean;
   readonly #onRejected: NonNullable<AgentOptions["onRejected"]>;
+  readonly #admit: () => void;
   #busy = false;
 
   constructor(store: EventStore, services: ToolServices, client: ToolModelClient, options: AgentOptions = {}) {
@@ -211,6 +222,7 @@ export class CaseAgent {
     this.#onCallError = options.onCallError ?? (() => {});
     this.#ready = options.ready ?? (() => true);
     this.#onRejected = options.onRejected ?? (() => {});
+    this.#admit = options.admit ?? (() => {});
   }
 
   get modelLabel(): string {
@@ -245,10 +257,10 @@ export class CaseAgent {
       actions: [],
       timings: { tools: [], checks: [] },
     };
-    const fail = (code: ChatErrorCode) => {
+    const fail = (code: ChatErrorCode, text?: string) => {
       report.errorCode = code;
       // Finding 11: after a tool wrote, "nothing was saved" is not true.
-      const message = report.wrote && code !== "case_deleted" ? PARTIAL_ERROR_TEXT : ERROR_MESSAGES[code];
+      const message = report.wrote && code !== "case_deleted" ? PARTIAL_ERROR_TEXT : (text ?? ERROR_MESSAGES[code]);
       emit({ event: "turn.error", data: { turnId, code, message } });
     };
     if (this.#busy) {
@@ -260,7 +272,7 @@ export class CaseAgent {
       await this.#store.inCase(() => this.#turn(turnId, input, emit, report), input.generation);
     } catch (err) {
       if (this.#rethrow(err)) throw err;
-      fail(errorCode(err));
+      fail(errorCode(err), err instanceof UsageRefusedError ? err.userText : undefined);
     } finally {
       this.#busy = false;
     }
@@ -299,6 +311,7 @@ export class CaseAgent {
     // J12: with no provider ready the turn answers the fixed setup
     // sentence, and nothing is saved.
     if (!this.#ready()) throw new ProviderNotReadyError();
+    this.#admit();
     // SP12.2: the tools this case can use, read once, before the person's
     // message is saved (review round 1, finding 3), so every call of the
     // turn offers the same ones. The Google tools need the connection and
@@ -474,13 +487,20 @@ export class CaseAgent {
         }
       });
     } catch (err) {
-      const stop = err instanceof BudgetError ? new TurnStop("stopped", TOKEN_LIMIT_TEXT, null) : err;
+      // A hosted mode refusal mid-turn (0014): no call was made, and every
+      // action before it is whole and in the activity log.
+      const stop =
+        err instanceof BudgetError
+          ? new TurnStop("stopped", TOKEN_LIMIT_TEXT, null)
+          : err instanceof UsageRefusedError
+            ? new TurnStop("stopped", wrote() ? `${PARTIAL_TEXT} ${err.reason}` : err.userText, usageCode(err))
+            : err;
       if (!(stop instanceof TurnStop)) {
         wrote();
         throw stop;
       }
       // Finding 11: after a tool wrote, say so instead of "nothing changed".
-      finalText = wrote() ? PARTIAL_TEXT : stop.text;
+      finalText = stop.code === "credits_exhausted" || stop.code === "usage_paused" ? stop.text : wrote() ? PARTIAL_TEXT : stop.text;
       outcome = stop.outcome;
       code = stop.code;
       if (outcome === "stopped") addCard({ kind: "notice", text: finalText });
@@ -502,7 +522,7 @@ export class CaseAgent {
     if (code) {
       report.errorCode = code;
       // A model failure after a tool wrote carries the stored sentence.
-      const message = code === "model_unavailable" ? text : ERROR_MESSAGES[code];
+      const message = code === "model_unavailable" || code === "credits_exhausted" || code === "usage_paused" ? text : ERROR_MESSAGES[code];
       emit({ event: "turn.error", data: { turnId, code, message } });
     }
     emit({ event: "turn.done", data: { turnId, assistantMessageId: assistantId, chatVersion } });
@@ -640,6 +660,7 @@ export function errorCode(err: unknown): ChatErrorCode {
   if (err instanceof InvalidRequestError) return "invalid_request";
   if (err instanceof ModelCallError) return "model_unavailable";
   if (err instanceof ProviderNotReadyError) return "provider_not_ready";
+  if (err instanceof UsageRefusedError) return usageCode(err);
   return "server_error";
 }
 
