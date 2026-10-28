@@ -13,6 +13,7 @@ export type Card =
   | { kind: "claims"; messageId: string; evidenceIds: string[] } // each claim with its status, pending or decided
   | { kind: "question"; conflictId: string } // the question, open or answered
   | { kind: "reply"; draftId: string } // readback and approve: the person only
+  | { kind: "own_report"; messageId: string } // "Record this as your own report?" Yes or No: the person only
   | { kind: "explanation"; conflictId: string } // checked explanation
   | { kind: "notice"; text: string }; // code-written
 
@@ -85,7 +86,7 @@ export const QUESTION_WITHHELD_NOTICE = "The question's wording did not pass the
 // where the person asks for it in their own words.
 export const PASTE_TURN_NOTICE =
   "I did not do that, because it came with a pasted message. Ask me in your own words, in a new message, and I will.";
-export const IMPORT_AFTER_ACTION_NOTICE =
-  "I did not add the pasted message, because this message already changed something else. Paste it in its own message.";
+// The question on an own_report card (0009, D1').
+export const OWN_REPORT_QUESTION = "Record this as your own report?";
 export const DRAFT_OPEN_NOTICE = "A reply draft is already open. Finish or discard it before starting another.";
 export const WITHHELD_USER_TEXT = "Not saved: this message asked about health, which this app does not handle.";

@@ -40,7 +40,7 @@ import { checkAnswer, type Fact, type Grounds, type Status } from "./grounding.t
 import {
   DRAFT_OPEN_NOTICE,
   EXTERNAL_SOURCE_LABEL,
-  IMPORT_AFTER_ACTION_NOTICE,
+  OWN_REPORT_QUESTION,
   PASTE_TURN_NOTICE,
   QUESTION_WITHHELD_NOTICE,
   SOURCE_SUGGESTED_LABEL,
@@ -78,15 +78,26 @@ export type ToolContext = ToolServices & {
   // the same transaction (review round 2, finding 10). Over MCP it only
   // runs `write`.
   recordImport: <T>(lines: ImportedLines, write: () => T) => T;
-  // What this chat turn did so far, for the paste rule (0009, D2). Absent
+  // The chat turn's paste rule and what it imported (0009, D2'). Absent
   // over MCP.
   turn?: ChatTurnState;
 };
 
-// `imported` holds the messages and lines this turn imported. `acted` is
-// true once the turn took an action other than the import and the review
-// of the imported message's claims.
-export type ChatTurnState = { imported: ImportedLines[]; acted: boolean };
+// `paste` is code's reading of the person's message at the start of the
+// turn (mayContainPaste). `imported` holds the lines this turn imported.
+export type ChatTurnState = { paste: boolean; imported: ImportedLines[] };
+
+// 0009, D2': the person's message may contain a paste when it has a line
+// break, is longer than 280 characters, or starts a line with a sender-like
+// prefix ("Name:" or "From:") or a quote mark. Code reads it once, at the
+// start of the turn, so the order of the model's calls changes nothing.
+const SENDER_LIKE = /^\s*(?:from\s*:|[\p{L}][\p{L}\p{N} .,'&()-]{0,60}:(?:\s|$))/iu;
+const QUOTE_START = /^\s*["'“”‘’«»>]/u;
+
+export function mayContainPaste(text: string): boolean {
+  if (/[\r\n]/.test(text) || text.length > 280) return true;
+  return text.split(/\r\n?|\n/).some((l) => SENDER_LIKE.test(l) || QUOTE_START.test(l));
+}
 
 // Lines of the person's message that a tool imported, counted from 0 after
 // line endings are normalized.
@@ -299,35 +310,6 @@ export function senderAttributed(from: string, userText: string, first: number, 
   return false;
 }
 
-// 0009, D1: the imported lines are the person's own typed words, a report
-// of something that happened elsewhere, only when nothing marks them as a
-// message from someone else. Code reads the person's words outside the
-// import and the import's position:
-// - the words around it do not introduce a message ("I got this", "they
-//   texted", "below", a line ending with a colon),
-// - the import is not a block set off by a blank line under a lead-in,
-// - it has no header line (From:, Sent:, Subject:) and does not start with
-//   a sender's name and a colon,
-// - it speaks in the first person singular and does not address the
-//   reader as you.
-const INTRODUCES =
-  /\b(?:got|received|sent|texted|emailed|wrote|forwarded|message|text|email|mail|note|letter|voicemail|this came|came in|here is|here's|below|pasted?|copied|from)\b|:\s*$/i;
-const HEADER = /^(?:from|sent|to|subject|date|received|cc)\s*:/i;
-const SENDER_PREFIX = /^[\p{L}][\p{L}\p{N} .,'&-]{0,60}:\s/u;
-const FIRST_PERSON = /\b(?:i|i'm|i've|i'll|i'd|me|my|mine|myself)\b/i;
-const ADDRESSES_YOU = /\b(?:you|your|yours)\b/i;
-
-export function ownWords(userText: string, first: number, last: number, text: string): boolean {
-  const lines = userText.replace(/\r\n?/g, "\n").split("\n");
-  const outside = [...lines.slice(0, first), ...lines.slice(last + 1)].join("\n").trim();
-  if (outside !== "" && INTRODUCES.test(outside)) return false;
-  if (first > 0 && lines.slice(0, first).some((l) => l.trim() === "")) return false;
-  const imported = text.split("\n").map((l) => l.trim()).filter(Boolean);
-  if (imported.some((l) => HEADER.test(l)) || SENDER_PREFIX.test(imported[0] ?? "")) return false;
-  const words = text.replace(/[’‘]/g, "'");
-  return FIRST_PERSON.test(words) && !ADDRESSES_YOU.test(words);
-}
-
 // Review round 2, finding 3: a send time comes only from a header line in
 // the paste (Sent:, Date:, Received:) or from the person's own words about
 // when it arrived ("this came yesterday at 3"). A date or time anywhere else
@@ -456,15 +438,14 @@ function decideClaims(decision: "accept" | "reject") {
     const decided: EvidenceView[] = [];
     for (const ref of input.claims) {
       const r = await guarded(async () => {
-        // D2: in a turn that imported a message, only that message's claims.
+        // D2': in a paste turn, only the claims of messages this turn imported.
         const from = ctx.intake.evidence().find((e) => e.id === ref.evidence_id)?.messageId ?? null;
         const importedIds = ctx.turn?.imported.map((x) => x.message_id) ?? [];
-        if (importedIds.length > 0 && (from === null || !importedIds.includes(from))) return failure("waits_for_person", PASTE_TURN_NOTICE);
+        if (ctx.turn?.paste && (from === null || !importedIds.includes(from))) return failure("waits_for_person", PASTE_TURN_NOTICE);
         const { value, entries } = await acting(ctx, (by) =>
           decision === "accept" ? ctx.actions.acceptClaim(by, ref.evidence_id, ref.expected_version) : ctx.actions.rejectClaim(by, ref.evidence_id, ref.expected_version),
         );
         decided.push(value);
-        if (ctx.turn && !importedIds.includes(from ?? "")) ctx.turn.acted = true;
         return result({ evidence_id: ref.evidence_id, status: value.status, activity: activityOut(entries[0], ctx.actions) });
       });
       done.push(r.ok ? r.output : { evidence_id: ref.evidence_id, ...r.output });
@@ -551,11 +532,12 @@ function recordResult(ctx: ToolContext, slot: string, entries: ActivityEntry[], 
   );
 }
 
-// 0009, D2: a turn that imports a pasted message may only import it and
-// accept or reject that message's claims. Text in the paste must not be
-// able to drive any other action. These actions also need words of the
-// person's own, outside any imported lines, in the turn.
-const PERSON_ASKED_TOOLS: ReadonlySet<string> = new Set([
+// 0009, D2': in a turn whose message may contain a paste, only reads,
+// import_message and the review of claims this turn imported are allowed.
+// Every other writing tool is refused for the whole turn, whatever the
+// order of the calls. ask_next_question and explain_conflict are refused
+// only when they would write (see writeRefusal).
+const PASTE_TURN_REFUSED: ReadonlySet<string> = new Set([
   "archive_appointment",
   "unarchive_appointment",
   "set_tags",
@@ -567,34 +549,14 @@ const PERSON_ASKED_TOOLS: ReadonlySet<string> = new Set([
   "undo",
 ]);
 
-// The person's words in the turn, without the lines a tool imported.
-function ownText(userText: string, imported: ImportedLines[]): string {
-  return userText
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .filter((_, i) => !imported.some((x) => i >= x.first_line && i <= x.last_line))
-    .join("\n")
-    .trim();
-}
+const pasteRefusal = (): ToolResult => failure("waits_for_person", PASTE_TURN_NOTICE, { cards: [{ kind: "notice", text: PASTE_TURN_NOTICE }] });
 
-function pasteTurnRefusal(ctx: ToolContext): ToolResult | null {
-  if (!ctx.turn || ctx.userText === null) return null;
-  if (ctx.turn.imported.length === 0 && ownText(ctx.userText, []) !== "") return null;
-  return failure("waits_for_person", PASTE_TURN_NOTICE, { cards: [{ kind: "notice", text: PASTE_TURN_NOTICE }] });
-}
+// For a tool that writes only sometimes: the refusal in a paste turn.
+const writeRefusal = (ctx: ToolContext): ToolResult | null => (ctx.turn?.paste ? pasteRefusal() : null);
 
 function gated(spec: ToolSpec<unknown>): ToolSpec<unknown> {
-  if (!PERSON_ASKED_TOOLS.has(spec.name)) return spec;
-  return {
-    ...spec,
-    run: async (ctx, input) => {
-      const refused = pasteTurnRefusal(ctx);
-      if (refused) return refused;
-      const r = await spec.run(ctx, input);
-      if (r.ok && ctx.turn) ctx.turn.acted = true;
-      return r;
-    },
-  };
+  if (!PASTE_TURN_REFUSED.has(spec.name)) return spec;
+  return { ...spec, run: (ctx, input) => (ctx.turn?.paste ? pasteRefusal() : spec.run(ctx, input)) };
 }
 
 const TOOL_SPECS: ToolSpec<unknown>[] = [
@@ -727,9 +689,11 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
       const pendingEvidence = intake.reviewQueue();
       const byMessage = new Map<string, string[]>();
       for (const e of pendingEvidence) if (e.messageId) byMessage.set(e.messageId, [...(byMessage.get(e.messageId) ?? []), e.id]);
+      const offered = intake.messages().filter((m) => m.ownReport === "offered");
       const cards: Card[] = [
         ...(view.question ? [{ kind: "question" as const, conflictId: view.question.conflictId }] : []),
         ...[...byMessage].map(([messageId, evidenceIds]) => ({ kind: "claims" as const, messageId, evidenceIds })),
+        ...offered.map((m) => ({ kind: "own_report" as const, messageId: m.id })),
       ];
       const keys = open.conflicts.flatMap((c) => c.slotKeys);
       return result(
@@ -746,6 +710,7 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
             : null,
           questions_version: view.questionsVersion,
           pending_claims: pendingEvidence.map(evidenceItem),
+          own_report_questions: offered.map((m) => m.id),
         },
         {
           cards,
@@ -805,17 +770,22 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
       const evidence = intake.evidence();
       const sameDay = view.slots.filter((s) => s.date === input.date);
       const day = sameDay.map((s) => ({ slot_key: s.key, label: s.label, state: s.state, ...plainState(s, evidence) }));
+      // A time the clock skips when daylight time starts is read as the
+      // first time after the gap, and the result says so, with or without a
+      // calendar.
+      const gap = input.time !== null && resolveWallClock(input.date, input.time, zone).kind === "gap";
+      const timeNote = gap ? { time_note: `${input.time} does not happen on ${input.date} in ${zone}, because the clock moves forward. It was checked from the first time after the gap.` } : {};
       // Finding 5: the date and time asked about are the model's own words,
       // so they are not facts. Only what the calendar and the case hold is.
       if (!view.calendar) {
-        return result({ calendar_loaded: false, date: input.date, time: input.time, time_zone: zone, appointments_that_day: day }, { slots: sameDay, facts: sameDay.map(slotFact) });
+        return result(
+          { calendar_loaded: false, date: input.date, time: input.time, time_zone: zone, appointments_that_day: day, ...timeNote },
+          { slots: sameDay, facts: sameDay.map(slotFact) },
+        );
       }
       const events = view.calendar.events;
       const that = events.filter((e) => caseLocal(e.start, zone).date === input.date);
       const clashes = input.time === null ? [] : findClashes(input.date, input.time, events, zone);
-      // A time the clock skips when daylight time starts is read as the
-      // first time after the gap, and the result says so.
-      const gap = input.time !== null && resolveWallClock(input.date, input.time, zone).kind === "gap";
       const eventFacts = [...that, ...clashes].flatMap((e) => [caseLocal(e.start, zone), ...(e.end ? [caseLocal(e.end, zone)] : [])]);
       return result(
         {
@@ -830,7 +800,7 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
           })),
           clashes_with_time: clashes.map((e) => ({ summary: untrustedText(e.summary), starts: localLabel(caseLocal(e.start, zone)) })),
           appointments_that_day: day,
-          ...(gap ? { time_note: `${input.time} does not happen on ${input.date} in ${zone}, because the clock moves forward. It was checked from the first time after the gap.` } : {}),
+          ...timeNote,
         },
         { slots: sameDay, facts: [...sameDay.map(slotFact), ...eventFacts] },
       );
@@ -865,7 +835,7 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
       "Import a message from the office, or the person's own report of a call or visit, so the app can extract its claims. " +
       "In the chat, text must be whole lines copied from the person's current message: the whole pasted message, never part of a line. " +
       "channel and from are suggestions: from must be a sender the person's message names. received_at is used only when the pasted text states when it was sent. " +
-      "Use channel user_report only for the person's own words about something that happened elsewhere, never for a pasted message. " +
+      "When the text is the person's own words about something that happened elsewhere, set channel user_report: the app then asks the person to confirm it as their own report. " +
       "The app marks the source as suggested. Each claim has passed the quote and date checks, and waits for review until you or the person accept or reject it." +
       UNTRUSTED,
     parameters: {
@@ -934,6 +904,8 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
       let conflict = kase.view().conflicts.find((c) => c.id === input.conflict_id);
       if (!conflict) return failure("not_found", `No open conflict ${input.conflict_id}.`);
       if (!conflict.explanation) {
+        const refused = writeRefusal(ctx);
+        if (refused) return refused;
         const c = conflict;
         try {
           conflict = (await acting(ctx, (b) => ctx.actions.explain(b, c.id, c.version))).value;
@@ -983,6 +955,8 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
       let opened = false;
       if (!view.question) {
         if (view.waiting === 0) return result({ asked: false, reason: "no_conflict_waits", note: "No conflict waits for a question." }, { code: "no_conflict_waits" });
+        const refused = writeRefusal(ctx);
+        if (refused) return refused;
         const v = view.questionsVersion;
         try {
           view = (await acting(ctx, (b) => ctx.actions.askNext(b, v))).value;
@@ -1230,8 +1204,6 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
 // external agent.
 async function importMessage(ctx: ToolContext, input: { text: string; channel: string | null; from: string | null; received_at: string | null }): Promise<ToolResult> {
   const { intake } = ctx;
-  // D2: a turn that already took another action does not import as well.
-  if (ctx.turn?.acted) return failure("waits_for_person", IMPORT_AFTER_ACTION_NOTICE, { cards: [{ kind: "notice", text: IMPORT_AFTER_ACTION_NOTICE }] });
   let text = input.text;
   let lines = { first: 0, last: 0 };
   let outside = "";
@@ -1258,12 +1230,16 @@ async function importMessage(ctx: ToolContext, input: { text: string; channel: s
   // and the ones an agent suggested are marked.
   const suggested: Array<"channel" | "from" | "received_at"> = [];
   const channel = Channel.safeParse(input.channel);
-  // 0009, D1: user_report means the person's own words. In the chat it is
-  // kept only when the imported lines are what the person typed, not a
-  // paste they introduced as someone else's message. Over MCP it is kept,
-  // and the claims are reported through the external agent.
-  const ownReport = ctx.userText === null || ownWords(ctx.userText, lines.first, lines.last, text);
-  const pickedChannel = channel.success && channel.data !== "unknown" && (channel.data !== "user_report" || ownReport) ? channel.data : "unknown";
+  // 0009, D1': in the chat the assistant never sets user_report. When the
+  // text may be the person's own report (the model asked for user_report,
+  // or the turn's message has no sign of a paste), it is added with channel
+  // unknown and the person is asked "Record this as your own report?".
+  // Its claims wait for the answer. Over MCP a user_report is kept, and its
+  // claims are reported through the external agent (D1).
+  const chat = ctx.userText !== null;
+  const asked = channel.success && channel.data === "user_report";
+  const offerOwnReport = chat && (asked || ctx.turn?.paste === false);
+  const pickedChannel = channel.success && channel.data !== "unknown" && !offerOwnReport && !(chat && asked) ? channel.data : "unknown";
   if (pickedChannel !== "unknown") suggested.push("channel");
   const trimmed = input.from?.trim() ?? "";
   const fromOk = trimmed.length > 0 && trimmed.length <= 200 && (ctx.userText === null || senderAttributed(trimmed, ctx.userText, lines.first, lines.last));
@@ -1286,7 +1262,12 @@ async function importMessage(ctx: ToolContext, input: { text: string; channel: s
         ctx.actions.importMessage(
           { actor: ctx.by.actor, onEntry: ctx.by.onEntry },
           { id, channel: pickedChannel, from: from ?? "Unknown sender", received_at: stated ? iso! : zonedIso(ctx.sentAt, ctx.zone), text },
-          { suggested, note, ...(ctx.userText === null && pickedChannel === "user_report" ? { agentName: EXTERNAL_AGENT_NAME } : {}) },
+          {
+            suggested,
+            note,
+            ...(!chat && pickedChannel === "user_report" ? { agentName: EXTERNAL_AGENT_NAME } : {}),
+            ...(offerOwnReport ? { ownReport: true } : {}),
+          },
         ),
       );
       status = "imported";
@@ -1325,13 +1306,16 @@ async function importMessage(ctx: ToolContext, input: { text: string; channel: s
         suggested: message.sourceSuggested,
       },
       claims: evidence.map(evidenceItem),
+      own_report: message.ownReport,
       note:
-        message.status === "manual_entry_needed"
-          ? "Extraction failed the code checks twice. The card lets the person enter the claims by hand."
-          : "Each claim passed the quote and date checks and waits for review. Accept the ones the message states with accept_claim, or leave them for the person.",
+        message.ownReport === "offered"
+          ? `The card asks the person: ${OWN_REPORT_QUESTION} Its claims wait for that answer, so do not accept them.`
+          : message.status === "manual_entry_needed"
+            ? "Extraction failed the code checks twice. The card lets the person enter the claims by hand."
+            : "Each claim passed the quote and date checks and waits for review. Accept the ones the message states with accept_claim, or leave them for the person.",
     },
     {
-      cards: [{ kind: "claims", messageId: id, evidenceIds: ids }],
+      cards: [{ kind: "claims", messageId: id, evidenceIds: ids }, ...(message.ownReport === "offered" ? [{ kind: "own_report" as const, messageId: id }] : [])],
       facts: claimFacts(evidence),
       code: status === "already_imported" ? "already_imported" : "ok",
     },

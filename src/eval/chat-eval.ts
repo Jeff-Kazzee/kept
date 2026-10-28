@@ -55,7 +55,7 @@ const Expect = z
     tools: z.array(z.string()).default([]),
     // At least one of these tools, when the right tool is a judgment call.
     tools_any: z.array(z.string()).default([]),
-    cards: z.array(z.enum(["claims", "question", "reply", "explanation", "notice"])).default([]),
+    cards: z.array(z.enum(["claims", "question", "reply", "explanation", "own_report", "notice"])).default([]),
     // Activity kinds the turn's actions must include, such as
     // claim_accepted, and kinds they must not include.
     actions: z.array(z.string()).default([]),

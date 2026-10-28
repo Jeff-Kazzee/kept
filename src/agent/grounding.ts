@@ -190,6 +190,12 @@ export function statesAgree(text: string, grounds: Grounds): boolean {
       // pronoun, and never to "the other appointment" (finding 6).
       const carried = PRONOUN.test(c) && !OTHER.test(c) ? previous : [];
       const targets = clauseSlots.length > 0 ? clauseSlots : sentenceSlots.length > 0 && !OTHER.test(c) ? sentenceSlots : carried;
+      // Review round 2, finding 4: a clause, or a sentence with no slot,
+      // that names a date no slot among the facts has. A claim fact, such
+      // as an agent's unconfirmed report, carries no state, so a positive
+      // state word about that date fails, with no fallback to other slots.
+      const datesNoSlot =
+        (parseMentions(c).some(hasDate) && clauseSlots.length === 0) || (sentenceSlots.length === 0 && targets.length === 0 && parseMentions(s).some(hasDate));
       for (const w of STATE_WORDS) {
         const fits = fitsWord(w);
         for (const m of c.matchAll(w.re)) {
@@ -199,6 +205,7 @@ export function statesAgree(text: string, grounds: Grounds): boolean {
           // Finding 5: two negations read either way, so they fail closed.
           if (n > 1) return false;
           const negated = n === 1;
+          if (datesNoSlot && !negated) return false;
           if (w.namedOnly && clauseSlots.length === 0) continue;
           const named = w.namedOnly ? clauseSlots : targets;
           if (named.length > 0) {

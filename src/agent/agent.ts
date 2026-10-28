@@ -41,7 +41,7 @@ import { zonedIso } from "../domain/zone.ts";
 import { SETTINGS_STREAM } from "../settings/events.ts";
 import { CHAT_STREAM, projectChat, type AssistantOutcome, type ChatCallRecord, type ChatEventData, type ChatLog } from "./events.ts";
 import { checkAnswer, chipsFor, type Fact, type Status, type TextProblem } from "./grounding.ts";
-import { defaultMessageId, functionTools, parseCall, toolLabel, type ToolContext, type ToolResult, type ToolServices } from "./tools.ts";
+import { defaultMessageId, functionTools, mayContainPaste, parseCall, toolLabel, type ToolContext, type ToolResult, type ToolServices } from "./tools.ts";
 import type { ChatTurnState, ImportedLines } from "./tools.ts";
 import {
   MALFORMED_TEXT,
@@ -261,8 +261,9 @@ export class CaseAgent {
 
     // Each action's entry goes to the page at once, as an `action` event.
     const actions: ActivityEntry[] = [];
-    // What the turn imported and did, for the paste rule (0009, D2).
-    const turn: ChatTurnState = { imported: [], acted: false };
+    // The paste rule, read from the person's message now, and what the turn
+    // imports (0009, D2').
+    const turn: ChatTurnState = { paste: mayContainPaste(text), imported: [] };
     const ctx: ToolContext = {
       ...this.#services,
       store: this.#store,
@@ -535,6 +536,8 @@ function cardWords(c: Card): string | null {
       return `reply draft ${c.draftId} for readback`;
     case "explanation":
       return `explanation of conflict ${c.conflictId}`;
+    case "own_report":
+      return `question whether message ${c.messageId} is your own report`;
     case "notice":
       return null;
   }
