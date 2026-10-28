@@ -188,7 +188,11 @@ function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean
       {unavailable ? (
         <p className="notice">
           <Icon name="info" />
-          <span>The chat is not available in this build yet. Your schedule works as usual. To try the scripted chat, open this page with ?mockchat=1 at the end of the address.</span>
+          <span>
+            The chat is not available in this build yet. Your schedule works as usual, and Add an office message in the box below adds a message from the office.
+            {/* Only a development build has the scripted chat (App.tsx). */}
+            {import.meta.env.DEV && " To try the scripted chat, open this page with ?mockchat=1 at the end of the address."}
+          </span>
         </p>
       ) : (
         <div className="chips" aria-label="Ways to start">

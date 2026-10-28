@@ -3,7 +3,7 @@
 // markup, cards render from the live case and errors say nothing was saved.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppState } from "../api.ts";
 import { ChatView, turnErrorText, type ChatViewProps } from "./ChatView.tsx";
 import type { ChatState } from "./state.ts";
@@ -38,6 +38,10 @@ const render = (partial: Omit<ChatState, "declinedText"> & Partial<Pick<ChatStat
 
 const at = "2026-11-01T08:30:00.000Z";
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("chat view", () => {
   it("an empty chat offers the three ways to start", () => {
     const html = render({ status: "ready", chatVersion: 0, messages: [], pending: null });
@@ -51,6 +55,15 @@ describe("chat view", () => {
     const html = render({ status: "unavailable", chatVersion: 0, messages: [], pending: null });
     expect(html).toContain("The chat is not available in this build yet.");
     expect(html).toMatch(/<textarea[^>]*disabled=""/);
+  });
+
+  it("review 1, finding 1: a production build does not point to the scripted chat it does not have", () => {
+    vi.stubEnv("DEV", false);
+    const prod = render({ status: "unavailable", chatVersion: 0, messages: [], pending: null });
+    expect(prod).toContain("The chat is not available in this build yet.");
+    expect(prod).not.toContain("mockchat");
+    vi.stubEnv("DEV", true);
+    expect(render({ status: "unavailable", chatVersion: 0, messages: [], pending: null })).toContain("?mockchat=1");
   });
 
   it("labels assistant text as model output, shows the decline in its own style, and never renders text as markup", () => {
