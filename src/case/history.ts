@@ -1,20 +1,29 @@
 // The case history: every event of the case in the order it was written,
 // each with a label code builds from the event kind, ids, counts, dates and
 // times. No free text is repeated here: not message text, quotes, notes,
-// proposal statements, tags, file names or choice labels, which can carry
-// words from messages. The views that show them label them. Grants are app settings, not
-// case events, so they are left out. An undo shows as its own entry and
-// marks the entry it reversed.
+// tags, file names or choice labels, which can carry words from messages.
+// The views that show them label them. Settings and streams from before
+// sprint 8 (grants and agent proposals) are left out. An undo shows as its
+// own entry and marks the entry it reversed. The activity log
+// (src/activity/) holds the plain summary of each action.
 import type { EvidenceClaim } from "../domain/claim.ts";
 import type { EvidenceEvent, MessageEvent } from "../intake/events.ts";
-import type { AccessEvent, Actor, ProposalEvent, RecordEvent } from "../records/events.ts";
+import { actorName, type AccessEvent, type Actor, type RecordEvent } from "../records/events.ts";
 import type { ReplyEvent } from "../reply/events.ts";
 import { TEMPLATES } from "../reply/templates.ts";
-import { slotLabel } from "../slots/labels.ts";
+import { slotLabel, sourceLabel } from "../slots/labels.ts";
+
+const sourceLabelOf = (c: EvidenceClaim) => sourceLabel(c.source_type, c.agent_name ?? null);
 import type { StoredEvent } from "../store/event-log.ts";
-import { GRANT_PREFIX } from "../grants/grants.ts";
 import type { CaseEvent } from "./events.ts";
 import type { ChatEventData } from "../agent/events.ts";
+import { ACTIVITY_STREAM } from "../activity/events.ts";
+import { SETTINGS_STREAM } from "../settings/events.ts";
+
+// Streams the history leaves out: settings, the activity log, which says
+// the same things in its own words, and streams from before sprint 8.
+const LEFT_OUT = ["grant:", "proposal:"];
+const leftOut = (streamId: string) => streamId === SETTINGS_STREAM || streamId === ACTIVITY_STREAM || LEFT_OUT.some((p) => streamId.startsWith(p));
 
 export type HistoryEntry = {
   seq: number;
@@ -25,7 +34,7 @@ export type HistoryEntry = {
   undone: boolean;
 };
 
-type AnyEvent = MessageEvent | EvidenceEvent | CaseEvent | ReplyEvent | RecordEvent | ProposalEvent | AccessEvent | ChatEventData;
+type AnyEvent = MessageEvent | EvidenceEvent | CaseEvent | ReplyEvent | RecordEvent | AccessEvent | ChatEventData;
 
 const CHAT_OUTCOME = {
   answered: "answer passed the code checks",
@@ -52,7 +61,7 @@ function claimText(c: EvidenceClaim): string {
   return c.slot.date === null ? words : `${words} for ${slotLabel(c.slot.date, c.slot.time)}`;
 }
 
-const actor = (by: Actor) => (by.kind === "user" ? "by you" : `by ${by.grant_name}`);
+const actor = (by: Actor) => `by ${actorName(by)}`;
 const after = (id: string, prefix: string) => id.slice(prefix.length);
 
 const APPROVAL_CLAIMS = {
@@ -73,7 +82,6 @@ function label(e: StoredEvent): string | null {
   const event = { type: e.type, data: e.data } as AnyEvent;
   const evidence = after(e.streamId, "evidence:");
   const record = after(e.streamId, "record:");
-  const proposal = after(e.streamId, "proposal:");
   switch (event.type) {
     case "message_imported":
       return `Message ${event.data.message.id} added (${event.data.message.channel.replaceAll("_", " ")})`;
@@ -90,11 +98,15 @@ function label(e: StoredEvent): string | null {
     case "claim_entered_manually":
       return `Claim ${evidence} saved for review: ${claimText(event.data.claim)}`;
     case "claim_accepted":
-      return `You accepted claim ${evidence}`;
+      return `Claim ${evidence} accepted`;
     case "claim_rejected_by_user":
-      return `You rejected claim ${evidence}`;
+      return `Claim ${evidence} rejected`;
+    case "claim_decision_undone":
+      return `Review of claim ${evidence} undone. It waits for review again`;
+    case "evidence_withdrawn":
+      return `Claim ${evidence} withdrawn by an undo`;
     case "answer_recorded":
-      return `Your answer recorded as claim ${evidence}: ${claimText(event.data.claim)}`;
+      return `Answer recorded as claim ${evidence}${event.data.claim.source_type === "reported_by_user_via_agent" ? ` (${sourceLabelOf(event.data.claim)})` : ""}: ${claimText(event.data.claim)}`;
     case "reply_recorded":
       return `Your approved reply recorded as claim ${evidence}: ${claimText(event.data.claim)}`;
     case "agent_report_confirmed":
@@ -104,7 +116,9 @@ function label(e: StoredEvent): string | null {
     case "question_asked":
       return `Question ${event.data.question_id} asked (${event.data.origin === "model" ? "model wording, passed the code checks" : "fixed wording"})`;
     case "question_withdrawn":
-      return `Question ${event.data.question_id} withdrawn because its conflict changed`;
+      return `Question ${event.data.question_id} withdrawn ${event.data.reason === "undone" ? "by an undo" : "because its conflict changed"}`;
+    case "question_answer_undone":
+      return `Answer to question ${event.data.question_id} undone. The question is open again`;
     case "question_answered":
       return `Question ${event.data.question_id} answered (choice ${event.data.choice_id})`;
     case "explanation_attempted":
@@ -118,7 +132,9 @@ function label(e: StoredEvent): string | null {
     case "reply_edited":
       return `Draft ${event.data.draft_id} edited`;
     case "reply_discarded":
-      return `Draft ${event.data.draft_id} discarded${event.data.reason === "replaced" ? " because a new draft replaced it" : ""}`;
+      return `Draft ${event.data.draft_id} discarded${event.data.reason === "replaced" ? " because a new draft replaced it" : event.data.reason === "undone" ? " by an undo" : ""}`;
+    case "reply_discard_undone":
+      return `Discard of draft ${event.data.draft_id} undone. The draft is open again`;
     case "reply_approved":
       return `Draft ${event.data.draft_id} approved. Simulated send. ${APPROVAL_CLAIMS[event.data.claims]}`;
     case "reply_send_simulated":
@@ -132,12 +148,6 @@ function label(e: StoredEvent): string | null {
       return `${record} archived ${actor(event.data.by)}${event.data.proposal_id ? ` from proposal ${event.data.proposal_id}` : ""}`;
     case "event_undone":
       return `Undo on ${record} ${actor(event.data.by)}: reversed version ${event.data.version}`;
-    case "change_proposed":
-      return `${event.data.grant_name} proposed a change (${event.data.change.kind.replaceAll("_", " ")}), proposal ${proposal}`;
-    case "proposal_confirmed":
-      return `You confirmed proposal ${proposal}`;
-    case "proposal_rejected":
-      return `You rejected proposal ${proposal}`;
     case "chat_user_message":
       return event.data.withheld ? "You wrote in the chat (not saved: health question)" : "You wrote in the chat";
     case "chat_lines_imported":
@@ -148,7 +158,8 @@ function label(e: StoredEvent): string | null {
     case "tool_called": {
       const d = event.data;
       const count = d.count === undefined ? "" : ` (${d.count} calls)`;
-      return `Agent call by ${d.grant_name ?? "an unknown grant"}: ${d.tool} · ${d.result.replaceAll("_", " ")}${count}`;
+      const who = d.actor === "mcp" ? "an external agent" : (d.grant_name ?? "an unknown grant");
+      return `Agent call by ${who}: ${d.tool} · ${d.result.replaceAll("_", " ")}${count}`;
     }
   }
   return `${e.type} on ${e.streamId}`;
@@ -161,7 +172,7 @@ export function caseHistory(events: StoredEvent[]): HistoryEntry[] {
   }
   const entries: HistoryEntry[] = [];
   for (const e of events) {
-    if (e.streamId.startsWith(GRANT_PREFIX)) continue;
+    if (leftOut(e.streamId)) continue;
     const text = label(e);
     if (text === null) continue;
     entries.push({ seq: e.seq, at: e.recordedAt, streamId: e.streamId, label: text, undone: undone.has(`${e.streamId}#${e.version}`) });

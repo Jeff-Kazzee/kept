@@ -190,6 +190,32 @@ export class ReplyService {
     return this.#kase.view();
   }
 
+  // Undo of a draft's start (0009, design 3): the open draft is discarded.
+  // For the activity log, inside its transaction.
+  undoStart(draftId: string): void {
+    this.#store.inCase(() => {
+      this.#open(draftId);
+      const event: ReplyEvent = { type: "reply_discarded", data: { draft_id: draftId, reason: "undone" } };
+      this.#store.append(REPLY_STREAM, this.#store.streamVersion(REPLY_STREAM), [asEvent(event)], this.#describe);
+    });
+  }
+
+  // Undo of a discard: the draft is open again. Refused while another
+  // draft is open. Approval checks the draft against the case as always.
+  undoDiscard(draftId: string): void {
+    this.#store.inCase(() => this.#undoDiscard(draftId));
+  }
+
+  #undoDiscard(draftId: string): void {
+    const log = this.#kase.replyState().log;
+    const open = openDraft(log);
+    if (open) throw new InvalidRequestError(`Draft ${open.id} is open. Finish or discard it first.`);
+    const draft = log.drafts.find((d) => d.id === draftId);
+    if (!draft || draft.status !== "discarded") throw new InvalidRequestError(`Draft ${draftId} is not discarded.`);
+    const event: ReplyEvent = { type: "reply_discard_undone", data: { draft_id: draftId } };
+    this.#appendFor(draft.slotKey, () => this.#store.append(REPLY_STREAM, this.#store.streamVersion(REPLY_STREAM), [asEvent(event)], this.#describe));
+  }
+
   // Approval needs the name of every field the user read back, at the
   // reply-stream version the readback was done at. Any edit moves the
   // version, so a readback from before an edit is a stale edit. The draft
@@ -222,7 +248,7 @@ export class ReplyService {
     const needsConfirmation = claimConfirmation(draft) !== null;
     const targets = needsConfirmation && options.confirmClaim !== true ? [] : claims;
     const outcome: ApprovalClaims = claims.length === 0 ? "none" : targets.length === 0 ? "not_confirmed" : "recorded";
-    const now = this.#now();
+    const now = this.#kase.zoned(this.#now());
     const accepted = context.evidence.filter((e) => e.status === "accepted");
     const latest = accepted.reduce((max, e) => Math.max(max, arrivalTime(e)), Number.NEGATIVE_INFINITY);
     const after = Number.isFinite(latest) ? new Date(latest).toISOString() : now;

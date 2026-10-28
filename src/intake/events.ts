@@ -6,8 +6,10 @@
 // accepted when it is recorded. An approved reply creates evidence items the
 // same way, because the approval is the user's review. A change an agent
 // proposed becomes an evidence item only when the user confirms it in the
-// app, so that item is also accepted when it is recorded. Unknown event
-// kinds are skipped.
+// app, so that item is also accepted when it is recorded. Undo of a review
+// decision appends claim_decision_undone, which returns the item to
+// pending. Undo of an answer appends evidence_withdrawn to each item the
+// answer created, which leaves the case. Unknown event kinds are skipped.
 import type { Effort, EvidenceClaim, Message, SourceType } from "../domain/claim.ts";
 import type { AttemptProblem, ClaimProblem } from "../extract/extract.ts";
 import type { ModelClaim, TokenUsage } from "../model/request.ts";
@@ -47,7 +49,10 @@ export type MessageEvent =
       type: "extraction_finished";
       data: { effort: Effort; outcome: ExtractionOutcome; evidence_ids: string[] };
     }
-  | { type: "manual_entry_recorded"; data: { evidence_id: string } };
+  | { type: "manual_entry_recorded"; data: { evidence_id: string } }
+  // Undo of adding the message (0009, design 3). The message and its
+  // claims leave the case. Pasting it again adds it anew.
+  | { type: "message_withdrawn"; data: Record<string, never> };
 
 export type ExtractionOutcome = "claims_pending" | "no_claims" | "manual_entry_needed";
 
@@ -58,7 +63,11 @@ export type EvidenceEvent =
   | { type: "claim_rejected_by_user"; data: Record<string, never> }
   | { type: "answer_recorded"; data: { claim: EvidenceClaim } & AnswerMeta }
   | { type: "reply_recorded"; data: { claim: EvidenceClaim } & ReplyMeta }
-  | { type: "agent_report_confirmed"; data: { proposal_id: string; grant_id: string; claim: EvidenceClaim } };
+  // From before sprint 8: a change an agent proposed that the user
+  // confirmed. Kept so old cases still project.
+  | { type: "agent_report_confirmed"; data: { proposal_id: string; grant_id: string; claim: EvidenceClaim } }
+  | { type: "claim_decision_undone"; data: Record<string, never> }
+  | { type: "evidence_withdrawn"; data: Record<string, never> };
 
 // Where an answer item came from. `clarifies` names the evidence item whose
 // date or time the answer resolves. `after` is the latest evidence time in
@@ -108,7 +117,7 @@ export type EvidenceView = {
   messageId: string | null;
   claim: EvidenceClaim;
   // "model" means model output that passed the code checks. "agent" means a
-  // change an agent proposed and the user confirmed.
+  // change an agent proposed and the user confirmed, before sprint 8.
   origin: "model" | "manual" | "answer" | "reply" | "agent";
   status: ReviewStatus;
   decidedAt: string | null;
@@ -153,6 +162,8 @@ export function projectMessages(events: StoredEvent[]): Map<string, MessageView>
       view.evidenceIds.push(...event.data.evidence_ids);
     } else if (event.type === "manual_entry_recorded") {
       view.manualEvidenceIds.push(event.data.evidence_id);
+    } else if (event.type === "message_withdrawn") {
+      views.delete(id);
     }
   }
   return views;
@@ -228,6 +239,11 @@ export function projectEvidence(events: StoredEvent[]): Map<string, EvidenceView
     } else if (event.type === "claim_rejected_by_user") {
       view.status = "rejected";
       view.decidedAt = e.recordedAt;
+    } else if (event.type === "claim_decision_undone") {
+      view.status = "pending";
+      view.decidedAt = null;
+    } else if (event.type === "evidence_withdrawn") {
+      views.delete(id);
     }
   }
   return views;

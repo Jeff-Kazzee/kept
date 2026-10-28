@@ -11,8 +11,8 @@ export function fromPackage(...parts: string[]): string {
   return path.join(PACKAGE_ROOT, ...parts);
 }
 
-// The app's event log. The app, the MCP server and the grant command open
-// this one file, so a grant revoked in the app stops the next agent call.
+// The app's event log. The app and the MCP server open this one file, so
+// an external agent's action shows in the app at once.
 export function appDbPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.resolve(PACKAGE_ROOT, env.APP_DB ?? "data/app.sqlite");
 }

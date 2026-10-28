@@ -1,11 +1,12 @@
-// Shapes of records and proposals that the UI also uses, and the plain
-// words code builds for a proposed change. Shared by the server and the UI,
-// so this file must not import Node modules.
+// Agent proposals were removed in sprint 8 (0009, J1): agents act, and the
+// person undoes. The server no longer has proposals. This file stays only
+// so the sprint 7B UI, which sprint 9 replaces, still builds. Delete it with
+// ui/case/ProposalCard.tsx. Runs in the browser, so it must not import Node
+// modules.
 import type { ClaimType } from "../domain/claim.ts";
 import { slotLabel } from "../slots/labels.ts";
 
-// A change an agent proposes. Validated by src/records/inputs.ts before it
-// is stored. `statement` is the agent's own words, kept as untrusted text.
+// A change an agent proposed, before sprint 8.
 export type ProposedChange =
   | {
       kind: "new_appointment";

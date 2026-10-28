@@ -33,6 +33,14 @@ export function slotLabel(date: string, time: string | null): string {
   return time === null ? `${dateLabel(date)}, no time` : `${dateLabel(date)} ${timeLabel(time)}`;
 }
 
+// The names code gives the agents that write evidence (0009, design 4):
+// the in-app assistant and an external agent over MCP.
+export const ASSISTANT_NAME = "the assistant";
+export const EXTERNAL_AGENT_NAME = "an external agent";
+const AGENT_NAMES: readonly string[] = [ASSISTANT_NAME, EXTERNAL_AGENT_NAME];
+
+// "added by the assistant" for evidence an agent wrote. A name from before
+// sprint 8 is a grant's name on a report the user confirmed.
 export function sourceLabel(source: SourceType, agentName: string | null = null): string {
   switch (source) {
     case "office_message":
@@ -40,7 +48,7 @@ export function sourceLabel(source: SourceType, agentName: string | null = null)
     case "reported_by_user":
       return "reported by you";
     case "reported_by_user_via_agent":
-      return `reported by you through ${agentName ?? "an agent"}`;
+      return agentName !== null && AGENT_NAMES.includes(agentName) ? `added by ${agentName}` : `reported by you through ${agentName ?? "an agent"}`;
   }
 }
 

@@ -3,11 +3,13 @@
 // claim accepted evidence. Message text is data. Nothing in a message or a
 // claim triggers an action.
 import { z } from "zod";
-import { ClaimType, Effort, Message, sourceTypeForChannel, type EvidenceClaim } from "../domain/claim.ts";
+import { CLAIM_TYPES, ClaimType, Effort, Message, sourceTypeForChannel, type EvidenceClaim } from "../domain/claim.ts";
 import { checkSlotFormats } from "../domain/datetime.ts";
+import { zonedIso } from "../domain/zone.ts";
+import { caseTimeZone } from "../settings/events.ts";
 import { OutOfScopeError, hasClinicalContent } from "../domain/scope.ts";
 import { quoteAppearsIn } from "../domain/quote.ts";
-import { extractClaims, type ExtractionResult } from "../extract/extract.ts";
+import { checkClaim, extractClaims, type ExtractionResult } from "../extract/extract.ts";
 import type { ModelClient } from "../model/client.ts";
 import type { EventStore, StoredEvent, StreamWrite } from "../store/event-log.ts";
 import {
@@ -121,8 +123,45 @@ export class IntakeService {
         ...(source && source.suggested.length > 0 ? { source_suggested: source.suggested, source_note: source.note } : {}),
       },
     };
-    this.#store.append(messageStream(message.id), 0, [asEvent(event)], this.#describeMessage);
+    // A message added again after an undo withdrew it starts anew on its
+    // own stream. A message still in the case is a stale edit, as before.
+    const stream = messageStream(message.id);
+    const version = this.#store.streamVersion(stream);
+    const withdrawn = version > 0 && !projectMessages(this.#store.readStream(stream)).has(message.id);
+    this.#store.append(stream, withdrawn ? version : 0, [asEvent(event)], this.#describeMessage);
     return this.message(message.id);
+  }
+
+  // How many times the message was added. Evidence ids of a message added
+  // again after an undo carry the round, such as m1-r2-e1, because the
+  // first round's ids stay taken.
+  #idPrefix(messageId: string): string {
+    const rounds = this.#store.readStream(messageStream(messageId)).filter((e) => e.type === "message_imported").length;
+    return rounds <= 1 ? messageId : `${messageId}-r${rounds}`;
+  }
+
+  // Undo of adding a message (0009, design 3): the message and its claims
+  // leave the case, in one transaction. Refused while one of its claims is
+  // accepted or rejected, because a later review depends on it.
+  withdrawMessage(messageId: string): void {
+    this.#store.inCase(() => this.#withdrawMessage(messageId));
+  }
+
+  #withdrawMessage(messageId: string): void {
+    this.#store.transaction(() => {
+      const m = this.message(messageId);
+      const ids = [...m.evidenceIds, ...m.manualEvidenceIds];
+      const decided = ids.map((id) => this.evidenceItem(id)).filter((e) => e.status !== "pending");
+      if (decided.length > 0) {
+        throw new InvalidRequestError(`${decided.length === 1 ? "A fact" : `${decided.length} facts`} from message ${messageId} ${decided.length === 1 ? "was" : "were"} reviewed. Undo those reviews first.`);
+      }
+      const withdrawn: EvidenceEvent = { type: "evidence_withdrawn", data: {} };
+      const event: MessageEvent = { type: "message_withdrawn", data: {} };
+      this.#store.appendMany([
+        { streamId: messageStream(messageId), expectedVersion: m.version, events: [asEvent(event)] },
+        ...ids.map((id) => ({ streamId: evidenceStream(id), expectedVersion: this.#store.streamVersion(evidenceStream(id)), events: [asEvent(withdrawn)] })),
+      ]);
+    });
   }
 
   // Keeps the case generation it started from, as the other model calls do.
@@ -167,12 +206,13 @@ export class IntakeService {
     }
 
     const finalAttempt = result.attempts.at(-1)!.attempt;
+    const prefix = this.#idPrefix(messageId);
     const evidenceWrites: StreamWrite[] = result.passed.map((claim, i) => {
       const event: EvidenceEvent = {
         type: "claim_extracted",
         data: { message_id: messageId, claim: before.sourceNote ? { ...claim, source_note: before.sourceNote } : claim, effort, attempt: finalAttempt },
       };
-      return { streamId: evidenceStream(this.#newId(`${messageId}-e${i + 1}`)), expectedVersion: 0, events: [asEvent(event)] };
+      return { streamId: evidenceStream(this.#newId(`${prefix}-e${i + 1}`)), expectedVersion: 0, events: [asEvent(event)] };
     });
     const evidenceIds = evidenceWrites.map((w) => w.streamId.slice("evidence:".length));
     const outcome: ExtractionOutcome = result.needsManualEntry
@@ -214,6 +254,47 @@ export class IntakeService {
     return this.evidenceItem(evidenceId);
   }
 
+  // Undo of a review decision (0009, design 3): the item waits for review
+  // again. For the activity log, inside its transaction, which has checked
+  // that the decision is still the item's latest event.
+  undoDecision(evidenceId: string): EvidenceView {
+    return this.#store.inCase(() => {
+      const event: EvidenceEvent = { type: "claim_decision_undone", data: {} };
+      this.#store.append(evidenceStream(evidenceId), this.#store.streamVersion(evidenceStream(evidenceId)), [asEvent(event)], this.#describeEvidence);
+      return this.evidenceItem(evidenceId);
+    });
+  }
+
+  // Why an agent may not accept this claim, or null when it may (0009,
+  // design 1). The claim must come from a message in the case, its quote
+  // must still appear verbatim in that message's text, and its date, time
+  // and event time must pass the extraction checks against the quote. A
+  // fact the person entered by hand with no quote has nothing to check, so
+  // only the person accepts it.
+  verificationProblem(evidenceId: string): string | null {
+    const e = this.evidenceItem(evidenceId);
+    if (e.messageId === null) return "This fact came from no message, so there is nothing to check it against.";
+    const message = this.message(e.messageId).message;
+    const c = e.claim;
+    if (c.quote === null || c.quote.trim() === "") return "This fact has no quote from its message to check. Accept it yourself in the app.";
+    if (!(CLAIM_TYPES as readonly string[]).includes(c.claim_type)) return "Only facts from a message can be checked this way.";
+    const problems = checkClaim(
+      {
+        claim_type: c.claim_type as ClaimType,
+        date: c.slot.date,
+        time: c.slot.time,
+        location: c.slot.location,
+        quote: c.quote,
+        sender_kind: c.sender_kind,
+        event_time: c.event_time,
+        request_item: c.request_item,
+      },
+      message,
+    );
+    if (problems.length > 0) return `This fact did not pass the extraction checks again (${problems.join(", ")}). Accept or reject it yourself in the app.`;
+    return null;
+  }
+
   // The user enters a claim by hand, for example after extraction fell to
   // manual entry. It is recorded as reported by the user and waits in the
   // review queue like every other claim.
@@ -248,11 +329,11 @@ export class IntakeService {
       quote,
       source_type: "reported_by_user",
       sender_kind: "unknown",
-      evidence_time: this.#now(),
+      evidence_time: zonedIso(this.#now(), caseTimeZone(this.#store)),
       event_time: null,
       request_item: claimInput.claim_type === "office_request" ? claimInput.request_item : null,
     };
-    const id = this.#newId(`${messageId}-u${before.manualEvidenceIds.length + 1}`);
+    const id = this.#newId(`${this.#idPrefix(messageId)}-u${before.manualEvidenceIds.length + 1}`);
     const evidenceEvent: EvidenceEvent = { type: "claim_entered_manually", data: { message_id: messageId, claim } };
     const messageEvent: MessageEvent = { type: "manual_entry_recorded", data: { evidence_id: id } };
     this.#store.appendMany(

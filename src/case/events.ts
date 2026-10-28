@@ -43,7 +43,11 @@ export type CaseEvent =
         attempts: AttemptData[];
       };
     }
-  | { type: "question_withdrawn"; data: { question_id: string; reason: "conflict_changed" } }
+  // "undone": an undo of the ask in the activity log.
+  | { type: "question_withdrawn"; data: { question_id: string; reason: "conflict_changed" | "undone" } }
+  // An undo of the answer in the activity log. The question is open again
+  // and the evidence it settled counts again.
+  | { type: "question_answer_undone"; data: { question_id: string; settled_evidence_ids: string[] } }
   | {
       type: "question_answered";
       data: {
@@ -108,11 +112,15 @@ export function projectQuestions(events: StoredEvent[]): QuestionQueue {
       });
       continue;
     }
-    if (event.type !== "question_withdrawn" && event.type !== "question_answered") continue;
+    if (event.type !== "question_withdrawn" && event.type !== "question_answered" && event.type !== "question_answer_undone") continue;
     const q = queue.questions.find((x) => x.id === event.data.question_id);
     if (!q) continue;
     if (event.type === "question_withdrawn") q.status = "withdrawn";
-    else {
+    else if (event.type === "question_answer_undone") {
+      q.status = "open";
+      q.answer = null;
+      for (const id of event.data.settled_evidence_ids) queue.settled.delete(id);
+    } else {
       q.status = "answered";
       q.answer = { choiceId: event.data.choice_id, label: event.data.label, evidenceIds: event.data.evidence_ids, answeredAt: e.recordedAt };
       for (const id of event.data.settled_evidence_ids) queue.settled.add(id);

@@ -14,13 +14,15 @@ import { evidenceStream, type AnswerMeta, type EvidenceEvent, type EvidenceView 
 import { InvalidRequestError, NotFoundError, type IntakeService } from "../intake/service.ts";
 import type { ModelClient } from "../model/client.ts";
 import { MODEL } from "../model/request.ts";
-import { ASSUMED_SLOT_MINUTES, CASE_TIME_ZONE } from "../slots/clash.ts";
+import { ASSUMED_SLOT_MINUTES } from "../slots/clash.ts";
 import { projectSlots } from "../slots/project.ts";
 import { arrivalTime } from "../slots/time.ts";
 import type { Conflict } from "../slots/types.ts";
 import { StaleEditError, type EventStore, type StoredEvent, type StreamWrite } from "../store/event-log.ts";
-import { GRANT_PREFIX } from "../grants/grants.ts";
 import { ACCESS_LOG_STREAM, RECORD_PREFIX, projectRecords } from "../records/events.ts";
+import { SETTINGS_STREAM, caseTimeZone } from "../settings/events.ts";
+import { zonedIso } from "../domain/zone.ts";
+import { ASSISTANT_NAME } from "../slots/labels.ts";
 import { buildDraft, type ReplyContext } from "../reply/draft.ts";
 import { REPLY_STREAM, draftEvents, projectReplies, type ReplyLog } from "../reply/events.ts";
 import { replyView } from "../reply/view.ts";
@@ -42,9 +44,10 @@ import type { AttemptSummary, CaseView, ConflictView, QuestionView } from "./typ
 
 export const MAX_CALENDAR_CHARS = 60_000;
 
-// Delete case keeps grants, which are app settings. Every other event in the
-// file is case data and is erased.
-export const KEPT_ON_DELETE = [GRANT_PREFIX] as const;
+// Delete case keeps the settings stream, such as the time zone. Every other
+// event in the file is case data and is erased, the activity log included.
+// Streams from before sprint 8 (grants, proposals) are erased too.
+export const KEPT_ON_DELETE = [SETTINGS_STREAM] as const;
 
 export { DELETE_CONFIRMATION };
 
@@ -130,10 +133,20 @@ export class CaseService {
   }
 
   // The version Delete case states: the latest event of the case. Access log
-  // entries do not move it, so an agent reading the case does not make the
-  // user's confirmation stale.
+  // entries and settings do not move it, so an agent reading the case does
+  // not make the user's confirmation stale.
   caseVersion(): number {
-    return this.#store.latestSeqExcept([GRANT_PREFIX, ACCESS_LOG_STREAM]);
+    return this.#store.latestSeqExcept([SETTINGS_STREAM, ACCESS_LOG_STREAM]);
+  }
+
+  // The case's time zone (0009, J5), read from the settings each time.
+  timeZone(): string {
+    return caseTimeZone(this.#store);
+  }
+
+  // An instant written with the case zone's offset.
+  zoned(iso: string): string {
+    return zonedIso(iso, this.timeZone());
   }
 
   // What the page polls to learn that anything changed: the case generation
@@ -144,8 +157,8 @@ export class CaseService {
     return { generation: this.#store.caseGeneration(), seq: this.#store.latestSeqExcept([]) };
   }
 
-  // Delete case: erases every event of the case, its access log and its
-  // rate-limit counters, and clears them from the file on disk. Grants stay.
+  // Delete case: erases every event of the case, its activity and access
+  // logs, and clears them from the file on disk. Settings stay.
   // App only, after the user types the confirmation. No MCP tool calls it.
   // The version check runs in the same transaction as the delete.
   deleteCase(expectedVersion: number, confirmation: string): { erased: number } {
@@ -182,7 +195,8 @@ export class CaseService {
     const queue = projectQuestions(this.#store.readStream(QUESTIONS_STREAM));
     const calendar = latestCalendar(this.#store.readStream(CALENDAR_STREAM));
     const events = calendar ? parseIcs(calendar.text) : null;
-    const projection = projectSlots({ evidence, settled: queue.settled, calendar: events });
+    const timeZone = this.timeZone();
+    const projection = projectSlots({ evidence, settled: queue.settled, calendar: events, timeZone });
     const archived = this.archivedKeys();
     const archivedIn = (c: Conflict) => c.slotKeys.filter((k) => archived.has(k));
 
@@ -217,7 +231,7 @@ export class CaseService {
       question: current ? questionView(current) : null,
       waiting: conflicts.filter(isWaiting).length,
       questionsVersion: queue.version,
-      calendar: calendar && events ? { name: calendar.name, events, timeZone: CASE_TIME_ZONE, assumedSlotMinutes: ASSUMED_SLOT_MINUTES } : null,
+      calendar: calendar && events ? { name: calendar.name, events, timeZone, assumedSlotMinutes: ASSUMED_SLOT_MINUTES } : null,
       calendarVersion: calendar?.version ?? 0,
       reply: replyView(replies, replyContext),
       checklist: buildChecklist(evidence),
@@ -366,11 +380,15 @@ export class CaseService {
   // in one transaction with the answer. A choice that starts a reply opens
   // its draft in the same transaction, so it also states the expected
   // version of the reply stream.
-  answer(questionId: string, choiceId: string, expectedVersion: number, replyVersion?: number): CaseView {
-    return this.#store.inCase(() => this.#answer(questionId, choiceId, expectedVersion, replyVersion));
+  // `agent` names the agent that answered, when one did: "the assistant" or
+  // "an external agent". Its items are then added by that agent, not
+  // reported by the person, and code refuses an answer whose items would
+  // set a slot to confirmed or canceled (0009, design 1).
+  answer(questionId: string, choiceId: string, expectedVersion: number, replyVersion?: number, agent: string | null = null): CaseView {
+    return this.#store.inCase(() => this.#answer(questionId, choiceId, expectedVersion, replyVersion, agent));
   }
 
-  #answer(questionId: string, choiceId: string, expectedVersion: number, replyVersion?: number): CaseView {
+  #answer(questionId: string, choiceId: string, expectedVersion: number, replyVersion: number | undefined, agent: string | null): CaseView {
     this.#store.assertVersion(QUESTIONS_STREAM, expectedVersion, this.#describeQueue);
     const { evidence, current, replyContext, replies, conflicts } = this.#build();
     if (!current || current.id !== questionId) throw new InvalidRequestError(`Question ${questionId} is not open.`);
@@ -378,19 +396,24 @@ export class CaseService {
     const choice = current.choices.find((c) => c.id === choiceId);
     if (!choice) throw new InvalidRequestError(`Question ${questionId} has no choice ${choiceId}.`);
 
-    const now = this.#now();
+    const now = this.zoned(this.#now());
     const latest = evidence.filter((e) => e.status === "accepted").reduce((max, e) => Math.max(max, arrivalTime(e)), Number.NEGATIVE_INFINITY);
     const after = Number.isFinite(latest) ? new Date(latest).toISOString() : now;
+    // An answer that was undone keeps its ids, so a new answer to the same
+    // question takes the next free ones.
+    let answerBase = `answer-${questionId}`;
+    for (let k = 2; this.#store.streamVersion(evidenceStream(`${answerBase}-1`)) > 0; k++) answerBase = `answer-${questionId}-r${k}`;
     const writes: StreamWrite[] = choice.effects.map((effect, i) => {
       const claim: EvidenceClaim = {
         claim_type: effect.claim_type,
         slot: { date: effect.date, time: effect.time, location: effect.location },
         quote: choice.label,
-        source_type: "reported_by_user",
+        source_type: agent === null ? "reported_by_user" : "reported_by_user_via_agent",
         sender_kind: "person",
         evidence_time: now,
         event_time: null,
         request_item: null,
+        ...(agent === null ? {} : { agent_name: agent }),
       };
       const meta: AnswerMeta = {
         question_id: questionId,
@@ -401,7 +424,7 @@ export class CaseService {
         index: i,
       };
       const event: EvidenceEvent = { type: "answer_recorded", data: { claim, ...meta } };
-      return { streamId: evidenceStream(`answer-${questionId}-${i + 1}`), expectedVersion: 0, events: [asEvent(event)] };
+      return { streamId: evidenceStream(`${answerBase}-${i + 1}`), expectedVersion: 0, events: [asEvent(event)] };
     });
     const answered: CaseEvent = {
       type: "question_answered",
@@ -438,9 +461,70 @@ export class CaseService {
         [{ streamId: QUESTIONS_STREAM, expectedVersion, events: [asEvent(answered)] }, ...writes],
         (streamId, events) => (streamId === QUESTIONS_STREAM ? this.#describeQueue(streamId, events) : null),
       );
+      // The slot-state rule, on the case as the answer leaves it: a slot's
+      // state comes only from an office message or the person's own report.
+      // An agent's answer whose items would set a state is refused, and
+      // nothing is kept. Answers that say which date or place a claim
+      // means, start a reply or leave things open set no state.
+      if (agent !== null) {
+        const made = new Set(writes.map((w) => w.streamId.slice("evidence:".length)));
+        const held = this.view().slots.find((s) => made.has(s.stateEvidenceId));
+        if (held) {
+          throw new AgentAnswerRefused(
+            `Only an office message or your own report can set ${held.label} to ${STATE_WORDS[held.state]}. ${agent === ASSISTANT_NAME ? "The assistant" : "An agent"} cannot answer with that choice. Answer it yourself in the app.`,
+          );
+        }
+      }
     });
     return this.view();
   }
+
+  // Undo of an answer (0009, design 3): the question is open again, the
+  // evidence it created leaves the case and the evidence it settled counts
+  // again. A draft the answer opened is discarded when still open. For the
+  // activity log, inside its transaction.
+  undoAnswer(questionId: string, evidenceIds: string[], settledIds: string[]): void {
+    this.#store.inCase(() => this.#undoAnswer(questionId, evidenceIds, settledIds));
+  }
+
+  #undoAnswer(questionId: string, evidenceIds: string[], settledIds: string[]): void {
+    const version = this.#store.streamVersion(QUESTIONS_STREAM);
+    const event: CaseEvent = { type: "question_answer_undone", data: { question_id: questionId, settled_evidence_ids: settledIds } };
+    this.#store.appendMany([
+      { streamId: QUESTIONS_STREAM, expectedVersion: version, events: [asEvent(event)] },
+      ...evidenceIds.map((id) => ({
+        streamId: evidenceStream(id),
+        expectedVersion: this.#store.streamVersion(evidenceStream(id)),
+        events: [asEvent({ type: "evidence_withdrawn", data: {} } as EvidenceEvent)],
+      })),
+    ]);
+  }
+
+  // Undo of an ask: the question is withdrawn and its conflict waits again.
+  withdrawQuestion(questionId: string): void {
+    const event: CaseEvent = { type: "question_withdrawn", data: { question_id: questionId, reason: "undone" } };
+    this.#store.inCase(() => this.#store.append(QUESTIONS_STREAM, this.#store.streamVersion(QUESTIONS_STREAM), [asEvent(event)]));
+  }
+
+  // The question queue as stored, for undo checks.
+  questions(): QuestionRecord[] {
+    return projectQuestions(this.#store.readStream(QUESTIONS_STREAM)).questions;
+  }
+}
+
+const STATE_WORDS: Record<string, string> = {
+  offered: "offered",
+  requested: "requested",
+  confirmed: "confirmed",
+  change_proposed: "confirmed",
+  canceled: "canceled",
+  declined: "declined",
+};
+
+// An agent's answer would set a slot state that only an office message or
+// the person's own report may set.
+export class AgentAnswerRefused extends InvalidRequestError {
+  override name = "AgentAnswerRefused";
 }
 
 // A conflict the app may ask about now. One that names an archived

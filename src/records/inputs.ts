@@ -1,16 +1,12 @@
-// Input rules for record writes and proposals. The app and the MCP server
-// both validate with these schemas, so an agent gets no looser rules than
-// the user. Date and time use the same format checks as a manual entry. An
-// agent report has no event time, the same as a manual entry, so slot order
-// falls back to when the agent reported it.
+// Input rules for record writes. The app, the in-app agent and the MCP
+// server all validate with these schemas, so an agent gets no looser rules
+// than the person.
 import { z } from "zod";
-import { ClaimType } from "../domain/claim.ts";
-import { checkSlotFormats, isValidDate, isValidTime } from "../domain/datetime.ts";
+import { isValidDate, isValidTime } from "../domain/datetime.ts";
 
 export const MAX_NOTE_CHARS = 2_000;
 export const MAX_TAGS = 20;
 export const MAX_TAG_CHARS = 40;
-export const MAX_STATEMENT_CHARS = 500;
 
 // Control characters other than tab and newline, and the Unicode marks that
 // reorder or hide text.
@@ -56,64 +52,3 @@ export const Tags = z
       return true;
     });
   });
-
-const Statement = z
-  .string()
-  .trim()
-  .min(1)
-  .max(MAX_STATEMENT_CHARS)
-  .refine(noHidden, "The statement contains control characters.");
-const Place = z.string().trim().min(1).max(300).refine(noHidden, "The place contains control characters.");
-const Item = z.string().trim().min(1).max(300).refine(noHidden, "The item contains control characters.");
-const DateString = z.string().refine((s) => checkSlotFormats({ date: s, time: null, event_time: null }).length === 0, "Use YYYY-MM-DD.");
-const TimeString = z.string().refine((s) => checkSlotFormats({ date: null, time: s, event_time: null }).length === 0, "Use 24-hour HH:MM.");
-
-export const ProposedChangeInput = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("new_appointment"),
-      date: DateString,
-      time: TimeString,
-      location: Place.nullable().default(null),
-      status: z.enum(["offered", "confirmed"]),
-      statement: Statement,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("user_report"),
-      claim_type: ClaimType,
-      date: DateString.nullable(),
-      time: TimeString.nullable().default(null),
-      location: Place.nullable().default(null),
-      request_item: Item.nullable().default(null),
-      statement: Statement,
-    })
-    .strict()
-    .refine((c) => c.claim_type !== "office_request" || c.request_item !== null, {
-      message: "An office request needs the item to bring or the task to do.",
-      path: ["request_item"],
-    })
-    .refine((c) => c.claim_type === "office_request" || c.date !== null, {
-      message: "A report about a slot needs its date.",
-      path: ["date"],
-    }),
-  z
-    .object({
-      kind: z.literal("detail_edit"),
-      appointment_id: AppointmentId,
-      expected_version: ExpectedVersion,
-      location: Place,
-      statement: Statement,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("archive"),
-      appointment_id: AppointmentId,
-      expected_version: ExpectedVersion,
-      statement: Statement,
-    })
-    .strict(),
-]);
-export type ProposedChangeInput = z.input<typeof ProposedChangeInput>;

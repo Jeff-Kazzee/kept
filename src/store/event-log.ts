@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS case_meta (
   key TEXT PRIMARY KEY,
   value INTEGER NOT NULL
 );
+-- Rate-limit counters from before sprint 8, when every MCP process on the
+-- file shared them. Nothing writes them now. Delete case still clears them.
 CREATE TABLE IF NOT EXISTS rate_windows (
   key TEXT NOT NULL,
   window_start INTEGER NOT NULL,
@@ -86,8 +88,6 @@ const toEvent = (r: Row): StoredEvent => ({
 });
 
 const defaultDescribe: Describe = (_streamId, events) => ({ version: events.at(-1)?.version ?? 0, events });
-
-export type RateWindow = { key: string; windowStart: number; calls: number; denied: number };
 
 // Another process held the write lock through the busy timeout and every
 // retry. Nothing was written.
@@ -145,9 +145,11 @@ export class EventStore {
   readonly #clock: () => string;
   #depth = 0;
   readonly #retryMs: number[];
-  #guard: (() => void) | null = null;
   // The case generation the current command started from. See inCase.
   readonly #scope = new AsyncLocalStorage<number>();
+  // Runs inside each outermost write transaction of a command, before it
+  // commits. See withWriteHook.
+  readonly #hooks = new AsyncLocalStorage<() => void>();
 
   // `location` is a file path or ":memory:".
   constructor(location: string = ":memory:", clock: () => string = () => new Date().toISOString(), options: StoreOptions = {}) {
@@ -218,12 +220,14 @@ export class EventStore {
     else this.#db.exec(`SAVEPOINT ${savepoint}`);
     this.#depth++;
     try {
-      if (this.#depth === 1) {
-        this.#assertGeneration();
-        if (this.#guard) this.#guard();
-      }
+      if (this.#depth === 1) this.#assertGeneration();
       const result = fn();
       if (result instanceof Promise) throw new Error("A transaction must be synchronous.");
+      if (this.#depth === 1) {
+        const hook = this.#hooks.getStore();
+        // The hook's own writes run without it.
+        if (hook) this.#hooks.exit(hook);
+      }
       this.#depth--;
       this.#db.exec(this.#depth === 0 ? "COMMIT" : `RELEASE ${savepoint}`);
       return result;
@@ -250,18 +254,13 @@ export class EventStore {
     }
   }
 
-  // Runs `fn` with a check that every write transaction it starts runs
-  // first, inside the lock. The MCP server uses it to check the grant in the
-  // same transaction as the agent's write, while the reads before the write
-  // hold no lock.
-  withWriteGuard<T>(guard: () => void, fn: () => T): T {
-    const previous = this.#guard;
-    this.#guard = guard;
-    try {
-      return fn();
-    } finally {
-      this.#guard = previous;
-    }
+  // Runs `fn` so that each outermost write transaction it starts, before
+  // and after any await, runs `hook` just before it commits, inside the
+  // lock. The activity log uses it to write an entry in the same
+  // transaction as the action it describes, for commands that wait for a
+  // model before they write.
+  withWriteHook<T>(hook: () => void, fn: () => T): T {
+    return this.#hooks.run(hook, fn);
   }
 
   // Writes to several streams in one transaction. Every stream must be at its
@@ -300,40 +299,6 @@ export class EventStore {
       const at = this.#clock();
       return events.map((e, i) => toEvent(insert.get(streamId, current + i + 1, e.type, JSON.stringify(e.data), at) as unknown as Row));
     });
-  }
-
-  // Call counts in fixed time windows, for limits that every process on this
-  // file shares. These rows are counters, not history, so they are updated
-  // and removed. Use them inside transaction(), so a read and the update
-  // that depends on it are one step.
-  rateWindow(key: string, windowStart: number): RateWindow {
-    const row = this.#db.prepare("SELECT calls, denied FROM rate_windows WHERE key = ? AND window_start = ?").get(key, windowStart) as
-      | { calls: number; denied: number }
-      | undefined;
-    return { key, windowStart, calls: row?.calls ?? 0, denied: row?.denied ?? 0 };
-  }
-
-  bumpRateWindow(key: string, windowStart: number, field: "calls" | "denied"): RateWindow {
-    this.#db
-      .prepare(
-        `INSERT INTO rate_windows (key, window_start, ${field}) VALUES (?, ?, 1)
-         ON CONFLICT (key, window_start) DO UPDATE SET ${field} = ${field} + 1`,
-      )
-      .run(key, windowStart);
-    return this.rateWindow(key, windowStart);
-  }
-
-  // Removes and returns the windows that started before `before`, for one
-  // key or, with key null, for every key.
-  closeRateWindows(key: string | null, before: number): RateWindow[] {
-    const rows = (
-      key === null
-        ? this.#db.prepare("DELETE FROM rate_windows WHERE window_start < ? RETURNING *").all(before)
-        : this.#db.prepare("DELETE FROM rate_windows WHERE key = ? AND window_start < ? RETURNING *").all(key, before)
-    ) as Array<{ key: string; window_start: number; calls: number; denied: number }>;
-    return rows
-      .map((r) => ({ key: r.key, windowStart: r.window_start, calls: r.calls, denied: r.denied }))
-      .sort((a, b) => a.key.localeCompare(b.key) || a.windowStart - b.windowStart);
   }
 
   // The highest seq among events whose stream does not start with one of the
@@ -394,7 +359,7 @@ export class EventStore {
   // Delete case. The one path that removes events. In one transaction it
   // runs `check`, lifts the delete guard, removes every event whose stream
   // does not start with one of `keepPrefixes`, puts the guard back, clears
-  // every rate-limit counter, moves the case to a new generation and marks
+  // any old rate-limit counter, moves the case to a new generation and marks
   // the erase as pending. Then it rewrites the file (finishPendingErase), so
   // the removed text is gone from disk and not only from queries. Returns
   // the number of events removed. Running it again on an empty case only

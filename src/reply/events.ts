@@ -46,7 +46,11 @@ export type ReplyEvent =
       };
     }
   | { type: "reply_edited"; data: { draft_id: string; text: string } }
-  | { type: "reply_discarded"; data: { draft_id: string; reason: "replaced" | "by_user" } }
+  // "by_user" is a discard by the person or an agent. "undone" is an undo of
+  // the draft's start in the activity log.
+  | { type: "reply_discarded"; data: { draft_id: string; reason: "replaced" | "by_user" | "undone" } }
+  // An undo of a discard in the activity log. The draft is open again.
+  | { type: "reply_discard_undone"; data: { draft_id: string } }
   | {
       type: "reply_approved";
       data: {
@@ -131,6 +135,8 @@ export function projectReplies(events: StoredEvent[]): ReplyLog {
       draft.edited = true;
     } else if (event.type === "reply_discarded") {
       draft.status = "discarded";
+    } else if (event.type === "reply_discard_undone") {
+      draft.status = "open";
     } else if (event.type === "reply_approved") {
       draft.status = "approved";
       draft.approval = {
