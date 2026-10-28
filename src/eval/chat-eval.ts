@@ -25,8 +25,9 @@ import { defaultMessageId } from "../agent/tools.ts";
 import type { Card, ChatEvent } from "../agent/types.ts";
 import { CaseService } from "../case/service.ts";
 import { CaseActions, YOU } from "../actions/service.ts";
+import { DEMO_CALENDAR_NAME, demoCalendarText, loadCalendarAsPerson } from "../actions/demo.ts";
 import { Effort } from "../domain/claim.ts";
-import { corpusMessages, loadCaseProfile, loadScenarios, readFixtureText } from "../fixtures/load.ts";
+import { corpusMessages, loadCaseProfile, loadScenarios } from "../fixtures/load.ts";
 import { IntakeService } from "../intake/service.ts";
 import { ModelCallError, type ModelClient } from "../model/client.ts";
 import { RecordedModelClient } from "../model/recorded.ts";
@@ -78,7 +79,8 @@ const Step = z.union([
   z
     .object({
       say: z.string(),
-      // A fixture message pasted after the words in `say`.
+      // A fixture message pasted after the words in `say`. With `say` empty
+      // the message is the paste alone, as "Try the demo" sends it.
       paste: z.string().optional(),
       expect: Expect.default(Expect.parse({})),
     })
@@ -337,6 +339,13 @@ async function seed(store: EventStore, now: () => string, ids: string[], accept:
 
 const has = (list: string[], wanted: string[]) => wanted.every((w) => list.includes(w));
 
+// What the person sends in a `say` step.
+export function stepText(step: { say: string; paste?: string }): string {
+  if (!step.paste) return step.say;
+  const pasted = messageText(step.paste).text;
+  return step.say === "" ? pasted : `${step.say}\n\n${pasted}`;
+}
+
 export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalReport> {
   const wall = options.now ?? (() => new Date().toISOString());
   const runs = options.runs ?? 3;
@@ -358,10 +367,13 @@ export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalRep
       const store = new EventStore(":memory:", clock);
       try {
         const app = build(store, guard, clock);
-        // The demo's messages come from a clinic in America/Denver, so the
-        // case uses the demo's zone, as "Load the demo" sets it.
-        new CaseActions(store, app).setTimezone({ actor: "agent" }, loadCaseProfile().time_zone, 0);
-        if (script.setup.calendar) app.kase.loadCalendar("dana.ics", readFixtureText("calendar/dana.ics"), 0);
+        // The case is set up as the page sets it up (SP12.3): "Try the
+        // demo" loads the demo calendar through the calendar route, which
+        // also sets the demo's zone, America/Denver. Without the calendar
+        // the case still uses the demo's zone.
+        const setup = new CaseActions(store, app);
+        if (script.setup.calendar) loadCalendarAsPerson(setup, store, DEMO_CALENDAR_NAME, demoCalendarText(), 0);
+        else setup.setTimezone({ actor: "agent" }, loadCaseProfile().time_zone, 0);
         await seed(store, clock, script.setup.accepted, true);
         await seed(store, clock, script.setup.pending, false);
         const agent = new CaseAgent(store, app, chat, {
@@ -380,7 +392,7 @@ export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalRep
             if (problem) skipped.push({ run, step: i + 1, action: step.do, reason: problem });
             continue;
           }
-          const text = step.paste ? `${step.say}\n\n${messageText(step.paste).text}` : step.say;
+          const text = stepText(step);
           const before = personOnlyState(app);
           const statesBefore = slotStates(app);
           const events: ChatEvent[] = [];

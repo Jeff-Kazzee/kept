@@ -6,10 +6,11 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { GoogleServices } from "../src/google/tools.ts";
 import { CaseActions, UndoBlockedError, YOU } from "../src/actions/service.ts";
+import { DEMO_CALENDAR_NAME, demoCalendarText, loadCalendarAsPerson } from "../src/actions/demo.ts";
 import { CaseService } from "../src/case/service.ts";
 import { Channel, DEFAULT_EXTRACTION_EFFORT, Effort } from "../src/domain/claim.ts";
 import { OutOfScopeError } from "../src/domain/scope.ts";
-import { loadCaseProfile, loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
+import { loadScenarios } from "../src/fixtures/load.ts";
 import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } from "../src/intake/service.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
@@ -71,7 +72,6 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
   const scenarios = loadScenarios();
   const { records, store } = access;
   const actions = new CaseActions(store, { intake: service, kase, reply, records, ...(access.google ? { google: access.google } : {}) });
-  const demoCalendar = readFixtureText("calendar/dana.ics");
 
   const routes: Route[] = [
     ["GET", /^\/api\/state$/, () => {
@@ -113,7 +113,7 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
         messages: s.messages.map(({ expected: _expected, ...m }) => m),
       })),
     ],
-    ["GET", /^\/api\/fixtures\/calendar$/, () => ({ name: "dana.ics", text: readFixtureText("calendar/dana.ics") })],
+    ["GET", /^\/api\/fixtures\/calendar$/, () => ({ name: DEMO_CALENDAR_NAME, text: demoCalendarText() })],
     ["POST", /^\/api\/messages$/, (_m, body) => {
       const input = PastedMessage.parse(body);
       return actions.importMessage(YOU, { ...input, id: input.id ?? `pasted-${randomUUID()}` });
@@ -144,12 +144,7 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     // person can undo (J5).
     ["POST", /^\/api\/calendar$/, (_m, body) => {
       const { name, text, expectedVersion } = CalendarBody.parse(body);
-      const view = actions.loadCalendar(YOU, name, text, expectedVersion);
-      if (text !== demoCalendar) return view;
-      const demoZone = loadCaseProfile().time_zone;
-      const current = timezoneSettings(store);
-      if (current.timezone === demoZone && current.timezoneSource !== "default") return view;
-      actions.setTimezone({ actor: "agent" }, demoZone, current.settingsVersion);
+      loadCalendarAsPerson(actions, store, name, text, expectedVersion);
       return kase.view();
     }],
     ["POST", /^\/api\/conflicts\/([^/]+)\/explain$/, (m, body) =>

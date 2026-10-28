@@ -43,11 +43,40 @@ function canonical(value: unknown): string {
 // The parts of a request that decide the answer.
 export type KeyedRequest = Pick<ToolRequestBody, "model" | "reasoning" | "tool_choice" | "instructions" | "tools" | "input">;
 
+// SP12.3: the clock's values in tool results. A tool result gives the
+// turn's date (`today`) and the time code read the clock, such as an
+// imported message's received_at. They change with the day the demo runs,
+// so the key reads each as a fixed placeholder, and a recording made on one
+// day replays on another. Code still checks each replayed answer against
+// the turn's facts, so an answer that names a date from the recording day
+// is replaced.
+const CLOCK_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function withoutClock(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutClock);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, k === "today" ? "<today>" : withoutClock(v)]));
+  }
+  return typeof value === "string" && CLOCK_TIME.test(value) ? "<time>" : value;
+}
+
+// An input item as the key reads it: a tool result without the clock.
+function keyedItem(item: unknown): unknown {
+  const it = item as { type?: unknown; output?: unknown };
+  if (it?.type !== "function_call_output" || typeof it.output !== "string") return item;
+  try {
+    return { ...it, output: withoutClock(JSON.parse(it.output)) };
+  } catch {
+    return item;
+  }
+}
+
 // The recording key: the first 16 hex digits of the SHA-256 of the
 // request's model, effort, tool choice, instructions, tool schemas and
-// input, written canonically without encrypted reasoning. A recording made
-// at one effort, or with other instructions or tools, never answers
-// another request (sprint 7A review, finding 13).
+// input, written canonically without encrypted reasoning and without the
+// clock's values in tool results. A recording made at one effort, or with
+// other instructions or tools, never answers another request (sprint 7A
+// review, finding 13).
 export function chatRecordingKey(body: KeyedRequest): string {
   const keyed = {
     model: body.model,
@@ -55,7 +84,7 @@ export function chatRecordingKey(body: KeyedRequest): string {
     tool_choice: body.tool_choice,
     instructions: body.instructions,
     tools: body.tools,
-    input: body.input,
+    input: body.input.map(keyedItem),
   };
   return createHash("sha256").update(canonical(keyed)).digest("hex").slice(0, 16);
 }
@@ -168,12 +197,23 @@ export class RecordingChatClient implements ToolModelClient {
   readonly #inner: ToolModelClient;
   readonly #dir: string;
   readonly #now: () => string;
+  readonly #source: ChatRecording["source"];
+  readonly #note: string | undefined;
   written = 0;
 
-  constructor(inner: ToolModelClient, dir: string = CHAT_RECORDINGS_DIR, now: () => string = () => new Date().toISOString()) {
+  // `source` is "hand-written" when `inner` is a scripted stand-in, never
+  // the live model.
+  constructor(
+    inner: ToolModelClient,
+    dir: string = CHAT_RECORDINGS_DIR,
+    now: () => string = () => new Date().toISOString(),
+    options: { source?: ChatRecording["source"]; note?: string } = {},
+  ) {
     this.#inner = inner;
     this.#dir = dir;
     this.#now = now;
+    this.#source = options.source ?? "live";
+    this.#note = options.note;
     this.label = `${inner.label}+recording`;
   }
 
@@ -182,7 +222,8 @@ export class RecordingChatClient implements ToolModelClient {
     const key = chatRecordingKey(request.body);
     const recording: ChatRecording = {
       key,
-      source: "live",
+      source: this.#source,
+      ...(this.#note ? { note: this.#note } : {}),
       model: request.body.model,
       effort: request.effort,
       recorded_at: this.#now(),

@@ -25,6 +25,10 @@
 //   --chat-effort <minimal|low>  reasoning effort for the agent (default low)
 //   --record-chat  write each live agent reply as a recording in
 //                  fixtures/recordings/chat/. For the coordinator's live runs.
+//                  Only the agent's calls are live: extraction, explanations,
+//                  questions and templates replay their recordings, as in the
+//                  recorded app, so the agent's requests match the app's and
+//                  its recordings replay there (SP12.3).
 //   --provider <meta|chatgpt>  the live provider (default meta, 0010). meta
 //                  uses MODEL_API_KEY. chatgpt uses the ChatGPT connection
 //                  saved by the app (sign in in the app first), from the
@@ -68,6 +72,8 @@ export type CliDeps = {
   createChatClient?: (apiKey: string) => ToolModelClient;
   // For tests of --provider chatgpt: the fetch the ChatGPT client uses.
   chatGptFetch?: FetchLike;
+  // For tests of --record-chat: where the recordings go.
+  chatRecordingsDir?: string;
   log?: (line: string) => void;
   error?: (line: string) => void;
   now?: () => string;
@@ -288,13 +294,14 @@ async function runChat(
     return 2;
   }
   const now = deps.now ?? (() => new Date().toISOString());
-  const client = values.recorded
-    ? RecordedModelClient.fromDirectory()
-    : (chatGpt ?? (deps.createClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!));
+  const client =
+    values.recorded || values["record-chat"]
+      ? RecordedModelClient.fromDirectory()
+      : (chatGpt ?? (deps.createClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!));
   const base = values.recorded
     ? RecordedChatClient.fromDirectory()
     : (chatGpt ?? (deps.createChatClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!));
-  const chatClient = values["record-chat"] ? new RecordingChatClient(base) : base;
+  const chatClient = values["record-chat"] ? new RecordingChatClient(base, deps.chatRecordingsDir) : base;
   const report = await runChatEval({ chatClient, client, scripts, runs, effort: effort.data, model, maxUsd, now, onProgress: log });
   const out = path.resolve(PACKAGE_ROOT, values.out ?? path.join("eval-results", `eval-chat-${report.startedAt.replace(/[:.]/g, "-")}.json`));
   mkdirSync(path.dirname(out), { recursive: true });

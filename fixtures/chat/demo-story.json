@@ -1,12 +1,12 @@
 {
   "id": "demo-story",
-  "title": "The demo story through chat, with the assistant doing the work: paste m1 to m3 and the assistant accepts their facts, ask, move to Monday, the person approves the reply, paste m4, ask what to bring",
+  "title": "The demo story as \"Try the demo\" runs it in the page: the demo calendar, m1 to m3 pasted alone and the assistant accepts their facts, ask what is confirmed and about the Friday clash, move to Monday, the person approves the reply, paste m4, ask what to bring",
   "setup": {
     "calendar": true
   },
   "steps": [
     {
-      "say": "I got this text from my clinic:",
+      "say": "",
       "paste": "m1",
       "expect": {
         "tools": [
@@ -23,7 +23,7 @@
       }
     },
     {
-      "say": "And this email came the next day:",
+      "say": "",
       "paste": "m2",
       "expect": {
         "tools": [
@@ -40,7 +40,7 @@
       }
     },
     {
-      "say": "Now they sent this:",
+      "say": "",
       "paste": "m3",
       "expect": {
         "tools": [
@@ -57,7 +57,7 @@
       }
     },
     {
-      "say": "What is confirmed right now?",
+      "say": "What is confirmed?",
       "expect": {
         "tools_any": [
           "get_schedule",
@@ -108,7 +108,7 @@
       "do": "approve_draft"
     },
     {
-      "say": "The office wrote back:",
+      "say": "",
       "paste": "m4",
       "expect": {
         "tools": [

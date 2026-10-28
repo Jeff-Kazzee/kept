@@ -1,0 +1,33 @@
+{
+  "key": "50cb3caf131f68e7",
+  "source": "hand-written",
+  "note": "Placeholder for the demo story, written by a stand-in model, not a model. A live recording replaces it.",
+  "model": "muse-spark-1.3",
+  "effort": "low",
+  "recorded_at": "2026-10-28T12:00:00.000Z",
+  "reply": {
+    "output": [
+      {
+        "type": "reasoning",
+        "id": "rs_48",
+        "summary": []
+      },
+      {
+        "type": "function_call",
+        "id": "fc_47",
+        "call_id": "call_47",
+        "name": "check_calendar",
+        "arguments": "{\"date\":\"2026-11-13\",\"time\":\"09:15\"}",
+        "status": "completed"
+      }
+    ],
+    "usage": {
+      "input": 1200,
+      "cached_input": 0,
+      "output": 60,
+      "reasoning": 20
+    },
+    "latency_ms": 900,
+    "first_byte_ms": 300
+  }
+}
