@@ -72,7 +72,10 @@ const Usage = z
 export const ChatReply = z
   .object({
     output: z.array(OutputItem).optional(),
-    error: z.object({ status: z.number().int().nullable(), message: z.string() }).strict().optional(),
+    error: z
+      .object({ status: z.number().int().nullable(), message: z.string(), type: z.string().optional(), code: z.string().optional() })
+      .strict()
+      .optional(),
     usage: Usage,
     latency_ms: z.number().int().nonnegative(),
     first_byte_ms: z.number().int().nonnegative().nullable().optional(),
@@ -110,7 +113,7 @@ export function readChatFault(name: string, dir: string = CHAT_FAULTS_DIR): Chat
 }
 
 function toReply(r: ChatReply): ToolReply {
-  if (r.error) throw new ModelCallError(r.error.message, r.error.status, r.latency_ms);
+  if (r.error) throw new ModelCallError(r.error.message, r.error.status, r.latency_ms, { type: r.error.type, code: r.error.code });
   return {
     output: structuredClone(r.output!) as ToolReply["output"],
     usage: { input: r.usage.input, cachedInput: r.usage.cached_input, output: r.usage.output, reasoning: r.usage.reasoning },

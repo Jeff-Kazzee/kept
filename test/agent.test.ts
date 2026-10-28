@@ -247,10 +247,15 @@ describe("G4: grounding", () => {
     expect(stored).not.toContain("3:00 PM");
     expect(stored).not.toContain("Wednesday 11/18");
     expect(app.kase.history().at(-1)!.label).toBe("Assistant answered in the chat (answer replaced by code)");
-    // The retry carried only problem codes and ran with tools off.
+    // E2: the retry is the answering call's input plus one problem-code
+    // message, with the same tools and tool choice, and no failed text.
+    const answered = model.calls[1]!.body;
     const retry = model.calls[2]!.body;
-    expect(retry.tool_choice).toBe("none");
+    expect(retry.tool_choice).toBe("auto");
+    expect(retry.tools).toEqual(answered.tools);
+    expect(retry.input.slice(0, -1)).toEqual(answered.input);
     expect(JSON.stringify(retry.input.at(-1))).toContain("(ungrounded)");
+    expect(JSON.stringify(retry.input)).not.toContain("3:00 PM");
   });
 
   it("keeps a retried answer that passes, with chips for the slots it names", async () => {
@@ -447,7 +452,8 @@ describe("the demo story through chat", () => {
     // The chat holds every message in order, with its cards.
     const chat = agent.chat();
     expect(chat.messages).toHaveLength(16);
-    expect(chat.chatVersion).toBe(16);
+    // 16 messages and 4 imported-line records, one per paste.
+    expect(chat.chatVersion).toBe(20);
     expect(chat.messages.every((m, i) => m.role === (i % 2 === 0 ? "user" : "assistant"))).toBe(true);
     expect(chat.messages[1]!.cards).toEqual([{ kind: "claims", messageId: "m1", evidenceIds: ["m1-e1", "m1-e2"] }]);
     expect(chat.messages[0]!.createdAt).toBe("2026-11-05T10:00:00.000-07:00");

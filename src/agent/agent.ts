@@ -24,7 +24,7 @@ import { DEFAULT_EXTRACTION_EFFORT, type Effort } from "../domain/claim.ts";
 import { OutOfScopeError, SCOPE_DECLINE, hasClinicalContent } from "../domain/scope.ts";
 import { InvalidRequestError } from "../intake/service.ts";
 import { ModelCallError } from "../model/client.ts";
-import { MODEL, type TokenUsage } from "../model/request.ts";
+import { MODEL, ZERO_USAGE, type TokenUsage } from "../model/request.ts";
 import { buildToolRequest, functionCalls, outputText, type InputItem, type OutputItem, type ToolModelClient } from "../model/responses.ts";
 import type { SlotView } from "../slots/types.ts";
 import { CaseDeletedError, StaleEditError, StoreBusyError, type EventStore, type StoredEvent } from "../store/event-log.ts";
@@ -97,7 +97,11 @@ export type AgentOptions = {
   // Errors the caller handles itself instead of a turn.error, such as the
   // eval's spend guard.
   rethrow?: (err: unknown) => boolean;
+  // Told about each failed model call, with codes only, for the server log.
+  onCallError?: (info: CallErrorInfo) => void;
 };
+
+export type CallErrorInfo = { turnId: string; call: number; kind: "loop" | "retry"; status: number | null; type: string | null; code: string | null };
 
 export type TurnInput = { text: string; expectedVersion: number; generation: number };
 
@@ -145,6 +149,7 @@ export class CaseAgent {
   readonly #messageIdFor: (text: string) => string;
   readonly #limits: AgentLimits;
   readonly #rethrow: (err: unknown) => boolean;
+  readonly #onCallError: (info: CallErrorInfo) => void;
   #busy = false;
 
   constructor(store: EventStore, services: ToolServices, client: ToolModelClient, options: AgentOptions = {}) {
@@ -159,6 +164,7 @@ export class CaseAgent {
     this.#messageIdFor = options.messageIdFor ?? defaultMessageId;
     this.#limits = { ...DEFAULT_LIMITS, ...options.limits };
     this.#rethrow = options.rethrow ?? (() => false);
+    this.#onCallError = options.onCallError ?? (() => {});
   }
 
   get modelLabel(): string {
@@ -211,6 +217,9 @@ export class CaseAgent {
     const sentAt = this.#now();
     const today = caseIso(sentAt).slice(0, 10);
     const userId = `cm${input.expectedVersion + 1}`;
+    // The chat stream's version as this turn writes it: the person's
+    // message, any imported lines, then the answer.
+    let chatVersion = input.expectedVersion + 1;
     const assistantId = `cm${input.expectedVersion + 2}`;
 
     // G5: a clinical message gets the fixed decline. No model call, and its
@@ -241,13 +250,19 @@ export class CaseAgent {
       today,
       messageIdFor: this.#messageIdFor,
       extractionEffort: this.#extractionEffort,
+      recordImport: (lines, write) =>
+        this.#store.transaction(() => {
+          const result = write();
+          this.#append(chatVersion, [{ type: "chat_lines_imported", data: { turn_id: turnId, user_message_id: userId, ...lines } }]);
+          chatVersion++;
+          return result;
+        }),
     };
     const items: InputItem[] = [...history.map((m) => historyItem(m, log.imported.get(m.id))), { role: "user", content: text }];
     const cards: Card[] = [];
     const slots: SlotView[] = [];
     const facts: Fact[] = [];
     const statuses = new Set<Status>();
-    const imported: ImportedLines[] = [];
     let scheduleRead = false;
     let toolCalls = 0;
     let malformed = 0;
@@ -260,17 +275,25 @@ export class CaseAgent {
       if (meter.exhausted) throw new TurnStop("stopped", TOKEN_LIMIT_TEXT, null);
     };
 
-    const call = async (toolChoice: "auto" | "none"): Promise<OutputItem[]> => {
+    // Every call has the same shape: the tools, tool_choice auto and the
+    // encrypted reasoning, as the live API accepted on the first turn.
+    const call = async (input: InputItem[], kind: "loop" | "retry"): Promise<OutputItem[]> => {
       budget();
       n++;
-      const body = buildToolRequest({ model: this.#model, effort: this.#effort, instructions: AGENT_INSTRUCTIONS, input: items, tools: functionTools(), toolChoice });
+      const body = buildToolRequest({ model: this.#model, effort: this.#effort, instructions: AGENT_INSTRUCTIONS, input, tools: functionTools() });
       report.modelCalls++;
       try {
         const reply = await this.#client.respond({ key: `chat-${turnId}-${n}`, effort: this.#effort, body });
-        report.calls.push({ latency_ms: reply.latencyMs, first_byte_ms: reply.firstByteMs, usage: reply.usage });
+        report.calls.push({ latency_ms: reply.latencyMs, first_byte_ms: reply.firstByteMs, usage: reply.usage, kind });
         return reply.output;
       } catch (err) {
-        if (err instanceof ModelCallError) throw new TurnStop("model_unavailable", MODEL_UNAVAILABLE_TEXT, "model_unavailable");
+        if (err instanceof ModelCallError) {
+          // E2: the status and the API's error type and code, never text.
+          const error = { status: err.status, type: err.errorType, code: err.errorCode };
+          report.calls.push({ latency_ms: err.latencyMs, first_byte_ms: null, usage: ZERO_USAGE, kind, error });
+          this.#onCallError({ turnId, call: n, kind, ...error });
+          throw new TurnStop("model_unavailable", MODEL_UNAVAILABLE_TEXT, "model_unavailable");
+        }
         throw err;
       }
     };
@@ -288,10 +311,12 @@ export class CaseAgent {
       await withMeter(meter, async () => {
         let output: OutputItem[];
         for (;;) {
-          output = await call("auto");
-          items.push(...output);
+          output = await call(items, "loop");
           const calls = functionCalls(output);
+          // The answer itself is not added: the retry must not send the
+          // failed text back, and nothing follows it in this turn.
           if (calls.length === 0) break;
+          items.push(...output);
           for (const fc of calls) {
             if ("malformed" in fc) {
               // No call id to answer, so the turn cannot go on with it.
@@ -314,7 +339,6 @@ export class CaseAgent {
               facts.push(...r.facts);
               r.statuses.forEach((x) => statuses.add(x));
               if (r.scheduleRead) scheduleRead = true;
-              if (r.imported) imported.push(r.imported);
               result = r;
             }
             report.tools.push({ tool: name, ok: result.ok, code: result.code });
@@ -331,15 +355,12 @@ export class CaseAgent {
         let problems = checkAnswer(finalText, grounds());
         report.problems.push(problems);
         for (let retry = 0; problems.length > 0 && retry < this.#limits.answerRetries; retry++) {
-          items.push({
-            role: "user",
-            content:
-              `App check, written by code and not by the person: your answer was not shown (${problems.join(", ")}). ` +
-              "Answer again in at most three short sentences. Mention only dates, weekdays and times from this turn's tool results, " +
-              "never say you changed anything, and keep to administrative content.",
-          });
-          output = await call("none");
-          items.push(...output);
+          // E2: the retry sends the same input as the call that answered,
+          // which the API accepted, plus one code-written message with the
+          // problem codes. The failed answer is not sent back. Tools stay
+          // as they were, so every function call in the input keeps its
+          // tool. A tool call in the retry's output is not run.
+          output = await call([...items, retryMessage(problems)], "retry");
           finalText = cleanText(outputText(output)).trim();
           problems = checkAnswer(finalText, grounds());
           report.problems.push(problems);
@@ -369,13 +390,12 @@ export class CaseAgent {
     wrote();
 
     const chips = chipsFor(slots, outcome === "answered" ? finalText : null, today);
-    this.#append(input.expectedVersion + 1, [
-      this.#assistantEvent(assistantId, turnId, finalText, outcome, cards, chips, report.tools, report.problems, report.calls, imported),
-    ]);
+    const answerId = `cm${chatVersion + 1}`;
+    this.#append(chatVersion, [this.#assistantEvent(answerId, turnId, finalText, outcome, cards, chips, report.tools, report.problems, report.calls)]);
     report.outcome = outcome;
     report.cards = cards;
     if (chips.length > 0) emit({ event: "facts", data: { turnId, chips } });
-    this.#finish(emit, turnId, assistantId, input.expectedVersion + 2, finalText, code, report);
+    this.#finish(emit, turnId, answerId, chatVersion + 1, finalText, code, report);
   }
 
   #finish(emit: Emit, turnId: string, assistantId: string, chatVersion: number, text: string, code: ChatErrorCode | null, report: TurnReport) {
@@ -399,17 +419,24 @@ export class CaseAgent {
     tools: Array<{ tool: string; ok: boolean; code: string }>,
     problems: string[][],
     calls: ChatCallRecord[],
-    imported: ImportedLines[] = [],
   ): ChatEventData {
-    return {
-      type: "chat_assistant_message",
-      data: { message_id: messageId, turn_id: turnId, text, outcome, cards, chips, tools, problems, calls, ...(imported.length > 0 ? { imported } : {}) },
-    };
+    return { type: "chat_assistant_message", data: { message_id: messageId, turn_id: turnId, text, outcome, cards, chips, tools, problems, calls } };
   }
 
   #append(expectedVersion: number, events: ChatEventData[]): void {
     this.#store.append(CHAT_STREAM, expectedVersion, events.map((e) => ({ type: e.type, data: e.data })), describeChat);
   }
+}
+
+// The code-written message the answer retry adds: problem codes only.
+export function retryMessage(problems: string[]): InputItem {
+  return {
+    role: "user",
+    content:
+      `App check, written by code and not by the person: your last answer was not shown (${problems.join(", ")}). ` +
+      "Answer again without calling a tool, in at most three short sentences. Mention only dates, weekdays and times from this turn's tool results, " +
+      "never say you changed anything, and keep to administrative content.",
+  };
 }
 
 // A tool whose write met a newer version (the person acted on a card

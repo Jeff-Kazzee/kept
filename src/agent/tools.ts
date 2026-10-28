@@ -16,7 +16,7 @@ import type { CaseView } from "../case/types.ts";
 import { Channel, DEFAULT_EXTRACTION_EFFORT, type Effort } from "../domain/claim.ts";
 import { isValidDate, isValidTime, parseMentions, weekdayOf } from "../domain/datetime.ts";
 import type { IcsTime } from "../domain/ics.ts";
-import { normalizeWhitespace, phraseAppearsIn } from "../domain/quote.ts";
+import { normalizeWhitespace } from "../domain/quote.ts";
 import { OutOfScopeError } from "../domain/scope.ts";
 import type { EvidenceView } from "../intake/events.ts";
 import { InvalidRequestError, NotFoundError, type IntakeService } from "../intake/service.ts";
@@ -54,6 +54,9 @@ export type ToolContext = ToolServices & {
   // same paste maps to the same message.
   messageIdFor: (text: string) => string;
   extractionEffort: Effort;
+  // Runs `write` (the import) and records the imported lines on the chat in
+  // the same transaction (review round 2, finding 10).
+  recordImport: <T>(lines: ImportedLines, write: () => T) => T;
 };
 
 // Lines of the person's message that a tool imported, counted from 0 after
@@ -73,7 +76,6 @@ export type ToolResult = {
   statuses: Status[];
   // True when the whole schedule was read.
   scheduleRead?: boolean;
-  imported?: ImportedLines;
 };
 
 type ToolSpec<I> = {
@@ -100,7 +102,6 @@ const result = (output: Record<string, unknown>, extra: Extra = {}): ToolResult 
   facts: extra.facts ?? [],
   statuses: extra.statuses ?? [],
   ...(extra.scheduleRead ? { scheduleRead: true } : {}),
-  ...(extra.imported ? { imported: extra.imported } : {}),
 });
 
 const failure = (error: string, message: string): ToolResult => result({ error, message }, { ok: false, code: error });
@@ -226,23 +227,96 @@ export function wholeLines(text: string, userText: string): { text: string; firs
   return null;
 }
 
-// E1: the time a message was sent, when the pasted text states it. The
-// proposed time must not be after the chat message, and its date in
-// America/Denver must be a date the text names (with the time, when the
-// text gives one).
-export function statedSendTime(proposed: string, text: string, sentAt: string): boolean {
+// Review round 2, finding 1: whole lines can still cut a sentence that a
+// line break splits ("We cannot\nconfirm Monday 11/16 at 1:00 PM.") or a
+// wrapped list item. A selection is refused when the line right before it
+// (with no blank line between) does not end a sentence and the selection
+// starts lowercase, the line before ends with a negation, auxiliary or
+// joining word, or the selection continues a list item. The same rules
+// apply to the line right after it.
+const SENTENCE_END = /[.!?:;]["')\]]*$/;
+const JOINING_WORD =
+  /\b(?:not|no|never|cannot|can't|won't|don't|doesn't|didn't|isn't|aren't|wasn't|weren't|unable|able|is|are|was|were|be|been|being|will|would|can|could|should|shall|may|might|must|do|does|did|have|has|had|to|and|or|but|nor|the|a|an|of|for|on|at|with|by|your|our|their|this|that|if|unless)$/i;
+const BULLET = /^(?:[-*•‣◦]|\d{1,2}[.)]|[a-z][.)])\s+/i;
+
+export function cutsSentence(userText: string, first: number, last: number): boolean {
+  const raw = userText.replace(/\r\n?/g, "\n").split("\n");
+  const joins = (before: string, after: string, afterRaw: string, beforeIsItem: boolean) =>
+    !SENTENCE_END.test(before) &&
+    (/^[a-z]/.test(after) || JOINING_WORD.test(before) || (beforeIsItem && !BULLET.test(after) && /^\s/.test(afterRaw)));
+  // The list item a line belongs to: itself, or an indented continuation of
+  // the item above it.
+  const inItem = (i: number): boolean => {
+    for (let k = i; k >= 0 && raw[k]!.trim() !== ""; k--) {
+      if (BULLET.test(raw[k]!.trim())) return true;
+      if (!/^\s/.test(raw[k]!)) return false;
+    }
+    return false;
+  };
+  const prev = first - 1;
+  if (prev >= 0 && raw[prev]!.trim() !== "" && joins(raw[prev]!.trim(), raw[first]!.trim(), raw[first]!, inItem(prev))) return true;
+  const next = last + 1;
+  if (next < raw.length && raw[next]!.trim() !== "" && joins(raw[last]!.trim(), raw[next]!.trim(), raw[next]!, inItem(last))) return true;
+  return false;
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const wordsOf = (s: string) => ` ${(s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ")} `;
+
+// Review round 2, finding 2: a sender is kept only with an explicit
+// attribution: words outside the paste such as "from X", "sent by X", "X
+// texted" or "X emailed", a From: line in the paste, the sender at the
+// start of the paste ("Lantern Hill Clinic: ..."), or the paste's closing
+// signature lines.
+export function senderAttributed(from: string, userText: string, first: number, last: number): boolean {
+  const x = wordsOf(from).trim();
+  if (x === "") return false;
+  const lines = userText.replace(/\r\n?/g, "\n").split("\n").map((l) => l.trim());
+  const paste = lines.slice(first, last + 1).filter(Boolean);
+  const outside = wordsOf([...lines.slice(0, first), ...lines.slice(last + 1)].join(" "));
+  const X = escapeRe(x);
+  if (new RegExp(` (?:from|by) (?:the )?${X} `).test(outside)) return true;
+  if (new RegExp(` ${X} (?:texted|emailed|wrote|sent|messaged|called|replied|left) `).test(outside)) return true;
+  if (paste.some((l) => /^from\s*:/i.test(l) && wordsOf(l).includes(` ${x} `))) return true;
+  const sep = x.split(" ").map(escapeRe).join(String.raw`[\s,.'’&-]+`);
+  if (paste[0] && new RegExp(`^${sep}\\s*[:\\-–]`, "i").test(paste[0])) return true;
+  for (let k = 1; k <= Math.min(3, paste.length); k++) {
+    if (wordsOf(paste.slice(-k).join(" ")).trim() === x) return true;
+  }
+  return false;
+}
+
+// Review round 2, finding 3: a send time comes only from a header line in
+// the paste (Sent:, Date:, Received:) or from the person's own words about
+// when it arrived ("this came yesterday at 3"). A date or time anywhere else
+// in the paste, such as the appointment's, is not a send time. The proposed
+// time must not be after the chat message, and the header or the person's
+// sentence must name its date in America/Denver, and its time when it
+// gives one.
+const SEND_HEADER = /^(?:sent|date|received|delivered)\s*:/i;
+const ARRIVAL_WORDS = /\b(?:came|arrived|got (?:it|this|that)|received|was sent|sent (?:it|this|that|me)|texted me|emailed me|called me|left (?:it|this|a message))\b/i;
+
+export function statedSendTime(proposed: string, pasteText: string, outsideText: string, sentAt: string): boolean {
   const ms = Date.parse(proposed);
   if (!Number.isFinite(ms) || ms > Date.parse(sentAt)) return false;
   const local = caseIso(new Date(ms).toISOString());
   const date = local.slice(0, 10);
   const time = local.slice(11, 16);
-  return parseMentions(canonicalDates(text, null).text).some(
-    (m) =>
-      m.monthDay === date.slice(5, 10) &&
-      (m.year === null || m.year === Number(date.slice(0, 4))) &&
-      (m.weekday === null || m.weekday === weekdayOf(date)) &&
-      (m.times.length === 0 || m.times.includes(time)) &&
-      (m.ambiguousTimes.length === 0 || m.ambiguousTimes.includes(time)),
+  const today = caseIso(sentAt).slice(0, 10);
+  const sources = [
+    ...pasteText.split("\n").filter((l) => SEND_HEADER.test(l.trim())),
+    ...outsideText.split(/(?<=[.!?])\s+|\n+/).filter((l) => ARRIVAL_WORDS.test(l)),
+  ];
+  return sources.some((source) =>
+    // "at 3" in the person's words is a clock time with either reading.
+    parseMentions(canonicalDates(source.replace(/\b(at|around) (\d{1,2})\b(?![:\d])/gi, "$1 $2:00"), today).text).some(
+      (m) =>
+        m.monthDay === date.slice(5, 10) &&
+        (m.year === null || m.year === Number(date.slice(0, 4))) &&
+        (m.weekday === null || m.weekday === weekdayOf(date)) &&
+        (m.times.length === 0 || m.times.includes(time)) &&
+        (m.ambiguousTimes.length === 0 || m.ambiguousTimes.includes(time)),
+    ),
   );
 }
 
@@ -521,34 +595,46 @@ export const AGENT_TOOLS: ToolSpec<unknown>[] = [
           "import_message takes only whole lines of the person's current message: the pasted message from its first line to its last. Nothing was imported.",
         );
       }
+      if (cutsSentence(ctx.userText, lines.first, lines.last)) {
+        return failure(
+          "cuts_sentence",
+          "The text starts or ends in the middle of a sentence or a list item. Import the whole pasted message, from the start of its first sentence. Nothing was imported.",
+        );
+      }
+      const userLines = ctx.userText.replace(/\r\n?/g, "\n").split("\n");
+      const outside = [...userLines.slice(0, lines.first), ...userLines.slice(lines.last + 1)].join("\n");
       // E1: source fields. Each comes from the person's message or from
       // code, and the ones the model suggested are marked.
       const suggested: Array<"channel" | "from" | "received_at"> = [];
       const channel = Channel.safeParse(input.channel);
       const pickedChannel = channel.success && channel.data !== "unknown" ? channel.data : "unknown";
       if (pickedChannel !== "unknown") suggested.push("channel");
-      const from = input.from?.trim() && input.from.trim().length <= 200 && phraseAppearsIn(input.from, ctx.userText) ? input.from.trim() : null;
+      const from = input.from?.trim() && input.from.trim().length <= 200 && senderAttributed(input.from, ctx.userText, lines.first, lines.last) ? input.from.trim() : null;
       if (from !== null) suggested.push("from");
-      const stated = input.received_at && z.iso.datetime({ offset: true }).safeParse(input.received_at).success && statedSendTime(input.received_at, lines.text, ctx.sentAt);
+      const stated = input.received_at && z.iso.datetime({ offset: true }).safeParse(input.received_at).success && statedSendTime(input.received_at, lines.text, outside, ctx.sentAt);
       if (stated) suggested.push("received_at");
 
       const id = ctx.messageIdFor(lines.text);
       let message = intake.messages().find((m) => m.id === id) ?? null;
       let status: string;
       try {
+        const imported = { message_id: id, first_line: lines.first, last_line: lines.last };
         if (message === null) {
-          message = intake.importMessage(
-            {
-              id,
-              channel: pickedChannel,
-              from: from ?? "Unknown sender",
-              received_at: stated ? input.received_at! : caseIso(ctx.sentAt),
-              text: lines.text,
-            },
-            { suggested, note: SOURCE_SUGGESTED_LABEL },
+          message = ctx.recordImport(imported, () =>
+            intake.importMessage(
+              {
+                id,
+                channel: pickedChannel,
+                from: from ?? "Unknown sender",
+                received_at: stated ? input.received_at! : caseIso(ctx.sentAt),
+                text: lines.text,
+              },
+              { suggested, note: SOURCE_SUGGESTED_LABEL },
+            ),
           );
           status = "imported";
         } else {
+          ctx.recordImport(imported, () => null);
           status = "already_imported";
         }
         if (message.status === "imported") {
@@ -584,7 +670,6 @@ export const AGENT_TOOLS: ToolSpec<unknown>[] = [
           cards: [{ kind: "claims", messageId: id, evidenceIds: ids }],
           facts: claimFacts(evidence),
           code: status === "already_imported" ? "already_imported" : "ok",
-          imported: { message_id: id, first_line: lines.first, last_line: lines.last },
         },
       );
     },

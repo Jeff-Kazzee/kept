@@ -140,6 +140,9 @@ function label(e: StoredEvent): string | null {
       return `You rejected proposal ${proposal}`;
     case "chat_user_message":
       return event.data.withheld ? "You wrote in the chat (not saved: health question)" : "You wrote in the chat";
+    case "chat_lines_imported":
+      // Written with the import, whose own entry says what was added.
+      return null;
     case "chat_assistant_message":
       return `Assistant answered in the chat (${CHAT_OUTCOME[event.data.outcome]})`;
     case "tool_called": {

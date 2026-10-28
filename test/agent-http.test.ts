@@ -110,6 +110,8 @@ async function startServer() {
   const env = { ...process.env, APP_PORT: String(port), APP_DB: path.join(dir, "app.sqlite"), APP_LIVE_MODEL: "", MODEL_API_KEY: "" };
   const child = spawn(process.execPath, [fromPackage("server/main.ts")], { env, stdio: ["ignore", "pipe", "pipe"] });
   children.push(child);
+  let stderr = "";
+  child.stderr!.on("data", (d: Buffer) => (stderr += d.toString()));
   const code = await new Promise<string>((resolve, reject) => {
     let out = "";
     child.stdout!.on("data", (d: Buffer) => {
@@ -127,12 +129,12 @@ async function startServer() {
     "X-Appointments-App": "1",
     ...extra,
   });
-  return { port, code, page };
+  return { port, code, page, stderr: () => stderr };
 }
 
 describe("the chat routes on the real server", () => {
   it("need the paired session for GET and POST, refuse another origin, and stream a turn as server-sent events", async () => {
-    const { port, code, page } = await startServer();
+    const { port, code, page, stderr } = await startServer();
     for (const [method, body] of [["GET", undefined], ["POST", { text: "Hi", expectedVersion: 0 }]] as const) {
       const res = await call(port, method, "/api/chat", page(), body);
       expect([method, res.status, JSON.parse(res.text).error]).toEqual([method, 401, "not_paired"]);
@@ -158,6 +160,10 @@ describe("the chat routes on the real server", () => {
     // Recorded mode has no recording for this request: model_unavailable.
     const unrecorded = parseSse((await call(port, "POST", "/api/chat", withSession(), { text: "Hello there", expectedVersion: 2 })).text);
     expect(unrecorded.find((e) => e.event === "turn.error")!.data).toMatchObject({ code: "model_unavailable" });
+
+    // E2: the server log names the failed call with codes only.
+    expect(stderr()).toContain("Chat model call 1 (loop) failed: HTTP none, type none, code none.");
+    expect(stderr()).not.toContain("Hello there");
 
     // A stale version is refused in the stream.
     const stale = parseSse((await call(port, "POST", "/api/chat", withSession(), { text: "Hello", expectedVersion: 0 })).text);

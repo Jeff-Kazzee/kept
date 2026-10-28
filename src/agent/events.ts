@@ -17,7 +17,16 @@ export const CHAT_STREAM = "chat";
 // call failed.
 export type AssistantOutcome = "answered" | "declined" | "ungrounded" | "stopped" | "model_unavailable";
 
-export type ChatCallRecord = { latency_ms: number; first_byte_ms: number | null; usage: TokenUsage };
+// One model call of a turn. `kind` is "loop" for the tool loop and "retry"
+// for the answer retry. A failed call keeps the HTTP status and the API's
+// error type and code, never its message.
+export type ChatCallRecord = {
+  latency_ms: number;
+  first_byte_ms: number | null;
+  usage: TokenUsage;
+  kind?: "loop" | "retry";
+  error?: { status: number | null; type: string | null; code: string | null };
+};
 
 export type ChatEventData =
   | {
@@ -42,14 +51,18 @@ export type ChatEventData =
         chips: FactChip[];
         // Each tool call with its result code, such as ok or not_from_user.
         tools: Array<{ tool: string; ok: boolean; code?: string }>;
-        // Lines of the person's message that a tool imported (finding 8).
-        // History sends a reference in their place.
-        imported?: Array<{ message_id: string; first_line: number; last_line: number }>;
         // Problem codes from the checks of the model's final text, attempt by
         // attempt. Never the text itself.
         problems: string[][];
         calls: ChatCallRecord[];
       };
+    }
+  | {
+      // Lines of the person's message that a tool imported, written in the
+      // same transaction as the import (review round 2, finding 10).
+      // History sends a reference in their place.
+      type: "chat_lines_imported";
+      data: { turn_id: string; user_message_id: string; message_id: string; first_line: number; last_line: number };
     };
 
 // `imported` maps a user message id to the lines its turn imported.
@@ -61,17 +74,17 @@ export type ChatLog = {
 
 export function projectChat(events: StoredEvent[]): ChatLog {
   const log: ChatLog = { version: 0, messages: [], imported: new Map() };
-  const userOfTurn = new Map<string, string>();
+
   for (const e of events) {
     if (e.streamId !== CHAT_STREAM) continue;
     log.version = e.version;
     const event = { type: e.type, data: e.data } as ChatEventData;
     if (event.type === "chat_user_message") {
-      userOfTurn.set(event.data.turn_id, event.data.message_id);
       log.messages.push({ id: event.data.message_id, role: "user", text: event.data.text, createdAt: caseIso(e.recordedAt), cards: [], chips: [] });
+    } else if (event.type === "chat_lines_imported") {
+      const { user_message_id, message_id, first_line, last_line } = event.data;
+      log.imported.set(user_message_id, [...(log.imported.get(user_message_id) ?? []), { message_id, first_line, last_line }]);
     } else if (event.type === "chat_assistant_message") {
-      const user = userOfTurn.get(event.data.turn_id);
-      if (user && event.data.imported?.length) log.imported.set(user, event.data.imported);
       log.messages.push({
         id: event.data.message_id,
         role: "assistant",

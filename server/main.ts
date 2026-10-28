@@ -75,6 +75,9 @@ const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, reply,
 const chat = createChat(
   new CaseAgent(store, { intake, kase, reply, records }, chatClient, {
     messageIdFor: live ? defaultMessageId : fixtureMessageIds(defaultMessageId),
+    // Codes only: no key, headers or message text.
+    onCallError: (e) =>
+      console.error(`Chat model call ${e.call} (${e.kind}) failed: HTTP ${e.status ?? "none"}, type ${e.type ?? "none"}, code ${e.code ?? "none"}.`),
   }),
 );
 

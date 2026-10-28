@@ -172,3 +172,58 @@ export async function* readSse(stream: AsyncIterable<Uint8Array>): AsyncGenerato
   if (buffer !== "") yield* flushLine(buffer);
   yield* flushLine("");
 }
+
+// Shape rules for a tool request, taken from the request the live API
+// accepted on the first turn (0007, E2). Returns the rules a body breaks.
+// - store false, include the encrypted reasoning, the function tools, and
+//   tool_choice auto
+// - the input holds plain user and assistant messages, earlier output
+//   items, and function call outputs
+// - each function call has its output, and each output its call
+// - a reasoning item is followed by an item from the same output (a
+//   message or a function call), never by a plain message or an output
+// - an assistant output message is followed by a function call of the same
+//   output, so no finished answer is sent back
+// - the input ends with a plain user message or a function call output
+export function toolRequestShapeProblems(body: ToolRequestBody): string[] {
+  const problems: string[] = [];
+  if (body.store !== false) problems.push("store_not_false");
+  if (JSON.stringify(body.include) !== JSON.stringify(["reasoning.encrypted_content"])) problems.push("include");
+  if (!Array.isArray(body.tools) || body.tools.length === 0 || body.tools.some((t) => t.type !== "function")) problems.push("tools");
+  if (body.tool_choice !== "auto") problems.push("tool_choice");
+  const input = body.input as Array<Record<string, unknown>>;
+  const calls = new Set<string>();
+  const answered = new Set<string>();
+  input.forEach((item, i) => {
+    const next = input[i + 1] as Record<string, unknown> | undefined;
+    const plain = typeof item.role === "string" && typeof item.content === "string" && item.type === undefined;
+    if (plain) {
+      if (item.role !== "user" && item.role !== "assistant") problems.push(`role_${i}`);
+      if (calls.size > answered.size) problems.push(`message_before_output_${i}`);
+      return;
+    }
+    switch (item.type) {
+      case "reasoning":
+        if (!next || (next.type !== "function_call" && next.type !== "message" && next.type !== "reasoning")) problems.push(`reasoning_alone_${i}`);
+        return;
+      case "message":
+        if (!input.slice(i + 1).some((x) => x.type === "function_call") || (next && next.type !== "function_call" && next.type !== "message")) {
+          problems.push(`answer_sent_back_${i}`);
+        }
+        return;
+      case "function_call":
+        calls.add(String(item.call_id));
+        return;
+      case "function_call_output":
+        if (!calls.has(String(item.call_id))) problems.push(`output_without_call_${i}`);
+        answered.add(String(item.call_id));
+        return;
+      default:
+        problems.push(`item_type_${i}`);
+    }
+  });
+  for (const c of calls) if (!answered.has(c)) problems.push("call_without_output");
+  const last = input.at(-1);
+  if (!last || !((last.role === "user" && last.type === undefined) || last.type === "function_call_output")) problems.push("last_item");
+  return problems;
+}

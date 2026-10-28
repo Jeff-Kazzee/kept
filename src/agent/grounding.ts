@@ -105,19 +105,42 @@ export function grounded(text: string, facts: Fact[], today: string | null = nul
   return true;
 }
 
-// State words and the slot states that make them true. A moved or
-// rescheduled slot is canceled. A change that is only proposed has not
-// moved anything. "Moved to Monday" names the new slot, which fits when it
-// is held and another slot was canceled.
-const STATE_WORDS: Array<{ re: RegExp; states: SlotState[]; moved?: boolean }> = [
-  { re: /\b(?:confirmed|booked)\b/g, states: ["confirmed", "change_proposed"] },
-  { re: /\brequested\b/g, states: ["requested"] },
-  { re: /\b(?:canceled|cancelled)\b/g, states: ["canceled"] },
-  { re: /\bdeclined\b/g, states: ["declined"] },
+// State words and the slot states that make them true, in synonym groups
+// (review round 2, finding 4). A moved or rescheduled slot is canceled. A
+// change that is only proposed has not moved anything. "Moved to Monday"
+// names the new slot, which fits when it is held and another slot was
+// canceled. "Offered", "available" and "open" are checked only against a
+// slot their own clause names, because "the question is open" names none.
+const STATE_WORDS: Array<{ re: RegExp; states: SlotState[]; moved?: boolean; namedOnly?: boolean }> = [
+  {
+    re: /\b(?:confirmed|booked|scheduled|all set|locked in|good to go|set for|you're on|you are on|on the (?:books|calendar|schedule))\b/g,
+    states: ["confirmed", "change_proposed"],
+  },
+  { re: /\b(?:offered|available|open)\b/g, states: ["offered"], namedOnly: true },
+  { re: /\b(?:requested|awaiting confirmation|waiting (?:for|on) (?:the office|confirmation))\b/g, states: ["requested"] },
+  { re: /\bpending\b/g, states: ["requested", "change_proposed"] },
+  { re: /\b(?:canceled|cancelled|called off|no longer happening)\b/g, states: ["canceled"] },
+  { re: /\b(?:declined|turned down)\b/g, states: ["declined"] },
   { re: /\b(?:moved|rescheduled)\b/g, states: ["canceled"], moved: true },
 ];
 
-const NEGATION = /\b(?:not|never|no|none|nothing|neither|nor|yet to|no longer|cannot)\b|n't\b/;
+// Status words code cannot map to a slot state. Said of a named slot, they
+// fail closed.
+const UNMAPPED_STATUS =
+  /\b(?:finali[sz]ed|secured|reserved|sorted|settled|fixed|nailed down|firmed up|guaranteed|approved|accepted|held|on hold|tentative|penciled in|pencilled in)\b/;
+
+const NEGATIONS = /\b(?:not|never|no|none|nothing|neither|nor|yet to|no longer|cannot)\b|n't\b/g;
+const negations = (text: string) => (text.match(NEGATIONS) ?? []).length;
+
+// Words before a state word that make the clause a condition or an open
+// question rather than a statement: "I can check whether Monday is
+// confirmed", "once it is confirmed".
+const CONDITIONAL = /\b(?:whether|if|once|unless|in case|until|when|after)\b/;
+
+// A pronoun that refers back to the slot of the sentence before, and words
+// that point to a different one.
+const PRONOUN = /\b(?:it|it's|its|that one|this one|that appointment|this appointment|that time|this time|that visit|this visit|that slot|this slot)\b/;
+const OTHER = /\b(?:other|another|different|new|second|first|earlier|later)\s+(?:appointment|time|slot|visit|one)\b/;
 
 // Statuses of claims, replies and proposals.
 const STATUS_WORDS: Array<{ re: RegExp; noun: RegExp; statuses: Status[] }> = [
@@ -143,37 +166,52 @@ export function statesAgree(text: string, grounds: Grounds): boolean {
   const slots = grounds.facts.filter((f) => f.state !== undefined);
   const fitsWord = (w: (typeof STATE_WORDS)[number]) => (f: Fact) =>
     w.states.includes(f.state!) || (w.moved === true && (f.state === "confirmed" || f.state === "requested") && slots.some((x) => x.state === "canceled"));
-  let carried: Fact[] = [];
+  let previous: Fact[] = [];
   for (const s of sentences(canonical)) {
     const sentenceSlots = slotsNamed(parseMentions(s), grounds.facts);
     // A question asserts nothing.
     if (s.endsWith("?")) {
-      if (sentenceSlots.length > 0) carried = sentenceSlots;
+      if (sentenceSlots.length > 0) previous = sentenceSlots;
       continue;
     }
     for (const c of clauses(s)) {
       const clauseSlots = slotsNamed(parseMentions(c), grounds.facts);
-      const targets = clauseSlots.length > 0 ? clauseSlots : sentenceSlots.length > 0 ? sentenceSlots : carried;
+      // The slot of the sentence before carries over only through a
+      // pronoun, and never to "the other appointment" (finding 6).
+      const carried = PRONOUN.test(c) && !OTHER.test(c) ? previous : [];
+      const targets = clauseSlots.length > 0 ? clauseSlots : sentenceSlots.length > 0 && !OTHER.test(c) ? sentenceSlots : carried;
       for (const w of STATE_WORDS) {
         const fits = fitsWord(w);
         for (const m of c.matchAll(w.re)) {
-          const negated = NEGATION.test(c.slice(0, m.index));
-          if (targets.length > 0) {
+          const before = c.slice(0, m.index);
+          if (CONDITIONAL.test(before)) continue;
+          const n = negations(before);
+          // Finding 5: two negations read either way, so they fail closed.
+          if (n > 1) return false;
+          const negated = n === 1;
+          if (w.namedOnly && clauseSlots.length === 0) continue;
+          const named = w.namedOnly ? clauseSlots : targets;
+          if (named.length > 0) {
             // A positive state needs a named slot in it. A negated one needs
             // a named slot outside it.
-            if (negated ? targets.every(fits) : !targets.some(fits)) return false;
+            if (negated ? named.every(fits) : !named.some(fits)) return false;
           } else if (negated ? slots.length === 0 && grounds.scheduleRead !== true : !slots.some(fits)) {
             return false;
           }
         }
       }
+      // A status word code cannot map, said of a slot, fails closed. A
+      // status of claims or replies is checked below instead.
+      const unmapped = c.match(UNMAPPED_STATUS);
+      if (unmapped && targets.length > 0 && !STATUS_WORDS.some((w) => w.noun.test(c)) && !CONDITIONAL.test(c.slice(0, unmapped.index))) return false;
       for (const w of STATUS_WORDS) {
         const at = c.search(w.re);
         if (at === -1 || !w.noun.test(c)) continue;
-        if (!NEGATION.test(c.slice(0, at)) && !w.statuses.some((x) => grounds.statuses.has(x))) return false;
+        if (CONDITIONAL.test(c.slice(0, at))) continue;
+        if (negations(c.slice(0, at)) === 0 && !w.statuses.some((x) => grounds.statuses.has(x))) return false;
       }
     }
-    if (sentenceSlots.length > 0) carried = sentenceSlots;
+    if (sentenceSlots.length > 0) previous = sentenceSlots;
   }
   return true;
 }

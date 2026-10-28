@@ -52,9 +52,17 @@ const TERMS = [
   "injections?",
   "pain(?:s|ful)?",
   "mental health",
-  // Preparation and diet instructions (sprint 7A review, finding 7). Each
-  // is a phrase, so "arrive 15 minutes early", "bring your insurance card"
-  // and a calendar entry such as "Lunch with Sam" still pass.
+];
+
+const CLINICAL = new RegExp(`\\b(?:${TERMS.join("|")})\\b`, "i");
+
+// Preparation and diet instructions (sprint 7A review, findings 7 and 9).
+// Each is a phrase, so "arrive 15 minutes early", "bring your insurance
+// card" and a calendar entry such as "Lunch with Sam" pass. A sentence about
+// the building or its rules ("No water damage in Suite 2", "No food or
+// drink in the waiting room") passes too, unless it also gives preparation
+// timing such as "after midnight" or "before your visit".
+const DIET_TERMS = [
   "fasting",
   "fast (?:after|before|from|for|overnight|until|beginning)",
   "(?:what|can|should|may|must|do) (?:i|we|you) (?:eat|drink)",
@@ -73,8 +81,17 @@ const TERMS = [
   "prep(?:aration)? instructions?",
   "bowel prep\\w*",
 ];
+const DIET = new RegExp(`\\b(?:${DIET_TERMS.join("|")})\\b`, "i");
+const FACILITY =
+  /\b(?:damage|damaged|leak(?:s|ing|ed)?|flood(?:s|ing|ed)?|service|outage|lobby|waiting (?:room|area)|building|parking|garage|fountain|cooler|vending|cafeteria|hallway|elevator|allowed in|permitted in|in the (?:office|clinic|lobby|hallway|exam rooms?))\b/i;
+const PREP_TIMING =
+  /\b(?:before (?:your|the) (?:visit|appointment|procedure|exam|test)|after midnight|midnight|the night before|the morning of|prior to|hours? before|fast(?:ing)?)\b/i;
 
-const CLINICAL = new RegExp(`\\b(?:${TERMS.join("|")})\\b`, "i");
+function dietAdvice(text: string): boolean {
+  return text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .some((sentence) => DIET.test(sentence) && !(FACILITY.test(sentence) && !PREP_TIMING.test(sentence)));
+}
 
 // Letters of a script other than Latin. Digits, marks and punctuation are
 // not letters, so they never count.
@@ -101,7 +118,7 @@ export function hasClinicalContent(text: string): boolean {
   if (mixesScripts(normalized)) return true;
   // Accents are matched as their base letters too, so "sýmptoms" matches.
   const unaccented = normalized.normalize("NFKD").replace(/\p{M}/gu, "");
-  return CLINICAL.test(normalized) || CLINICAL.test(unaccented);
+  return CLINICAL.test(normalized) || CLINICAL.test(unaccented) || dietAdvice(normalized) || dietAdvice(unaccented);
 }
 
 // S11: the fixed decline for text the user types that asks for clinical

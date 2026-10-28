@@ -31,11 +31,35 @@ export class ModelCallError extends Error {
   override name = "ModelCallError";
   readonly status: number | null;
   readonly latencyMs: number;
+  // The API's error type and code, when it sent them. Short identifiers
+  // only, never message text, so they are safe to log.
+  readonly errorType: string | null;
+  readonly errorCode: string | null;
 
-  constructor(message: string, status: number | null = null, latencyMs = 0) {
+  constructor(message: string, status: number | null = null, latencyMs = 0, error: { type?: string | null; code?: string | null } = {}) {
     super(message);
     this.status = status;
     this.latencyMs = latencyMs;
+    this.errorType = identifier(error.type);
+    this.errorCode = identifier(error.code);
+  }
+}
+
+const identifier = (v: unknown): string | null => (typeof v === "string" && /^[A-Za-z0-9_.:-]{1,64}$/.test(v) ? v : null);
+
+// The error type and code from an API error body or stream event, such as
+// { "error": { "type": "invalid_request_error", "code": "..." } }.
+export function apiError(json: unknown): { type: string | null; code: string | null } {
+  const o = (json ?? {}) as Record<string, unknown>;
+  const inner = (o.error ?? (o.response as Record<string, unknown> | undefined)?.error ?? o) as Record<string, unknown> | null;
+  return { type: identifier(inner?.type), code: identifier(inner?.code ?? o.code) };
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
   }
 }
 
@@ -131,7 +155,7 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
     }
     if (!res.ok) {
       const raw = await res.text();
-      throw new ModelCallError(`Model call returned HTTP ${res.status}: ${raw.slice(0, 200)}`, res.status, elapsed(started));
+      throw new ModelCallError(`Model call returned HTTP ${res.status}: ${raw.slice(0, 200)}`, res.status, elapsed(started), apiError(parseJson(raw)));
     }
     if (!request.body.stream) {
       let json: unknown;
@@ -152,7 +176,8 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
           return { ...readCompletedBody(data.response), latencyMs: elapsed(started), firstByteMs };
         }
         if (event.event === "response.failed" || event.event === "response.incomplete" || event.event === "error") {
-          throw new ModelCallError(`Model stream ended with ${event.event}.`, res.status, elapsed(started));
+          const err = apiError(parseJson(event.data));
+          throw new ModelCallError(`Model stream ended with ${event.event}.`, res.status, elapsed(started), { type: err.type ?? event.event, code: err.code });
         }
       }
     } catch (err) {

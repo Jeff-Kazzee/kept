@@ -75,6 +75,12 @@ function clock(h: number, m: string, meridiem: "am" | "pm" | null): string {
   return meridiem ? `${h}:${m} ${meridiem}` : `${h}:${m}`;
 }
 
+// Nouns after an ordinal that make it a place or a count, not a day: "the
+// second floor", "the 2nd entrance", "the first claim".
+const PLACE_NOUN =
+  "(?:floor|level|door|entrance|exit|room|suite|building|street|st|avenue|ave|road|rd|desk|window|row|wing|stop|lot|option|time|times|claim|claims|message|appointment|visit|reminder|one|offer|try|attempt|place|step|page|item|question)\\b";
+const PLACE_NUMBER = /\b(room|rm|suite|ste|building|bldg|unit|apt|apartment|floor|door|gate|bay|wing|no|number)\.?\s*#?\s*\d[\w/-]*/g;
+
 export type Canonical = { text: string; unreadable: string[] };
 
 // `today` is the turn's date in America/Denver, YYYY-MM-DD, for relative
@@ -94,7 +100,10 @@ export function canonicalDates(input: string, today: string | null): Canonical {
   t = t.replace(new RegExp(`(?<![:/.\\d])\\b(${NUM})(?=\\s*(?:am|pm)\\b)`, "g"), (_m, h: string) => String(num(h)));
   t = t.replace(new RegExp(`(?<![:/.\\d])\\b(${NUM})(?::(\\d{2}))? (?:in the morning)\\b`, "g"), (_m, h: string, mm?: string) => clock(num(h), mm ?? "00", "am"));
   t = t.replace(new RegExp(`(?<![:/.\\d])\\b(${NUM})(?::(\\d{2}))? (?:in the (?:afternoon|evening)|at night)\\b`, "g"), (_m, h: string, mm?: string) => clock(num(h), mm ?? "00", "pm"));
-  t = t.replace(new RegExp(`\\b(at|by|until|from|around|after|before) (${byLength(NUMBER_WORDS.keys())})\\b(?!\\s+(?:of|claims?|times?|slots?|messages?|appointments?|items?|things?|minutes?|hours?|days?))`, "g"), (_m, w: string, h: string) => `${w} ${num(h)}`);
+
+  // A number after a room, suite, building or unit word is a place, not a
+  // date or a time: "Room 11-16", "Suite 2", "Floor 3".
+  t = t.replace(PLACE_NUMBER, (_m, w: string) => `${w} ref`);
 
   // Days next to a month: "november the 16th", "the sixteenth of november",
   // "16 november 2026".
@@ -102,7 +111,7 @@ export function canonicalDates(input: string, today: string | null): Canonical {
   t = t.replace(new RegExp(`\\b(?:the )?(${ORD}|\\d{1,2}) (?:of )?(${MONTHS})\\b\\.?(?:,? (\\d{4})\\b)?`, "g"), (_m, d: string, mo: string, y?: string) =>
     `${mo} ${/^\d+$/.test(d) ? Number(d) : ord(d)}${y ? `, ${y}` : ""}`,
   );
-  t = t.replace(new RegExp(`\\bon the (${byLength(ORDINAL_WORDS.keys())})\\b`, "g"), (_m, d: string) => `on the ${ord(d)}th`);
+  t = t.replace(new RegExp(`\\bon the (${byLength(ORDINAL_WORDS.keys())})\\b(?! ${PLACE_NOUN})`, "g"), (_m, d: string) => `on the ${ord(d)}th`);
 
   // Relative days.
   if (today) {
@@ -139,7 +148,12 @@ const LONE_MONTHS = MONTHS.split("|").filter((m) => m !== "may").join("|");
 
 const UNREADABLE = [
   new RegExp(`\\b(?:${LONE_MONTHS})\\b`, "g"),
-  /\b(?:the )?\d{1,2}(?:st|nd|rd|th)\b/g,
+  // "may" as a month: "in May", "May of", "May 2027", "next May".
+  /\b(?:in|this|next|last|early|late|mid|of|by|until|since|through) may\b|\bmay(?: of\b| \d{4}\b|,)/g,
+  new RegExp(`\\b(?:the )?\\d{1,2}(?:st|nd|rd|th)\\b(?! ${PLACE_NOUN})`, "g"),
+  // A spelled hour after "at" with nothing after it that makes it a name:
+  // "see you at one." but not "at Two Rivers Clinic".
+  new RegExp(`\\b(?:at|by|around|until) (?:${byLength(NUMBER_WORDS.keys())})\\b(?=\\s*(?:[.,;!?]|$|(?:on|in|this|today|tomorrow|tonight|sharp|then|and|or)\\b))`, "g"),
   new RegExp(`\\b(?:${byLength(ORDINAL_WORDS.keys())})\\b(?= at\\b)`, "g"),
   /\bo'?clock\b/g,
   /\b(?:half|quarter) (?:past|to)\b/g,
@@ -178,5 +192,5 @@ function unreadable(text: string): string[] {
 export function loneDays(text: string): Array<{ match: string; day: number; index: number }> {
   let rest = text;
   for (const re of READ) rest = rest.replace(re, (m) => " ".repeat(m.length));
-  return [...rest.matchAll(/\b(?:the )?(\d{1,2})(?:st|nd|rd|th)\b/g)].map((m) => ({ match: m[0], day: Number(m[1]), index: m.index! }));
+  return [...rest.matchAll(new RegExp(`\\b(?:the )?(\\d{1,2})(?:st|nd|rd|th)\\b(?! ${PLACE_NOUN})`, "g"))].map((m) => ({ match: m[0], day: Number(m[1]), index: m.index! }));
 }

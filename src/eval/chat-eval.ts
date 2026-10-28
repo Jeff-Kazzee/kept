@@ -163,6 +163,10 @@ export type TurnResult = {
   // Each call's result code: "ok", or the error such as not_from_user or
   // invalid_arguments. Codes only, no text.
   toolResults: Array<{ tool: string; code: string }>;
+  // E2: each failed model call of the turn, with its kind (loop or retry),
+  // HTTP status and the API's error type and code. No text.
+  callErrors: Array<{ call: number; kind: string; status: number | null; type: string | null; code: string | null }>;
+  retried: boolean;
   toolsOk: boolean;
   expectedCards: string[];
   cards: string[];
@@ -200,6 +204,8 @@ export type ScriptReport = {
   stateChangesWithoutUser: number;
   textChecks: { checked: number; passed: number };
   modelUnavailable: number;
+  // E2: answer retries made, and how many failed as a model call.
+  retries: { made: number; failed: number };
   latencyMs: { p50: number | null; p95: number | null };
   firstByteMs: { p50: number | null; p95: number | null };
   usage: TokenUsage;
@@ -335,6 +341,8 @@ export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalRep
             expectedToolsAny: e.tools_any,
             toolsCalled: tools,
             toolResults: report.tools.map((t) => ({ tool: t.tool, code: t.code })),
+            callErrors: report.calls.flatMap((c, i) => (c.error ? [{ call: i + 1, kind: c.kind ?? "loop", ...c.error }] : [])),
+            retried: report.calls.some((c) => c.kind === "retry"),
             toolsOk: has(tools, e.tools) && (e.tools_any.length === 0 || e.tools_any.some((t) => tools.includes(t))) && (!e.no_model_call || report.modelCalls === 0),
             expectedCards: e.cards,
             cards,
@@ -448,6 +456,7 @@ function scriptReport(script: ChatScript, runsCompleted: number, turns: TurnResu
     stateChangesWithoutUser: turns.filter((t) => t.stateChanged).length,
     textChecks: { checked: texts.length, passed: texts.filter((t) => t.textOk).length },
     modelUnavailable: turns.filter((t) => t.outcome === "model_unavailable").length,
+    retries: { made: turns.filter((t) => t.retried).length, failed: turns.filter((t) => t.callErrors.some((e) => e.kind === "retry")).length },
     latencyMs: { p50: percentile(latencies, 50), p95: percentile(latencies, 95) },
     firstByteMs: { p50: percentile(firstBytes, 50), p95: percentile(firstBytes, 95) },
     usage,
@@ -466,7 +475,7 @@ export function formatChatSummary(report: ChatEvalReport): string {
     );
     lines.push(
       `  grounding: first answer failed ${s.groundingFirstFailures}, replaced ${s.replacedAnswers}. Declines ${s.declines}. ` +
-        `Model unavailable ${s.modelUnavailable}. Text checks ${s.textChecks.passed}/${s.textChecks.checked}. Skipped actions ${s.skippedActions.length}` +
+        `Model unavailable ${s.modelUnavailable}. Retries ${s.retries.made}, failed calls ${s.retries.failed}. Text checks ${s.textChecks.passed}/${s.textChecks.checked}. Skipped actions ${s.skippedActions.length}` +
         (s.injection ? `. Injection held ${s.injection.held}/${s.injection.steps}` : ""),
     );
     lines.push(

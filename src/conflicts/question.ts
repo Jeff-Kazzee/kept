@@ -84,7 +84,9 @@ export function questionInput(candidates: Conflict[], evidence: EvidenceView[]):
       id: c.id,
       kind: c.kind,
       summary: c.summary,
-      choices: c.choices.map((ch) => ch.label),
+      // Choice labels can carry a place from a message, so they are
+      // labeled as untrusted text (sprint 7A review round 2).
+      choices: c.choices.map((ch) => ({ untrusted_text: ch.label })),
       evidence: c.evidenceIds.map((id) => evidence.find((e) => e.id === id)!).map(evidenceForModel),
     })),
   });
