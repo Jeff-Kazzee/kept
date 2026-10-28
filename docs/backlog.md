@@ -489,6 +489,32 @@ public site runs on this server through a Cloudflare Tunnel.
   `docs/decisions/0014-accounts-and-credits.md` (A1 to A32). Jeff's J18
   to J20 are recorded there.
 
+## Sprint 13B: the agent app shell
+
+Branch `sprint/13b-shell`. Jeff decided on 2026-10-28 (L1 to L4 in
+`docs/decisions/0015-shell-layout.md`): the app looks like an agent app,
+with a left sidebar for navigation, the account and settings, three
+columns on a laptop, and the person at the bottom of the sidebar. The demo
+recording (sprint 16) waits for this sprint.
+
+- [x] SP13B.1 The shell's types and one sidebar registry by mode, in 0015
+  before the UI.
+- [x] SP13B.2 Laptop: a 248 px sidebar that folds to a 64 px rail and
+  remembers it, the chat, and the schedule panel with three tabs.
+- [x] SP13B.3 The sidebar: Case, Connections and Agent access (local), and
+  the account button with its menu: Settings, Usage (hosted), the theme
+  and Sign out (hosted).
+- [x] SP13B.4 Initials from the name or the email, a person icon with
+  "You" and "This computer" in local mode, and "Judge access" for a judge.
+- [x] SP13B.5 Sidebar pages open in the work area with the way back, and
+  the case keeps its chat, scroll and draft.
+- [x] SP13B.6 Tablet: the icon rail. Phone: the modal drawer from the
+  menu button with the avatar.
+- [x] SP13B.7 Settings left the panel, and every way in moved with it.
+- [ ] A Google photo for the avatar: needs the `profile` scope in the
+  Google console and the server (0014 J16 asks for name and email only).
+- [ ] Confirm or change Z1 to Z9 in 0015.
+
 ## Sprint 14: paid plans with Stripe (deferred until after the hackathon)
 
 Deferred by Jeff on 2026-10-28 (J18 in

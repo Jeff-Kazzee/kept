@@ -353,7 +353,7 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
 .page-back:hover:not(:disabled) { color: var(--text); }
 .main:has(> .page) > :not(.page) { visibility: hidden; }
 .command { padding: var(--s-1) var(--s-2); border-radius: var(--radius-md); background: var(--surface-2); font-family: var(--mono); font-size: var(--text-xs); overflow-wrap: anywhere; user-select: all; }
-.access-lists { display: grid; gap: var(--s-2); grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.access-lists { display: grid; gap: var(--s-2); align-items: start; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 
 .offline {
   display: flex; align-items: center; justify-content: center; gap: var(--s-1);

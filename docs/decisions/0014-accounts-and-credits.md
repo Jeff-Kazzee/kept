@@ -326,7 +326,8 @@ On the hosted site only, to the existing design system:
   `/judge` opens the code form at once. The code field is a password
   field, cleared after every try.
 - An account menu in the top bar with the account, the balance, Usage and
-  Sign out.
+  Sign out. Moved by `0015-shell-layout.md` to the bottom of the sidebar,
+  with Usage as its own page.
 - Settings has a Usage section: the balance, each recent charge (time,
   what it was, model, cost), the $20 and $100 plans as disabled "coming
   soon" buttons, a field to add a judge code to a Google account, and the

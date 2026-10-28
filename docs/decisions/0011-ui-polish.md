@@ -15,6 +15,12 @@ Code: `ui/contract.ts` (the contract types), `ui/agentApi.ts` (its routes),
 `vite.config.ts`. The development fake of the new routes,
 `ui/dev/fakeBackend.ts`, is gone since U51.
 
+Superseded in part by `0015-shell-layout.md` (2026-10-28): account and
+settings controls are no longer in the top bar or the schedule panel. V8's
+Settings tab and V10's place for Settings moved to the sidebar (Connections,
+and Settings in the account menu), and 0014's top bar account menu moved to
+the bottom of the sidebar. The rest holds.
+
 ## Design direction
 
 - V1. A centered chat column, 720 px at most, with generous space.

@@ -6,7 +6,7 @@ are in `docs/decisions/0014-accounts-and-credits.md`.
 ## Modes
 
 - **Local** (the default, `APP_MODE` unset or `local`): the app as it runs
-  on your own computer. One case, no sign-in, your Meta key in Settings or
+  on your own computer. One case, no sign-in, your Meta key in Connections or
   `MODEL_API_KEY`, and Sign in with ChatGPT. Nothing below applies.
 - **Hosted** (`APP_MODE=hosted`): the public site. Each person signs in
   with Google or a judge code and gets a workspace of their own: a case,
@@ -61,7 +61,8 @@ The data lives beside `APP_DB` (default `data/`):
 
 Each judge gets a code with a cap. The code signs them in on its own, so
 they need no Google account. A judge who signs in with Google can add the
-code to that account in Settings, Usage. Each code grants its cap once.
+code to that account on the Usage page, from the account menu at the
+bottom of the sidebar. Each code grants its cap once.
 
 ```sh
 pnpm admin judges create --label "Judge Ada" --cap-usd 5 --expires 2026-11-30
@@ -127,13 +128,13 @@ The daily cap counts the real model cost of every charge that day and
 every hold still open. When it is reached, or the server key is off, every
 step is refused with a plain message and nothing is charged.
 
-The usage page in Settings shows the balance, each recent charge (a chat
+The Usage page, from the account menu, shows the balance, each recent charge (a chat
 turn is one line with its calls), the $20 and $100 plans (coming soon:
 billing waits until after the hackathon) and a rough cost per turn for each model.
 
 ## Delete account
 
-Settings, Delete account, erases the account's workspace (its case, chat,
+Delete account, in Settings from the account menu, erases the account's workspace (its case, chat,
 activity, settings and Google connection, after revoking the Google grant)
 and every session. It is refused, with nothing changed, while a step of
 the account is still running. The ledger keeps its rows for accounting, with the

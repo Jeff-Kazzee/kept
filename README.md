@@ -175,7 +175,8 @@ agent and the chat contract, `docs/decisions/0008-web-app.md` for the
 web app, `docs/decisions/0009-agent-first.md` for the agent that acts,
 the activity log and the case time zone,
 `docs/decisions/0010-providers.md` for the model providers and sign-in,
-and `docs/decisions/0011-ui-polish.md` for the agent UI. `docs/diagrams.md` shows the slot states and the agent change
+and `docs/decisions/0011-ui-polish.md` for the agent UI, with
+`docs/decisions/0015-shell-layout.md` for its sidebar shell. `docs/diagrams.md` shows the slot states and the agent change
 flow.
 
 ## Commands
@@ -198,7 +199,7 @@ pnpm demo:check --recorded  # the same path offline on test doubles, not a produ
 The app has no recorded mode. Every model step, the chat included, runs
 on the provider the person chose. Until a Meta key is added or ChatGPT is
 signed in, the chat and every step that needs the model answer one fixed
-sentence that links to Settings, and nothing in the case changes. The
+sentence that links to Connections, and nothing in the case changes. The
 schedule, Activity, Undo, Settings and Delete case work without a model.
 "Try the demo" loads four made-up Lantern Hill Clinic messages and a
 made-up calendar, and the assistant reads them live. The recorded model

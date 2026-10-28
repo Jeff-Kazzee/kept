@@ -61,8 +61,14 @@ imports them (`ui/chat/types.ts` adds only how it reaches the chat).
   the top bar, closed with Escape, the close button or the backdrop. Phone
   (up to 767 px): the chat is full screen and a bottom tab bar switches
   between Chat and Schedule. Nothing scrolls sideways at 360 px.
+  Superseded by `0015-shell-layout.md` (2026-10-28): a left sidebar sits
+  before the chat, the schedule panel keeps this sizing on its right, and
+  the phone's tab bar had already become a bottom sheet (0011, U18).
 - W2. The schedule panel has five tabs: Schedule, Checklist, Activity,
-  Access and Settings.
+  Access and Settings. Superseded by `0015-shell-layout.md`: the panel has
+  three tabs, Schedule, Checklist and Activity. Settings moved to the
+  sidebar's account menu and Connections, and Access was removed earlier
+  (0011, V13).
 - W3. The thread shows user and assistant messages, streaming text with a
   typing state, a tool line per `tool.started` label, fact chips and
   cards. Assistant text carries a small "Model output" tag. The fixed
