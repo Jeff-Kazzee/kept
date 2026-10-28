@@ -209,8 +209,9 @@ server.on("request", async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? "live" : "recorded responses"})`);
-  console.log(serveBuild ? "Serving the production build from dist/ui." : "Serving the UI through Vite for development.");
   if (extraHosts.length > 0) console.log(`Also answers to: ${extraHosts.join(", ")}`);
+  // Last, so a script that waits for this line has read the others.
+  console.log(serveBuild ? "Serving the production build from dist/ui." : "Serving the UI through Vite for development.");
 });
 
 const shutdown = async () => {
