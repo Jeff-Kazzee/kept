@@ -1,0 +1,72 @@
+{
+  "id": "booked-monday",
+  "title": "Am I booked Monday? before the reply, after approval, and after the office confirms",
+  "setup": {
+    "calendar": true,
+    "accepted": [
+      "m1",
+      "m2",
+      "m3"
+    ]
+  },
+  "steps": [
+    {
+      "say": "Am I booked Monday?",
+      "expect": {
+        "tools_any": [
+          "get_schedule",
+          "get_appointment"
+        ],
+        "text_any": [
+          "offer",
+          "not (yet )?(booked|confirmed)"
+        ],
+        "text_none": [
+          "\\byes\\b"
+        ]
+      }
+    },
+    {
+      "do": "answer",
+      "choice": "Request Monday 11/16 1:00 PM"
+    },
+    {
+      "do": "approve_draft"
+    },
+    {
+      "say": "Am I booked Monday now?",
+      "expect": {
+        "tools_any": [
+          "get_schedule",
+          "get_appointment"
+        ],
+        "text_any": [
+          "request",
+          "not (yet )?(booked|confirmed)",
+          "wait"
+        ],
+        "text_none": [
+          "\\byes\\b"
+        ]
+      }
+    },
+    {
+      "do": "seed",
+      "messages": [
+        "m4"
+      ]
+    },
+    {
+      "say": "And now, am I booked Monday?",
+      "expect": {
+        "tools_any": [
+          "get_schedule",
+          "get_appointment"
+        ],
+        "text_any": [
+          "confirmed"
+        ]
+      }
+    }
+  ]
+}

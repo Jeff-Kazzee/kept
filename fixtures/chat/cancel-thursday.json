@@ -1,0 +1,22 @@
+{
+  "id": "cancel-thursday",
+  "title": "The person asks the assistant to cancel Thursday",
+  "setup": {
+    "calendar": true,
+    "accepted": [
+      "m1",
+      "m2",
+      "m3"
+    ]
+  },
+  "steps": [
+    {
+      "say": "Cancel Thursday.",
+      "expect": {
+        "text_none": [
+          "\\bI (have |'ve )?(cancel|canceled|cancelled)"
+        ]
+      }
+    }
+  ]
+}

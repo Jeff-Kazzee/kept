@@ -14,6 +14,7 @@ import { slotLabel } from "../slots/labels.ts";
 import type { StoredEvent } from "../store/event-log.ts";
 import { GRANT_PREFIX } from "../grants/grants.ts";
 import type { CaseEvent } from "./events.ts";
+import type { ChatEventData } from "../agent/events.ts";
 
 export type HistoryEntry = {
   seq: number;
@@ -24,7 +25,15 @@ export type HistoryEntry = {
   undone: boolean;
 };
 
-type AnyEvent = MessageEvent | EvidenceEvent | CaseEvent | ReplyEvent | RecordEvent | ProposalEvent | AccessEvent;
+type AnyEvent = MessageEvent | EvidenceEvent | CaseEvent | ReplyEvent | RecordEvent | ProposalEvent | AccessEvent | ChatEventData;
+
+const CHAT_OUTCOME = {
+  answered: "answer passed the code checks",
+  declined: "fixed scope decline",
+  ungrounded: "answer replaced by code",
+  stopped: "stopped at a limit",
+  model_unavailable: "model unavailable",
+} as const;
 
 const CLAIM_WORDS: Record<EvidenceClaim["claim_type"], string> = {
   offer: "offer",
@@ -129,6 +138,13 @@ function label(e: StoredEvent): string | null {
       return `You confirmed proposal ${proposal}`;
     case "proposal_rejected":
       return `You rejected proposal ${proposal}`;
+    case "chat_user_message":
+      return event.data.withheld ? "You wrote in the chat (not saved: health question)" : "You wrote in the chat";
+    case "chat_lines_imported":
+      // Written with the import, whose own entry says what was added.
+      return null;
+    case "chat_assistant_message":
+      return `Assistant answered in the chat (${CHAT_OUTCOME[event.data.outcome]})`;
     case "tool_called": {
       const d = event.data;
       const count = d.count === undefined ? "" : ` (${d.count} calls)`;

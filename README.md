@@ -107,13 +107,28 @@ in this repo is synthetic.
   Every route of the app's web API, reads included, needs that session,
   and every change must also come from the app's own page.
 
+## The case agent (chat)
+
+- `src/agent/` is the agent: a tool loop on Muse Spark that reads the
+  case, imports messages you paste, explains a conflict, opens the next
+  question and drafts a reply. It never changes a slot. Every change is a
+  card you act on.
+- `POST /api/chat` answers with server-sent events and `GET /api/chat`
+  returns the chat. Both need the paired session.
+- Code checks every answer before you see it: each date, weekday and
+  time must come from the turn's tool results, the text must stay
+  administrative, and it must not say the agent changed anything. After
+  one retry, code replaces an answer that fails.
+- The chat is saved with the case. Delete case erases it.
+
 See `docs/decisions/0001-stack.md` for the stack and dependency checks,
 `docs/decisions/0002-slot-states.md` for the slot rules,
 `docs/decisions/0003-reply-templates.md` for the reply rules, and
 `docs/decisions/0004-mcp-core.md` for records, grants and the MCP server,
 `docs/decisions/0005-saved-outcome.md` for the saved case, the
-checklist and Delete case, and `docs/decisions/0006-mcp-app.md` for agent
-access in the app. `docs/diagrams.md` shows the slot states and the agent
+checklist and Delete case, `docs/decisions/0006-mcp-app.md` for agent
+access in the app, and `docs/decisions/0007-case-agent.md` for the case
+agent and the chat contract. `docs/diagrams.md` shows the slot states and the agent
 change flow.
 
 ## Commands
@@ -165,6 +180,15 @@ report also gives the lowest single-run accuracy and flags any run below 95%,
 so one weak run is not hidden by the pool. Accuracy is matched / (matched +
 missed + extra). A claim matches when claim type, date and time match, and
 location and sender kind match where the fixture states them.
+
+`--chat` runs only the chat eval: the scripted conversations in
+`fixtures/chat/`, three runs each (`--chat-runs`, `--chat-script`,
+`--chat-effort`). The report gives, per script, tools and cards against
+expected, grounding failures, declines, injection outcomes, state changes
+made without a user action (it exits 1 if any), latency, tokens and cost.
+`--record-chat` writes each live answer as a recording in
+`fixtures/recordings/chat/`. `pnpm recording:key <request.json>` prints
+the key a request is recorded under.
 
 A relative `--out` path resolves from the package root. `--recorded` replays
 the recorded responses instead, for a smoke test with no key.
@@ -257,7 +281,7 @@ on the agent following those labels.
 
 ## What the model does and what code checks
 
-The app uses a language model for four jobs. Each one only proposes. Code
+The app uses a language model for five jobs. Each one only proposes. Code
 checks the output, and you review what is left.
 
 | The model | Code checks | You |
@@ -266,6 +290,7 @@ checks the output, and you review what is left.
 | Explains a conflict | Every cited evidence id must exist and belong to the conflict. After two failures the conflict shows with its quotes and no explanation. | Read the sources beside it. |
 | Proposes the next question | The question must name an open conflict and no invented date. After two failures code uses a fixed wording. Code builds the answer choices. | Tap a choice. |
 | Picks a reply template and a slot | The template must fit the slot's state, and every field comes from the case, not the model. C1: when your note states a date or time, the picked slot must match it. The model may also answer that no template fits (`time_not_offered` or `template_not_allowed`), and you pick by hand. | Read back every field and approve. |
+| Answers in the chat and calls tools | No tool changes a slot. Imported text must be whole lines of your message, and the source fields the assistant suggests are marked. Every date, weekday and time in the answer must come from the turn's tool results, the answer must stay administrative and must not claim the agent changed anything. After one retry code replaces the answer. | Act on each card: review claims, answer the question, read back and approve the reply. |
 
 Slot states come only from accepted evidence by a fixed table of rules. No
 model output changes a slot. A schema-valid answer can still change the

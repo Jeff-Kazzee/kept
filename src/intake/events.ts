@@ -17,7 +17,17 @@ export const messageStream = (id: string) => `message:${id}`;
 export const evidenceStream = (id: string) => `evidence:${id}`;
 
 export type MessageEvent =
-  | { type: "message_imported"; data: { message: Message; source_type: SourceType } }
+  | {
+      type: "message_imported";
+      data: {
+        message: Message;
+        source_type: SourceType;
+        // Source fields the assistant suggested, and the note the review
+        // shows for them. Absent for messages imported any other way.
+        source_suggested?: Array<"channel" | "from" | "received_at">;
+        source_note?: string;
+      };
+    }
   | {
       type: "extraction_attempted";
       data: {
@@ -77,6 +87,10 @@ export type MessageView = {
   version: number;
   message: Message;
   sourceType: SourceType;
+  // The source fields the assistant suggested, and the note to show beside
+  // them. Empty and null for messages imported any other way.
+  sourceSuggested: Array<"channel" | "from" | "received_at">;
+  sourceNote: string | null;
   status: "imported" | ExtractionOutcome;
   attempts: Array<Extract<MessageEvent, { type: "extraction_attempted" }>["data"]>;
   rejections: Array<Extract<MessageEvent, { type: "claim_rejected" }>["data"]>;
@@ -119,6 +133,8 @@ export function projectMessages(events: StoredEvent[]): Map<string, MessageView>
         version: e.version,
         message: event.data.message,
         sourceType: event.data.source_type,
+        sourceSuggested: event.data.source_suggested ?? [],
+        sourceNote: event.data.source_note ?? null,
         status: "imported",
         attempts: [],
         rejections: [],

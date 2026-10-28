@@ -1,0 +1,181 @@
+{
+  "source": "hand-written",
+  "note": "The model keeps calling get_schedule. The seventh call is refused and the turn stops with a notice.",
+  "replies": [
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f16",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f15",
+          "call_id": "call_f15",
+          "name": "get_schedule",
+          "arguments": "{}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f18",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f17",
+          "call_id": "call_f17",
+          "name": "get_schedule",
+          "arguments": "{}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f20",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f19",
+          "call_id": "call_f19",
+          "name": "get_schedule",
+          "arguments": "{}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f22",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f21",
+          "call_id": "call_f21",
+          "name": "get_schedule",
+          "arguments": "{}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f24",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f23",
+          "call_id": "call_f23",
+          "name": "get_schedule",
+          "arguments": "{}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f26",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f25",
+          "call_id": "call_f25",
+          "name": "get_schedule",
+          "arguments": "{}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f28",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f27",
+          "call_id": "call_f27",
+          "name": "get_schedule",
+          "arguments": "{}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    }
+  ]
+}

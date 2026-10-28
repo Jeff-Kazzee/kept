@@ -1,0 +1,56 @@
+{
+  "source": "hand-written",
+  "note": "The model calls tools the agent does not have: accept_claim, then approve_reply. Each fails with unknown_tool, the second ends the turn, and nothing changes.",
+  "replies": [
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f2",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f1",
+          "call_id": "call_f1",
+          "name": "accept_claim",
+          "arguments": "{\"evidence_id\": \"m1-e1\"}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f4",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f3",
+          "call_id": "call_f3",
+          "name": "approve_reply",
+          "arguments": "{\"draft_id\": \"d1\"}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    }
+  ]
+}

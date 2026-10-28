@@ -11,6 +11,7 @@ import { Effort } from "../domain/claim.ts";
 import { RECORDINGS_DIR } from "../paths.ts";
 import { ModelCallError, assertAllowedModel, type ModelCall, type ModelClient, type ModelReply } from "./client.ts";
 import { parseResponseBody } from "./request.ts";
+import { meterAdd, meterCheck } from "./meter.ts";
 
 const RecordedUsage = z
   .object({
@@ -84,6 +85,7 @@ export class RecordedModelClient implements ModelClient {
 
   async call(request: ModelCall): Promise<ModelReply> {
     assertAllowedModel(request.body.model);
+    meterCheck();
     this.calls.push(request);
     const recording = this.#lookup(request.key, request.effort);
     if (!recording) {
@@ -102,6 +104,8 @@ export class RecordedModelClient implements ModelClient {
         output_tokens_details: { reasoning_tokens: attempt.usage.reasoning },
       },
     };
-    return { ...parseResponseBody(body), latencyMs: attempt.latency_ms };
+    const reply = { ...parseResponseBody(body), latencyMs: attempt.latency_ms };
+    meterAdd(reply.usage);
+    return reply;
   }
 }

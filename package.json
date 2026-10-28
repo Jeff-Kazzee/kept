@@ -13,6 +13,7 @@
     "mcp": "node mcp/main.ts",
     "grant": "node src/grants/cli.ts",
     "eval:live": "node scripts/eval-live.ts",
+    "recording:key": "node scripts/recording-key.ts",
     "scan:secrets": "node scripts/scan-secrets.ts"
   },
   "dependencies": {

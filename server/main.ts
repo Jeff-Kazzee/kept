@@ -21,6 +21,11 @@ import { RecordedModelClient } from "../src/model/recorded.ts";
 import { PACKAGE_ROOT, fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { createApi } from "./api.ts";
+import { CHAT_PATH, createChat, sseFrame } from "./chat.ts";
+import { CaseAgent } from "../src/agent/agent.ts";
+import { defaultMessageId } from "../src/agent/tools.ts";
+import { RecordedChatClient, fixtureMessageIds } from "../src/agent/recorded.ts";
+import type { ToolModelClient } from "../src/model/responses.ts";
 import { APP_HEADER, Pairing, Sessions, createGate, requestSourceProblem } from "./guard.ts";
 
 const HOST = "127.0.0.1";
@@ -29,15 +34,19 @@ const MAX_BODY = 64 * 1024;
 const live = process.env.APP_LIVE_MODEL === "1";
 
 let client: ModelClient;
+let chatClient: ToolModelClient;
 if (live) {
   const apiKey = process.env.MODEL_API_KEY;
   if (!apiKey) {
     console.error("APP_LIVE_MODEL=1 needs MODEL_API_KEY in the environment.");
     process.exit(2);
   }
-  client = new MetaResponsesClient({ apiKey });
+  const meta = new MetaResponsesClient({ apiKey });
+  client = meta;
+  chatClient = meta;
 } else {
   client = RecordedModelClient.fromDirectory();
+  chatClient = RecordedChatClient.fromDirectory();
 }
 
 const dbPath = path.resolve(PACKAGE_ROOT, process.env.APP_DB ?? "data/app.sqlite");
@@ -55,10 +64,22 @@ const kase = new CaseService(store, intake, client, { userName: loadCaseProfile(
 // paired session.
 const pairing = new Pairing();
 const gate = createGate({ pairing, sessions: new Sessions(), port: PORT });
-const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, new ReplyService(store, kase, client), {
-  records: new RecordsService(store, intake, kase),
+const reply = new ReplyService(store, kase, client);
+const records = new RecordsService(store, intake, kase);
+const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, reply, {
+  records,
   grants: new GrantStore(store),
 });
+// The case agent (0007). In recorded mode a pasted fixture message keeps
+// its fixture id, so its extraction recording replays.
+const chat = createChat(
+  new CaseAgent(store, { intake, kase, reply, records }, chatClient, {
+    messageIdFor: live ? defaultMessageId : fixtureMessageIds(defaultMessageId),
+    // Codes only: no key, headers or message text.
+    onCallError: (e) =>
+      console.error(`Chat model call ${e.call} (${e.kind}) failed: HTTP ${e.status ?? "none"}, type ${e.type ?? "none"}, code ${e.code ?? "none"}.`),
+  }),
+);
 
 const allowedHosts = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]);
 const appOrigins = [...allowedHosts].map((h) => `http://${h}`);
@@ -142,6 +163,33 @@ server.on("request", async (req, res) => {
   // A missing or malformed header leaves it undefined, and the API refuses
   // the write.
   const generation = typeof header === "string" && /^\d{1,15}$/.test(header) ? Number(header) : undefined;
+  if (url.pathname === CHAT_PATH) {
+    // The turn runs to its end even if the page goes away, so its writes
+    // and the stored chat stay whole. Events after a disconnect are dropped.
+    res.on("error", () => {});
+    const open = () => !res.writableEnded && !res.destroyed;
+    try {
+      await chat.serve(
+        { method: req.method ?? "GET", body, generation },
+        {
+          json: (status, payload) => send(res, status, payload),
+          event: (e) => {
+            if (!res.headersSent) {
+              res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+            }
+            if (open()) res.write(sseFrame(e));
+          },
+          end: () => {
+            if (open()) res.end();
+          },
+        },
+      );
+    } catch {
+      if (!res.headersSent) send(res, 500, { error: "server_error", message: "The server could not complete the request." });
+      else if (open()) res.end();
+    }
+    return;
+  }
   const result = await api({ method: req.method ?? "GET", path: url.pathname, body, generation });
   send(res, result.status, result.body);
 });

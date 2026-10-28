@@ -37,7 +37,9 @@ export type SlotState = (typeof SLOT_STATES)[number];
 // `user_report` is a message the user typed about something that happened
 // elsewhere, for example a phone call. Every other channel is a message the
 // user pasted or selected from the office.
-export const Channel = z.enum(["sms", "email", "portal", "voicemail_transcript", "user_report"]);
+// `unknown` is a message pasted in the chat whose channel the assistant
+// could not name with one of the others (0007, E1).
+export const Channel = z.enum(["sms", "email", "portal", "voicemail_transcript", "user_report", "unknown"]);
 export type Channel = z.infer<typeof Channel>;
 
 export function sourceTypeForChannel(channel: Channel): SourceType {
@@ -79,5 +81,9 @@ export const EvidenceClaim = z.object({
   // The grant name for reported_by_user_via_agent, taken from the grant and
   // never from the name the client reports. Absent for every other source.
   agent_name: z.string().min(1).max(100).nullable().optional(),
+  // Set when the assistant suggested the source fields of the message this
+  // claim came from (channel, sender, time). The review shows it beside
+  // the source. Absent for every other claim.
+  source_note: z.string().min(1).max(100).nullable().optional(),
 });
 export type EvidenceClaim = z.infer<typeof EvidenceClaim>;

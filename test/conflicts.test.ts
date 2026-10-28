@@ -144,8 +144,9 @@ describe("SP2.13 next-question call", () => {
       text: "The office needs to move your Thursday 11/12 10:30 AM visit. Which new time do you want to request?",
       evidenceIds: ["m3-e1", "m3-e2", "m3-e3"],
     });
-    const input = JSON.parse(recorded.calls.at(-1)!.body.input) as { conflicts: Array<{ choices: string[] }> };
-    expect(input.conflicts[0]!.choices).toEqual(["Request Friday 11/13 9:15 AM", "Request Monday 11/16 1:00 PM", "Not sure yet"]);
+    // Choice labels go to the model as untrusted text (sprint 7A review round 2).
+    const input = JSON.parse(recorded.calls.at(-1)!.body.input) as { conflicts: Array<{ choices: Array<{ untrusted_text: string }> }> };
+    expect(input.conflicts[0]!.choices.map((c) => c.untrusted_text)).toEqual(["Request Friday 11/13 9:15 AM", "Request Monday 11/16 1:00 PM", "Not sure yet"]);
   });
 
   it("falls back to the fixed wording after a question names a conflict that is not open", async () => {
@@ -297,7 +298,9 @@ describe("citation and date checks", () => {
     const strings = (v: unknown): string[] =>
       typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(strings) : v && typeof v === "object" ? Object.values(v).flatMap(strings) : [];
     const dir = fromPackage("fixtures/recordings");
-    const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".json"));
+    // Chat recordings have their own format and the same check in
+    // test/agent-recorded.test.ts.
+    const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".json") && !f.startsWith(`chat${path.sep}`));
     expect(files.length).toBeGreaterThan(30);
     for (const f of files) {
       for (const a of readRecording(path.join(dir, f)).attempts) {

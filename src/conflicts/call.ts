@@ -94,7 +94,9 @@ export const totalLatency = (attempts: Array<{ latencyMs: number }>) => attempts
 
 // What the model sees of one evidence item. Only the quote from the
 // message is sent, never the full message text. For an answer item the
-// quote is the choice the user tapped.
+// quote is the choice the user tapped. The quote and the place are words
+// from a message, so they go in labeled untrusted fields (sprint 7A review,
+// finding 9).
 export function evidenceForModel(e: EvidenceView) {
   const c = e.claim;
   return {
@@ -106,7 +108,7 @@ export function evidenceForModel(e: EvidenceView) {
     event_time: c.event_time,
     date: c.slot.date,
     time: c.slot.time,
-    location: c.slot.location,
-    quote: c.quote,
+    location: c.slot.location === null ? null : { untrusted_text: c.slot.location },
+    quote: c.quote === null ? null : { untrusted_quote: c.quote },
   };
 }

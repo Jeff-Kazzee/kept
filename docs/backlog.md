@@ -342,6 +342,32 @@ eval). 7B builds the web app (chat and schedule layout, cards, design
 system, production build, mobile layout, Tailscale host setting). Both work
 to one chat contract. Details live in their decision docs, 0007 and 0008.
 
+Sprint 7A tasks (branch `sprint/07a-case-agent`, decisions in
+`docs/decisions/0007-case-agent.md`):
+
+- [x] SP7A.1 Model client for tool turns: `store: false`, streaming,
+  function tools, encrypted reasoning within a turn only (G1).
+- [x] SP7A.2 Nine tools, none of which changes slot state, with message
+  text only in labeled untrusted fields (G2).
+- [x] SP7A.3 `import_message` takes only text the person pasted, then runs
+  the checked extraction and shows a claims card (G3).
+- [x] SP7A.4 Grounding of the final text, one retry, fixed replacement,
+  fact chips (G4). Code also replaces a claim that the agent changed
+  something (C8).
+- [x] SP7A.5 Scope check before any model call and on model text (G5).
+- [x] SP7A.6 Draft safety, limits, malformed calls, token guard, history
+  (G7, G8).
+- [x] SP7A.7 Chat stream with expected versions and the case generation,
+  erased by Delete case, restored on reopen (G9).
+- [x] SP7A.8 `POST /api/chat` as server-sent events and `GET /api/chat`,
+  behind the paired session.
+- [x] SP7A.9 Recorded chat client, faults and `pnpm recording:key` (G10).
+- [x] SP7A.10 `pnpm eval:live --chat` with six scripts (G11).
+- [ ] SP7A.11 Live chat eval and live recordings. The coordinator runs
+  them.
+- [ ] SP7A.12 Confirm or change the decisions marked "proposed, pending
+  Jeff" in `docs/decisions/0007-case-agent.md`.
+
 ## Sprint 8: failure testing
 
 Branch `sprint/08-failure-testing`.
