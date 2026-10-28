@@ -43,8 +43,8 @@ Rules:
 | 2 | Slot states and conflict resolution | D2 | Oct 27 | Done (`46e5917`) |
 | 3 | Reviewed reply | D3 | Oct 27 | Done (`af00de3`) |
 | 4 | MCP core: domain events, grants, tools | D5, part 1 | Oct 27 | Done (`49f9c45`) |
-| 5 | Saved outcome and checklist | D4 | Nov 1 to 2 | Next |
-| 6 | MCP in the app and connect test | D5, part 2 | Nov 2 | Planned |
+| 5 | Saved outcome and checklist | D4 | Oct 28 | Done (`d6a0d86`) |
+| 6 | MCP in the app and connect test | D5, part 2 | Nov 2 | Next |
 | 7 | Failure testing | All | Nov 2 to 3 | Planned |
 | 8 | Submission build | All | Nov 3 to 4 | Planned |
 
@@ -111,12 +111,15 @@ tier. Read-only MCP is the floor.
   both and keeps grants (O-a in `docs/decisions/0005-saved-outcome.md`).
 - [ ] Sprint 6 work: a reply can still be drafted for an archived
   appointment. Decide whether archive hides it from the reply panel.
-- [ ] Sprint 5 or 7 work: extraction at effort `minimal` missed m2's
+- [x] Sprint 5 or 7 work: extraction at effort `minimal` missed m2's
   "arrive 15 minutes early" office request in one of three runs, twice
   across the live runs so far. The checklist in the demo depends on it.
   Tune the prompt for office requests or extract at `low`, then measure.
   Sprint 5 changed the extraction instructions to ask for one office request
-  per instruction (O-g). The live measurement is still open.
+  per instruction (O-g). Three live runs after the change caught m2's two
+  requests in 9 of 9 runs at `minimal` and at `low`. The second run found one
+  extra claim ("Reply C to confirm.") that C2 fixed. The third run was 100%
+  at both levels with no extra claims.
 
 ## Sprint 2: slot states and conflict resolution (D2)
 
