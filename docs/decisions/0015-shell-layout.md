@@ -145,8 +145,8 @@ holds: under 150 KB of JavaScript gzipped on first load.
   puts focus on the top bar's heading, which names the view.
 - Z10. Focus is tried again each frame, up to about half a second
   (`focusSoon` in `ui/layout.ts`), because a sheet or the drawer that just
-  opened refuses focus for a frame or two while it slides in. This also
-  fixes the schedule sheet, whose title did not take focus on open in a
-  headless check before this sprint.
+  opened refuses focus for a frame or two while it slides in. The schedule
+  sheet uses it too: it waited two frames, the same wait that left the
+  drawer's close button without focus in the browser check.
 - Z9. `ui/schedule/Settings.tsx` moved to `ui/pages/Settings.tsx`, because
   it is no longer part of the schedule panel.
