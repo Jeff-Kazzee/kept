@@ -161,21 +161,31 @@ server.on("request", async (req, res) => {
   // the write.
   const generation = typeof header === "string" && /^\d{1,15}$/.test(header) ? Number(header) : undefined;
   if (url.pathname === CHAT_PATH) {
-    return chat.serve(
-      { method: req.method ?? "GET", body, generation },
-      {
-        json: (status, payload) => send(res, status, payload),
-        event: (e) => {
-          if (!res.headersSent) {
-            res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
-          }
-          if (!res.writableEnded) res.write(sseFrame(e));
+    // The turn runs to its end even if the page goes away, so its writes
+    // and the stored chat stay whole. Events after a disconnect are dropped.
+    res.on("error", () => {});
+    const open = () => !res.writableEnded && !res.destroyed;
+    try {
+      await chat.serve(
+        { method: req.method ?? "GET", body, generation },
+        {
+          json: (status, payload) => send(res, status, payload),
+          event: (e) => {
+            if (!res.headersSent) {
+              res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+            }
+            if (open()) res.write(sseFrame(e));
+          },
+          end: () => {
+            if (open()) res.end();
+          },
         },
-        end: () => {
-          if (!res.writableEnded) res.end();
-        },
-      },
-    );
+      );
+    } catch {
+      if (!res.headersSent) send(res, 500, { error: "server_error", message: "The server could not complete the request." });
+      else if (open()) res.end();
+    }
+    return;
   }
   const result = await api({ method: req.method ?? "GET", path: url.pathname, body, generation });
   send(res, result.status, result.body);

@@ -247,6 +247,10 @@ for example the scope decline, and need not show `message` a second time.
 - C1 means the answer text appears after the checks, not word by word.
   The coordinator measured about 1.2 s per model call at effort low.
   Cards and tool steps show sooner.
+- G3 checks that imported text comes from the paste, not that it is the
+  whole paste. A model that imports only part of a message drops the
+  claims in the rest. The claims card shows the imported text, so the
+  person can see what was left out and paste it again.
 - C8 is a new check that G4 did not ask for. It catches "I canceled
   Thursday", which the date check alone passes.
 
