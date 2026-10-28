@@ -366,6 +366,11 @@ with sender_kind person. Tests: `test/review-sprint12-round2.test.ts`.
   identity still matches, and stops waiting after 15 s, failing the check,
   so an app it cannot stop never holds it open. (proposed)
 
+- N10 (coordinator check after the merge). "Don't worry" and "Do not
+  worry" are idioms, so "Don't worry your Thursday visit is confirmed"
+  confirms. Without the comma the check had read "don't" as negating
+  "confirmed" and refused a real confirmation.
+
 ## Questions for Jeff
 
 - Answered by the coordinator: the scripted chat behind `?mockchat=1`

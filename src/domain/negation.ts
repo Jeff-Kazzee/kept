@@ -26,7 +26,7 @@ const STATE_WORDS: Partial<Record<ClaimType, string>> = {
 const NEGATION_BEFORE = /\b(?:not|never|no|none|without|cannot|unable to|yet to be|\w+n't)\b/gi;
 const NEGATION_AFTER = /\b(?:no longer|anymore)\b/i;
 const IDIOMS =
-  /\b(?:can(?:not|'t) wait|no problem|no worries|not a problem|never mind|no doubt|without delay|no need to (?:reply|call|respond|worry|bring|do))\b/gi;
+  /\b(?:can(?:not|'t) wait|no problem|no worries|not a problem|never mind|no doubt|without delay|no need to (?:reply|call|respond|worry|bring|do)|(?:do not|don't) worry)\b/gi;
 const CLAUSE_END = /[,;]|:\s|\b(?:but|however|though|although|whereas|while|instead|rather)\b/gi;
 const PRONOUN_START = /^(?:it|it's|this|that)\b/i;
 
