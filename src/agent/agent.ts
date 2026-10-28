@@ -327,7 +327,7 @@ export class CaseAgent {
           const error = { status: err.status, type: err.errorType, code: err.errorCode };
           report.calls.push({ latency_ms: err.latencyMs, first_byte_ms: null, usage: ZERO_USAGE, kind, error });
           this.#onCallError({ turnId, call: n, kind, ...error });
-          throw new TurnStop("model_unavailable", MODEL_UNAVAILABLE_TEXT, "model_unavailable");
+          throw new TurnStop("model_unavailable", err.userText ?? MODEL_UNAVAILABLE_TEXT, "model_unavailable");
         }
         throw err;
       }

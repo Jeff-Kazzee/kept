@@ -35,13 +35,27 @@ export class ModelCallError extends Error {
   // only, never message text, so they are safe to log.
   readonly errorType: string | null;
   readonly errorCode: string | null;
+  // The request field the API named, such as "tools", when it named one.
+  readonly errorParam: string | null;
+  // A fixed sentence written by code for the person, such as how to sign
+  // in again (0010). Null when the generic sentence fits. Never holds a
+  // key, a token or response text.
+  readonly userText: string | null;
 
-  constructor(message: string, status: number | null = null, latencyMs = 0, error: { type?: string | null; code?: string | null } = {}) {
+  constructor(
+    message: string,
+    status: number | null = null,
+    latencyMs = 0,
+    error: { type?: string | null; code?: string | null; param?: string | null } = {},
+    userText: string | null = null,
+  ) {
     super(message);
     this.status = status;
     this.latencyMs = latencyMs;
     this.errorType = identifier(error.type);
     this.errorCode = identifier(error.code);
+    this.errorParam = identifier(error.param);
+    this.userText = userText;
   }
 }
 
@@ -49,10 +63,10 @@ const identifier = (v: unknown): string | null => (typeof v === "string" && /^[A
 
 // The error type and code from an API error body or stream event, such as
 // { "error": { "type": "invalid_request_error", "code": "..." } }.
-export function apiError(json: unknown): { type: string | null; code: string | null } {
+export function apiError(json: unknown): { type: string | null; code: string | null; param: string | null } {
   const o = (json ?? {}) as Record<string, unknown>;
   const inner = (o.error ?? (o.response as Record<string, unknown> | undefined)?.error ?? o) as Record<string, unknown> | null;
-  return { type: identifier(inner?.type), code: identifier(inner?.code ?? o.code) };
+  return { type: identifier(inner?.type), code: identifier(inner?.code ?? o.code), param: identifier(inner?.param ?? o.param) };
 }
 
 function parseJson(text: string): unknown {
