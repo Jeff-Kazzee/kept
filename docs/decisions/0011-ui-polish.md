@@ -10,9 +10,10 @@ for the model picker and Google. V1 to V13 are the design direction Jeff set.
 U1 to U20 are choices the writer made while building it.
 
 Code: `ui/contract.ts` (the contract types), `ui/agentApi.ts` (its routes),
-`ui/agent/` (shared agent state, receipts, model picker), `ui/dev/fakeBackend.ts`
-(the development fake of the new routes), `ui/chat/`, `ui/case/`,
-`ui/schedule/`, `ui/components/Menu.tsx`, `ui/styles.css`, `vite.config.ts`.
+`ui/agent/` (shared agent state, receipts, model picker), `ui/chat/`,
+`ui/case/`, `ui/schedule/`, `ui/components/Menu.tsx`, `ui/styles.css`,
+`vite.config.ts`. The development fake of the new routes,
+`ui/dev/fakeBackend.ts`, is gone since U51.
 
 ## Design direction
 
@@ -322,6 +323,48 @@ mountains, rivers, creeks, hot springs and wildlife, at a high-end polish.
   and shows a plain sentence for the code.
 - U50. The default zone is UTC, the server's. Every settings and sign-in
   write states the one `settingsVersion`.
+
+## On sprint 11's routes (`sprint/09c-google`, from `dev` at `23b1dda`)
+
+- U51. The Google part uses sprint 11's routes (0012), and the last
+  development fake is gone: `ui/dev/fakeBackend.ts` and
+  `createHybridBackend` are deleted, and every build, development or
+  production, uses the server's routes. A fake could not do what the
+  server does: the server marks a Gmail message with `importedFrom`, and
+  the paste route cannot. The scripted chat stays a development tool. It
+  no longer searches Gmail or writes Google Calendar entries. Asked about
+  email, it says where the server's Google connection stands.
+  `test/bundle.test.ts` now checks only the scripted chat's marker.
+- U52. Settings shows four Google states from `GET /api/google`. With
+  `configured: false` it says the server has no Google client yet and
+  points to `docs/google.md`, with no Connect button. Not connected, it
+  offers Gmail and Google Calendar as two checked boxes and Connect
+  Google, which sends `{ expectedVersion, gmail, calendar }` and opens the
+  answered address. With `needsReconnect` it says Google needs a new
+  sign-in, shows the account and what was connected, and offers Reconnect
+  (with the same permissions) and Disconnect. Connected, it shows the
+  account, each permission, "Read the calendar again" (`POST
+  /api/google/calendar/refresh`) when Calendar is on, "Connect again with
+  both" when one is off, and Disconnect. A disconnect that Google did not
+  confirm (`revoked: false`) says so in a toast.
+- U53. Google's callback comes back to `/?connected=google` or
+  `/?google_error=<code>`. Each of the server's codes has its own short
+  sentence written by code (`googleErrorSentence`), an unknown code the
+  general one, and the query is removed with `history.replaceState`, as
+  for the ChatGPT sign-in (`signInReturn`).
+- U54. Refusals: 409 `google_stale` shows the page's sentence, and the
+  reload after the action shows the current connection. The Google
+  refusals (`google_*`), 422 `redirect_unavailable` and `google_busy`
+  show the server's sentence. An Undo refused with 409 `undo_blocked` or
+  `google_busy` shows its reason beside the entry. The message card says
+  "From Gmail" only from `importedFrom: "gmail"`, not from the activity,
+  and the text stays in the untrusted box (0012, G21). The activity kinds
+  of U15 are the ones the server writes (0012, G19).
+- U55 (for sprint 11). The undo route maps `undo_blocked` to 409, but a
+  `GoogleBusyError` from `CaseActions.undoEntry` reaches `server/api.ts`'s
+  error mapping unmapped and answers 500 `server_error`. The page handles
+  409 `google_busy` once the server sends it. Until then such an Undo
+  shows "The app could not complete the request. Nothing was saved."
 
 ## Measured on the production build
 
