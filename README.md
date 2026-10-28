@@ -100,8 +100,12 @@ in this repo is synthetic.
   a restart.
 - Archive hides an appointment from the slot list, the question queue and
   the reply panel. "Show archived" lists it with Undo.
-- `pnpm scan:secrets` checks every tracked file and the whole git history
-  for grant tokens.
+- `pnpm scan:secrets` checks the repository for grant tokens. See "What
+  the secret scan finds" below for exactly what it covers.
+- Creating a grant and confirming an agent's proposal need a pairing code
+  that the app prints in its terminal when it starts. The page asks for it
+  once per browser tab. Every change through the app's web API must come
+  from its own page.
 
 See `docs/decisions/0001-stack.md` for the stack and dependency checks,
 `docs/decisions/0002-slot-states.md` for the slot rules,
@@ -121,7 +125,7 @@ pnpm install
 pnpm test        # offline, no key needed
 pnpm typecheck
 pnpm dev         # http://127.0.0.1:5180 with recorded model responses
-pnpm scan:secrets  # no grant token in any tracked file or commit
+pnpm scan:secrets  # grant tokens in the repository, see "What the secret scan finds"
 ```
 
 Live model in the UI: set `APP_LIVE_MODEL=1` and provide `MODEL_API_KEY` in
@@ -175,6 +179,14 @@ and, if you allow it, add notes and propose changes. Nothing is shared until
 you create a grant. `docs/connect-agent.md` is the full guide, with the
 client entries for Grok Build, OpenCode and Claude Code and the connect
 test.
+
+Run the agent with only the MCP tools. An agent that runs as your OS user
+and has a shell or file tools can read and change the app's files, its
+database included, whatever its grant allows. The app's pairing code and
+its web API checks raise the bar, but a process with a shell can open the
+database file directly. The agent client's own tool permissions are the
+real control. `docs/connect-agent.md` gives the exact settings for each
+client.
 
 1. Create a grant. Pick a name you will recognize and the lowest tier that
    does the job. In the app, use "Agent access (MCP)". Or, on the app's
@@ -283,7 +295,12 @@ app's hands:
   but a model can still follow an instruction hidden in a message. The
   server's own checks do not depend on the agent obeying the labels, so a
   steered agent still cannot change a slot, send a reply, delete the case
-  or widen its grant.
+  or widen its grant through MCP.
+- An agent with a shell or file tools on the app's host, or one that can
+  `ssh` to it, is not limited by its grant. It can open the database file
+  or call the app's web API. The pairing code stops it only from creating
+  grants and confirming proposals through that API. Give agents only the
+  MCP tools.
 - Anyone who holds the token can use the grant until you revoke it. The
   token file must stay readable by you only. Revoking stops the next call,
   not data already read.
@@ -292,3 +309,27 @@ app's hands:
   under the limit from reading everything its tier allows.
 
 `docs/diagrams.md` shows the agent change flow.
+
+## What the secret scan finds
+
+`pnpm scan:secrets` reads every tracked file on disk and every tracked
+path, every object reachable from any ref (the bytes of every blob, binary
+ones included, the text of every commit and tag, and every file and folder
+name in every tree), and every ref name. That covers old versions, merge
+results and other branches, including session checkpoint refs.
+
+In each of those it finds:
+
+- A grant token, `appt_` and 43 base64url characters, on one line or split
+  across two adjacent lines at a line break.
+- The same token in hexadecimal, on one line.
+- A run of exactly 43 base64url characters with an upper-case letter, a
+  lower-case letter and a digit, the shape of a token made before tokens
+  had a prefix.
+
+It does not find a token in any other encoding (base64 of the token, URL
+encoding, UTF-16, compression or encryption), split into more than two
+parts or with other text between them, a hex or unprefixed token split
+across lines, or anything outside this repository: other clones, the
+database file, logs and screenshots elsewhere. It prints where a hit is,
+never the matched text, and exits 1 on any hit.

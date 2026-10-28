@@ -2,20 +2,20 @@
 //
 // What it reads:
 // - every tracked file as it is on disk, as bytes, binary files included,
-//   and every tracked path;
-// - every object reachable from any ref (`git rev-list --all --objects`):
+//   and every tracked path.
+// - every object reachable from any ref (`git rev-list --all --objects`),
 //   the bytes of every blob, the text of every commit and tag (headers and
 //   message) and every entry name in every tree. So a token in any version
 //   of any file, in a merge result, in a binary file or in a file name is
-//   read, whatever `git log -p` would show;
+//   read, whatever `git log -p` would show.
 // - every ref name.
 //
 // What it finds, in each of those:
 // - a grant token, `appt_` and 43 base64url characters at the end of a run
 //   of base64url characters, on one line, or split across two adjacent
 //   lines at a line break (spaces and tabs at the start of the second line
-//   are ignored);
-// - the same token written in hexadecimal, upper or lower case, on one line;
+//   are ignored).
+// - the same token written in hexadecimal, upper or lower case, on one line.
 // - a run of exactly 43 base64url characters with an upper-case letter, a
 //   lower-case letter and a digit, on one line. That is the shape of a token
 //   without its prefix, as tokens were made before sprint 6. A run next to

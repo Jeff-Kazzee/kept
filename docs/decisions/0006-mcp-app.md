@@ -147,6 +147,54 @@ Code: `ui/AgentPanels.tsx` (grant screen, proposals, notes, live refresh),
   it imports Node code. It is type-checked by its own config,
   `ui/tsconfig.node-tests.json`, which `pnpm typecheck` runs.
 
+## Review round 1
+
+- R1 (coordinator decision, proposed, pending Jeff). The local HTTP API has
+  no user login, and an agent with a shell or HTTP access can call it. A
+  process that runs as the same OS user can also open the SQLite file
+  directly, so no HTTP secret fully stops it. The real control is the
+  agent client's own tool permissions. `docs/connect-agent.md` gives each
+  client's settings for only the MCP tools, and the connect test starts by
+  checking that the agent cannot run a shell command or write a file. Two
+  checks add defense in depth (`server/guard.ts`):
+  - Every request that changes state must carry `Sec-Fetch-Site:
+    same-origin` or an `Origin` equal to the app's own origin, and the
+    `X-Appointments-App: 1` header the page sends. Otherwise the server
+    answers 403 `forbidden_source` before reading the body, and nothing
+    runs. GET needs neither.
+  - Creating a grant and confirming an agent's proposal also need the
+    pairing code. The server makes it at start from 8 characters of a
+    31-letter alphabet with no 0, O, 1, I or L (about 40 bits), keeps it in
+    memory only and prints it once to its own stdout. The page asks for it
+    once per tab and keeps it in sessionStorage. It sends the code only
+    with those two requests. Case and dashes do not matter. A wrong or
+    missing code is 403 and writes nothing. After 10 wrong codes both
+    actions are locked until the app restarts, so the code cannot be
+    guessed through the API. Rejecting a proposal, revoking a grant,
+    archive and undo need no code, because they narrow what an agent
+    changed or can do. `pnpm grant create` needs no code, because it opens
+    the database file, which a process with a shell can do anyway.
+- R2. Checklist items and sources, and reply field sources, carry
+  `agentName` and `untrustedLabel` when the words are an agent's
+  (`src/domain/untrusted.ts` builds the label). A reply field whose value
+  only agents reported, such as a place from a confirmed detail edit,
+  carries its own label. The labels are in the data, so the next UI shows
+  them without new rules. A value an office message or the user also
+  states is not labeled. Drafts stored earlier have no labels.
+- R3 to R6. The secret scan reads every reachable object through
+  `git cat-file --batch` instead of `git log -p`: blob bytes with no binary
+  skip, commit and tag text, and tree entry names. It also reads every
+  tracked path and ref name, prints names with the secret part replaced by
+  `<redacted>`, and finds a prefixed token in hexadecimal and one split
+  across two adjacent lines. This replaces A14's history scan. The exact
+  guarantee, what it finds and what it does not, is in the README section
+  "What the secret scan finds" and in the scanner's header comment. It
+  takes about 7 seconds here.
+- R7. `list_open_questions` leaves out a conflict that names an archived
+  appointment, as the app's question queue does (A12).
+- R8. The token file is opened with `O_NONBLOCK`, so a FIFO at the path is
+  refused as not a regular file instead of hanging the server at start.
+
 ## For Jeff
 
 - When the propose grant reports that the office confirmed Monday by
