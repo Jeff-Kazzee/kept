@@ -64,12 +64,37 @@ export class ModelCallError extends Error {
 // text that could be an echoed key, is dropped.
 const identifier = (v: unknown): string | null => (typeof v === "string" && /^[a-z][a-z0-9_.:-]{0,63}$/.test(v) ? v : null);
 
+// Error codes that say a model lacks a request feature (0010 M4), and the
+// request fields such an error names. A known value is kept in lower case
+// whatever case the API sent it in, before the identifier check, so the
+// capability check still sees it.
+export const CAPABILITY_CODES: readonly string[] = [
+  "subscription_sharing_unsupported_capability",
+  "unsupported_parameter",
+  "unsupported_value",
+  "unsupported_model_feature",
+];
+const CAPABILITY_PARAM = /^(tools|tool_choice|parallel_tool_calls|text|stream|reasoning)(?=$|[.[])/;
+
+const errorCode = (v: unknown): string | null =>
+  typeof v === "string" && CAPABILITY_CODES.includes(v.toLowerCase()) ? v.toLowerCase() : identifier(v);
+
+const errorParam = (v: unknown): string | null => {
+  if (typeof v !== "string") return null;
+  const lower = v.toLowerCase();
+  const known = CAPABILITY_PARAM.exec(lower);
+  // A known field keeps its path when the path is an identifier, as in
+  // text.format, and its name alone otherwise, as in tools[0].name.
+  if (known) return identifier(lower) ?? known[1]!;
+  return identifier(v);
+};
+
 // The error type and code from an API error body or stream event, such as
 // { "error": { "type": "invalid_request_error", "code": "..." } }.
 export function apiError(json: unknown): { type: string | null; code: string | null; param: string | null } {
   const o = (json ?? {}) as Record<string, unknown>;
   const inner = (o.error ?? (o.response as Record<string, unknown> | undefined)?.error ?? o) as Record<string, unknown> | null;
-  return { type: identifier(inner?.type), code: identifier(inner?.code ?? o.code), param: identifier(inner?.param ?? o.param) };
+  return { type: identifier(inner?.type), code: errorCode(inner?.code ?? o.code), param: errorParam(inner?.param ?? o.param) };
 }
 
 function parseJson(text: string): unknown {

@@ -2,7 +2,7 @@
 // that provider: the chat agent, extraction, explanations, questions and
 // templates. A model that fails a capability the app needs is named in
 // settings and the call fails. No call moves to another model by itself.
-import { assertAllowedModel, type ModelCallError } from "../client.ts";
+import { CAPABILITY_CODES, assertAllowedModel, type ModelCallError } from "../client.ts";
 import type { ModelProblem, ProviderKind, StoredSettings } from "./secrets.ts";
 
 export type ModelOption = { id: string; label: string; costHint: "lower" | "higher" | null };
@@ -79,14 +79,14 @@ export function modelProblemText(problem: ModelProblem, label: string): string {
 // Error codes that say a request feature is not supported. ChatGPT's code
 // is documented (errors-and-recovery). The others are the Responses API's
 // usual codes for an unsupported parameter, assumed for Meta's API.
-const UNSUPPORTED_CODES = new Set(["subscription_sharing_unsupported_capability", "unsupported_parameter", "unsupported_value", "unsupported_model_feature"]);
+const UNSUPPORTED_CODES = new Set(CAPABILITY_CODES);
 
 // The capability a failed call shows the model lacks, or null. `param` is
 // the error's param when the client read it. Without one, the request
 // decides: a tool turn needs tool calling, a JSON call structured output.
 export function capabilityProblem(err: ModelCallError, request: { tools: boolean; json: boolean }): ModelProblem["capability"] | null {
-  if (err.status !== 400 || err.errorCode === null || !UNSUPPORTED_CODES.has(err.errorCode)) return null;
-  const param = err.errorParam ?? "";
+  if (err.status !== 400 || err.errorCode === null || !UNSUPPORTED_CODES.has(err.errorCode.toLowerCase())) return null;
+  const param = (err.errorParam ?? "").toLowerCase();
   if (/^(tools|tool_choice|parallel_tool_calls)/.test(param)) return "tool_calling";
   if (/^text/.test(param)) return "structured_output";
   if (/^stream/.test(param)) return "streaming";
