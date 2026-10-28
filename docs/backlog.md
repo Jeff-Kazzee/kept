@@ -44,9 +44,11 @@ Rules:
 | 3 | Reviewed reply | D3 | Oct 27 | Done (`af00de3`) |
 | 4 | MCP core: domain events, grants, tools | D5, part 1 | Oct 27 | Done (`49f9c45`) |
 | 5 | Saved outcome and checklist | D4 | Oct 28 | Done (`d6a0d86`) |
-| 6 | MCP in the app and connect test | D5, part 2 | Nov 2 | Next |
-| 7 | Failure testing | All | Nov 2 to 3 | Planned |
-| 8 | Submission build | All | Nov 3 to 4 | Planned |
+| 6 | MCP in the app and connect test | D5, part 2 | Oct 28 | Done (`2bc8384`), real client run open |
+| 7A | Case agent: chat tool loop on Muse Spark | Chat app | Oct 28 to 29 | Next |
+| 7B | Web app: chat and schedule UI, production build, mobile | Chat app | Oct 28 to 29 | Next, beside 7A |
+| 8 | Failure testing | All | Oct 30 to 31 | Planned |
+| 9 | Submission build | All | Nov 1 to 3 | Planned |
 
 Milestone checkpoint: Oct 31, after sprint 2. If sprint 2 is not merged by
 then, cut the MCP slice in this order: `propose_change`, then the annotate
@@ -329,9 +331,20 @@ Tasks:
   proposed". The optional demo beat stops before the confirmation, so the
   demo is not affected. Decide whether the demo should show it.
 
-## Sprint 7: failure testing
+## Sprint 7A and 7B: the agentic chat app
 
-Branch `sprint/07-failure-testing`.
+On 2026-10-28 Jeff decided the product is an agentic chat app: the user
+talks to an agent on Muse Spark with tools, and the schedule sits beside the
+chat (a tab on phones). The agent never changes slot state. Every change is
+a card the user acts on with the existing routes. 7A builds the agent (tool
+loop, tools, streaming chat route, grounding and scope checks, live chat
+eval). 7B builds the web app (chat and schedule layout, cards, design
+system, production build, mobile layout, Tailscale host setting). Both work
+to one chat contract. Details live in their decision docs, 0007 and 0008.
+
+## Sprint 8: failure testing
+
+Branch `sprint/08-failure-testing`.
 
 - [ ] SP7.1 Full fixture suite S1 to S19 against the final model and host.
 - [ ] SP7.2 Fixed set of out-of-scope prompts for S11. A manual review finds
@@ -343,9 +356,9 @@ Branch `sprint/07-failure-testing`.
 Stretch work starts only after SP7.1 passes, in this order: intake form,
 calendar export, voice input.
 
-## Sprint 8: submission build
+## Sprint 9: submission build
 
-Branch `sprint/08-submission`.
+Branch `sprint/09-submission`.
 
 - [ ] SP8.1 Rehearse and record the three-minute demo.
 - [ ] SP8.2 Review the video and screenshots frame by frame for tokens and
