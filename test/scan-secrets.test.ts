@@ -104,7 +104,7 @@ describe("the secret scan", () => {
     const r = repo();
     r.write("README.md", "Nothing here.\n");
     r.commit("First");
-    expect(scan(r.dir)).toMatchObject({ status: 0, stdout: expect.stringMatching(/^Secret scan passed: no secret in 1 tracked files, 1 commits or 3 reachable objects\.\n$/) });
+    expect(scan(r.dir)).toMatchObject({ status: 0, stdout: expect.stringMatching(/^Secret scan passed: no secret in 1 tracked files, 1 commits or 3 reachable objects\. Skipped local refs: none\.\n$/) });
 
     const planted = assignment();
     r.write(".env.local.backup", `# saved\nAPP_PORT=5180\n${planted.text}\n`);
@@ -306,6 +306,45 @@ describe("the secret scan", () => {
     const run = scan(PACKAGE_ROOT);
     expect(run.stderr).toBe("");
     expect(run.status).toBe(0);
-    expect(run.stdout).toMatch(/^Secret scan passed: no secret in \d+ tracked files, \d+ commits or \d+ reachable objects\.\n$/);
+    expect(run.stdout).toMatch(/^Secret scan passed: no secret in \d+ tracked files, \d+ commits or \d+ reachable objects\. Skipped local refs: (none|refs\/[^ ]+ \(\d+\)(, refs\/[^ ]+ \(\d+\))*)\.\n$/);
+  }, 60_000);
+
+  it("0010 P25: a token only under a local tool ref is skipped and its prefix named, and one on a branch is found", () => {
+    const r = repo();
+    r.write("README.md", "Nothing here.\n");
+    r.commit("First");
+    const token = newGrantToken();
+    r.git("checkout", "-q", "-b", "side");
+    r.write("leak.txt", `${token}\n`);
+    r.commit("Leak");
+    r.git("update-ref", "refs/entire/checkpoints/AB/01TEST", "HEAD");
+    r.git("update-ref", "refs/t3/checkpoints/1", "HEAD");
+    r.git("checkout", "-q", "main");
+    r.git("branch", "-q", "-D", "side");
+    let run = scan(r.dir);
+    expect(run.status).toBe(0);
+    expect(run.stdout).toMatch(/^Secret scan passed: .* Skipped local refs: refs\/entire \(1\), refs\/t3 \(1\)\.\n$/);
+    expectSilent(run, token);
+
+    r.git("branch", "kept", "refs/entire/checkpoints/AB/01TEST");
+    run = scan(r.dir);
+    expect(run.status).toBe(1);
+    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} leak\\.txt:1\\n`));
+    expect(run.stdout).toContain("Skipped local refs: refs/entire (1), refs/t3 (1).");
+    expectSilent(run, token);
+  }, 60_000);
+
+  it("0010 P25: a token staged in the index and then changed on disk is found", () => {
+    const r = repo();
+    r.write("README.md", "Nothing here.\n");
+    r.commit("First");
+    const token = newGrantToken();
+    r.write("staged.txt", `${token}\n`);
+    r.git("add", "staged.txt");
+    r.write("staged.txt", "clean now\n");
+    const run = scan(r.dir);
+    expect(run.status).toBe(1);
+    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} staged\\.txt:1\\n`));
+    expectSilent(run, token);
   }, 60_000);
 });

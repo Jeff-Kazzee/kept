@@ -4,15 +4,23 @@
 // and in the server's environment, and the user's Meta key and ChatGPT
 // tokens, which live only in the app's settings file.
 //
-// What it reads:
+// What it reads (its scope is what can be published, 0010 P25):
 // - every tracked file as it is on disk, as bytes, binary files included,
 //   and every tracked path.
-// - every object reachable from any ref (`git rev-list --all --objects`),
-//   the bytes of every blob, the text of every commit and tag (headers and
-//   message) and every entry name in every tree. So a key in any version
-//   of any file, in a merge result, in a binary file or in a file name is
-//   read, whatever `git log -p` would show.
-// - every ref name.
+// - every blob staged in the index, so a secret staged and then changed on
+//   disk is still read.
+// - every object reachable from a branch, a tag, a remote-tracking ref or
+//   HEAD (`git rev-list --objects` over refs/heads, refs/tags, refs/remotes
+//   and HEAD): the bytes of every blob, the text of every commit and tag
+//   (headers and message) and every entry name in every tree. So a secret in
+//   any version of any file on those refs, in a merge result, in a binary
+//   file or in a file name is read, whatever `git log -p` would show.
+// - the name of every branch, tag and remote-tracking ref.
+//
+// What it skips: every other ref, such as local tool refs (refs/entire/*,
+// refs/t3/*) and refs/stash, which are never pushed. Their prefixes and
+// counts are named in the summary line, so the gap stays visible. An object
+// reachable only from them is not read.
 //
 // What it finds, on one line, in each of those:
 // - an assignment of MODEL_API_KEY with a value: `MODEL_API_KEY=value`,
@@ -191,8 +199,8 @@ const nameHasSecret = (name: string) => {
   return found;
 };
 
-function git(repo: string, args: string[]): string {
-  const run = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+function git(repo: string, args: string[], input?: string): string {
+  const run = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, input });
   if (run.status !== 0) throw new Error(`git ${args[0]} failed: ${run.stderr.trim()}`);
   return run.stdout;
 }
@@ -260,11 +268,44 @@ function scanWorkingTree(repo: string, hit: Hit, note: (text: string) => void): 
   return files.length;
 }
 
-function scanRefs(repo: string, hit: Hit): void {
+// Refs that can be published: branches, tags and remote-tracking refs.
+const PUBLISHED_REF = /^refs\/(heads|tags|remotes)\//;
+
+export type RefScope = { published: string[]; skipped: Array<{ prefix: string; count: number }> };
+
+// Splits the refs into the published ones and the skipped ones, counted by
+// their first two name parts, such as refs/entire.
+function refScope(repo: string): RefScope {
   // Ref names cannot hold a newline or other control characters.
-  for (const ref of git(repo, ["for-each-ref", "--format=%(refname)"]).split("\n").filter(Boolean)) {
+  const refs = git(repo, ["for-each-ref", "--format=%(refname)"]).split("\n").filter(Boolean);
+  const published = refs.filter((r) => PUBLISHED_REF.test(r));
+  const counts = new Map<string, number>();
+  for (const r of refs) {
+    if (PUBLISHED_REF.test(r)) continue;
+    const prefix = r.split("/").slice(0, 2).join("/");
+    counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
+  }
+  const skipped = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([prefix, count]) => ({ prefix, count }));
+  return { published, skipped };
+}
+
+function scanRefs(refs: string[], hit: Hit): void {
+  for (const ref of refs) {
     if (nameHasSecret(ref)) hit(`ref name ${redact(ref)}`);
   }
+}
+
+// The blobs staged in the index, with their paths. Submodule entries
+// (mode 160000) name a commit in another repository and are left out.
+function indexBlobs(repo: string): Array<{ id: string; path: string }> {
+  const out: Array<{ id: string; path: string }> = [];
+  for (const entry of git(repo, ["ls-files", "-s", "-z"]).split("\0").filter(Boolean)) {
+    const m = /^(\d{6}) ([0-9a-f]+) \d\t([\s\S]*)$/.exec(entry);
+    if (!m) throw new Error("git ls-files printed an index entry the scan cannot read");
+    if (m[1] === "160000") continue;
+    out.push({ id: m[2]!, path: m[3]! });
+  }
+  return out;
 }
 
 // Tree entries are "<mode> <name>\0" and the raw object id. Each entry's
@@ -285,16 +326,25 @@ function scanTreeObject(id: string, b: Buffer, raw: number, paths: Map<string, s
   }
 }
 
-// Reads every reachable object through `git cat-file --batch`, as a stream.
-async function scanObjects(repo: string, hit: Hit): Promise<{ commits: number; objects: number }> {
+// Reads every object reachable from the published refs and HEAD, and every
+// staged blob, through `git cat-file --batch`, as a stream.
+async function scanObjects(repo: string, refs: string[], hit: Hit): Promise<{ commits: number; objects: number }> {
   const { hex, raw } = objectFormat(repo);
   const idPattern = new RegExp(`^[0-9a-f]{${hex}}$`);
-  const ids = git(repo, ["rev-list", "--all", "--objects", "--no-object-names"]).split("\n").filter(Boolean);
+  const head = spawnSync("git", ["-C", repo, "rev-parse", "--verify", "--quiet", "HEAD"], { encoding: "utf8" });
+  const tips = [...refs, ...(head.status === 0 ? ["HEAD"] : [])];
+  const ids = tips.length === 0 ? [] : git(repo, ["rev-list", "--objects", "--no-object-names", "--stdin"], tips.join("\n") + "\n").split("\n").filter(Boolean);
   for (const id of ids) if (!idPattern.test(id)) throw new Error("git rev-list printed a line that is not an object id");
-  const unique = [...new Set(ids)];
-  if (unique.length === 0) return { commits: 0, objects: 0 };
-  // Paths of trees and blobs, from root trees down.
+  // Paths of trees and blobs, from root trees down. Staged blobs are named
+  // by their index path.
   const paths = new Map<string, string>();
+  const staged = indexBlobs(repo);
+  for (const { id, path: p } of staged) {
+    if (!idPattern.test(id)) throw new Error("git ls-files printed an object id the scan cannot read");
+    if (!paths.has(id)) paths.set(id, p);
+  }
+  const unique = [...new Set([...ids, ...staged.map((b) => b.id)])];
+  if (unique.length === 0) return { commits: 0, objects: 0 };
   const child = spawn("git", ["-C", repo, "cat-file", "--batch"], { stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "";
   child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
@@ -378,7 +428,11 @@ async function scanObjects(repo: string, hit: Hit): Promise<{ commits: number; o
   return { commits, objects };
 }
 
-export type ScanResult = { hits: string[]; notes: string[]; files: number; commits: number; objects: number };
+export type ScanResult = { hits: string[]; notes: string[]; files: number; commits: number; objects: number; skipped: RefScope["skipped"] };
+
+export function skippedText(skipped: RefScope["skipped"]): string {
+  return skipped.length === 0 ? "Skipped local refs: none." : `Skipped local refs: ${skipped.map((s) => `${s.prefix} (${s.count})`).join(", ")}.`;
+}
 
 export async function scanRepo(repo: string): Promise<ScanResult> {
   const hits: string[] = [];
@@ -390,24 +444,25 @@ export async function scanRepo(repo: string): Promise<ScanResult> {
     hits.push(where);
   };
   const files = scanWorkingTree(repo, hit, (text) => notes.push(text));
-  scanRefs(repo, hit);
-  const { commits, objects } = await scanObjects(repo, hit);
-  return { hits, notes, files, commits, objects };
+  const { published, skipped } = refScope(repo);
+  scanRefs(published, hit);
+  const { commits, objects } = await scanObjects(repo, published, hit);
+  return { hits, notes, files, commits, objects, skipped };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const { values } = parseArgs({ args: process.argv.slice(2).filter((a) => a !== "--"), options: { repo: { type: "string" } }, strict: true });
   const repo = path.resolve(values.repo ?? process.cwd());
   try {
-    const { hits, notes, files, commits, objects } = await scanRepo(repo);
+    const { hits, notes, files, commits, objects, skipped } = await scanRepo(repo);
     for (const n of notes) console.log(n);
     for (const h of hits) console.log(`Possible secret at ${h}`);
     if (hits.length > 0) {
-      console.log(`Secret scan failed: ${hits.length} place${hits.length === 1 ? "" : "s"} to check. The matched text is not shown.`);
+      console.log(`Secret scan failed: ${hits.length} place${hits.length === 1 ? "" : "s"} to check. The matched text is not shown. ${skippedText(skipped)}`);
       console.log("For a blob, `git log --all --find-object=<id>` lists the commits that hold it.");
       process.exit(1);
     }
-    console.log(`Secret scan passed: no secret in ${files} tracked files, ${commits} commits or ${objects} reachable objects.`);
+    console.log(`Secret scan passed: no secret in ${files} tracked files, ${commits} commits or ${objects} reachable objects. ${skippedText(skipped)}`);
   } catch (err) {
     console.error(`Secret scan could not run: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(2);
