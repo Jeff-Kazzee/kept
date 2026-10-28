@@ -683,6 +683,8 @@ figure.source { margin: 0; }
   border-radius: var(--radius-sm); font-size: var(--text-sm);
 }
 .untrusted .label { font-size: var(--text-xs); font-weight: 650; color: var(--untrusted-label); }
+.unconfirmed { opacity: 0.8; }
+.unconfirmed-line { display: inline-flex; align-items: center; gap: var(--s-half); font-style: italic; }
 .untrusted-inline { text-decoration: underline dotted var(--untrusted-border); text-underline-offset: 3px; }
 
 .choices { display: grid; gap: var(--s-1); }

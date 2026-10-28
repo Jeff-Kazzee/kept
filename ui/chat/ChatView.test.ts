@@ -84,10 +84,10 @@ describe("chat view", () => {
       chatVersion: 2,
       pending: null,
       messages: [
-        { id: "u1", role: "user", text: "Hi <img src=x onerror=alert(1)>\nsecond line", createdAt: at, cards: [], chips: [] },
-        { id: "a1", role: "assistant", text: "Monday is <b>confirmed</b>.", createdAt: at, cards: [{ kind: "notice", text: "See the Checklist tab." }], chips: [{ slotKey: "2026-11-16T13:00", label: "Monday 11/16 1:00 PM", stateLabel: "Confirmed · office message", evidenceIds: ["m4-e1"] }] },
-        { id: "u2", role: "user", text: "Which dose?", createdAt: at, cards: [], chips: [] },
-        { id: "a2", role: "assistant", text: "This app only handles appointment times.", createdAt: at, cards: [], chips: [], declined: true },
+        { id: "u1", actions: [], role: "user", text: "Hi <img src=x onerror=alert(1)>\nsecond line", createdAt: at, cards: [], chips: [] },
+        { id: "a1", actions: [], role: "assistant", text: "Monday is <b>confirmed</b>.", createdAt: at, cards: [{ kind: "notice", text: "See the Checklist tab." }], chips: [{ slotKey: "2026-11-16T13:00", label: "Monday 11/16 1:00 PM", stateLabel: "Confirmed · office message", evidenceIds: ["m4-e1"] }] },
+        { id: "u2", actions: [], role: "user", text: "Which dose?", createdAt: at, cards: [], chips: [] },
+        { id: "a2", actions: [], role: "assistant", text: "This app only handles appointment times.", createdAt: at, cards: [], chips: [], declined: true },
       ],
     });
     expect(html).toContain('<span class="model-tag">Model output</span>');
@@ -105,7 +105,7 @@ describe("chat view", () => {
   });
 
   it("the scripted chat labels its text as scripted, not a model", () => {
-    const html = render({ status: "ready", chatVersion: 1, pending: null, messages: [{ id: "a1", role: "assistant", text: "Hello.", createdAt: at, cards: [], chips: [] }] }, { scripted: true });
+    const html = render({ status: "ready", chatVersion: 1, pending: null, messages: [{ id: "a1", actions: [], role: "assistant", text: "Hello.", createdAt: at, cards: [], chips: [] }] }, { scripted: true });
     expect(html).toContain("Scripted demo reply, not a model");
     expect(html).not.toContain(">Model output<");
   });
@@ -174,7 +174,7 @@ describe("chat view", () => {
         status: "ready",
         chatVersion: 1,
         pending: null,
-        messages: [{ id: "a1", role: "assistant", text: "Here.", createdAt: at, cards: [], chips: [chip("2026-11-12T10:30", "Confirmed · office message"), chip("2026-11-10T14:00", "Offered · office message"), chip("2026-11-20T09:00", "Offered · office message")] }],
+        messages: [{ id: "a1", actions: [], role: "assistant", text: "Here.", createdAt: at, cards: [], chips: [chip("2026-11-12T10:30", "Confirmed · office message"), chip("2026-11-10T14:00", "Offered · office message"), chip("2026-11-20T09:00", "Offered · office message")] }],
       },
       { state: live },
     );
@@ -194,12 +194,12 @@ describe("chat view", () => {
       chatVersion: 6,
       pending: null,
       messages: [
-        { id: "cm1", role: "user", text: "Lantern Hill Clinic: we can see you Monday 11/16 at 1:00 PM.\nReply MON.", createdAt: at, cards: [], chips: [] },
-        { id: "cm2", role: "assistant", text: MODEL_UNAVAILABLE_TEXT, createdAt: at, cards: [], chips: [] },
-        { id: "cm3", role: "user", text: "What is confirmed?", createdAt: at, cards: [], chips: [] },
-        { id: "cm4", role: "assistant", text: MODEL_UNAVAILABLE_TEXT, createdAt: at, cards: [], chips: [] },
-        { id: "cm5", role: "user", text: "Import this", createdAt: at, cards: [], chips: [] },
-        { id: "cm6", role: "assistant", text: PARTIAL_TEXT, createdAt: at, cards: [{ kind: "notice", text: QUESTION_WITHHELD_NOTICE }], chips: [] },
+        { id: "cm1", actions: [], role: "user", text: "Lantern Hill Clinic: we can see you Monday 11/16 at 1:00 PM.\nReply MON.", createdAt: at, cards: [], chips: [] },
+        { id: "cm2", actions: [], role: "assistant", text: MODEL_UNAVAILABLE_TEXT, createdAt: at, cards: [], chips: [] },
+        { id: "cm3", actions: [], role: "user", text: "What is confirmed?", createdAt: at, cards: [], chips: [] },
+        { id: "cm4", actions: [], role: "assistant", text: MODEL_UNAVAILABLE_TEXT, createdAt: at, cards: [], chips: [] },
+        { id: "cm5", actions: [], role: "user", text: "Import this", createdAt: at, cards: [], chips: [] },
+        { id: "cm6", actions: [], role: "assistant", text: PARTIAL_TEXT, createdAt: at, cards: [{ kind: "notice", text: QUESTION_WITHHELD_NOTICE }], chips: [] },
       ],
     });
     expect(html.split("Written by code").length - 1).toBe(4);
@@ -241,7 +241,7 @@ describe("chat view", () => {
     const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void errors.push(a));
     const live = { ...state, case: { ...state.case, slots: [{ key: "2026-11-16T13:00", label: "Monday 11/16 1:00 PM", stateLabel: "Confirmed · office message" }] } } as unknown as AppState;
     const chip = { slotKey: "2026-11-16T13:00", label: "Monday 11/16 1:00 PM", stateLabel: "Confirmed · office message", evidenceIds: [] };
-    const html = render({ status: "ready", chatVersion: 2, pending: null, messages: [{ id: "cm2", role: "assistant", text: "Here.", createdAt: at, cards: [], chips: [chip, chip] }] }, { state: live });
+    const html = render({ status: "ready", chatVersion: 2, pending: null, messages: [{ id: "cm2", actions: [], role: "assistant", text: "Here.", createdAt: at, cards: [], chips: [chip, chip] }] }, { state: live });
     spy.mockRestore();
     expect(errors.filter((e) => String(e).includes("same key"))).toEqual([]);
     expect(html.match(/data-chip-message="cm2" data-chip-slot="2026-11-16T13:00"/g)).toHaveLength(2);
@@ -288,9 +288,9 @@ describe("chat view", () => {
   it("folds a finished turn's tool lines into one line, and shows the model the composer uses", () => {
     expect(toolSummaryText([{ callId: "c1", label: "Reading the message", ok: true }])).toBe("Worked through 1 step");
     expect(toolSummaryText([{ callId: "c1", label: "a", ok: true }, { callId: "c2", label: "b", ok: false }])).toBe("Worked through 2 steps, 1 did not finish");
-    const settings: Settings = { ...DEFAULT_SETTINGS, settingsVersion: 3, provider: "meta", model: "muse-spark-1.3", models: [{ id: "muse-spark-1.3", label: "Muse Spark 1.3", costHint: "lower" }, { id: "muse-wonder", label: "Muse Wonder", costHint: "higher" }], meta: { keySet: true, source: "you" } };
+    const settings: Settings = { ...DEFAULT_SETTINGS, providersInBuild: true, settingsVersion: 3, provider: "meta", model: "muse-spark-1.3", models: [{ id: "muse-spark-1.3", label: "Muse Spark 1.3", costHint: "lower" }, { id: "muse-wonder", label: "Muse Wonder", costHint: "higher" }], meta: { keySet: true, source: "you" } };
     const html = render(
-      { status: "ready", chatVersion: 2, pending: null, messages: [{ id: "c2", role: "assistant", text: "Done.", createdAt: at, cards: [], chips: [] }], toolsByMessage: { c2: [{ callId: "x", label: "Reading your schedule", ok: true }] } },
+      { status: "ready", chatVersion: 2, pending: null, messages: [{ id: "c2", actions: [], role: "assistant", text: "Done.", createdAt: at, cards: [], chips: [] }], toolsByMessage: { c2: [{ callId: "x", label: "Reading your schedule", ok: true }] } },
       {},
       { settings, settingsAvailable: true },
     );

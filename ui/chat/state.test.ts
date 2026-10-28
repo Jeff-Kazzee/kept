@@ -5,8 +5,8 @@ import { STREAM_CUT, chatReducer, initialChat, turnLost, type ChatState } from "
 import type { ChatEvent, ChatMessage } from "./types.ts";
 
 const ev = (e: ChatEvent) => ({ type: "event" as const, event: e });
-const user: ChatMessage = { id: "u1", role: "user", text: "What is confirmed?", createdAt: "2026-11-05T09:00:00Z", cards: [], chips: [] };
-const assistant: ChatMessage = { id: "a1", role: "assistant", text: "Monday.", createdAt: "2026-11-05T09:00:01Z", cards: [], chips: [] };
+const user: ChatMessage = { id: "u1", actions: [], role: "user", text: "What is confirmed?", createdAt: "2026-11-05T09:00:00Z", cards: [], chips: [] };
+const assistant: ChatMessage = { id: "a1", actions: [], role: "assistant", text: "Monday.", createdAt: "2026-11-05T09:00:01Z", cards: [], chips: [] };
 
 function streamed(): ChatState {
   let s = chatReducer(initialChat, { type: "loaded", log: { chatVersion: 3, messages: [] } });

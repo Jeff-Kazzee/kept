@@ -7,7 +7,7 @@
 // case view.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Mark, RidgeScene } from "../components/Art.tsx";
-import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
+import { IMPORT_AFTER_ACTION_NOTICE, MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
 import type { AppState, FixtureScenario } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
@@ -537,7 +537,10 @@ function ToolSummary({ tools }: { tools: ToolLine[] }) {
 
 // The fixed sentences the chat's code writes in place of an answer (0007).
 // They show as notices written by code, not as model output.
-const CODE_SENTENCES = new Set([UNGROUNDED_TEXT, MODEL_UNAVAILABLE_TEXT, TOOL_LIMIT_TEXT, MALFORMED_TEXT, TOKEN_LIMIT_TEXT, PARTIAL_TEXT]);
+// The two notices of 0009, D2 are written by code too: an action that came
+// with a pasted message waits (`waits_for_person`), and so does a paste
+// after another action.
+const CODE_SENTENCES = new Set([UNGROUNDED_TEXT, MODEL_UNAVAILABLE_TEXT, TOOL_LIMIT_TEXT, MALFORMED_TEXT, TOKEN_LIMIT_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, IMPORT_AFTER_ACTION_NOTICE]);
 export const isCodeSentence = (text: string) => CODE_SENTENCES.has(text.trim());
 
 // Text that reads as a pasted message, not a question: more than one line,
@@ -607,6 +610,8 @@ export function turnErrorText(err: { code: string; message: string }): string {
       return "The model did not answer. Nothing was saved. Try again in a moment.";
     case "stale_edit":
       return "The chat changed in another tab. It is reloaded. Nothing was saved.";
+    case "waits_for_person":
+      return PASTE_TURN_NOTICE;
     case "server_error":
       return "The app could not finish that answer. Nothing was saved.";
     default:
@@ -624,14 +629,6 @@ export function CardView({ card, state, run, fresh = false }: { card: Card; stat
       return <ExplanationCard conflictId={card.conflictId} state={state} run={run} />;
     case "reply":
       return <ReplyCard draftId={card.draftId} state={state} run={run} />;
-    case "proposal":
-      // Agents act directly now. A proposal card from an older chat has
-      // nothing left to act on.
-      return (
-        <div className="card card-quiet">
-          <p className="small muted">Agent proposals are gone. Agents act directly, and the Activity tab lists every action with Undo.</p>
-        </div>
-      );
     case "notice":
       return (
         <div className="notice" role="note">

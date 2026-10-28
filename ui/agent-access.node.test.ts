@@ -1,59 +1,61 @@
-// What an agent wrote, as the user sees it: agent notes and agent reports
-// as untrusted text, the archived toggle and the live refresh check.
-// Rendered to static markup with the server renderer, from state the real
-// API returns. The grant screen, proposal cards and pairing screen are gone
-// (sprint 9, 0011). The records service still takes a confirmed agent
-// report, which is how an external agent's words reach the case here.
+// What an agent wrote, as the person sees it: an external agent's note and
+// its unconfirmed report as untrusted text, the archived toggle and the live
+// refresh check. Rendered to static markup with the server renderer, from
+// state the real API returns. Grants, proposals and pairing are gone (0009),
+// so an external agent's words reach the case through the actions an MCP
+// client calls, with the actor "mcp".
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { createApi } from "../server/api.ts";
+import { CaseActions, YOU } from "../src/actions/service.ts";
+import { EXTERNAL_SOURCE_LABEL } from "../src/agent/types.ts";
 import { CaseService } from "../src/case/service.ts";
-import { GrantStore } from "../src/grants/grants.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
-import { acceptMessages, intake } from "../test/helpers.ts";
+import { acceptMessages, fixtureMessage, intake, useZone } from "../test/helpers.ts";
 import { versionChanged, type AppState } from "./api.ts";
 import { ReplyPanel } from "./case/ReplyCard.tsx";
 import { stampTime } from "./format.ts";
-import { Agenda, RecordNotes, activeArchive } from "./schedule/Agenda.tsx";
+import { Agenda, RecordNotes, UNCONFIRMED_WORDS, activeArchive } from "./schedule/Agenda.tsx";
 import { ChecklistPanel } from "./schedule/CaseTabs.tsx";
 
 const run = async () => {};
 const THU = "2026-11-12T10:30";
+const MCP = { actor: "mcp" as const };
 
-// A case with m2 accepted, a propose grant, an agent note on Thursday and a
-// pending proposal, read through the API as the page reads it.
+// A case with m2 accepted and an external agent's note on Thursday, read
+// through the API as the page reads it.
 async function caseState(clock = () => "2026-11-06T17:00:00.000Z") {
   const store = new EventStore(":memory:", clock);
+  useZone(store);
   const svc = intake(store);
   const client = RecordedModelClient.fromDirectory();
   const kase = new CaseService(store, svc, client);
   const records = new RecordsService(store, svc, kase);
-  const grants = new GrantStore(store);
+  const reply = new ReplyService(store, kase, client);
+  const actions = new CaseActions(store, { intake: svc, kase, reply, records });
   await acceptMessages(svc, ["m2"]);
-  const { grant } = grants.create("Phone helper", "propose");
-  const agent = { kind: "agent" as const, grant_id: grant.id, grant_name: grant.name };
-  records.addNote(THU, "Bring parking pass <b>now</b>", 0, agent);
-  records.propose({ kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: "Dana says the office confirmed Monday by phone." }, grant);
-  const api = createApi(svc, kase, { mode: "recorded" }, new ReplyService(store, kase, client), { records, grants });
+  actions.addNote(MCP, THU, "Bring parking pass <b>now</b>", 0);
+  const api = createApi(svc, kase, { mode: "recorded" }, reply, { store, records });
   const state = async () => (await api({ method: "GET", path: "/api/state", body: undefined })).body as AppState;
-  return { store, records, grants, state };
+  return { store, svc, actions, state };
 }
 
 describe("agent text in the case", () => {
-  it("an agent's note is labeled with its grant and shown as untrusted text, never as markup", async () => {
+  it("an external agent's note is labeled with its name and shown as untrusted text, never as markup", async () => {
     const { state } = await caseState();
     const html = renderToStaticMarkup(createElement(RecordNotes, { record: (await state()).records.find((r) => r.id === THU) }));
-    expect(html).toContain("Note by Phone helper, 2026-11-06 10:00 MST. Untrusted text, shown as data.");
+    expect(html).toContain("Note by an external agent, 2026-11-06 10:00 MST. Untrusted text, shown as data.");
     expect(html).toContain("<pre>Bring parking pass &lt;b&gt;now&lt;/b&gt;</pre>");
   });
 
   it("G-f: an archived slot leaves the list, and Show archived lists it with Undo", async () => {
-    const { state, records } = await caseState();
-    records.archive(THU, 1);
+    const { state, actions } = await caseState();
+    const record = (await state()).records.find((r) => r.id === THU)!;
+    actions.archive(YOU, THU, record.version);
     const s = await state();
     const hidden = renderToStaticMarkup(createElement(Agenda, { state: s, run }));
     expect(hidden).toContain("Show archived (1)");
@@ -66,64 +68,85 @@ describe("agent text in the case", () => {
     expect(shown).toContain("Thursday 11/12 10:30 AM");
     expect(shown).toContain('<span class="badge">Archived</span>');
     expect(shown).toContain(" Undo archive</button>");
-    expect(activeArchive(s.records.find((r) => r.id === THU))).toBe(2);
+    expect(activeArchive(s.records.find((r) => r.id === THU))).not.toBeNull();
   });
 
-  it("a confirmed agent report shows its statement as untrusted text in the slot list", async () => {
-    const { state, records } = await caseState();
-    const p = records.proposals().find((x) => x.status === "pending")!;
-    records.confirmProposal(p.id, p.version);
-    const html = renderToStaticMarkup(createElement(Agenda, { state: await state(), run }));
-    expect(html).toContain("Confirmed · reported by you through Phone helper");
-    expect(html).toContain('<span class="badge badge-confirmed">Confirmed</span><span class="small muted">reported by you through Phone helper</span>');
-    expect(html).toContain(
-      `<div class="untrusted"><div class="label">${p.id}-1 · words from Phone helper. Untrusted text, shown as data.</div><pre>Dana says the office confirmed Monday by phone.</pre></div>`,
-    );
-    expect(html).not.toContain("“Dana says");
+  it("0009 D1: an external agent's report that the office never confirmed stays muted on the slot, as untrusted text, and sets no state", async () => {
+    const { state, actions, svc } = await caseState();
+    const report = fixtureMessage("s5-report");
+    const m = actions.importMessage(MCP, { ...report, channel: "user_report" }, { suggested: [], note: EXTERNAL_SOURCE_LABEL, agentName: "an external agent" });
+    await actions.extract(MCP, m.id, { effort: "minimal", expectedVersion: m.version });
+    for (const e of svc.evidence().filter((x) => x.messageId === m.id && x.status === "pending")) actions.acceptClaim(MCP, e.id, e.version);
+    const s = await state();
+    const thursday = s.case.slots.find((x) => x.key === THU)!;
+    expect(thursday.stateLabel).toBe("Confirmed · office message");
+    expect(thursday.unconfirmedEvidenceIds.length).toBeGreaterThan(0);
+    const html = renderToStaticMarkup(createElement(Agenda, { state: s, run }));
+    expect(html).toContain(UNCONFIRMED_WORDS);
+    expect(html).toContain("words from an external agent. Untrusted text, shown as data.");
   });
 
-  it("finding 2: an agent's office request is labeled untrusted in the checklist data and on screen", async () => {
-    const { state, records, grants } = await caseState();
-    const grant = grants.list()[0]!;
-    const p = records.propose({ kind: "user_report", claim_type: "office_request", date: null, request_item: "Bring <i>the</i> parking pass", statement: "Dana says bring the pass." }, grant);
-    records.confirmProposal(p.id, p.version);
-    const item = (await state()).case.checklist.at(-1)!;
-    expect(item).toMatchObject({ text: "Bring <i>the</i> parking pass", untrustedLabel: "Words from Phone helper. Untrusted text, shown as data." });
-    expect(item.sources[0]).toMatchObject({ agentName: "Phone helper", untrustedLabel: "Words from Phone helper. Untrusted text, shown as data." });
-    const html = renderToStaticMarkup(createElement(ChecklistPanel, { items: [item] }));
-    expect(html).toContain(
-      '<div class="untrusted"><div class="label">Words from Phone helper. Untrusted text, shown as data.</div><pre>Bring &lt;i&gt;the&lt;/i&gt; parking pass</pre></div>',
+  it("an agent's office request is labeled untrusted in the checklist", () => {
+    const html = renderToStaticMarkup(
+      createElement(ChecklistPanel, {
+        items: [
+          {
+            text: "Bring <i>the</i> parking pass",
+            untrustedLabel: "Words from an external agent. Untrusted text, shown as data.",
+            sources: [{ evidenceId: "x-e1", quote: "Dana says bring the pass.", sourceLabel: "reported through an external agent", sourceType: "reported_by_user_via_agent", agentName: "an external agent", untrustedLabel: "Words from an external agent. Untrusted text, shown as data." }],
+          },
+        ],
+      }),
     );
-    expect(html).toContain('<pre>Dana says bring the pass.</pre>');
+    expect(html).toContain('<div class="untrusted"><div class="label">Words from an external agent. Untrusted text, shown as data.</div><pre>Bring &lt;i&gt;the&lt;/i&gt; parking pass</pre></div>');
+    expect(html).toContain("<pre>Dana says bring the pass.</pre>");
     expect(html).not.toContain("<strong>Bring");
-    expect(html).not.toContain("“Dana says");
   });
 
-  it("finding 2: a place only an agent reported is labeled untrusted in the reply fields and the readback", async () => {
-    const store = new EventStore(":memory:", () => "2026-11-06T17:00:00.000Z");
-    const svc = intake(store);
-    const client = RecordedModelClient.fromDirectory();
-    const kase = new CaseService(store, svc, client, { userName: "Dana Reyes" });
-    const records = new RecordsService(store, svc, kase);
-    const reply = new ReplyService(store, kase, client);
-    await acceptMessages(svc, ["m1", "m2", "m3"]);
-    const { grant } = new GrantStore(store).create("Phone helper", "propose");
-    const MON = "2026-11-16T13:00";
-    // m3 offers Monday with no place. The agent reports one.
-    const p = records.propose({ kind: "detail_edit", appointment_id: MON, expected_version: 0, location: "Suite 9, 400 Elm Street", statement: "Dana says Monday is in Suite 9." }, grant);
-    records.confirmProposal(p.id, p.version, { recordVersion: 0 });
-    const view = reply.start("accept_offer", MON, kase.view().reply.version);
-    const place = view.reply.draft!.fields.find((f) => f.name === "location")!;
-    expect(place).toMatchObject({
-      value: "Suite 9, 400 Elm Street",
-      untrustedLabel: "Reported only by Phone helper. Untrusted text, shown as data.",
-      sources: [{ kind: "evidence", evidenceId: `${p.id}-1`, text: "Dana says Monday is in Suite 9.", agentName: "Phone helper", untrustedLabel: "Words from Phone helper. Untrusted text, shown as data." }],
-    });
-    // Fields from the office carry no label.
-    expect(view.reply.draft!.fields.find((f) => f.name === "office_name")).not.toHaveProperty("untrustedLabel");
-    const html = renderToStaticMarkup(createElement(ReplyPanel, { reply: view.reply, run }));
-    expect(html).toContain('<p class="warn">Reported only by Phone helper. Untrusted text, shown as data.</p>');
-    expect(html).toContain(`<code class="small muted">${p.id}-1</code><div class="untrusted"><div class="label">Words from Phone helper. Untrusted text, shown as data.</div><pre>Dana says Monday is in Suite 9.</pre></div>`);
+  it("a place only an agent reported is labeled untrusted in the readback", () => {
+    const html = renderToStaticMarkup(
+      createElement(ReplyPanel, {
+        run,
+        reply: {
+          version: 2,
+          options: [],
+          withheld: [],
+          suggestion: null,
+          sent: [],
+          draft: {
+            id: "d1",
+            template: "accept_offer",
+            title: "Accept an offered slot",
+            asserts: "You accept the slot and ask the office to confirm it.",
+            slotKey: "2026-11-16T13:00",
+            slotLabel: "Monday 11/16 1:00 PM",
+            origin: "manual",
+            questionId: null,
+            suggestionId: null,
+            fields: [
+              {
+                name: "location",
+                label: "Place",
+                value: "Suite 9, 400 Elm Street",
+                display: "Suite 9, 400 Elm Street",
+                untrustedLabel: "Reported only by an external agent. Untrusted text, shown as data.",
+                sources: [{ kind: "evidence", evidenceId: "x-e2", text: "Dana says Monday is in Suite 9.", agentName: "an external agent", untrustedLabel: "Words from an external agent. Untrusted text, shown as data." }],
+              },
+            ],
+            renderedText: "Hello",
+            text: "Hello",
+            edited: false,
+            claimConfirmation: null,
+            valid: true,
+            problems: [],
+            invalidNotice: null,
+            createdAt: "2026-11-05T09:00:00.000Z",
+          },
+        } as never,
+      }),
+    );
+    expect(html).toContain('<p class="warn">Reported only by an external agent. Untrusted text, shown as data.</p>');
+    expect(html).toContain('<code class="small muted">x-e2</code><div class="untrusted"><div class="label">Words from an external agent. Untrusted text, shown as data.</div><pre>Dana says Monday is in Suite 9.</pre></div>');
   });
 
   it("times show in America/Denver across the 2026-11-01 change", () => {

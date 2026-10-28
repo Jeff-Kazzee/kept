@@ -75,6 +75,10 @@ export type AppState = {
   history: HistoryEntry[];
   // Notes, tags and archive of every appointment, archived ones included.
   records: RecordView[];
+  // Sprint 8 sends the time zone settings and the activity here too. The
+  // page reads both from their own routes.
+  settings?: unknown;
+  activity?: unknown;
   // The version this state was read at. The page polls for a newer one.
   live: LiveVersion;
 };
@@ -84,7 +88,11 @@ export type LiveVersion = { generation: number; seq: number };
 
 export const versionChanged = (a: LiveVersion, b: LiveVersion) => a.generation !== b.generation || a.seq !== b.seq;
 
-export type Actor = { kind: "user" } | { kind: "agent"; grant_id: string; grant_name: string };
+// An agent is "the assistant" or "an external agent" (0009, A22). Old
+// records keep the name of the grant they came through.
+export type Actor = { kind: "user" } | { kind: "agent"; name: string } | { kind: "agent"; grant_id: string; grant_name: string };
+
+export const actorName = (a: Extract<Actor, { kind: "agent" }>) => ("name" in a ? a.name : a.grant_name);
 
 export type RecordView = {
   id: string;

@@ -6,7 +6,7 @@ import { useState } from "react";
 import type { IcsEvent, IcsTime } from "../../src/domain/ics.ts";
 import { dateLabel, slotIdPart, timeLabel } from "../../src/slots/labels.ts";
 import type { SlotView } from "../../src/slots/types.ts";
-import { api, type AppState, type EvidenceView, type RecordView } from "../api.ts";
+import { actorName, api, type AppState, type EvidenceView, type RecordView } from "../api.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { StateBadge } from "../components/StateBadge.tsx";
@@ -174,6 +174,11 @@ function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; r
           <StateBadge state={s.state} />
           <span className="small muted">{s.sourceLabel}</span>
         </div>
+        {(s.unconfirmedEvidenceIds ?? []).length > 0 && (
+          <span className="small muted unconfirmed-line">
+            <Icon name="robot" size="sm" /> {UNCONFIRMED_WORDS}
+          </span>
+        )}
         {s.missing.length > 0 && (
           <p className="warn">
             <Icon name="alert" size="sm" /> Incomplete: no {s.missing.map((m) => (m === "time" ? "time" : "place")).join(", no ")}
@@ -184,6 +189,7 @@ function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; r
           <div className="stack-sm">
             {s.locationDisputed && <span className="warn">The sources disagree on the place</span>}
             <StateQuote id={s.stateEvidenceId} state={state} />
+            <Unconfirmed ids={s.unconfirmedEvidenceIds ?? []} state={state} />
             {s.staleEvidenceIds.length > 0 && <p className="warn">A reminder for this time may be out of date: {s.staleEvidenceIds.join(", ")}</p>}
             {clashes.length > 0 ? (
               clashes.map((c, i) => (
@@ -228,6 +234,23 @@ function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; r
   );
 }
 
+// What an agent reported about a time that no office message or report of
+// the person's backs (0009, D1): kept aside, muted, never the state.
+export const UNCONFIRMED_WORDS = "Reported through an external agent, not confirmed";
+
+function Unconfirmed({ ids, state }: { ids: string[]; state: AppState }) {
+  const items = ids.map((id) => state.evidence.find((e) => e.id === id)).filter((e): e is EvidenceView => e !== undefined);
+  if (items.length === 0) return null;
+  return (
+    <div className="stack-sm unconfirmed">
+      <span className="small muted">{UNCONFIRMED_WORDS}</span>
+      {items.map((e) => (
+        <AgentQuote key={e.id} item={e} />
+      ))}
+    </div>
+  );
+}
+
 // The quote of the evidence that set a slot's state, so the state and its
 // words are on screen together.
 function StateQuote({ id, state }: { id: string | null; state: AppState }) {
@@ -251,7 +274,7 @@ export function RecordNotes({ record }: { record: RecordView | undefined }) {
       {record.tags.length > 0 && <p className="small">Tags: {record.tags.join(", ")}</p>}
       {record.notes.map((n) =>
         n.by.kind === "agent" ? (
-          <UntrustedText key={n.id} label={`Note by ${n.by.grant_name}, ${stampTime(n.at)}`} text={n.text} />
+          <UntrustedText key={n.id} label={`Note by ${actorName(n.by)}, ${stampTime(n.at)}`} text={n.text} />
         ) : (
           <p key={n.id} className="small">
             Note by you, {stampTime(n.at)}: {n.text}
