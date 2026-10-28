@@ -83,7 +83,7 @@ export function Receipt({ text, entries, quiet = false }: { text: string; entrie
 
 // Undo for one or more entries, shown while any of them can be undone.
 export function UndoButton({ entries, label }: { entries: ActivityEntry[]; label: string }) {
-  const { undo } = useAgent();
+  const { undo, undoBusy } = useAgent();
   const [busy, setBusy] = useState(false);
   const open = entries.filter(canUndo);
   if (open.length === 0) return null;
@@ -91,9 +91,10 @@ export function UndoButton({ entries, label }: { entries: ActivityEntry[]; label
     <button
       type="button"
       className="link-btn"
-      disabled={busy}
+      disabled={busy || undoBusy}
       aria-busy={busy || undefined}
       aria-label={label}
+      title={undoBusy && !busy ? "Undo waits until the assistant finishes" : undefined}
       onClick={async () => {
         setBusy(true);
         try {

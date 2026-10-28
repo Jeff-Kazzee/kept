@@ -6,9 +6,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { realBackend, type AgentBackend } from "./agentApi.ts";
 import { AgentContext, type AgentState } from "./agent/AgentContext.tsx";
+import { keep, sendDeviceZone, settle } from "./agent/reads.ts";
+import { runUndo, serialUndo } from "./agent/undo.ts";
 import { ApiError, api, type AppState, type FixtureScenario } from "./api.ts";
 import type { Run } from "./components/ActionButton.tsx";
 import { Mark } from "./components/Art.tsx";
+import { LoadError } from "./components/LoadError.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { DEFAULT_SETTINGS, deviceZone, type ActivityLog, type GoogleStatus, type Settings } from "./contract.ts";
 import { ChatView } from "./chat/ChatView.tsx";
@@ -56,50 +59,55 @@ export function App() {
 
   // Reads the case, the settings, the activity and Google together. Reads
   // can overlap (a card mid-turn, the turn's end, the poll), so only the
-  // latest one is applied, and an older answer never replaces a newer one.
-  // A build without the new routes yet keeps the default zone and shows
-  // the case history in Activity.
+  // latest one is applied, checked again after every wait, and an older
+  // answer never replaces a newer one. A route this build does not have
+  // reads as null: the default zone, and the case history in Activity. Any
+  // other failure keeps the last good value (Muse round 1, finding 5).
   const reads = useRef(0);
+  const last = useRef<{ settings: Settings | null; activity: ActivityLog | null; google: GoogleStatus | null }>({ settings: null, activity: null, google: null });
+  const [degraded, setDegraded] = useState(false);
   const refresh = useCallback(async () => {
     const mine = ++reads.current;
+    const stale = () => mine !== reads.current;
     try {
-      const [next, s, read, g] = await Promise.all([
-        api.state(),
-        backend.settings().catch(() => null),
-        backend.activity().catch(() => null),
-        backend.google().catch(() => null),
-      ]);
-      if (mine !== reads.current) return;
+      const [next, sRead, aRead, gRead] = await Promise.all([api.state(), settle(() => backend.settings()), settle(() => backend.activity()), settle(() => backend.google())]);
+      if (stale()) return;
+      let aNow = aRead;
       // Delete case moves the generation. The fake activity goes with it.
-      let a = read;
       if (generation.current !== null && generation.current !== next.generation && backend.kind === "fake") {
         (backend as FakeBackend).clearActivity();
-        a = await backend.activity();
+        aNow = await settle(() => backend.activity());
+        if (stale()) return;
       }
       generation.current = next.generation;
+      const s = keep(sRead, last.current.settings);
+      const a = keep(aNow, last.current.activity);
+      const g = keep(gRead, last.current.google);
+      last.current = { settings: s, activity: a, google: g };
       // The zone is set before the render that uses it.
       setCaseZone(s?.timezone ?? DEFAULT_SETTINGS.timezone);
       setSettings(s);
       setActivity(a);
       setGoogle(g);
+      setDegraded(!sRead.ok || !aNow.ok || !gRead.ok);
       setState(next);
       setLoadError(null);
-      // On first load with no zone set, the page sends this device's zone,
-      // once (contract, sprint 8).
+      // On first load with no zone set, the page sends this device's zone.
+      // It counts as done once sent, or when someone else set the settings
+      // first. A failed send is tried again at the next read (finding 8).
       if (s && s.timezoneSource === "default" && !sentZone.current) {
-        sentZone.current = true;
         const zone = deviceZone();
-        if (zone) {
-          try {
-            await backend.setTimezone(zone, s.settingsVersion, "browser");
-          } catch {
-            // The default zone stays. Settings can set it.
-          }
-          void refreshRef.current();
+        if (!zone) {
+          sentZone.current = true;
+          return;
         }
+        sentZone.current = true;
+        const outcome = await sendDeviceZone(backend, s, zone);
+        if (outcome === "failed") sentZone.current = false;
+        else if (!stale()) void refreshRef.current();
       }
     } catch (e) {
-      if (mine === reads.current) setLoadError(errorSentence(e));
+      if (!stale()) setLoadError(errorSentence(e));
     }
   }, [backend]);
   const refreshRef = useRef(refresh);
@@ -138,26 +146,26 @@ export function App() {
     [refresh, toast],
   );
 
-  // Undo, newest first. The first entry states the activity version this
-  // page showed. A refusal shows its reason beside the entry.
+  // Undo, through runUndo: newest first, one run at a time, after a fresh
+  // read of the activity (Muse round 1, findings 3 and 4). A refusal shows
+  // its reason beside the entry.
   const [blocked, setBlocked] = useState<Record<string, string>>({});
-  const activityRef = useRef(activity);
-  activityRef.current = activity;
+  const [undoing, setUndoing] = useState(false);
+  const serial = useRef(serialUndo());
   const undo = useCallback(
     async (ids: string[]) => {
-      setBlocked((b) => Object.fromEntries(Object.entries(b).filter(([k]) => !ids.includes(k))));
-      let version = activityRef.current?.activityVersion ?? 0;
-      for (const id of ids) {
+      await serial.current(async () => {
+        setUndoing(true);
+        setBlocked((b) => Object.fromEntries(Object.entries(b).filter(([k]) => !ids.includes(k))));
         try {
-          await backend.undo(id, version);
-          version = (await backend.activity())?.activityVersion ?? version + 1;
-        } catch (e) {
-          if (e instanceof ApiError && e.body.error === "undo_blocked") setBlocked((b) => ({ ...b, [id]: errorSentence(e) }));
-          else toast("error", errorSentence(e));
-          break;
+          const out = await runUndo(backend, ids);
+          if (out.blocked) setBlocked((b) => ({ ...b, [out.blocked!.id]: errorSentence(out.blocked!.error) }));
+          if (out.error) toast("error", errorSentence(out.error));
+          await refresh();
+        } finally {
+          setUndoing(false);
         }
-      }
-      await refresh();
+      });
     },
     [backend, refresh, toast],
   );
@@ -166,16 +174,7 @@ export function App() {
     // Loading: a skeleton of the chat and the schedule. A failed load: the
     // reason in a sentence and Try again.
     return loadError ? (
-      <main className="loading">
-        <span className="welcome-mark" aria-hidden="true">
-          <Mark size={24} />
-        </span>
-        <h1 className="loading-title">The app did not answer</h1>
-        <p role="alert">{loadError}</p>
-        <button type="button" className="btn btn-primary" onClick={() => void refresh()}>
-          Try again
-        </button>
-      </main>
+      <LoadError message={loadError} onRetry={() => void refresh()} />
     ) : (
       <main className="skeleton" aria-busy="true">
         <p className="sr-only" role="status">
@@ -210,6 +209,8 @@ export function App() {
       google={google}
       undo={undo}
       blocked={blocked}
+      undoing={undoing}
+      degraded={degraded}
     />
   );
 }
@@ -228,6 +229,8 @@ function Shell({
   google,
   undo,
   blocked,
+  undoing,
+  degraded,
 }: {
   state: AppState;
   run: Run;
@@ -242,6 +245,8 @@ function Shell({
   google: GoogleStatus | null;
   undo: AgentState["undo"];
   blocked: AgentState["blocked"];
+  undoing: boolean;
+  degraded: boolean;
 }) {
   const transport: ChatTransport = useMemo(
     () => (fakesBuilt && scripted ? createMockTransport({ api, storage: sessionStorage, agent: backend.kind === "fake" ? (backend as FakeBackend) : null }) : realTransport),
@@ -270,14 +275,22 @@ function Shell({
     // After React has rendered the chat again.
     requestAnimationFrame(() => ((ref ? findChip(document, ref) : null) ?? fallback)?.focus());
   };
+  // What opened the sheet when it was not a fact chip, such as the
+  // composer's model pill opening Settings. Focus goes back to it (Muse
+  // round 1, finding 11).
+  const opener = useRef<HTMLElement | null>(null);
   const closeSchedule = () => {
     setSheetOpen(false);
-    giveBackFocus(sheetToggle.current);
+    const back = opener.current && opener.current.isConnected ? opener.current : sheetToggle.current;
+    opener.current = null;
+    giveBackFocus(back);
   };
   const closeRef = useRef(closeSchedule);
   closeRef.current = closeSchedule;
   const focusPanel = () => requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("panel-title")?.focus()));
   const openPanel = (t?: PanelTab) => {
+    const from = document.activeElement;
+    opener.current = from instanceof HTMLElement && from !== document.body ? from : null;
     if (t) setTab(t);
     if (laptop) setRailed(false);
     else setSheetOpen(true);
@@ -359,6 +372,8 @@ function Shell({
     google,
     undo,
     blocked,
+    // Undo waits while a turn streams or another undo runs (finding 4).
+    undoBusy: streaming || undoing,
     report: (e) => toast("error", errorSentence(e)),
     reload: refresh,
     openSettings: () => openPanel("settings"),
@@ -390,11 +405,18 @@ function Shell({
             )}
           </button>
         </header>
-        {!online && (
-          <p className="offline" role="status">
-            <Icon name="wifiOff" size="sm" /> You are offline. Nothing can be saved until the connection is back.
-          </p>
-        )}
+        <div className="banners">
+          {!online && (
+            <p className="offline" role="status">
+              <Icon name="wifiOff" size="sm" /> You are offline. Nothing can be saved until the connection is back.
+            </p>
+          )}
+          {degraded && online && (
+            <p className="offline degraded" role="status">
+              <Icon name="info" size="sm" /> Some settings could not be read just now. The app shows the last ones it read.
+            </p>
+          )}
+        </div>
         <main className="main">
           <div className="chat-slot" inert={sheetModal}>
             <ChatView

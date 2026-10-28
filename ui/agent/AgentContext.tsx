@@ -17,6 +17,8 @@ export type AgentState = {
   // Undoes entries newest first, each with the activity version it was
   // shown at. A refusal shows its plain reason beside the entry.
   undo: (ids: string[]) => Promise<void>;
+  // True while a turn streams or an undo runs. Undo buttons wait.
+  undoBusy: boolean;
   // The reason Undo was refused, by entry id, until the next undo.
   blocked: Readonly<Record<string, string>>;
   reload: () => Promise<void>;
@@ -52,6 +54,7 @@ export const DEFAULT_AGENT: AgentState = {
   activity: null,
   google: null,
   undo: noop,
+  undoBusy: false,
   blocked: {},
   reload: noop,
   openSettings: () => {},
