@@ -3,6 +3,7 @@
 // every time. The scripted chat (?mockchat=1) labels its text as scripted.
 // Every card renders from the live case view.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
 import type { AppState, FixtureScenario } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
@@ -122,7 +123,7 @@ export function ChatView(props: ChatViewProps) {
                 run={run}
                 scripted={scripted}
                 onShowSlot={onShowSlot}
-                onImport={m.declined ? () => openImport(declinedOriginal(chat, i)) : undefined}
+                onImport={offersImport(m) ? () => openImport(m.declined ? declinedOriginal(chat, i) : userTextBefore(chat, i)) : undefined}
               />
               {imports
                 .filter((x) => x.after === i + 1)
@@ -163,6 +164,8 @@ export function ChatView(props: ChatViewProps) {
       <ImportSheet
         request={importing}
         run={run}
+        fixtures={fixtures}
+        importedIds={new Set(state.messages.map((m) => m.id))}
         onClose={() => setImporting(null)}
         onImported={(messageId) => {
           setImports((all) => [...all, { messageId, after: chat.messages.length }]);
@@ -241,16 +244,7 @@ function Declined({ text, onImport }: { text: string; onImport?: () => void }) {
       <div className="stack-sm">
         <strong className="small">Outside this app's scope</strong>
         <p>{text}</p>
-        {onImport && (
-          <>
-            <p className="small muted">If you pasted a message from the office, add it as an office message instead. The app then reads only its appointment facts.</p>
-            <div>
-              <button type="button" className="btn" onClick={onImport}>
-                <Icon name="message" size="sm" /> Add this as an office message
-              </button>
-            </div>
-          </>
-        )}
+        <ImportOffer onImport={onImport} />
       </div>
     </div>
   );
@@ -259,6 +253,11 @@ function Declined({ text, onImport }: { text: string; onImport?: () => void }) {
 // The words of the user message just before a declined answer, as this
 // page kept them. Empty after a reload, because the server stores a fixed
 // sentence in their place.
+function userTextBefore(chat: ChatState, index: number): string {
+  const before = chat.messages[index - 1];
+  return before && before.role === "user" ? before.text : "";
+}
+
 function declinedOriginal(chat: ChatState, index: number): string {
   const before = chat.messages[index - 1];
   return before && before.role === "user" ? (chat.declinedText[before.id] ?? "") : "";
@@ -276,21 +275,42 @@ function ImportedItem({ messageId, state, run }: { messageId: string; state: App
   );
 }
 
-function Extras({ cards, chips, state, run, onShowSlot }: { cards: Card[]; chips: FactChip[]; state: AppState; run: Run; onShowSlot: (k: string, from?: HTMLElement) => void }): ReactNode {
+// The message id a chip of the streamed turn carries until the stored
+// message replaces it.
+export const PENDING_MESSAGE = "pending";
+
+// Each chip carries its message id and slot key, so focus can find the live
+// chip again after the thread re-renders (review 2, B6). Keys use the
+// position too, because one answer can name a slot twice (B2).
+function Extras({
+  messageId,
+  cards,
+  chips,
+  state,
+  run,
+  onShowSlot,
+}: {
+  messageId: string;
+  cards: Card[];
+  chips: FactChip[];
+  state: AppState;
+  run: Run;
+  onShowSlot: (k: string, from?: HTMLElement) => void;
+}): ReactNode {
   return (
     <>
       {chips.length > 0 && (
         <div className="chips" aria-label="Facts from your schedule">
-          {chips.map((c) => {
+          {chips.map((c, i) => {
             const live = liveChip(c, state);
             return live.gone ? (
-              <button key={c.slotKey} type="button" className="chip fact-chip" disabled aria-label={`${c.label}: no longer on your schedule. At the time: ${c.stateLabel}.`}>
+              <button key={`${c.slotKey}:${i}`} type="button" className="chip fact-chip" data-chip-message={messageId} data-chip-slot={c.slotKey} disabled aria-label={`${c.label}: no longer on your schedule. At the time: ${c.stateLabel}.`}>
                 <span>{c.label}</span>
                 <small>No longer on your schedule</small>
                 <small className="muted">At the time: {c.stateLabel}</small>
               </button>
             ) : (
-              <button key={c.slotKey} type="button" className="chip fact-chip" onClick={(e) => onShowSlot(c.slotKey, e.currentTarget)} aria-label={`${live.label}: ${live.stateLabel}. Show in schedule.`}>
+              <button key={`${c.slotKey}:${i}`} type="button" className="chip fact-chip" data-chip-message={messageId} data-chip-slot={c.slotKey} onClick={(e) => onShowSlot(c.slotKey, e.currentTarget)} aria-label={`${live.label}: ${live.stateLabel}. Show in schedule.`}>
                 <span>{live.label}</span>
                 <small>{live.stateLabel}</small>
                 {live.stateLabel !== c.stateLabel && <small className="muted">At the time: {c.stateLabel}</small>}
@@ -326,13 +346,15 @@ function MessageItem({
     <article className="msg msg-assistant" aria-label="Assistant">
       {m.declined ? (
         <Declined text={m.text} onImport={onImport} />
+      ) : isCodeSentence(m.text) ? (
+        <CodeNotice text={m.text} at={m.createdAt} onImport={onImport} />
       ) : (
         <>
           <AssistantHead scripted={scripted} at={m.createdAt} />
           {m.text && <p className="assistant-text">{m.text}</p>}
         </>
       )}
-      <Extras cards={m.cards} chips={m.chips} state={state} run={run} onShowSlot={onShowSlot} />
+      <Extras messageId={m.id} cards={m.cards} chips={m.chips} state={state} run={run} onShowSlot={onShowSlot} />
     </article>
   );
 }
@@ -356,20 +378,19 @@ function PendingItem({
   // ungrounded and model_unavailable: the streamed text is a fixed
   // sentence written by code. It is shown once, as a notice.
   const fixed = err !== null && (err.code === "ungrounded" || err.code === "model_unavailable");
+  const codeText = fixed ? turn.text.trim() || turnErrorText(err) : isCodeSentence(turn.text) ? turn.text.trim() : null;
+  // The chat could not answer. A pasted office message can still go in
+  // through the import sheet.
+  const offerImport = err !== null && err.code !== "ungrounded" && err.code !== "stale_edit";
   return (
     <>
       <UserBubble text={turn.userText} at={turn.createdAt} />
       <article className="msg msg-assistant" aria-label="Assistant" aria-busy={turn.status === "streaming"}>
         {err?.code === "out_of_scope" ? (
           <Declined text={turn.text.trim() || err.message} onImport={onImport} />
-        ) : fixed ? (
-          <div className="notice" role="note">
-            <Icon name="info" />
-            <p>{turn.text.trim() || turnErrorText(err)}</p>
-          </div>
         ) : (
           <>
-            <AssistantHead scripted={scripted} />
+            {codeText === null && <AssistantHead scripted={scripted} />}
             {turn.tools.map((t) => (
               <div key={t.callId} className="tool-line">
                 {t.ok === null ? <span className="spinner" aria-hidden="true" /> : t.ok ? <Icon name="check" size="sm" /> : <Icon name="alert" size="sm" />}
@@ -379,7 +400,9 @@ function PendingItem({
                 </span>
               </div>
             ))}
-            {turn.text ? (
+            {codeText !== null ? (
+              <CodeNotice text={codeText} onImport={offerImport ? onImport : undefined} />
+            ) : turn.text ? (
               <p className="assistant-text">{turn.text}</p>
             ) : (
               turn.status === "streaming" && (
@@ -392,15 +415,58 @@ function PendingItem({
             )}
           </>
         )}
-        <Extras cards={turn.cards} chips={turn.chips} state={state} run={run} onShowSlot={onShowSlot} />
+        <Extras messageId={PENDING_MESSAGE} cards={turn.cards} chips={turn.chips} state={state} run={run} onShowSlot={onShowSlot} />
         {err && err.code !== "out_of_scope" && !fixed && (
           <div className="turn-error" role="alert">
             <Icon name="alert" />
-            <p>{turnErrorText(err)}</p>
+            <div className="stack-sm">
+              <p>{turnErrorText(err)}</p>
+              {offerImport && <ImportOffer onImport={onImport} />}
+            </div>
           </div>
         )}
       </article>
     </>
+  );
+}
+
+// The fixed sentences the chat's code writes in place of an answer (0007).
+// They show as notices written by code, not as model output.
+const CODE_SENTENCES = new Set([UNGROUNDED_TEXT, MODEL_UNAVAILABLE_TEXT, TOOL_LIMIT_TEXT, MALFORMED_TEXT, TOKEN_LIMIT_TEXT, PARTIAL_TEXT]);
+export const isCodeSentence = (text: string) => CODE_SENTENCES.has(text.trim());
+
+// Answers after which a pasted office message can go in through the import
+// sheet: the scope decline and the model being unavailable.
+export const offersImport = (m: ChatMessage) => m.declined === true || m.text.trim() === MODEL_UNAVAILABLE_TEXT;
+
+function ImportOffer({ onImport }: { onImport?: () => void }) {
+  if (!onImport) return null;
+  return (
+    <>
+      <p className="small muted">If you pasted a message from the office, add it as an office message instead. The app reads it without the chat.</p>
+      <div>
+        <button type="button" className="btn" onClick={onImport}>
+          <Icon name="message" size="sm" /> Add this as an office message
+        </button>
+      </div>
+    </>
+  );
+}
+
+function CodeNotice({ text, at, onImport }: { text: string; at?: string; onImport?: () => void }) {
+  return (
+    <div className="notice" role="note">
+      <Icon name="info" />
+      <div className="stack-sm">
+        <div className="msg-meta">
+          <span>Assistant</span>
+          <span className="model-tag">Written by code</span>
+          {at && <time dateTime={at}>{denverShort(at)}</time>}
+        </div>
+        <p>{text}</p>
+        <ImportOffer onImport={onImport} />
+      </div>
+    </div>
   );
 }
 
@@ -459,7 +525,10 @@ export function CardView({ card, state, run }: { card: Card; state: AppState; ru
       return (
         <div className="notice" role="note">
           <Icon name="info" />
-          <p>{card.text}</p>
+          <div className="stack-sm">
+            <span className="model-tag">Written by code</span>
+            <p>{card.text}</p>
+          </div>
         </div>
       );
   }

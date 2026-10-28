@@ -6,7 +6,7 @@
 // Content-Security-Policy: scripts and styles only from this origin, no
 // inline scripts, and requests only to this origin.
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
@@ -76,6 +76,25 @@ function walk(dir: string, realRoot: string, prefix = ""): string[] {
   });
 }
 
+// Reads one build file through a single open handle. O_NOFOLLOW refuses a
+// symlink put in place after the walk, and fstat checks the file that was
+// opened, so a swap between the check and the read cannot serve another
+// file.
+export function readBuildFile(realRoot: string, rel: string): Buffer {
+  let fd: number;
+  try {
+    fd = openSync(path.join(realRoot, rel), constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (err) {
+    throw new BuildError(`The build file ${rel} could not be opened as a regular file (${(err as NodeJS.ErrnoException).code ?? "error"}). Run pnpm build again.`);
+  }
+  try {
+    if (!fstatSync(fd).isFile()) throw new BuildError(`The build has ${rel}, which is not a regular file.`);
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 // Reads the build in `root` into memory. Throws when there is no build, so
 // `pnpm start` without `pnpm build` stops with a clear message.
 export function loadBuild(root: string): Map<string, Entry> {
@@ -87,8 +106,8 @@ export function loadBuild(root: string): Map<string, Entry> {
   const all = walk(realRoot, realRoot);
   for (const rel of all) {
     if (rel.endsWith(".br") || rel.endsWith(".gz")) continue;
-    const raw = readFileSync(path.join(realRoot, rel));
-    const read = (suffix: string) => (all.includes(rel + suffix) ? readFileSync(path.join(realRoot, rel + suffix)) : undefined);
+    const raw = readBuildFile(realRoot, rel);
+    const read = (suffix: string) => (all.includes(rel + suffix) ? readBuildFile(realRoot, rel + suffix) : undefined);
     files.set(rel, {
       type: TYPES[path.extname(rel)] ?? "application/octet-stream",
       etag: `"${createHash("sha256").update(raw).digest("base64url").slice(0, 27)}"`,

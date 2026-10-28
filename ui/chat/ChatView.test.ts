@@ -4,6 +4,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, QUESTION_WITHHELD_NOTICE } from "../../src/agent/types.ts";
 import type { AppState } from "../api.ts";
 import { ChatView, turnErrorText, type ChatViewProps } from "./ChatView.tsx";
 import type { ChatState } from "./state.ts";
@@ -171,7 +172,63 @@ describe("chat view", () => {
     expect(html).toContain('<small class="muted">At the time: Confirmed · office message</small>');
     expect(html).not.toContain(">Confirmed · office message</small><small");
     // Archived and missing slots: disabled, said plainly.
-    expect(html.match(/<button type="button" class="chip fact-chip" disabled=""/g)).toHaveLength(2);
+    expect(html.match(/<button type="button" class="chip fact-chip"[^>]* disabled=""/g)).toHaveLength(2);
     expect(html.split("No longer on your schedule").length - 1).toBe(2);
+  });
+
+  it("7A: fixed sentences show as notices written by code, and the unavailable model offers the import sheet", () => {
+    const html = render({
+      status: "ready",
+      chatVersion: 6,
+      pending: null,
+      messages: [
+        { id: "cm1", role: "user", text: "Lantern Hill Clinic: see you Monday.", createdAt: at, cards: [], chips: [] },
+        { id: "cm2", role: "assistant", text: MODEL_UNAVAILABLE_TEXT, createdAt: at, cards: [], chips: [] },
+        { id: "cm3", role: "user", text: "Import this", createdAt: at, cards: [], chips: [] },
+        { id: "cm5", role: "assistant", text: PARTIAL_TEXT, createdAt: at, cards: [{ kind: "notice", text: QUESTION_WITHHELD_NOTICE }], chips: [] },
+      ],
+    });
+    expect(html.split("Written by code").length - 1).toBe(3);
+    expect(html).not.toContain(">Model output<");
+    expect(html).toContain(MODEL_UNAVAILABLE_TEXT);
+    expect(html).toContain(PARTIAL_TEXT);
+    expect(html).toContain(QUESTION_WITHHELD_NOTICE);
+    // Only the unavailable answer offers the import sheet.
+    expect(html.split(" Add this as an office message</button>").length - 1).toBe(1);
+  });
+
+  it("a streamed model_unavailable turn shows its tool lines, the sentence once, and the import offer", () => {
+    const html = render({
+      status: "ready",
+      chatVersion: 1,
+      messages: [],
+      pending: {
+        turnId: "t1",
+        userMessageId: "cm1",
+        userText: "Lantern Hill Clinic: see you Monday.",
+        createdAt: at,
+        text: MODEL_UNAVAILABLE_TEXT,
+        tools: [{ callId: "c1", label: "Reading your schedule", ok: true }],
+        cards: [],
+        chips: [],
+        status: "ended",
+        error: { code: "model_unavailable", message: MODEL_UNAVAILABLE_TEXT },
+        unsaved: false,
+      },
+    });
+    expect(html).toContain("Reading your schedule");
+    expect(html.split('<div class="sr-only" aria-live')[0]!.split(MODEL_UNAVAILABLE_TEXT).length - 1).toBe(1);
+    expect(html).toContain(" Add this as an office message</button>");
+  });
+
+  it("review 2, B2 and B6: chips for the same slot twice get their own keys, and carry the message id and slot key", () => {
+    const errors: unknown[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void errors.push(a));
+    const live = { ...state, case: { ...state.case, slots: [{ key: "2026-11-16T13:00", label: "Monday 11/16 1:00 PM", stateLabel: "Confirmed · office message" }] } } as unknown as AppState;
+    const chip = { slotKey: "2026-11-16T13:00", label: "Monday 11/16 1:00 PM", stateLabel: "Confirmed · office message", evidenceIds: [] };
+    const html = render({ status: "ready", chatVersion: 2, pending: null, messages: [{ id: "cm2", role: "assistant", text: "Here.", createdAt: at, cards: [], chips: [chip, chip] }] }, { state: live });
+    spy.mockRestore();
+    expect(errors.filter((e) => String(e).includes("same key"))).toEqual([]);
+    expect(html.match(/data-chip-message="cm2" data-chip-slot="2026-11-16T13:00"/g)).toHaveLength(2);
   });
 });

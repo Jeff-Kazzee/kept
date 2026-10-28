@@ -5,10 +5,12 @@
 // Each build runs in its own process with a hard time limit, so a stuck
 // build fails this test instead of holding the test run open.
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { precompress } from "../scripts/precompress.ts";
 import { MOCK_MARKER } from "../ui/chat/mockStream.ts";
 import { fromPackage } from "../src/paths.ts";
 
@@ -40,18 +42,43 @@ function bundle(mode: "production" | "development"): Promise<string> {
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (code !== 0) return reject(new Error(`vite build (${mode}) exited ${code}: ${err}`));
-      const assets = path.join(outDir, "assets");
-      resolve(
-        readdirSync(assets)
-          .filter((f) => f.endsWith(".js"))
-          .map((f) => readFileSync(path.join(assets, f), "utf8"))
-          .join("\n"),
-      );
+      // As pnpm build does, then every emitted file, in every folder:
+      // scripts, styles, maps, HTML and the decompressed .br and .gz copies.
+      precompress(outDir);
+      resolve(emitted(outDir));
     });
   });
 }
 
+// The text of every file under `dir`, compressed copies decompressed.
+export function emitted(dir: string): string {
+  const files = readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile());
+  expect(files.length).toBeGreaterThan(3);
+  return files
+    .map((e) => {
+      const bytes = readFileSync(path.join(e.parentPath, e.name));
+      if (e.name.endsWith(".br")) return brotliDecompressSync(bytes).toString("utf8");
+      if (e.name.endsWith(".gz")) return gunzipSync(bytes).toString("utf8");
+      return bytes.toString("utf8");
+    })
+    .join("\n");
+}
+
 describe("production bundle", () => {
+  it("review 2, B7: the scan reads nested files, maps and compressed copies", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "bundle-scan-"));
+    dirs.push(dir);
+    mkdirSync(path.join(dir, "assets/deep"), { recursive: true });
+    writeFileSync(path.join(dir, "index.html"), "<html></html>");
+    writeFileSync(path.join(dir, "assets/deep/a.js.map"), JSON.stringify({ sourcesContent: [`const k = "${MOCK_MARKER}";`] }));
+    writeFileSync(path.join(dir, "assets/b.js.br"), brotliCompressSync(Buffer.from(`brotli ${MOCK_MARKER}`)));
+    writeFileSync(path.join(dir, "assets/c.js.gz"), gzipSync(Buffer.from("gzip only-in-gz")));
+    const text = emitted(dir);
+    expect(text).toContain(`const k = \\"${MOCK_MARKER}\\";`);
+    expect(text).toContain(`brotli ${MOCK_MARKER}`);
+    expect(text).toContain("gzip only-in-gz");
+  });
+
   it("has no scripted chat code, while a development build has it", async () => {
     const prod = await bundle("production");
     expect(prod).not.toContain(MOCK_MARKER);

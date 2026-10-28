@@ -529,3 +529,6 @@ details[open] > summary::before { transform: rotate(90deg); }
 .msg-group:empty { display: none; }
 .slot:focus { outline: none; }
 .slot:focus-visible, .slot.highlight:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
+.chat-slot { display: contents; }
+#panel-title:focus { outline: none; }
+#panel-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }

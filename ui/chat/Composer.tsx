@@ -1,7 +1,7 @@
 // The message box. Enter sends and Shift+Enter adds a line. A pasted
 // message keeps its lines. The calendar button loads a .ics file through
 // the existing calendar route.
-import { useRef, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { Icon } from "../components/Icon.tsx";
 
 export const MAX_MESSAGE = 20000;
@@ -11,7 +11,19 @@ export const MAX_ROWS = 8;
 // The box grows by this attribute and by CSS (field-sizing: content where
 // the browser has it), never by a style written from script, which the
 // production Content-Security-Policy may refuse. Past MAX_ROWS it scrolls.
-export const composerRows = (value: string) => Math.min(MAX_ROWS, Math.max(1, value.split("\n").length));
+// Where the browser lacks field-sizing, a long line wraps without a newline,
+// so each line counts as many rows as it wraps to at `charsPerLine`
+// (review 2, B5).
+export function composerRows(value: string, charsPerLine = Number.POSITIVE_INFINITY): number {
+  const per = Math.max(1, Math.floor(charsPerLine));
+  const rows = value.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / per)), 0);
+  return Math.min(MAX_ROWS, Math.max(1, rows));
+}
+
+// About how many characters fit on one line of the box: its inner width
+// over an average character width at the 16 px body font.
+export const AVERAGE_CHAR_PX = 8.4;
+export const charsPerLine = (innerWidthPx: number) => Math.max(8, Math.floor(innerWidthPx / AVERAGE_CHAR_PX));
 
 export function Composer({
   value,
@@ -33,6 +45,17 @@ export function Composer({
   onAddOfficeMessage: () => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  // The box's width, read (never written) when it changes size.
+  const [perLine, setPerLine] = useState(Number.POSITIVE_INFINITY);
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => setPerLine(charsPerLine(el.clientWidth - 16));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [inputRef]);
 
   return (
     <form
@@ -70,7 +93,7 @@ export function Composer({
         ref={inputRef}
         id="chat-input"
         name="message"
-        rows={composerRows(value)}
+        rows={composerRows(value, perLine)}
         value={value}
         maxLength={MAX_MESSAGE}
         disabled={disabled}

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { JS_BUDGET_BYTES, firstLoadScripts, precompress } from "../scripts/precompress.ts";
-import { BuildError, CONTENT_SECURITY_POLICY, IMMUTABLE, createStaticHandler, loadBuild, pickEncoding } from "../server/static.ts";
+import { BuildError, CONTENT_SECURITY_POLICY, IMMUTABLE, createStaticHandler, loadBuild, pickEncoding, readBuildFile } from "../server/static.ts";
 
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -144,5 +144,19 @@ describe("production build serving", () => {
     dirs.push(path.dirname(link));
     symlinkSync(real, link);
     expect([...loadBuild(link).keys()]).toContain("/index.html");
+  });
+
+  it("review 2, B1: each file is read through one handle that refuses a symlink and a folder", () => {
+    const dir = build();
+    expect(readBuildFile(dir, "/index.html").toString()).toBe(INDEX);
+    // A symlink swapped in after the walk: O_NOFOLLOW refuses it.
+    const outside = mkdtempSync(path.join(tmpdir(), "static-swap-"));
+    dirs.push(outside);
+    writeFileSync(path.join(outside, "secret.txt"), "outside the build");
+    symlinkSync(path.join(outside, "secret.txt"), path.join(dir, "assets/swapped.js"));
+    expect(() => readBuildFile(dir, "/assets/swapped.js")).toThrow(BuildError);
+    expect(() => readBuildFile(dir, "/assets/swapped.js")).toThrow(/ELOOP/);
+    // A folder is not a regular file.
+    expect(() => readBuildFile(dir, "/assets")).toThrow(/not a regular file/);
   });
 });

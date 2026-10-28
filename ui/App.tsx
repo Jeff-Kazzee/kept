@@ -17,6 +17,7 @@ import { PairingScreen } from "./PairingScreen.tsx";
 import { SchedulePanel, waitingCount, type PanelTab } from "./schedule/SchedulePanel.tsx";
 import { slotElementId } from "./schedule/Agenda.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
+import { PHONE, TABLET, chipRef, findChip, useMedia, type ChipRef } from "./layout.ts";
 
 type Toast = { id: number; kind: "error" | "info"; text: string };
 
@@ -119,21 +120,39 @@ function Shell({
   const [highlight, setHighlight] = useState<string | null>(null);
   const [fixtures, setFixtures] = useState<FixtureScenario["messages"]>([]);
   const sheetToggle = useRef<HTMLButtonElement>(null);
+  const chatTab = useRef<HTMLButtonElement>(null);
+  const phone = useMedia(PHONE);
+  const tablet = useMedia(TABLET);
+  // The tablet sheet is a modal dialog while it is open: the rest of the
+  // page is inert (review 2, B4).
+  const sheetModal = tablet && sheetOpen;
   // The fact chip that opened the schedule. Focus goes back to it when the
-  // schedule closes (the tablet sheet) or the phone goes back to Chat.
-  const returnFocus = useRef<HTMLElement | null>(null);
+  // schedule closes: the tablet sheet, or the phone back to Chat.
+  const returnTo = useRef<ChipRef | null>(null);
 
   const giveBackFocus = (fallback: HTMLElement | null) => {
-    const target = returnFocus.current?.isConnected ? returnFocus.current : fallback;
-    returnFocus.current = null;
-    requestAnimationFrame(() => target?.focus());
+    const ref = returnTo.current;
+    returnTo.current = null;
+    // After React has rendered the chat again.
+    requestAnimationFrame(() => ((ref ? findChip(document, ref) : null) ?? fallback)?.focus());
   };
-  const closeSheet = () => {
-    setSheetOpen(false);
-    giveBackFocus(sheetToggle.current);
+  // Closes the schedule where it covers the chat: the tablet sheet, or the
+  // phone's Schedule view, which goes back to Chat (review 2, B3).
+  const closeSchedule = () => {
+    if (phone) {
+      setView("chat");
+      giveBackFocus(chatTab.current);
+    } else {
+      setSheetOpen(false);
+      giveBackFocus(sheetToggle.current);
+    }
   };
-  const closeSheetRef = useRef(closeSheet);
-  closeSheetRef.current = closeSheet;
+  const closeRef = useRef(closeSchedule);
+  closeRef.current = closeSchedule;
+  const openSheet = () => {
+    setSheetOpen(true);
+    requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("panel-title")?.focus()));
+  };
 
   useEffect(() => {
     void api.fixtures().then(
@@ -142,21 +161,24 @@ function Shell({
     );
   }, []);
 
-  // Escape closes the side sheet on a tablet.
+  // Escape closes the tablet sheet, and on a phone goes from Schedule back
+  // to Chat. An open dialog, such as the import sheet, takes Escape first.
+  const escapeCloses = (tablet && sheetOpen) || (phone && view === "schedule");
   useEffect(() => {
-    if (!sheetOpen) return;
+    if (!escapeCloses) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeSheetRef.current();
+      if (e.key !== "Escape" || document.querySelector("dialog[open]")) return;
+      closeRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [sheetOpen]);
+  }, [escapeCloses]);
 
   // Opens the schedule at one appointment, outlines it and moves focus to
   // it, so a keyboard or screen reader user lands there, not behind the
   // sheet or on a hidden chat.
   const showSlot = (slotKey: string, from?: HTMLElement) => {
-    returnFocus.current = from ?? null;
+    returnTo.current = chipRef(from, slotKey);
     setTab("schedule");
     setView("schedule");
     setSheetOpen(true);
@@ -201,7 +223,7 @@ function Shell({
 
   return (
     <div className="app" data-view={view} data-panel={sheetOpen ? "open" : "closed"}>
-      <header className="topbar">
+      <header className="topbar" inert={sheetModal}>
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">
             <Icon name="calendar" />
@@ -218,13 +240,14 @@ function Shell({
           className="btn btn-ghost sheet-toggle"
           aria-expanded={sheetOpen}
           aria-controls="schedule-panel"
-          onClick={() => (sheetOpen ? closeSheet() : setSheetOpen(true))}
+          onClick={() => (sheetOpen ? closeSchedule() : openSheet())}
         >
           <Icon name="panel" /> Schedule
           {waiting > 0 && <span className="count">{waiting}</span>}
         </button>
       </header>
       <main className="main">
+        <div className="chat-slot" inert={sheetModal}>
         <ChatView
           state={state}
           run={run}
@@ -237,26 +260,34 @@ function Shell({
           onLoadDemo={loadDemo}
           fixtures={fixtures}
         />
-        <button type="button" className="scrim" aria-label="Close the schedule" tabIndex={-1} onClick={closeSheet} />
-        <aside id="schedule-panel" className="panel" aria-label="Schedule">
+        </div>
+        <button type="button" className="scrim" aria-label="Close the schedule" tabIndex={-1} onClick={closeSchedule} />
+        <aside
+          id="schedule-panel"
+          className="panel"
+          aria-label="Schedule"
+          role={sheetModal ? "dialog" : undefined}
+          aria-modal={sheetModal || undefined}
+        >
           <SchedulePanel
             state={state}
             run={run}
             tab={tab}
             onTab={setTab}
             highlight={highlight}
-            onClose={closeSheet}
+            onClose={closeSchedule}
           />
         </aside>
       </main>
       <div className="tabbar" role="tablist" aria-label="Views">
         <button
+          ref={chatTab}
           type="button"
           role="tab"
           aria-selected={view === "chat"}
           onClick={(e) => {
             setView("chat");
-            if (returnFocus.current) giveBackFocus(e.currentTarget);
+            if (returnTo.current) giveBackFocus(e.currentTarget);
           }}
         >
           <Icon name="chat" /> Chat
