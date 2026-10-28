@@ -13,14 +13,19 @@
 //    before anything else, stops on an OAuth error, takes the issued client
 //    id from a new registration (and refuses a different one on a returning
 //    sign-in), then exchanges the code with the verifier, the same redirect
-//    URI and the resource.
+//    URI and the resource. The issued id stays with the attempt and is
+//    saved only after the exchange and the ID token check succeed with it.
 // 4. The ID token (oidc.ts), the same account on a returning sign-in, and
 //    the granted scopes. Model calls need chatgpt.tokens.use.direct.
 // 5. The tokens, saved with the issued client id in the secrets file.
 //
-// Refresh happens before expiry and once on a 401 from the Responses API,
-// one at a time. A refresh the token endpoint refuses for good signs the
-// user out. A network failure keeps the tokens.
+// Refresh happens before expiry and once on a 401 from the Responses API.
+// Refresh, sign-in completion and sign-out each hold the secrets file's
+// lock (secrets.ts) from their read to their write, so they never overlap,
+// in this process or across processes. A refresh stores its result only if
+// the session it refreshed is still the stored one. A refresh the token
+// endpoint refuses for good signs the user out. A network failure keeps
+// the tokens.
 //
 // No token, code, verifier or ID token is logged, put in an error message
 // or returned to the browser. The authorize URL holds none of them: it
@@ -182,12 +187,12 @@ export class ChatGptAuth {
     if (!code) return { ok: false, code: "authorization_failed" };
     const returned = query.get("client_id");
     let clientId = attempt.clientId;
-    if (attempt.clientId === DYNAMIC_CLIENT_ID) {
+    const registering = attempt.clientId === DYNAMIC_CLIENT_ID;
+    if (registering) {
       if (!returned || returned === DYNAMIC_CLIENT_ID || !CLIENT_ID.test(returned)) return { ok: false, code: "registration_incomplete" };
+      // Kept with this attempt only. It is saved after the exchange and the
+      // ID token check succeed with it, so a tampered callback saves nothing.
       clientId = returned;
-      // Saved before the exchange, so a later attempt reuses it even if
-      // this code expires.
-      this.#store.update((s) => ({ ...s, chatgpt: { ...s.chatgpt, clientId } }), { bump: false });
     } else if (returned !== null && returned !== attempt.clientId) {
       return { ok: false, code: "client_mismatch" };
     }
@@ -209,23 +214,27 @@ export class ChatGptAuth {
     } catch (err) {
       return { ok: false, code: err instanceof IdentityError && err.kind === "unavailable" ? "identity_unavailable" : "identity_invalid" };
     }
-    const previous = this.#store.read().chatgpt.account;
-    if (previous && previous.subject !== identity.subject) return { ok: false, code: "account_mismatch" };
     const session = this.#session(data, null);
     if (!session) return { ok: false, code: "exchange_failed" };
-
     const planUsage = session.scopes.includes(PLAN_USAGE_SCOPE);
     const models = planUsage ? await this.listModels(session.accessToken).catch(() => null) : null;
-    this.#store.update(
-      (s) => ({
-        ...s,
-        // Signing in chooses ChatGPT only when no provider was chosen yet.
-        provider: s.provider ?? "chatgpt",
-        chatgpt: { ...s.chatgpt, clientId, account: { ...identity }, session, models: models ?? s.chatgpt.models },
-      }),
-      { bump: true },
-    );
-    return { ok: true, planUsage };
+
+    return this.#store.withLock(async () => {
+      const current = this.#store.read().chatgpt;
+      // Another registration finished first: keep it, refuse this one.
+      if (current.clientId !== null && current.clientId !== clientId) return { ok: false, code: "client_mismatch" } as const;
+      if (current.account && current.account.subject !== identity.subject) return { ok: false, code: "account_mismatch" } as const;
+      this.#store.update(
+        (s) => ({
+          ...s,
+          // Signing in chooses ChatGPT only when no provider was chosen yet.
+          provider: s.provider ?? "chatgpt",
+          chatgpt: { ...s.chatgpt, clientId, account: { ...identity }, session, models: models ?? s.chatgpt.models },
+        }),
+        { bump: true },
+      );
+      return { ok: true, planUsage } as const;
+    });
   }
 
   // The token set from a token response, or null when it is incomplete.
@@ -240,6 +249,7 @@ export class ChatGptAuth {
     if (scopes.includes("offline_access") && refresh === null) return null;
     const now = this.#now();
     return {
+      id: previous?.id ?? randomUUID(),
       accessToken: data.access_token,
       refreshToken: refresh,
       expiresAt: now + Math.round(data.expires_in * 1000),
@@ -301,12 +311,20 @@ export class ChatGptAuth {
     return this.#refreshing;
   }
 
-  async #doRefresh(stale: string): Promise<string> {
-    // Read again: another process, such as the eval, may have refreshed.
+  #doRefresh(stale: string): Promise<string> {
+    return this.#store.withLock(() => this.#refreshLocked(stale));
+  }
+
+  async #refreshLocked(stale: string): Promise<string> {
+    // Read again under the lock: another process, such as the eval, may
+    // have refreshed already.
     const { chatgpt } = this.#store.read();
     const session = chatgpt.session;
     if (!session || !chatgpt.clientId) throw new ChatGptAuthError("signed_out");
-    if (session.accessToken !== stale && session.expiresAt - REFRESH_MARGIN_MS > this.#now()) return session.accessToken;
+    if (session.accessToken !== stale && session.expiresAt - REFRESH_MARGIN_MS > this.#now()) {
+      if (!session.scopes.includes(PLAN_USAGE_SCOPE)) throw new ChatGptAuthError("plan_usage_off");
+      return session.accessToken;
+    }
     if (!session.refreshToken) {
       this.#endSession();
       throw new ChatGptAuthError("session_ended");
@@ -342,8 +360,30 @@ export class ChatGptAuth {
         throw new ChatGptAuthError("session_ended");
       }
     }
-    // The access token, expiry, scopes and rotated refresh token together.
-    this.#store.update((s) => ({ ...s, chatgpt: { ...s.chatgpt, session: next } }), { bump: false });
+    // The access token, expiry, scopes and rotated refresh token together,
+    // and only over the session this refresh started from.
+    let stored = false;
+    this.#store.update(
+      (s) => {
+        const now = s.chatgpt.session;
+        if (!now || now.id !== session.id || now.refreshToken !== session.refreshToken) return s;
+        stored = true;
+        return { ...s, chatgpt: { ...s.chatgpt, session: next } };
+      },
+      { bump: false },
+    );
+    if (!stored) {
+      // The session was signed out or replaced meanwhile. The new refresh
+      // token is not kept, so it is revoked.
+      if (next.refreshToken) await this.#revoke(next.refreshToken, chatgpt.clientId);
+      throw new ChatGptAuthError("signed_out");
+    }
+    // A refresh can grant fewer scopes. Without plan usage the token is not
+    // used for this call either.
+    if (!next.scopes.includes(PLAN_USAGE_SCOPE)) {
+      this.#store.update((s) => s, { bump: true });
+      throw new ChatGptAuthError("plan_usage_off");
+    }
     return next.accessToken;
   }
 
@@ -354,39 +394,47 @@ export class ChatGptAuth {
   }
 
   // Signs out: revokes the refresh token, then clears the tokens. Returns
-  // whether OpenAI confirmed the revocation.
-  async signOut(): Promise<{ revoked: boolean }> {
-    const { chatgpt } = this.#store.read();
-    const session = chatgpt.session;
-    if (!session) return { revoked: true };
-    let revoked = false;
+  // whether OpenAI confirmed the revocation. Holds the lock, so a refresh
+  // in flight finishes first and its new refresh token is the one revoked.
+  signOut(): Promise<{ revoked: boolean }> {
+    return this.#store.withLock(async () => {
+      const { chatgpt } = this.#store.read();
+      const session = chatgpt.session;
+      if (!session) return { revoked: true };
+      const revoked = session.refreshToken && chatgpt.clientId ? await this.#revoke(session.refreshToken, chatgpt.clientId) : false;
+      this.#endSession();
+      return { revoked };
+    });
+  }
+
+  // Revokes a refresh token at the discovered endpoint, with one retry on
+  // a network failure or a 5xx. True when OpenAI confirmed it.
+  async #revoke(refreshToken: string, clientId: string): Promise<boolean> {
+    let revocation: string | null;
     try {
-      const { revocation_endpoint } = await this.#identity.discovery();
-      if (revocation_endpoint && session.refreshToken && chatgpt.clientId) {
-        const form = new URLSearchParams({ token: session.refreshToken, token_type_hint: "refresh_token", client_id: chatgpt.clientId }).toString();
-        // One retry on a network failure or a 5xx.
-        for (let i = 0; i < 2 && !revoked; i++) {
-          try {
-            const res = await this.#fetch(revocation_endpoint, {
-              method: "POST",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: form,
-              redirect: "error",
-              signal: AbortSignal.timeout(15_000),
-            });
-            await res.body?.cancel();
-            if (res.status === 200) revoked = true;
-            else if (res.status < 500) break;
-          } catch {
-            // Retried once.
-          }
-        }
-      }
+      revocation = (await this.#identity.discovery()).revocation_endpoint;
     } catch {
-      revoked = false;
+      return false;
     }
-    this.#endSession();
-    return { revoked };
+    if (!revocation) return false;
+    const form = new URLSearchParams({ token: refreshToken, token_type_hint: "refresh_token", client_id: clientId }).toString();
+    for (let i = 0; i < 2; i++) {
+      try {
+        const res = await this.#fetch(revocation, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form,
+          redirect: "error",
+          signal: AbortSignal.timeout(15_000),
+        });
+        await res.body?.cancel();
+        if (res.status === 200) return true;
+        if (res.status < 500) return false;
+      } catch {
+        // Retried once.
+      }
+    }
+    return false;
   }
 
   // The models listed for display for this connection, in the server's

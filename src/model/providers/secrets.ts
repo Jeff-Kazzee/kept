@@ -11,6 +11,11 @@
 //   a rename replaces a link itself, never its target.
 // - Read from disk on every use, so the app and `pnpm eval:live` see each
 //   other's token refreshes.
+// - `withLock` serializes the steps that read, call OpenAI and write the
+//   ChatGPT session (refresh, sign-in completion, sign-out), within this
+//   process through a queue and between processes through a lock file made
+//   with O_EXCL beside the secrets file. A lock file older than
+//   LOCK_STALE_MS is taken over, as its holder has stopped.
 //
 // Nothing here logs, and no error message holds a value from the file.
 import { randomUUID } from "node:crypto";
@@ -20,6 +25,8 @@ import {
   fchmodSync,
   fstatSync,
   fsyncSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -27,6 +34,7 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import path from "node:path";
 import { z } from "zod";
 import { appDbPath } from "../../paths.ts";
@@ -43,6 +51,9 @@ export type ProviderKind = z.infer<typeof ProviderKind>;
 
 const ChatGptSession = z
   .object({
+    // Made at sign-in and kept through refreshes. A refresh stores its
+    // result only while the same session is still stored.
+    id: z.string().min(1),
     accessToken: z.string().min(1),
     refreshToken: z.string().min(1).nullable(),
     // Unix milliseconds.
@@ -115,11 +126,116 @@ export class SecretsFileError extends Error {
   override name = "SecretsFileError";
 }
 
+// A lock older than this is taken over. Longer than any step it guards:
+// the token request times out after 30 seconds.
+export const LOCK_STALE_MS = 60_000;
+// How long a step waits for the lock before it gives up.
+export const LOCK_WAIT_MS = 75_000;
+
+export class SecretsLockError extends Error {
+  override name = "SecretsLockError";
+  constructor() {
+    super("The app's settings file stayed locked by another process.");
+  }
+}
+
+// One queue per file in this process, shared by every store on that file.
+const queues = new Map<string, Promise<unknown>>();
+
 export class SecretsStore {
   readonly file: string;
+  readonly #now: () => number;
 
-  constructor(file: string) {
+  constructor(file: string, options: { now?: () => number } = {}) {
     this.file = file;
+    this.#now = options.now ?? Date.now;
+  }
+
+  get lockFile(): string {
+    return `${this.file}.lock`;
+  }
+
+  // Runs `fn` holding the lock: first this process's queue, then the lock
+  // file. Not reentrant: `fn` must not call withLock.
+  withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = queues.get(this.file) ?? Promise.resolve();
+    const run = previous.catch(() => {}).then(async () => {
+      const token = await this.#acquire();
+      try {
+        return await fn();
+      } finally {
+        this.#release(token);
+      }
+    });
+    const tail = run.catch(() => {});
+    queues.set(this.file, tail);
+    void tail.then(() => {
+      if (queues.get(this.file) === tail) queues.delete(this.file);
+    });
+    return run;
+  }
+
+  async #acquire(): Promise<string> {
+    mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    const token = randomUUID();
+    const started = Date.now();
+    for (;;) {
+      try {
+        const fd = openSync(this.lockFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+        try {
+          writeSync(fd, `${token} ${process.pid} ${this.#now()}\n`);
+        } finally {
+          closeSync(fd);
+        }
+        return token;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      }
+      this.#takeOverStale();
+      if (Date.now() - started > LOCK_WAIT_MS) throw new SecretsLockError();
+      await delay(25);
+    }
+  }
+
+  // Moves a stale lock aside under a new name, then checks that what moved
+  // is the stale lock that was read. If another process put a fresh lock
+  // there in between, the fresh one is put back.
+  #takeOverStale(): void {
+    let held: { token: string; at: number };
+    try {
+      const st = lstatSync(this.lockFile);
+      const [tok, , at] = readFileSync(this.lockFile, "utf8").trim().split(" ");
+      held = { token: tok ?? "", at: Number(at) || st.mtimeMs };
+    } catch {
+      return;
+    }
+    if (this.#now() - held.at < LOCK_STALE_MS) return;
+    const aside = `${this.lockFile}.${randomUUID()}.stale`;
+    try {
+      renameSync(this.lockFile, aside);
+    } catch {
+      return;
+    }
+    try {
+      const moved = readFileSync(aside, "utf8").trim().split(" ")[0];
+      if (moved !== held.token) {
+        try {
+          linkSync(aside, this.lockFile);
+        } catch {
+          // A newer lock is in place already.
+        }
+      }
+    } finally {
+      rmSync(aside, { force: true });
+    }
+  }
+
+  #release(token: string): void {
+    try {
+      if (readFileSync(this.lockFile, "utf8").split(" ")[0] === token) rmSync(this.lockFile, { force: true });
+    } catch {
+      // Already gone, or taken over after going stale.
+    }
   }
 
   read(): StoredSettings {

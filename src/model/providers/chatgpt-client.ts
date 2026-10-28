@@ -24,10 +24,12 @@ import {
   CHATGPT_SIGNED_OUT_TEXT,
   CHATGPT_UNAVAILABLE_TEXT,
   PLAN_USAGE_OFF_TEXT,
+  SETTINGS_FILE_TEXT,
   chatGptFailureText,
   providerError,
 } from "./messages.ts";
 import type { FetchLike } from "./oidc.ts";
+import { SecretsFileError, SecretsLockError } from "./secrets.ts";
 
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 export const TOOL_NAMESPACE = "case_tools";
@@ -124,6 +126,8 @@ export class ChatGptResponsesClient implements ModelClient, ToolModelClient {
   }
 
   async #post(token: string, body: Record<string, unknown>, started: number): Promise<Response> {
+    // The model actually sent, checked right before it goes out.
+    assertAllowedModel(String(body.model));
     try {
       return await this.#fetch(this.#url, {
         method: "POST",
@@ -134,7 +138,7 @@ export class ChatGptResponsesClient implements ModelClient, ToolModelClient {
       });
     } catch (err) {
       const reason = err instanceof Error ? err.name : "unknown";
-      throw providerError(CHATGPT_UNAVAILABLE_TEXT, { latencyMs: elapsed(started), type: "network", code: reason });
+      throw providerError(CHATGPT_UNAVAILABLE_TEXT, { latencyMs: elapsed(started), type: "network", code: reason.toLowerCase() });
     }
   }
 
@@ -143,6 +147,8 @@ export class ChatGptResponsesClient implements ModelClient, ToolModelClient {
       return await this.#auth.accessToken(rejected === undefined ? {} : { rejected });
     } catch (err) {
       if (err instanceof ChatGptAuthError) throw authFailure(err);
+      if (err instanceof SecretsFileError) throw providerError(SETTINGS_FILE_TEXT, { type: "chatgpt_auth", code: "settings_file" });
+      if (err instanceof SecretsLockError) throw providerError(CHATGPT_UNAVAILABLE_TEXT, { type: "chatgpt_auth", code: "settings_locked" });
       throw err;
     }
   }
@@ -183,7 +189,7 @@ export class ChatGptResponsesClient implements ModelClient, ToolModelClient {
     } catch (err) {
       if (err instanceof ModelCallError) throw err;
       const reason = err instanceof Error ? err.name : "unknown";
-      throw providerError(CHATGPT_UNAVAILABLE_TEXT, { status: res.status, latencyMs: elapsed(started), type: "stream", code: reason });
+      throw providerError(CHATGPT_UNAVAILABLE_TEXT, { status: res.status, latencyMs: elapsed(started), type: "stream", code: reason.toLowerCase() });
     }
     throw providerError(CHATGPT_UNAVAILABLE_TEXT, { status: res.status, latencyMs: elapsed(started), type: "stream_ended" });
   }
