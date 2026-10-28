@@ -123,14 +123,14 @@ describe("SP5.5 case history", () => {
     ]);
     expect(labels.slice(-9)).toEqual([
       "Question q1 asked (model wording, passed the code checks)",
-      "Question q1 answered: Request Monday 11/16 1:00 PM",
+      "Question q1 answered (choice request:2026-11-16T13:00)",
       "Draft d1 started: Accept an offered slot, Monday 11/16 1:00 PM",
       "Draft d1 edited",
       "Draft d1 approved. Simulated send. Claims not confirmed.",
       "Note n1 added to 2026-11-12T10:30 by you",
       "2026-11-12T10:30 archived by you",
       "Undo on 2026-11-12T10:30 by you: reversed version 2",
-      "Tags on 2026-11-12T10:30 set by Laptop assistant: moved",
+      "Tags on 2026-11-12T10:30 set by Laptop assistant (1 tag)",
     ]);
     expect(history.find((h) => h.label === "2026-11-12T10:30 archived by you")!.undone).toBe(true);
     expect(history.filter((h) => h.undone)).toHaveLength(1);

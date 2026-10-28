@@ -77,6 +77,7 @@ export function App() {
         await action();
       } catch (e) {
         if (e instanceof ApiError && e.body.error === "out_of_scope") setNotice(e.body.message ?? null);
+        else if (e instanceof ApiError && e.body.error === "case_deleted") setError("The case was deleted. Nothing was saved. The empty case is loaded.");
         else if (e instanceof ApiError && e.status === 409) setError("This record changed since it was shown. The current version is loaded.");
         else setError(e instanceof Error ? e.message : String(e));
       }
@@ -177,7 +178,7 @@ export function App() {
 
       <section>
         <h2>12. Delete case</h2>
-        <DeleteCasePanel version={state.caseVersion} run={run} />
+        <DeleteCasePanel version={state.caseVersion} erasePending={state.erasePending} run={run} />
       </section>
     </>
   );
@@ -460,10 +461,16 @@ export function HistoryPanel({ entries }: { entries: HistoryEntry[] }) {
 
 // SP5.4: Delete case. The only permanent deletion, with its own typed
 // confirmation. No agent can reach it.
-export function DeleteCasePanel({ version, run }: { version: number; run: Run }) {
+export function DeleteCasePanel({ version, erasePending = false, run }: { version: number; erasePending?: boolean; run: Run }) {
   const [typed, setTyped] = useState("");
   return (
     <div className="card danger">
+      {erasePending && (
+        <p className="warn" role="alert">
+          A deleted case is not cleared from the database file yet, because another program kept the file busy. Close the MCP
+          client or other programs that use it, then run Delete case again.
+        </p>
+      )}
       <p>
         Delete case erases every message, claim, review, slot, question, explanation, reply, note, tag and proposal of this
         case, and the log of agent calls. It also clears them from the database file. Grants stay, because they are app

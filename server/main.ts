@@ -40,6 +40,12 @@ if (live) {
 const dbPath = path.resolve(PACKAGE_ROOT, process.env.APP_DB ?? "data/app.sqlite");
 mkdirSync(path.dirname(dbPath), { recursive: true });
 const store = new EventStore(dbPath);
+// Finish a Delete case that stopped before it cleared the file.
+try {
+  if (store.finishPendingErase()) console.log("Finished clearing a deleted case from the database file.");
+} catch (err) {
+  console.error(`Could not finish clearing a deleted case from the database file: ${err instanceof Error ? err.message : String(err)}`);
+}
 const intake = new IntakeService(store, client);
 const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
 const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, new ReplyService(store, kase, client));
@@ -98,7 +104,9 @@ server.on("request", async (req, res) => {
   } catch (err) {
     return send(res, 400, { error: err instanceof Error ? err.message : "bad_body" });
   }
-  const result = await api({ method: req.method ?? "GET", path: url.pathname, body });
+  const header = req.headers["x-case-generation"];
+  const generation = typeof header === "string" && /^\d{1,15}$/.test(header) ? Number(header) : undefined;
+  const result = await api({ method: req.method ?? "GET", path: url.pathname, body, generation });
   send(res, result.status, result.body);
 });
 

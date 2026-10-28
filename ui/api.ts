@@ -58,6 +58,11 @@ export type AppState = {
   case: CaseView;
   // The version Delete case states.
   caseVersion: number;
+  // The case generation. Delete case moves it. Every write sends the one
+  // this page last read.
+  generation: number;
+  // True when a Delete case still has to clear the database file.
+  erasePending: boolean;
   history: HistoryEntry[];
 };
 
@@ -77,10 +82,17 @@ export class ApiError extends Error {
   }
 }
 
+// The case generation from the last state this page read. A write from a
+// page that has not seen a Delete case is refused by the server.
+let lastGeneration: number | null = null;
+
 async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    headers: {
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(method === "POST" && lastGeneration !== null ? { "X-Case-Generation": String(lastGeneration) } : {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const json = await res.json();
@@ -89,7 +101,11 @@ async function request<T>(method: "GET" | "POST", path: string, body?: unknown):
 }
 
 export const api = {
-  state: () => request<AppState>("GET", "/api/state"),
+  state: async () => {
+    const state = await request<AppState>("GET", "/api/state");
+    lastGeneration = state.generation;
+    return state;
+  },
   fixtures: () => request<FixtureScenario[]>("GET", "/api/fixtures"),
   calendar: () => request<{ name: string; text: string }>("GET", "/api/fixtures/calendar"),
   addMessage: (m: Omit<Message, "id"> & { id?: string }) => request<MessageView>("POST", "/api/messages", m),

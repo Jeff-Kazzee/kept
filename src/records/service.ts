@@ -103,6 +103,16 @@ export class RecordsService {
     return this.#store.transaction(fn);
   }
 
+  // The case generation, and a command scope on it. See EventStore.inCase.
+  // The MCP server runs every tool call this way.
+  caseGeneration(): number {
+    return this.#store.caseGeneration();
+  }
+
+  inCase<T>(fn: () => T, generation?: number): T {
+    return this.#store.inCase(fn, generation);
+  }
+
   // Runs `fn` so that every write it makes first runs `guard` inside the
   // write's own transaction. See EventStore.withWriteGuard.
   withWriteGuard<T>(guard: () => void, fn: () => T): T {
@@ -171,7 +181,13 @@ export class RecordsService {
     return projectAccessLog(this.#store.readStream(ACCESS_LOG_STREAM));
   }
 
+  // The slot check reads the case before the write. inCase makes the write
+  // fail if a Delete case committed in between.
   addNote(id: string, text: string, expectedVersion: number, by: Actor): RecordView {
+    return this.#store.inCase(() => this.#addNote(id, text, expectedVersion, by));
+  }
+
+  #addNote(id: string, text: string, expectedVersion: number, by: Actor): RecordView {
     const slot = this.#slot(id);
     const note = parse(NoteText, text, "note");
     assertAdministrative([note]);
@@ -182,6 +198,10 @@ export class RecordsService {
   }
 
   setTags(id: string, tags: string[], expectedVersion: number, by: Actor): RecordView {
+    return this.#store.inCase(() => this.#setTags(id, tags, expectedVersion, by));
+  }
+
+  #setTags(id: string, tags: string[], expectedVersion: number, by: Actor): RecordView {
     const slot = this.#slot(id);
     const parsed = parse(Tags, tags, "tags");
     assertAdministrative(parsed);
@@ -230,6 +250,10 @@ export class RecordsService {
   // app. The checks a write depends on run again inside one short
   // transaction with the write.
   propose(input: unknown, grant: ProposingGrant): ProposalView {
+    return this.#store.inCase(() => this.#propose(input, grant));
+  }
+
+  #propose(input: unknown, grant: ProposingGrant): ProposalView {
     const change = parse(ProposedChangeInput, input, "proposal");
     assertAdministrative([
       change.statement,
@@ -279,6 +303,9 @@ export class RecordsService {
     const proposal = this.proposal(id);
     if (proposal.status !== "pending") throw new InvalidRequestError(`Proposal ${id} was already ${proposal.status}.`);
     const change = proposal.change;
+    // A proposal stored before the check existed is checked here, before any
+    // write, as the reply service checks a stored edit.
+    assertAdministrative([change.statement, "location" in change ? change.location : null, "request_item" in change ? change.request_item : null]);
     const recordVersion = options.recordVersion;
     const target = change.kind === "archive" || change.kind === "detail_edit" ? this.#slot(change.appointment_id) : null;
     if (target && recordVersion === undefined) {

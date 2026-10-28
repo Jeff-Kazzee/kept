@@ -85,7 +85,13 @@ export class ReplyService {
   // draft that code builds. A no-fit answer is recorded with its reason, and
   // the user picks by hand. After two invalid outputs the suggestion is
   // recorded with its attempts and the user picks by hand.
-  async suggest(intent: string | null, expectedVersion: number): Promise<CaseView> {
+  // Keeps the case generation it started from, so a Delete case during the
+  // model call makes the write fail instead of landing in the empty case.
+  suggest(intent: string | null, expectedVersion: number): Promise<CaseView> {
+    return this.#store.inCase(() => this.#suggest(intent, expectedVersion));
+  }
+
+  async #suggest(intent: string | null, expectedVersion: number): Promise<CaseView> {
     const note = intent?.trim() ? intent.trim() : null;
     if (note !== null && note.length > MAX_INTENT_CHARS) throw new InvalidRequestError(`The note is longer than ${MAX_INTENT_CHARS} characters.`);
     if (note !== null && hasClinicalContent(note)) throw new OutOfScopeError();

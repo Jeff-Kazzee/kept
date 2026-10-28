@@ -26,14 +26,13 @@ export type ChecklistItem = {
 };
 
 // Two requests are one item when they say the same thing in the same words.
-// Case, spacing, compatibility forms and end punctuation do not count as
-// different words.
+// Case, spacing, compatibility forms and punctuation at either end (marks,
+// quotes, brackets) do not count as different words.
 export function requestKey(text: string): string {
   return normalizeForScope(text)
     .toLowerCase()
     .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[\s.,;:!]+$/u, "");
+    .replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, "");
 }
 
 export function buildChecklist(evidence: Evidence[]): ChecklistItem[] {

@@ -8,9 +8,12 @@ import { OutOfScopeError } from "../src/domain/scope.ts";
 import { loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
 import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } from "../src/intake/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
-import { CompactionError, StaleEditError } from "../src/store/event-log.ts";
+import { CaseDeletedError, CompactionError, StaleEditError } from "../src/store/event-log.ts";
 
-export type ApiRequest = { method: string; path: string; body: unknown };
+// `generation` is the case generation the page last read. A write from a
+// page opened before a Delete case is refused instead of landing in the
+// empty case. Absent means the current generation.
+export type ApiRequest = { method: string; path: string; body: unknown; generation?: number };
 export type ApiResponse = { status: number; body: unknown };
 
 const PastedMessage = z
@@ -54,6 +57,8 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       evidence: service.evidence(),
       case: kase.view(),
       caseVersion: kase.caseVersion(),
+      generation: kase.generation(),
+      erasePending: kase.erasePending(),
       history: kase.history(),
     })],
     ["GET", /^\/api\/fixtures$/, () =>
@@ -127,7 +132,9 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       if (!match) continue;
       if (req.method !== method) return { status: 405, body: { error: "method_not_allowed" } };
       try {
-        return { status: 200, body: await run(match, req.body) };
+        // One command on the case: every write it makes checks the case
+        // generation inside its transaction.
+        return { status: 200, body: await kase.inCase(() => run(match, req.body), req.generation) };
       } catch (err) {
         return toErrorResponse(err);
       }
@@ -142,6 +149,7 @@ function toErrorResponse(err: unknown): ApiResponse {
   }
   if (err instanceof OutOfScopeError) return { status: 422, body: { error: "out_of_scope", message: err.message } };
   if (err instanceof NotFoundError) return { status: 404, body: { error: "not_found", message: err.message } };
+  if (err instanceof CaseDeletedError) return { status: 409, body: { error: "case_deleted", message: err.message } };
   if (err instanceof CompactionError) return { status: 503, body: { error: "compaction_incomplete", message: err.message } };
   if (err instanceof InvalidRequestError) return { status: 422, body: { error: "invalid_request", message: err.message } };
   if (err instanceof z.ZodError) {

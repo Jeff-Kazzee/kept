@@ -1,7 +1,8 @@
 // The case history: every event of the case in the order it was written,
-// each with a label code builds from the event kind, ids, dates and times.
-// Message text, quotes, notes and proposal statements are not repeated
-// here. The views that show them label them. Grants are app settings, not
+// each with a label code builds from the event kind, ids, counts, dates and
+// times. No free text is repeated here: not message text, quotes, notes,
+// proposal statements, tags, file names or choice labels, which can carry
+// words from messages. The views that show them label them. Grants are app settings, not
 // case events, so they are left out. An undo shows as its own entry and
 // marks the entry it reversed.
 import type { EvidenceClaim } from "../domain/claim.ts";
@@ -90,13 +91,13 @@ function label(e: StoredEvent): string | null {
     case "agent_report_confirmed":
       return `You confirmed a report from ${event.data.claim.agent_name ?? "an agent"} as claim ${evidence}: ${claimText(event.data.claim)}`;
     case "calendar_loaded":
-      return `Calendar loaded: ${event.data.name}`;
+      return "Calendar loaded";
     case "question_asked":
       return `Question ${event.data.question_id} asked (${event.data.origin === "model" ? "model wording, passed the code checks" : "fixed wording"})`;
     case "question_withdrawn":
       return `Question ${event.data.question_id} withdrawn because its conflict changed`;
     case "question_answered":
-      return `Question ${event.data.question_id} answered: ${event.data.label}`;
+      return `Question ${event.data.question_id} answered (choice ${event.data.choice_id})`;
     case "explanation_attempted":
       return `Model explanation attempt ${event.data.attempt}: ${event.data.outcome === "valid" ? "passed the code checks" : "failed the code checks"}`;
     case "explanation_finished":
@@ -117,7 +118,7 @@ function label(e: StoredEvent): string | null {
     case "note_added":
       return `Note ${event.data.note_id} added to ${record} ${actor(event.data.by)}`;
     case "tags_set":
-      return `Tags on ${record} set ${actor(event.data.by)}: ${event.data.tags.length === 0 ? "none" : event.data.tags.join(", ")}`;
+      return `Tags on ${record} set ${actor(event.data.by)} (${event.data.tags.length === 1 ? "1 tag" : `${event.data.tags.length} tags`})`;
     case "record_archived":
       return `${record} archived ${actor(event.data.by)}${event.data.proposal_id ? ` from proposal ${event.data.proposal_id}` : ""}`;
     case "event_undone":

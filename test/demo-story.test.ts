@@ -169,8 +169,12 @@ describe("demo story", () => {
 
     // The history lists the story in order, with the reply in plain words.
     const history = s.history.map((h) => h.label);
-    const at = (label: string) => history.indexOf(label);
-    expect(at("Draft d1 started: Accept an offered slot, Monday 11/16 1:00 PM")).toBeGreaterThan(at("Question q1 answered: Request Monday 11/16 1:00 PM"));
+    const at = (label: string) => {
+      const i = history.indexOf(label);
+      expect(i, label).toBeGreaterThanOrEqual(0);
+      return i;
+    };
+    expect(at("Draft d1 started: Accept an offered slot, Monday 11/16 1:00 PM")).toBeGreaterThan(at("Question q1 answered (choice request:2026-11-16T13:00)"));
     expect(at("Draft d1 approved. Simulated send. Claims recorded.")).toBeGreaterThan(at("Draft d1 started: Accept an offered slot, Monday 11/16 1:00 PM"));
     expect(at("You accepted claim m4-e2")).toBe(history.length - 1);
     expect(s.history.map((h) => h.seq)).toEqual([...s.history.map((h) => h.seq)].sort((a, b) => a - b));

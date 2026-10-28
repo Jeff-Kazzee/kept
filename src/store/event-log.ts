@@ -3,6 +3,7 @@
 // moved on, the write fails with StaleEditError and nothing is written.
 // Triggers block UPDATE and DELETE on the events table. eraseCase is the
 // one exception, for Delete case only.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseSync } from "node:sqlite";
 
 export type NewEvent = { type: string; data: unknown };
@@ -60,6 +61,10 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 ${NO_DELETE_TRIGGER}
+CREATE TABLE IF NOT EXISTS case_meta (
+  key TEXT PRIMARY KEY,
+  value INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS rate_windows (
   key TEXT NOT NULL,
   window_start INTEGER NOT NULL,
@@ -112,7 +117,7 @@ export class CompactionError extends Error {
   constructor() {
     super(
       "The case was deleted, but another program is using the database file, so old text may remain in it until that program closes. " +
-        "Close the MCP client or other programs that use it, then run Delete case again.",
+        "Close the MCP client or other programs that use it, then run Delete case again. The app also finishes it when it starts.",
     );
   }
 }
@@ -126,6 +131,14 @@ function prefixMatch(prefixes: readonly string[]): { sql: string; params: Array<
   };
 }
 
+// The case was deleted after this command read it. Nothing was written.
+export class CaseDeletedError extends Error {
+  override name = "CaseDeletedError";
+  constructor() {
+    super("The case was deleted while this was in progress. Nothing was saved.");
+  }
+}
+
 export class EventStore {
   readonly #db: DatabaseSync;
   readonly #file: boolean;
@@ -133,6 +146,8 @@ export class EventStore {
   #depth = 0;
   readonly #retryMs: number[];
   #guard: (() => void) | null = null;
+  // The case generation the current command started from. See inCase.
+  readonly #scope = new AsyncLocalStorage<number>();
 
   // `location` is a file path or ":memory:".
   constructor(location: string = ":memory:", clock: () => string = () => new Date().toISOString(), options: StoreOptions = {}) {
@@ -197,7 +212,10 @@ export class EventStore {
     else this.#db.exec(`SAVEPOINT ${savepoint}`);
     this.#depth++;
     try {
-      if (this.#depth === 1 && this.#guard) this.#guard();
+      if (this.#depth === 1) {
+        this.#assertGeneration();
+        if (this.#guard) this.#guard();
+      }
       const result = fn();
       if (result instanceof Promise) throw new Error("A transaction must be synchronous.");
       this.#depth--;
@@ -322,14 +340,46 @@ export class EventStore {
     return row?.s ?? 0;
   }
 
+  // The case generation. Delete case increments it. It lives in case_meta,
+  // outside the events table, so it survives the delete.
+  caseGeneration(): number {
+    return this.#meta("generation");
+  }
+
+  // True when a Delete case committed and the file was not compacted yet.
+  erasePending(): boolean {
+    return this.#meta("erase_pending") === 1;
+  }
+
+  #meta(key: string): number {
+    const row = this.#db.prepare("SELECT value FROM case_meta WHERE key = ?").get(key) as { value: number } | undefined;
+    return row?.value ?? 0;
+  }
+
+  // Runs `fn` as one command on the case. Every write transaction it starts,
+  // before and after any await, first checks inside the lock that the case
+  // generation is still `generation` (by default the current one). So a
+  // command that read the case, or waited for a model, before a Delete case
+  // cannot write into the empty case afterwards. An enclosing command's
+  // generation wins, because it was read first.
+  inCase<T>(fn: () => T, generation?: number): T {
+    if (this.#scope.getStore() !== undefined) return fn();
+    return this.#scope.run(generation ?? this.caseGeneration(), fn);
+  }
+
+  #assertGeneration(): void {
+    const expected = this.#scope.getStore();
+    if (expected !== undefined && expected !== this.caseGeneration()) throw new CaseDeletedError();
+  }
+
   // Delete case. The one path that removes events. In one transaction it
   // runs `check`, lifts the delete guard, removes every event whose stream
-  // does not start with one of `keepPrefixes`, puts the guard back and
-  // clears every rate-limit counter. Then it rewrites the file, so the
-  // removed text is gone from disk and not only from queries: VACUUM
-  // rebuilds the database without the freed pages, and a TRUNCATE checkpoint
-  // copies the WAL into the file and empties it. Returns the number of
-  // events removed. Running it again on an empty case only compacts.
+  // does not start with one of `keepPrefixes`, puts the guard back, clears
+  // every rate-limit counter, moves the case to a new generation and marks
+  // the erase as pending. Then it rewrites the file (finishPendingErase), so
+  // the removed text is gone from disk and not only from queries. Returns
+  // the number of events removed. Running it again on an empty case only
+  // compacts.
   eraseCase(keepPrefixes: readonly string[], check: () => void): number {
     if (this.#depth > 0) throw new Error("Delete case cannot run inside another transaction.");
     const keep = prefixMatch(keepPrefixes);
@@ -342,24 +392,34 @@ export class EventStore {
       const { changes } = this.#db.prepare(`DELETE FROM events WHERE NOT (${keep.sql})`).run(...keep.params);
       this.#db.exec(NO_DELETE_TRIGGER);
       this.#db.exec("DELETE FROM rate_windows");
+      this.#db.prepare("INSERT INTO case_meta (key, value) VALUES ('generation', 1) ON CONFLICT (key) DO UPDATE SET value = value + 1").run();
+      this.#db.prepare("INSERT INTO case_meta (key, value) VALUES ('erase_pending', 1) ON CONFLICT (key) DO UPDATE SET value = 1").run();
       return Number(changes);
     });
-    this.#compact();
+    this.finishPendingErase();
     return erased;
   }
 
-  // Rewrites the database file without free pages and empties the WAL.
-  // VACUUM builds its copy in memory, so no temporary file holds the text.
-  #compact(): void {
+  // Finishes a Delete case whose compaction did not run, for example because
+  // the process stopped after the delete committed. The app and the MCP
+  // server call it at start, before they serve. A TRUNCATE checkpoint, VACUUM
+  // and a second TRUNCATE checkpoint leave the database file without the
+  // removed text and the WAL empty. Only then is the pending mark cleared,
+  // so a crash at any point leaves it set. Returns true when it compacted.
+  finishPendingErase(): boolean {
+    if (!this.erasePending()) return false;
     this.#db.exec("PRAGMA temp_store = MEMORY");
     try {
       if (this.#file) this.#checkpoint();
       this.#db.exec("VACUUM");
       if (this.#file) this.#checkpoint();
+      // A plain statement, not a case command: the generation already moved.
+      this.#db.exec("DELETE FROM case_meta WHERE key = 'erase_pending'");
     } catch (err) {
       if (isBusy(err)) throw new CompactionError();
       throw err;
     }
+    return true;
   }
 
   #checkpoint(): void {

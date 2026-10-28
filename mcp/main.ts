@@ -29,6 +29,13 @@ const noModel: ModelClient = {
 };
 
 const store = new EventStore(appDbPath());
+// Finish a Delete case that stopped before it cleared the file, before
+// serving. A failure is reported and the server still starts.
+try {
+  store.finishPendingErase();
+} catch (err) {
+  console.error(`Could not finish clearing a deleted case from the database file: ${err instanceof Error ? err.message : String(err)}`);
+}
 const intake = new IntakeService(store, noModel);
 const records = new RecordsService(store, intake, new CaseService(store, intake, noModel));
 const grants = new GrantStore(store);

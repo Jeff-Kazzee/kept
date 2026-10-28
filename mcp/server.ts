@@ -16,7 +16,7 @@ import { InvalidRequestError, NotFoundError } from "../src/intake/service.ts";
 import { UNKNOWN_TOOL, rateSummaryEvents, type AccessEvent, type AccessResult } from "../src/records/events.ts";
 import { AppointmentId } from "../src/records/inputs.ts";
 import type { RecordsService } from "../src/records/service.ts";
-import { StaleEditError, StoreBusyError, type RateWindow } from "../src/store/event-log.ts";
+import { CaseDeletedError, StaleEditError, StoreBusyError, type RateWindow } from "../src/store/event-log.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { sanitize } from "./sanitize.ts";
 import { TOOLS, summary, toolByName, type ToolDef } from "./tools.ts";
@@ -94,10 +94,17 @@ const REVOKED: ToolError = {
   message: "This grant was revoked or does not exist. The user can create a new grant in the app.",
 };
 
+const CASE_DELETED: ToolError = {
+  error: "not_found",
+  message: "The user deleted the case during this call. Nothing was saved and no data is returned. Read the case again.",
+};
+
 // Log entries for calls that could not get the write lock. The next call
-// that gets it writes them first. Kept per records service, which is one
-// per server process.
-const pendingAudit = new WeakMap<RecordsService, AccessEntry[]>();
+// that gets it writes them first, but only into the case they belong to:
+// an entry from before a Delete case is dropped, never written. Kept per
+// records service, which is one per server process.
+type PendingEntry = { generation: number; entry: AccessEntry };
+const pendingAudit = new WeakMap<RecordsService, PendingEntry[]>();
 
 function logSummaries(deps: McpDeps, windows: RateWindow[]): void {
   if (windows.length === 0) return;
@@ -125,7 +132,16 @@ export function sweepRateWindows(deps: McpDeps): void {
 //    if the grant is still active then.
 // If the lock stays busy through every retry, the call returns a busy error
 // and its log entry waits for the next call.
+//
+// The whole call is one command on the case generation read at its start
+// (see EventStore.inCase). If the user deletes the case during the call,
+// its writes fail, its log entry is dropped, and it returns no data.
 export async function callTool(deps: McpDeps, name: string, args: unknown): Promise<CallResult> {
+  const generation = deps.records.caseGeneration();
+  return deps.records.inCase(() => runCall(deps, name, args, generation), generation);
+}
+
+function runCall(deps: McpDeps, name: string, args: unknown, generation: number): CallResult {
   const tool = toolByName(name);
   const parsed = tool ? tool.input.safeParse(args ?? {}) : null;
   const rawId = tool && parsed?.success ? tool.appointmentOf(parsed.data as never) : null;
@@ -147,7 +163,8 @@ export async function callTool(deps: McpDeps, name: string, args: unknown): Prom
   try {
     const flushed = pending.length;
     gate = deps.records.transaction(() => {
-      for (const e of pending.slice(0, flushed)) deps.records.logAccess(e);
+      // The transaction already checked that the generation is unchanged.
+      for (const p of pending.slice(0, flushed)) if (p.generation === generation) deps.records.logAccess(p.entry);
       logSummaries(deps, deps.limiter.sweep());
       grant = deps.grants.findByToken(deps.token);
       const log = (result: AccessResult) => deps.records.logAccess(entry(result));
@@ -186,8 +203,9 @@ export async function callTool(deps: McpDeps, name: string, args: unknown): Prom
     });
     pending.splice(0, flushed);
   } catch (err) {
+    if (err instanceof CaseDeletedError) return errorResult(CASE_DELETED);
     if (!(err instanceof StoreBusyError)) throw err;
-    pending.push(entry("busy"));
+    pending.push({ generation, entry: entry("busy") });
     return errorResult(BUSY);
   }
   if ("unknown" in gate) throw new ProtocolError(ProtocolErrorCode.InvalidParams, "Unknown tool.");
@@ -226,10 +244,13 @@ export async function callTool(deps: McpDeps, name: string, args: unknown): Prom
       return result;
     });
   } catch (err) {
+    // The case was deleted after the tool ran. Its result describes the
+    // deleted case, so it is not returned, and nothing is logged.
+    if (err instanceof CaseDeletedError) return errorResult(CASE_DELETED);
     if (!(err instanceof StoreBusyError)) throw err;
     // The tool's own writes, if any, are already committed. The log entry
     // waits for the next call.
-    pending.push(entry(outcome));
+    pending.push({ generation, entry: entry(outcome) });
     return result;
   }
 }
@@ -237,6 +258,7 @@ export async function callTool(deps: McpDeps, name: string, args: unknown): Prom
 function failure(deps: McpDeps, err: unknown, appointmentId: string | null): [CallResult, AccessResult] {
   if (err instanceof PermissionDenied) return [errorResult(REVOKED), "permission_denied"];
   if (err instanceof StoreBusyError) return [errorResult(BUSY), "busy"];
+  if (err instanceof CaseDeletedError) return [errorResult(CASE_DELETED), "not_found"];
   if (err instanceof StaleEditError) {
     const current = appointmentId ? deps.records.appointments({ includeArchived: true }).find((a) => a.id === appointmentId) : undefined;
     return [

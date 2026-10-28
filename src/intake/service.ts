@@ -115,7 +115,15 @@ export class IntakeService {
     return this.message(message.id);
   }
 
-  async extract(
+  // Keeps the case generation it started from, as the other model calls do.
+  extract(
+    messageId: string,
+    options: { effort: Effort; expectedVersion: number },
+  ): Promise<{ message: MessageView; evidence: EvidenceView[]; result: ExtractionResult }> {
+    return this.#store.inCase(() => this.#extract(messageId, options));
+  }
+
+  async #extract(
     messageId: string,
     options: { effort: Effort; expectedVersion: number },
   ): Promise<{ message: MessageView; evidence: EvidenceView[]; result: ExtractionResult }> {

@@ -228,9 +228,31 @@ export class CaseService {
     };
   }
 
+  // The case generation. See EventStore.inCase.
+  generation(): number {
+    return this.#store.caseGeneration();
+  }
+
+  // Runs `fn` as one command on the case at `generation`, or at the current
+  // generation. The API runs every request this way.
+  inCase<T>(fn: () => T, generation?: number): T {
+    return this.#store.inCase(fn, generation);
+  }
+
+  // True when a Delete case still has to clear the file on disk.
+  erasePending(): boolean {
+    return this.#store.erasePending();
+  }
+
   // Asks the model to explain one conflict and stores the result, valid or
-  // not, as events on the conflict's stream.
-  async explain(conflictId: string, expectedVersion: number): Promise<ConflictView> {
+  // not, as events on the conflict's stream. The command keeps the case
+  // generation it started from, so a Delete case during the model call makes
+  // the write fail with CaseDeletedError instead of landing in the empty case.
+  explain(conflictId: string, expectedVersion: number): Promise<ConflictView> {
+    return this.#store.inCase(() => this.#explain(conflictId, expectedVersion));
+  }
+
+  async #explain(conflictId: string, expectedVersion: number): Promise<ConflictView> {
     const { view, evidence, conflicts } = this.#build();
     const conflict = conflicts.find((c) => c.id === conflictId);
     if (!conflict) throw new NotFoundError(`No open conflict ${conflictId}.`);
@@ -253,12 +275,19 @@ export class CaseService {
       },
     ];
     this.#store.append(conflictStream(conflictId), expectedVersion, events.map(asEvent), this.#describeVersion);
-    return this.view().conflicts.find((c) => c.id === conflictId)!;
+    const after = this.view().conflicts.find((c) => c.id === conflictId);
+    if (!after) throw new NotFoundError(`Conflict ${conflictId} is no longer open.`);
+    return after;
   }
 
   // Opens the next question. Only one question is open at a time. A
-  // question whose conflict has changed or gone is withdrawn first.
-  async askNext(expectedVersion: number): Promise<CaseView> {
+  // question whose conflict has changed or gone is withdrawn first. Keeps
+  // the case generation it started from, as explain does.
+  askNext(expectedVersion: number): Promise<CaseView> {
+    return this.#store.inCase(() => this.#askNext(expectedVersion));
+  }
+
+  async #askNext(expectedVersion: number): Promise<CaseView> {
     this.#store.assertVersion(QUESTIONS_STREAM, expectedVersion, this.#describeQueue);
     const { view, evidence, conflicts, queue, open, current } = this.#build();
     if (current) throw new InvalidRequestError(`Question ${current.id} is still open. Answer it first.`);
