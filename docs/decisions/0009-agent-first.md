@@ -295,6 +295,66 @@ The root typecheck no longer compiles the UI: `test/bundle.test.ts` reads
 the scripted chat's marker from `ui/chat/mockStream.ts` as text instead of
 importing it.
 
+## Review round 2
+
+The coordinator replaced the text heuristics of D1 and D2 with rules that
+fail closed. Both proposed.
+
+- D1' (replaces D1's chat rule). The assistant never sets channel
+  `user_report`. When the text may be the person's own report (the model
+  asked for `user_report`, or the turn is not a paste turn under D2'), it
+  is added with channel `unknown` and `ownReport: "offered"`, and the chat
+  shows a card `{ "kind": "own_report", "messageId": string }` with the
+  question "Record this as your own report?" (`OWN_REPORT_QUESTION`). An
+  agent may not accept or reject that message's claims until the person
+  answers. The answer is `POST /api/messages/:id/own-report` with
+  `{ "expectedVersion": number, "answer": "yes" | "no" }` (the message's
+  version), the person's only, logged as `own_report_recorded` with Undo,
+  and answers the message view. Yes makes the message and its claims
+  `reported_by_user`, after the scope check a typed report gets. The
+  claims stay pending. Its undo is refused once a claim of the message was
+  reviewed. `ownWords` is gone. Over MCP, D1's
+  `reported_by_user_via_agent` rule stays.
+- D2' (replaces D2's ordering). At the start of a turn code reads the
+  person's message (`mayContainPaste`): a line break, more than 280
+  characters, or a line that starts with a sender-like prefix (`Name:` or
+  `From:`) or a quote mark. In such a turn only reads, `import_message` and
+  `accept_claim` or `reject_claim` for claims of messages this turn
+  imported are allowed. Archive, unarchive, tags, notes, the time zone,
+  answers, starting or discarding a draft and undo are refused for the
+  whole turn with `PASTE_TURN_NOTICE`, and so are `ask_next_question` and
+  `explain_conflict` when they would write, whatever the order of the
+  calls. A short message with none of those marks is a normal turn.
+  `IMPORT_AFTER_ACTION_NOTICE` is gone.
+
+Findings:
+
+1. and 5. Fixed by D2'.
+2. and 3. Fixed by D1'.
+4. A claim fact with no state, such as an agent's unconfirmed report,
+   grounded "Monday is confirmed" through the fallback to any slot. Now a
+   clause, or a sentence with no slot, that names a date no slot among
+   the facts has fails any positive state word.
+6. An import blocked forever on a rejected fact entered by hand. Only a
+   pending or accepted one blocks now, and a rejected one leaves with the
+   message.
+7. Every claim an agent reports, of any type, waits as unconfirmed until
+   an office message or the person's own report agrees, and the checklist
+   and `get_checklist` leave such office requests out. So an agent's answer
+   that records any claim is refused, a clarifying one included, and an
+   agent answers only with choices that record no claim (a reply, "Not
+   sure yet").
+8. `check_calendar` gives the gap note with no calendar loaded.
+9. A report with a date and no time shows on a slot only when it is the one
+   slot that day. Otherwise it is listed for the case only.
+
+API changes for sprint 9 in this round: the card kind `own_report`, the
+message field `ownReport` (`"offered" | "yes" | "no" | null`), the route
+`POST /api/messages/:id/own-report`, the activity kind
+`own_report_recorded`, `own_report_questions` in `list_open_questions`, and
+`unconfirmedEvidenceIds` now holds an agent's reports of every claim type.
+Removed: `IMPORT_AFTER_ACTION_NOTICE`.
+
 ## Self-review
 
 1. Each check that guards a write runs in the write's transaction: the

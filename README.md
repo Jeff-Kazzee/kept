@@ -120,11 +120,13 @@ in this repo is synthetic.
   stay administrative, and it may say the agent did something only when
   the activity log shows it did. After one retry, code replaces an answer
   that fails.
-- A message that brings a pasted message only adds that message and
-  reviews its facts. Anything else the paste asks for waits until you ask
-  in your own words. A report an agent makes that would confirm, cancel or
-  move an appointment changes nothing until an office message or your own
-  report agrees.
+- A message that may hold a paste (a line break, more than 280
+  characters, or a line that starts like `Name:` or with a quote mark) only
+  adds messages and reviews their facts. Anything else waits until you ask
+  in a short message of your own. When text may be your own report, the
+  chat asks "Record this as your own report?", and its facts wait for your
+  answer. A report an agent makes changes nothing until an office message
+  or your own report agrees.
 - `POST /api/chat` answers with server-sent events and `GET /api/chat`
   returns the chat.
 - Every time is in the case's time zone, which you or the assistant set.
