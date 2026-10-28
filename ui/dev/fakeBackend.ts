@@ -96,7 +96,8 @@ export function createFakeBackend({ storage = null, now = () => new Date().toISO
     async google() {
       return structuredClone(s.google);
     },
-    async googleConnect() {
+    async googleConnect(expectedVersion) {
+      if (expectedVersion !== s.google.version) throw refuse(409, "stale_edit", "The Google connection changed since it was shown.");
       // A synthetic account. The real route answers Google's sign-in page.
       // The page came from ?mockchat=1, so the callback keeps it.
       s.google = { version: s.google.version + 1, connected: true, email: "sample.person@example.com", gmail: true, calendar: true, calendarId: "primary" };
@@ -151,7 +152,7 @@ export function createHybridBackend(real: AgentBackend, fake: FakeBackend): Agen
       return real.undo(id, version);
     },
     google: () => fake.google(),
-    googleConnect: () => fake.googleConnect(),
+    googleConnect: (v) => fake.googleConnect(v),
     googleDisconnect: (v) => fake.googleDisconnect(v),
   };
 }

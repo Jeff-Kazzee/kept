@@ -65,7 +65,7 @@ describe("ui api", () => {
     await realBackend.chatgptStart();
     await realBackend.chatgptSignOut(6);
     await realBackend.undo("act-1", 7);
-    await realBackend.googleConnect();
+    await realBackend.googleConnect(1);
     await realBackend.googleDisconnect(2);
     const writes = sent.filter((s) => s.path !== "/api/state");
     expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([
@@ -91,7 +91,7 @@ describe("ui api", () => {
       {},
       { expectedVersion: 6 },
       { expectedVersion: 7 },
-      {},
+      { expectedVersion: 1 },
       { expectedVersion: 2 },
     ]);
   });

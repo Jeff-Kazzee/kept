@@ -148,7 +148,7 @@ describe("scripted chat", () => {
     const { turn, agent } = setup();
     const off = await turn("Check my email for appointments");
     expect(off.filter((e) => e.event === "text.delta").map((e) => (e.data as { text: string }).text).join("")).toContain("Gmail is not connected.");
-    await agent.googleConnect();
+    await agent.googleConnect(0);
     for (const id of ["m1", "m2"]) await turn(fixtureMessage(id).text);
     const mail = await turn("Check my email for appointments");
     const kinds = mail.filter((e) => e.event === "action").map((e) => (e.data as { entry: { kind: string } }).entry.kind);

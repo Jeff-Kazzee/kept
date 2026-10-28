@@ -28,7 +28,9 @@ export type AgentBackend = {
   undo(id: string, expectedVersion: number): Promise<unknown>;
   // Null when this build has no Google route yet.
   google(): Promise<GoogleStatus | null>;
-  googleConnect(): Promise<{ authorizeUrl: string }>;
+  // States the Google connection version it was shown at, as disconnect
+  // does (sprint 11 review round 3, finding 8).
+  googleConnect(expectedVersion: number): Promise<{ authorizeUrl: string }>;
   // States the Google connection version it was shown at.
   googleDisconnect(expectedVersion: number): Promise<unknown>;
 };
@@ -78,7 +80,7 @@ export const realBackend: AgentBackend = {
   activity: () => orNull(() => request<ActivityLog>("GET", "/api/activity")),
   undo: (id, expectedVersion) => request("POST", `/api/activity/${encodeURIComponent(id)}/undo`, { expectedVersion }),
   google: () => orNull(() => request<GoogleStatus>("GET", "/api/google")),
-  googleConnect: () => request<{ authorizeUrl: string }>("POST", "/api/google/connect", {}),
+  googleConnect: (expectedVersion) => request<{ authorizeUrl: string }>("POST", "/api/google/connect", { expectedVersion }),
   googleDisconnect: (expectedVersion) => request("POST", "/api/google/disconnect", { expectedVersion }),
 };
 

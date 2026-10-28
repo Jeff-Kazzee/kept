@@ -357,7 +357,7 @@ export function GoogleSetting({ run }: { run: Run }) {
           <ActionButton
             run={run}
             action={async () => {
-              const { authorizeUrl } = await backend.googleConnect();
+              const { authorizeUrl } = await backend.googleConnect(g.version);
               const url = safeAuthorizeUrl(authorizeUrl, window.location.origin);
               if (!url) throw new Error("The sign-in address was not one this app opens.");
               window.location.assign(url);
