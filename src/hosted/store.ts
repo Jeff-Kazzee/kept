@@ -22,7 +22,7 @@
 //   adjust   a signed correction by the admin, or a revoked code's rest
 // The balance is grants, refunds and adjustments, minus charges, minus
 // the holds still open. A hold is taken only when the balance covers it,
-// and a charge never takes more than the balance and its own hold, so the
+// and a charge never takes more than its own hold or the balance, so the
 // balance never goes below zero.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from "node:fs";
@@ -168,7 +168,8 @@ CREATE TABLE IF NOT EXISTS judge_codes (
   created_at INTEGER NOT NULL,
   revoked_at INTEGER,
   account_id TEXT UNIQUE REFERENCES accounts (id),
-  redeemed_at INTEGER
+  redeemed_at INTEGER,
+  revoke_due INTEGER NOT NULL DEFAULT 0
 ) STRICT;`;
 
 const isBusy = (err: unknown) => {
@@ -216,6 +217,9 @@ export class AccountsStore {
       this.#checkPath(false);
       db.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}; PRAGMA foreign_keys = ON;`);
       db.exec(SCHEMA);
+      // A database made before review round 1 gains the revoke column.
+      const cols = (db.prepare("PRAGMA table_info(judge_codes)").all() as Row[]).map((c) => String(c.name));
+      if (!cols.includes("revoke_due")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_due INTEGER NOT NULL DEFAULT 0");
     } catch (err) {
       db.close();
       if (err instanceof AccountsFileError) throw err;
@@ -448,7 +452,9 @@ export class AccountsStore {
       const account = this.#account(db, ctx.accountId);
       if (!account || account.deleted) return { ok: false, reason: "credits" };
       if (this.#dayCost(db, this.#now()) + costMicros > dailyCapMicros) return { ok: false, reason: "daily_cap" };
-      if (this.#balance(db, ctx.accountId) < amountMicros) return { ok: false, reason: "credits" };
+      // A revoked code's credit still inside open holds is not there to
+      // spend (review round 1, finding 2).
+      if (this.#balance(db, ctx.accountId) - this.#due(db, ctx.accountId) < amountMicros) return { ok: false, reason: "credits" };
       const holdId = this.#insert(db, {
         account_id: ctx.accountId,
         kind: "hold",
@@ -479,14 +485,16 @@ export class AccountsStore {
       db.prepare("UPDATE ledger SET open = 0 WHERE id = ?").run(holdId);
       const available = Math.max(0, this.#balance(db, accountId));
       const wanted = charge ? charge.amountMicros : holdAmount;
-      const charged = Math.min(wanted, available);
+      // Never more than the hold (review round 1, finding 1), nor than
+      // the balance.
+      const charged = Math.min(wanted, holdAmount, available);
       const usage = charge?.usage ?? { input: 0, cachedInput: 0, output: 0, reasoning: 0 };
       const ctx = { workspace: h.workspace as string, route: h.route as string, turn: (h.turn as string | null) ?? null, model: h.model as string };
       this.#insert(db, {
         account_id: accountId,
         kind: "charge",
         amount: charged,
-        cost: charge ? charge.costMicros : num(h.cost),
+        cost: charge ? Math.min(charge.costMicros, num(h.cost)) : num(h.cost),
         hold_id: holdId,
         ...ctx,
         input: usage.input,
@@ -497,6 +505,7 @@ export class AccountsStore {
         whole_hold: charge ? 0 : 1,
       });
       if (holdAmount > charged) this.#insert(db, { account_id: accountId, kind: "release", amount: holdAmount - charged, hold_id: holdId, ...ctx });
+      this.#collectDue(db, accountId);
       return { charged };
     });
   }
@@ -518,7 +527,31 @@ export class AccountsStore {
         turn: (h.turn as string | null) ?? null,
         model: h.model as string,
       });
+      this.#collectDue(db, String(h.account_id));
     });
+  }
+
+  // What revoked codes still owe the account: their unspent credit that
+  // sat inside open holds when they were revoked.
+  #due(db: DatabaseSync, accountId: string): number {
+    const r = db.prepare("SELECT COALESCE(SUM(revoke_due), 0) AS due FROM judge_codes WHERE account_id = ? AND revoked_at IS NOT NULL").get(accountId) as Row;
+    return num(r.due);
+  }
+
+  // After a hold closes: a revoked code's credit that the hold gave back
+  // leaves the balance. Once no hold is open, nothing more is owed, so the
+  // revoked credit is fully gone.
+  #collectDue(db: DatabaseSync, accountId: string): void {
+    const owed = db.prepare("SELECT id, revoke_due FROM judge_codes WHERE account_id = ? AND revoked_at IS NOT NULL AND revoke_due > 0").all(accountId) as Row[];
+    if (owed.length === 0) return;
+    for (const c of owed) {
+      const take = Math.min(num(c.revoke_due), Math.max(0, this.#balance(db, accountId)));
+      if (take > 0) this.#insert(db, { account_id: accountId, kind: "adjust", amount: -take, source: `judge_revoked:${String(c.id)}` });
+      db.prepare("UPDATE judge_codes SET revoke_due = revoke_due - ? WHERE id = ?").run(take, String(c.id));
+    }
+    if (!db.prepare("SELECT 1 FROM ledger WHERE account_id = ? AND kind = 'hold' AND open = 1").get(accountId)) {
+      db.prepare("UPDATE judge_codes SET revoke_due = 0 WHERE account_id = ? AND revoked_at IS NOT NULL").run(accountId);
+    }
   }
 
   // Holds left open by a process that stopped mid-call are charged in
@@ -555,12 +588,13 @@ export class AccountsStore {
   }
 
   // Every ledger row of an account, oldest first, for tests and the admin.
-  ledger(accountId: string): Array<{ id: number; kind: LedgerKind; amount: number; open: boolean; holdId: number | null; source: string | null }> {
+  ledger(accountId: string): Array<{ id: number; kind: LedgerKind; amount: number; cost: number; open: boolean; holdId: number | null; source: string | null }> {
     return this.#read((db) =>
-      (db.prepare("SELECT id, kind, amount, open, hold_id, source FROM ledger WHERE account_id = ? ORDER BY id").all(accountId) as Row[]).map((r) => ({
+      (db.prepare("SELECT id, kind, amount, cost, open, hold_id, source FROM ledger WHERE account_id = ? ORDER BY id").all(accountId) as Row[]).map((r) => ({
         id: num(r.id),
         kind: r.kind as LedgerKind,
         amount: num(r.amount),
+        cost: num(r.cost),
         open: num(r.open) === 1,
         holdId: r.hold_id === null ? null : num(r.hold_id),
         source: (r.source as string | null) ?? null,
@@ -646,9 +680,14 @@ export class AccountsStore {
       const accountId = String(c.account_id);
       const account = this.#account(db, accountId);
       if (account?.kind === "judge") db.prepare("DELETE FROM sessions WHERE account_id = ?").run(accountId);
+      // The unspent part leaves the balance now. What sits inside open
+      // holds is owed, refused to new holds, and taken as those holds
+      // close (review round 1, finding 2).
       const unspent = num(c.cap) - this.#spent(db, c);
       const take = Math.min(unspent, Math.max(0, this.#balance(db, accountId)));
       if (take > 0) this.#insert(db, { account_id: accountId, kind: "adjust", amount: -take, source: `judge_revoked:${id}` });
+      const open = db.prepare("SELECT 1 FROM ledger WHERE account_id = ? AND kind = 'hold' AND open = 1").get(accountId);
+      if (open && unspent > take) db.prepare("UPDATE judge_codes SET revoke_due = ? WHERE id = ?").run(unspent - take, id);
     });
   }
 

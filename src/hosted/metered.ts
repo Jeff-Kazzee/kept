@@ -20,7 +20,7 @@ import type { TokenUsage } from "../model/request.ts";
 import type { ToolCall, ToolReply } from "../model/responses.ts";
 import { UsageRefusedError, usageScope } from "../model/usage.ts";
 import type { HostedConfig } from "./config.ts";
-import { MAX_OUTPUT_TOKENS, chargeMicros, holdFor, inputTokenBound, modelCostMicros, priceOf } from "./prices.ts";
+import { MAX_OUTPUT_TOKENS, chargeMicros, holdFor, inputTokenBound, modelCostMicros, priceOf, usageBeyondHold } from "./prices.ts";
 import type { AccountsStore } from "./store.ts";
 
 export type MeteredOptions = {
@@ -65,7 +65,9 @@ export class MeteredClient implements LiveClient {
   async #run<T extends { usage: TokenUsage }>(key: string, body: object, maxOutput: number, send: (inner: LiveClient, body: object) => Promise<T>): Promise<T> {
     const { store, config } = this.#o;
     const inner = this.#inner;
-    if (!config.serverKeyOn || inner === null) throw new UsageRefusedError("server_key_off");
+    // J19: no daily cap set means no call.
+    if (!config.serverKeyOn || inner === null || config.dailyCapMicros === null) throw new UsageRefusedError("server_key_off");
+    const dailyCap = config.dailyCapMicros;
     const model = this.#o.model();
     assertAllowedModel(model);
     const price = priceOf(model);
@@ -74,7 +76,13 @@ export class MeteredClient implements LiveClient {
     const asked = (body as { max_output_tokens?: unknown }).max_output_tokens;
     const max = typeof asked === "number" && Number.isSafeInteger(asked) && asked > 0 ? Math.min(asked, maxOutput) : maxOutput;
     const sent = { ...body, model, max_output_tokens: max };
-    const hold = holdFor(price, inputTokenBound(sent), max, config.markupHundredths);
+    const bound = { inputTokens: inputTokenBound(sent), maxOutputTokens: max };
+    const hold = holdFor(price, bound.inputTokens, max, config.markupHundredths);
+    // Hold and charge use the same rule (review round 1, finding 1): a
+    // usage count the hold bounds is charged as reported, and any other is
+    // charged the whole hold. So a charge never exceeds its hold.
+    const charge = (usage: TokenUsage) =>
+      usageBeyondHold(usage, bound) ? null : { usage, amountMicros: chargeMicros(price, usage, config.markupHundredths), costMicros: modelCostMicros(price, usage) };
     const scope = usageScope();
     const turn = turnOf(key);
     if (scope && turn) scope.turn = turn;
@@ -82,7 +90,7 @@ export class MeteredClient implements LiveClient {
       { accountId: this.#o.accountId, workspace: this.#o.workspace, route: scope?.route ?? "other", turn: turn ?? scope?.turn ?? null, model },
       hold.amountMicros,
       hold.costMicros,
-      config.dailyCapMicros,
+      dailyCap,
     );
     if (!result.ok) throw new UsageRefusedError(result.reason === "credits" ? "credits_exhausted" : "daily_cap");
     let reply: T;
@@ -93,7 +101,7 @@ export class MeteredClient implements LiveClient {
       // charges it in full.
       try {
         const usage = err instanceof ModelCallError ? err.usage : null;
-        if (usage) store.settle(result.holdId, { usage, amountMicros: chargeMicros(price, usage, config.markupHundredths), costMicros: modelCostMicros(price, usage) });
+        if (usage) store.settle(result.holdId, charge(usage));
         else if (refusedBeforeRun(err)) store.release(result.holdId);
         else store.settle(result.holdId, null);
       } catch {
@@ -102,10 +110,7 @@ export class MeteredClient implements LiveClient {
       throw err;
     }
     try {
-      // A reply with no input tokens reported cannot be a real count, so the
-      // whole hold is charged.
-      if (reply.usage.input <= 0) store.settle(result.holdId, null);
-      else store.settle(result.holdId, { usage: reply.usage, amountMicros: chargeMicros(price, reply.usage, config.markupHundredths), costMicros: modelCostMicros(price, reply.usage) });
+      store.settle(result.holdId, charge(reply.usage));
     } catch {
       // See above.
     }

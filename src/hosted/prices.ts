@@ -38,12 +38,25 @@ const HUNDRED = 100n;
 
 const ceilDiv = (a: bigint, b: bigint) => (a + b - 1n) / b;
 
-// The tokens a usage report bills as output. The Responses API counts
-// reasoning tokens inside output_tokens. A report whose reasoning count is
-// above its output count is read as counting them apart, and both are
-// billed.
+// The tokens a usage report bills as output: output_tokens, which counts
+// the reasoning tokens inside it (review round 1, finding 1, and the live
+// rows of 2026-10-28: output 67 with reasoning 13, output 62 with 40).
 export function billedOutput(usage: TokenUsage): number {
-  return usage.reasoning > usage.output ? usage.output + usage.reasoning : usage.output;
+  return usage.output;
+}
+
+// A usage report the hold did not bound, so its own count cannot be
+// charged: reasoning above output, output above the call's
+// max_output_tokens, input above the request's byte bound, cached input
+// above input, or no input at all. Such a call is charged the whole hold.
+export function usageBeyondHold(usage: TokenUsage, bound: { inputTokens: number; maxOutputTokens: number }): boolean {
+  return (
+    usage.input <= 0 ||
+    usage.reasoning > usage.output ||
+    usage.output > bound.maxOutputTokens ||
+    usage.input > bound.inputTokens ||
+    usage.cachedInput > usage.input
+  );
 }
 
 // The model's own cost of a call in micro-dollars: what Jeff pays Meta.

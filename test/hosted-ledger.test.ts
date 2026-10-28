@@ -49,7 +49,8 @@ function rng(seed: number) {
 const spark = priceOf("muse-spark-1.3")!;
 const wonder = priceOf("muse-wonder-1.0")!;
 const usage = (input: number, cachedInput: number, output: number, reasoning = 0): TokenUsage => ({ input, cachedInput, output, reasoning });
-const config = (over: Record<string, string> = {}) => readHostedConfig({ APP_MODE: "hosted", ...over });
+// J19: both caps must be set for the server key to be on.
+const config = (over: Record<string, string> = {}) => readHostedConfig({ APP_MODE: "hosted", APP_DAILY_COST_CAP_USD: "20", APP_JUDGE_TOTAL_CAP_USD: "100", ...over });
 
 describe("prices and config", () => {
   it("has the handoff's prices, per million tokens, in micro-dollars", () => {
@@ -67,8 +68,9 @@ describe("prices and config", () => {
     expect(modelCostMicros(spark, usage(0, 0, 1_000_000))).toBe(4_250_000);
     // Reasoning inside output is not counted twice.
     expect(billedOutput(usage(0, 0, 100, 40))).toBe(100);
-    // A report that counts reasoning apart bills both.
-    expect(billedOutput(usage(0, 0, 10, 40))).toBe(50);
+    // Review round 1, finding 1: output_tokens alone. A report with more
+    // reasoning than output is charged the whole hold (metered.ts).
+    expect(billedOutput(usage(0, 0, 10, 40))).toBe(10);
     // One input token of Spark is 1.25 micro-dollars: 2 after rounding up.
     expect(modelCostMicros(spark, usage(1, 0, 0))).toBe(2);
     // Times 3: 3.75 rounds up to 4, once over the whole product.
@@ -106,11 +108,12 @@ describe("prices and config", () => {
   });
 
   it("reads the config with its defaults, and refuses a bad value", () => {
-    expect(config()).toEqual({ mode: "hosted", markupHundredths: 300, dailyCapMicros: 20_000_000, judgeTotalCapMicros: 100_000_000, serverKeyOn: true });
+    expect(config()).toEqual({ mode: "hosted", markupHundredths: 300, dailyCapMicros: 20_000_000, judgeTotalCapMicros: 100_000_000, serverKeyOn: true, trustedProxy: "none", missing: [] });
     expect(readHostedConfig({})).toMatchObject({ mode: "local" });
     expect(config({ APP_MARKUP: "2.5", APP_DAILY_COST_CAP_USD: "7.25", APP_SERVER_KEY: "off" })).toMatchObject({ markupHundredths: 250, dailyCapMicros: 7_250_000, serverKeyOn: false });
-    for (const env of [{ APP_MODE: "cloud" }, { APP_MARKUP: "0.5" }, { APP_MARKUP: "3.001" }, { APP_MARKUP: "1e3" }, { APP_DAILY_COST_CAP_USD: "-1" }, { APP_SERVER_KEY: "maybe" }, { APP_JUDGE_TOTAL_CAP_USD: "lots" }]) {
-      expect(() => readHostedConfig(env), JSON.stringify(env)).toThrow(ConfigError);
+    expect(() => readHostedConfig({ APP_MODE: "cloud" })).toThrow(ConfigError);
+    for (const env of [{ APP_MARKUP: "0.5" }, { APP_MARKUP: "3.001" }, { APP_MARKUP: "1e3" }, { APP_DAILY_COST_CAP_USD: "-1" }, { APP_SERVER_KEY: "maybe" }, { APP_JUDGE_TOTAL_CAP_USD: "lots" }]) {
+      expect(() => config(env), JSON.stringify(env)).toThrow(ConfigError);
     }
     expect(parseUsd("0.000001")).toBe(1);
     expect(parseUsd("0.0000001")).toBeNull();
@@ -157,14 +160,16 @@ describe("the ledger", () => {
     expect(s.hold(ctx(a), 1, 1, CAP)).toEqual({ ok: false, reason: "credits" });
   });
 
-  it("a charge above the hold and the balance is cut to what is there, so the balance stays at zero or more", () => {
+  it("a charge above its hold is cut to the hold, so the balance stays at zero or more", () => {
     const s = newStore();
     const a = account(s);
     s.grant(a, 1_000, "g");
     const h = s.hold(ctx(a), 600, 1, CAP) as { holdId: number };
     s.settle(h.holdId, { usage: usage(1, 0, 1), amountMicros: 5_000, costMicros: 2_000 });
-    expect(s.balance(a)).toBe(0);
-    expect(s.charges(a)[0]!.amountMicros).toBe(1_000);
+    // Review round 1, finding 1: never more than the hold, nor its cost.
+    expect(s.balance(a)).toBe(400);
+    expect(s.charges(a)[0]!.amountMicros).toBe(600);
+    expect(s.ledger(a).find((r) => r.kind === "charge")!.cost).toBe(1);
   });
 
   it("property: random grants, holds, charges, releases and adjustments never leave a negative balance, and the sums are exact", () => {
@@ -252,7 +257,7 @@ describe("the ledger", () => {
       },
     };
     const client = new MeteredClient({ store: s, accountId: a, workspace: a, config: config(), serverKey: "k", model: () => "muse-wonder-1.0", inner });
-    const body = { model: "muse-wonder-1.0", store: false as const, reasoning: { effort: "low" as const }, instructions: "x", input: "y", text: { format: { type: "json_schema" as const, name: "n", schema: {}, strict: false as const } } };
+    const body = { model: "muse-wonder-1.0", store: false as const, reasoning: { effort: "low" as const }, instructions: "x".repeat(2_500), input: "y", text: { format: { type: "json_schema" as const, name: "n", schema: {}, strict: false as const } } };
     const runs = Array.from({ length: 20 }, () => withUsageScope({ route: "extract", turn: null }, () => client.call({ key: "m1", attempt: 1, effort: "low", body })).then(
       () => "ok",
       (e) => (e instanceof UsageRefusedError ? e.code : "other"),
@@ -303,7 +308,7 @@ describe("the ledger", () => {
 });
 
 describe("the metered client", () => {
-  const body = { model: "muse-spark-1.3", store: false as const, reasoning: { effort: "low" as const }, instructions: "x", input: "y", text: { format: { type: "json_schema" as const, name: "n", schema: {}, strict: false as const } } };
+  const body = { model: "muse-spark-1.3", store: false as const, reasoning: { effort: "low" as const }, instructions: "x".repeat(2_500), input: "y", text: { format: { type: "json_schema" as const, name: "n", schema: {}, strict: false as const } } };
   const setup = (inner: Partial<LiveClient>, over: Record<string, string> = {}, grant = 10_000_000) => {
     const s = newStore();
     const a = account(s);
