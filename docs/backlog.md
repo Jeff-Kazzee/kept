@@ -52,7 +52,10 @@ Rules:
 | 10 | Model providers and sign-in | Chat app | Oct 28 | Done, live sign-in open |
 | 11 | Gmail and Google Calendar connection | Chat app | Oct 28 | Done (`23b1dda`), real connect open |
 | 12 | Failure testing and quality | All | Oct 28 to 31 | Next |
-| 13 | Submission build | All | Nov 1 to 4 | Planned |
+| 13 | Accounts, judge access and usage credits | Hosted app | Oct 28 to 30 | Next |
+| 14 | Paid plans with Stripe | Hosted app | Oct 30 to 31 | Planned |
+| 15 | Public hosting through a Cloudflare Tunnel | Hosted app | Nov 1 | Planned |
+| 16 | Submission build | All | Nov 2 to 4 | Planned |
 
 On 2026-10-28 the plan changed to an agent-first app: sprint 8 is the
 agent-first back end and time zone, sprint 9 the polished agent UI
@@ -458,18 +461,52 @@ Branch `sprint/12-failure-testing`. Fix what breaks. No new features.
   connect, and the OpenCode connect test on his laptop.
 - [ ] SP12.9 Milestone: fast-forward `prod` to `dev` with Jeff's approval.
 
-## Sprint 13: submission build
+## Sprint 13: accounts, judge access and usage credits
 
-Branch `sprint/13-submission`.
+Branch `sprint/13-accounts`. Jeff decided on 2026-10-28 (J13 to J17):
+judges use his Meta key through capped access codes, anyone may use Sign
+in with ChatGPT, Meta usage is the paid service, accounts sign in with
+Google, usage is charged at 3 times each model's token cost, and the
+public site runs on this server through a Cloudflare Tunnel.
 
-- [ ] SP13.1 Rehearse and record the three-minute demo.
-- [ ] SP13.2 Review the video and screenshots frame by frame for tokens and
+- [ ] SP13.1 Hosted mode beside local mode. Local mode stays as now, for a
+  judge who runs the app on their own computer.
+- [ ] SP13.2 Accounts through Sign in with Google (name and email only),
+  with server-side sessions.
+- [ ] SP13.3 One case, settings, Google connection and ChatGPT sign-in per
+  account, isolated from every other account. Delete account.
+- [ ] SP13.4 Usage credits: a ledger with grants, holds and charges. Every
+  model call on the server key is priced from its tokens, held before the
+  call and charged after. No balance, no call.
+- [ ] SP13.5 Judge access codes with a cap each, a total cap and an off
+  switch. An admin command creates and lists them.
+- [ ] SP13.6 Usage page: balance, what each turn cost, and the plan.
+
+## Sprint 14: paid plans with Stripe
+
+Branch `sprint/14-billing`. Stripe Checkout for the $20 and $100 plans in
+test mode first, a signed webhook that grants credits once per payment,
+receipts, and a profit check of the price table. Needs Jeff's Stripe
+account.
+
+## Sprint 15: public hosting
+
+Branch `sprint/15-hosting`. A Cloudflare Tunnel from this server to Jeff's
+domain, the host allowlist, the Google redirect URIs on that domain,
+backups, logs and limits. Publishing needs Jeff's approval.
+
+## Sprint 16: submission build
+
+Branch `sprint/16-submission`.
+
+- [ ] SP16.1 Rehearse and record the three-minute demo.
+- [ ] SP16.2 Review the video and screenshots frame by frame for tokens and
   keys.
-- [ ] SP13.3 README for judges: what it does, how to run it, what the model
+- [ ] SP16.3 README for judges: what it does, how to run it, what the model
   does and what code checks, limits.
-- [ ] SP13.4 Security audit of the repository and its history before
+- [ ] SP16.4 Security audit of the repository and its history before
   publication. Checkpoint refs never go to the public repo.
-- [ ] SP13.5 Fast-forward `prod`. Publish only with Jeff's approval. Submit
+- [ ] SP16.5 Fast-forward `prod`. Publish only with Jeff's approval. Submit
   before the deadline.
 
 ## Sprint 10: model providers and sign-in
