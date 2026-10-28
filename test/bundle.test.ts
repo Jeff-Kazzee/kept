@@ -11,8 +11,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { precompress } from "../scripts/precompress.ts";
-import { MOCK_MARKER } from "../ui/chat/mockStream.ts";
 import { fromPackage } from "../src/paths.ts";
+
+// The scripted chat's marker, read from its source rather than imported, so
+// the root typecheck does not compile the UI's files (sprint 8).
+const MOCK_MARKER = /export const MOCK_MARKER = "([^"]+)";/.exec(readFileSync(fromPackage("ui/chat/mockStream.ts"), "utf8"))![1]!;
 
 const BUILD_LIMIT_MS = 60_000;
 const dirs: string[] = [];
