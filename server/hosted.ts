@@ -38,10 +38,10 @@ import { UsageRefusedError, withUsageScope } from "../src/model/usage.ts";
 import { CALLBACK_PATH } from "./auth.ts";
 import { GOOGLE_CALLBACK_PATH, googleRedirectUris } from "./google.ts";
 import { appHosts, hostAllowed } from "./hosts.ts";
-import { apiPreamble, secureRequest } from "./http.ts";
+import { apiPreamble, trustedSecure } from "./http.ts";
 import { API_SECURITY_HEADERS } from "./static.ts";
 import { CHATGPT_HOSTED_TEXT, createWorkspace, send, serveApi, type Workspace } from "./workspace.ts";
-import { WorkspaceBusyError, Workspaces } from "./workspaces.ts";
+import { WorkspaceBusyError, Workspaces, WorkspacesFullError } from "./workspaces.ts";
 
 export type HostedOptions = {
   config: HostedConfig;
@@ -68,6 +68,7 @@ export const CHATGPT_HOSTED_REFUSED_TEXT = "Sign in with ChatGPT is not availabl
 export const RATE_LIMITED_TEXT = "Too many tries from this address. Wait a few minutes and try again.";
 export const SIGNIN_UNAVAILABLE_TEXT = "Sign in with Google is not set up on this site yet. Use a judge code, or try again later.";
 export const ACCOUNT_BUSY_TEXT = "The accounts database is busy just now. Try again in a moment. Nothing was changed.";
+export const SITE_BUSY_TEXT = "This site is busy just now. Try again in a minute. Nothing was saved.";
 export const DELETE_ACCOUNT_BUSY_TEXT = "The assistant is still working on something for this account. Wait for it to finish, then delete the account again. Nothing was deleted.";
 
 // What the usage page calls each route's model calls.
@@ -259,9 +260,16 @@ export function createHostedApp(o: HostedOptions) {
     };
   };
 
-  const sessionOf = (req: IncomingMessage, secure: boolean) => {
-    const token = cookieOf(req.headers.cookie, sessionCookieName(port, secure));
-    return { token, session: store.session(token) };
+  // Both cookie forms, the __Host- one first (final review, finding 3),
+  // so no claimed scheme hides or picks a session. A new session is set in
+  // the form the request's trusted scheme supports.
+  const sessionOf = (req: IncomingMessage) => {
+    for (const secureForm of [true, false]) {
+      const token = cookieOf(req.headers.cookie, sessionCookieName(port, secureForm));
+      const session = store.session(token);
+      if (session) return { token, session };
+    }
+    return { token: null, session: null };
   };
 
   // Review round 1, finding 6: sign-in and sign-out never trust the
@@ -289,7 +297,7 @@ export function createHostedApp(o: HostedOptions) {
   async function accountRoute(req: IncomingMessage, res: ServerResponse, path: string, body: unknown, secure: boolean): Promise<boolean> {
     const method = req.method ?? "GET";
     const address = clientAddress(req.headers, req.socket.remoteAddress, config.trustedProxy);
-    const { session } = sessionOf(req, secure);
+    const { session } = sessionOf(req);
     const only = (m: string) => {
       if (method === m) return true;
       send(res, 405, { error: "method_not_allowed" });
@@ -434,7 +442,7 @@ export function createHostedApp(o: HostedOptions) {
     // Refuse requests addressed to any other host name.
     if (!hostAllowed(allowed, req.headers.host)) return send(res, 403, { error: "forbidden_host" });
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
-    const secure = secureRequest(req);
+    const secure = trustedSecure(req);
     const redirect = (location: string, setCookie?: string[]) => {
       res.writeHead(303, { ...API_SECURITY_HEADERS, Location: location, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", ...(setCookie ? { "Set-Cookie": setCookie } : {}) });
       res.end();
@@ -445,7 +453,13 @@ export function createHostedApp(o: HostedOptions) {
         const q = url.searchParams;
         const clear = [signinCookie(port, true, "", 0), signinCookie(port, false, "", 0)];
         try {
-          const who = await signIn.finish({ state: q.get("state"), code: q.get("code"), error: q.get("error"), cookie: cookieOf(req.headers.cookie, signinCookieName(port, secure)) });
+          const who = await signIn.finish({
+            state: q.get("state"),
+            code: q.get("code"),
+            error: q.get("error"),
+            // Both forms, so a claimed scheme cannot hide the flow's cookie.
+            cookie: [cookieOf(req.headers.cookie, signinCookieName(port, true)), cookieOf(req.headers.cookie, signinCookieName(port, false))],
+          });
           const account = store.googleAccount(who);
           endBoth(req);
           const { token } = store.createSession(account.id);
@@ -461,7 +475,7 @@ export function createHostedApp(o: HostedOptions) {
         // The Gmail and Calendar connection, in the signed-in account's own
         // workspace. The flow it finishes lives there, so a callback in
         // another account's session finds no flow and is refused.
-        const { session } = sessionOf(req, secure);
+        const { session } = sessionOf(req);
         if (!session) return redirect("/?google_error=signed_out");
         const { location, setCookie } = await workspaces.use(session.account.id, (ws) => ws.googleRoutes.callback(url, req.headers.cookie));
         return redirect(location, setCookie);
@@ -471,7 +485,7 @@ export function createHostedApp(o: HostedOptions) {
       const input = await apiPreamble(req, res, allowed.origins);
       if (!input) return;
       if (await accountRoute(req, res, url.pathname, input.body, secure)) return;
-      const { session } = sessionOf(req, secure);
+      const { session } = sessionOf(req);
       if (!session) return send(res, 401, { error: "signed_out", message: SIGNED_OUT_TEXT });
       const accountId = session.account.id;
       await workspaces.use(accountId, async (ws) => {
@@ -486,6 +500,8 @@ export function createHostedApp(o: HostedOptions) {
         return;
       }
       if (err instanceof AccountsBusyError) return send(res, 503, { error: "accounts_busy", retryable: true, message: ACCOUNT_BUSY_TEXT });
+      // Every open workspace is working (final review, finding 2).
+      if (err instanceof WorkspacesFullError) return send(res, 503, { error: "site_busy", retryable: true, message: SITE_BUSY_TEXT });
       // The account is being deleted.
       if (err instanceof WorkspaceBusyError) return send(res, 409, { error: "account_busy", message: DELETE_ACCOUNT_BUSY_TEXT });
       if (err instanceof AccountsFileError) log(err.message);

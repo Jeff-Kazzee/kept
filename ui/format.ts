@@ -118,6 +118,7 @@ const SERVER_SENTENCE_CODES = new Set([
   "confirmation_mismatch",
   "account_busy",
   "accounts_busy",
+  "site_busy",
 ]);
 
 // A failed ChatGPT sign-in comes back to /?signInError=<code> (0010). The

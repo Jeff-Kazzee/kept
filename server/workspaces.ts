@@ -17,7 +17,18 @@ export const MAX_OPEN = 64;
 // the last 10 minutes, or one with a Google connect still open. It grows
 // past MAX_OPEN instead.
 export const RECENT_MS = 10 * 60_000;
+// Final review, finding 2: the cache never holds more than this many
+// times its size. At the ceiling the least recently used workspace with no
+// request running closes, even a recent one or one with a Google connect
+// waiting, which the person can start again. When every one has a request
+// running, a new workspace is refused.
+export const CEILING_FACTOR = 4;
 
+// Every workspace at the ceiling has a request running (final review,
+// finding 2). The site answers 503, and trying again is safe.
+export class WorkspacesFullError extends Error {
+  override name = "WorkspacesFullError";
+}
 export class WorkspaceBusyError extends Error {
   override name = "WorkspaceBusyError";
 }
@@ -60,6 +71,7 @@ export class Workspaces {
       const st = lstatSync(dir);
       if (st.isSymbolicLink() || !st.isDirectory()) throw new Error("the workspace folder is not a folder");
       this.#evict();
+      this.#makeRoom();
       e = { ws: this.#build(accountId, { dbPath: path.join(dir, "app.sqlite"), secretsPath: path.join(dir, "app-secrets.sqlite") }), lastUsed: this.#now(), inFlight: 0, deleting: false };
       this.#open.set(accountId, e);
     }
@@ -94,6 +106,14 @@ export class Workspaces {
       if (!oldest) return;
       this.#close(oldest[0]);
     }
+  }
+
+  #makeRoom(): void {
+    if (this.#open.size < this.#max * CEILING_FACTOR) return;
+    let oldest: [string, Entry] | null = null;
+    for (const kv of this.#open) if (kv[1].inFlight === 0 && !kv[1].deleting && (!oldest || kv[1].lastUsed < oldest[1].lastUsed)) oldest = kv;
+    if (!oldest) throw new WorkspacesFullError("Every open workspace has a request running.");
+    this.#close(oldest[0]);
   }
 
   #close(accountId: string): void {
