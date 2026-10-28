@@ -65,6 +65,11 @@ Additions from review round 1 that 7B uses:
   ("I stopped before finishing. Check the cards above.").
 - A model-worded question that fails the chat checks shows a `notice`
   card (`QUESTION_WITHHELD_NOTICE`) instead of its `question` card.
+- From round 2, a turn that imports a paste also writes one record of the
+  imported lines on the chat stream, so `chatVersion` can rise by more
+  than 2 in a turn. Use `turn.done`'s `chatVersion` and the ids in
+  `turn.started` and `turn.done`. These records are not messages and
+  `GET /api/chat` does not list them.
 
 ## Coordinator decisions
 
@@ -145,7 +150,8 @@ Additions from review round 1 that 7B uses:
   answer's write fail as `stale_edit`.
 - C4. Event order, refused turns and failed turns are as in "The chat
   contract" above.
-- C5. Message ids are `cm<version>`, so a reloaded chat has the same ids.
+- C5. Message ids are `cm<version>` of the event that holds them, so a
+  reloaded chat has the same ids.
   Turn ids are random.
 - C6. One turn at a time per app process. A second turn while one runs
   gets `busy` and writes nothing. The MCP server has no chat, so the
@@ -171,10 +177,12 @@ Additions from review round 1 that 7B uses:
   (`claims_action`). No tool can do any of those, so the claim is false
   whatever the case holds. It gets the same retry and replacement as an
   ungrounded answer. R6 widens it.
-- C9. The retry carries only problem codes, as a user-role item that
-  starts "App check, written by code and not by the person", with
-  `tool_choice: "none"`. Text that is empty, longer than 1,200
-  characters, or still fails is replaced.
+- C9. The retry sends the input of the call that gave the answer, plus
+  one user-role item that starts "App check, written by code and not by
+  the person" and carries only problem codes. Tools and `tool_choice:
+  "auto"` stay as in every other call, and the failed answer is not sent
+  back (E2). A tool call in the retry's output is not run. Text that is
+  empty, longer than 1,200 characters, or still fails is replaced.
 - C10. Clinical model text that fails twice becomes the scope decline,
   stored as a declined message, with `turn.error` `out_of_scope`.
 - C11. A turn stopped by a limit stores the fixed sentence as its text
@@ -348,6 +356,73 @@ value). E1 makes them suggestions that never fail the call.
   come only as `untrusted_text`. State labels in every tool name the
   source without the grant ("reported by you through an agent").
 - R13. See C17.
+
+## Review round 2 and the second live chat eval
+
+The second live eval ($0.40) confirmed E1: every demo paste imported on
+the first call. Clinical asks were declined by code 12 of 12, injection
+held, and no turn changed state without a user action.
+
+- E2. Every answer retry failed live (4 of 4) on its model call. The
+  round 1 retry sent the failed answer's output items (a reasoning item
+  and an assistant message) back and set `tool_choice: "none"`, which no
+  accepted request had done. The retry now sends exactly the input of the
+  call that answered, which the API had just accepted, plus one
+  problem-code message, with the same tools, `tool_choice: "auto"` and
+  include. A failed call records its HTTP status and the API's error type
+  and code (short identifiers only, never the message) in the turn report,
+  the stored answer, the eval's turn detail (`callErrors`, `retried`, and
+  per script `retries`) and one server log line. `toolRequestShapeProblems`
+  in `src/model/responses.ts` states the shape rules of the accepted
+  first-turn request, and the tests check the first-turn body, the retry
+  body and every request of the demo story against them. The coordinator
+  confirms it live.
+- R2-1. An import is refused (`cuts_sentence`) when the line right before
+  it, with no blank line between, does not end a sentence and the import
+  starts lowercase, the line before ends with a negation, auxiliary or
+  joining word, or the import continues a list item. The same rule applies
+  to the line right after it.
+- R2-2. A sender is kept only with an explicit attribution: "from X",
+  "sent by X", "X texted" or "X emailed" (and similar) outside the paste, a
+  `From:` line in the paste, the sender at the start of the paste
+  ("Lantern Hill Clinic: ..."), or the paste's last one to three lines
+  as a signature. The signature form is added beyond the finding, because
+  an email such as m2 names its sender only there.
+- R2-3. A send time comes only from a `Sent:`, `Date:`, `Received:` or
+  `Delivered:` line in the paste, or from the person's own sentence about
+  when it arrived ("this came yesterday at 3", read with the chat's date).
+  An appointment time in the paste is never a send time.
+- R2-4. State synonyms: confirmed (booked, scheduled, all set, locked in,
+  good to go, set for, you're on, on the books), offered (available, open,
+  checked only against a slot its own clause names), requested (awaiting
+  confirmation, waiting for the office), pending (requested or change
+  proposed), canceled (called off, no longer happening), declined (turned
+  down). A status code cannot map (finalized, secured, reserved, sorted,
+  settled, fixed, approved, accepted, held, tentative and others), said of
+  a named slot, fails closed.
+- R2-5. Two negations before a state word fail closed.
+- R2-6. A state word after whether, if, once, unless, in case, until, when
+  or after is not an assertion. A sentence takes the slot of the sentence
+  before only through a pronoun (it, that one, this appointment), and
+  never for "the other appointment".
+- R2-7. A spelled hour becomes a time only with clock context (o'clock,
+  am, pm, in the morning). "At one" at the end of a clause fails closed,
+  "at Two Rivers Clinic" does not. An ordinal before a place or count noun
+  (floor, door, entrance, room, claim and others) is not a day. A number
+  after room, suite, building, unit, floor or number is a place.
+- R2-8. "In May", "May of", "May 2027", "next May" and similar are month
+  mentions and fail closed. "May" as a verb is left alone.
+- R2-9. A sentence that names the building or its rules (damage, leak,
+  service, lobby, waiting room, building, parking and others) passes the
+  diet phrases, unless it also gives preparation timing such as "after
+  midnight" or "before your visit". Tested in notes, agent proposals, a
+  typed report, a reply edit and the chat.
+- R2-10. Imported lines are a `chat_lines_imported` event, written in the
+  same transaction as the import. A turn that imports and then fails still
+  replays the paste as a reference, and when the chat moved on during the
+  turn, neither the message nor its lines are kept.
+- R2-11. Question choice labels go to the nested model call as
+  `untrusted_text`.
 
 ## For Jeff
 
