@@ -84,7 +84,9 @@ export function App() {
         await action();
       } catch (e) {
         if (e instanceof ApiError && e.body.error === "out_of_scope") setNotice(e.body.message ?? null);
-        else if (e instanceof ApiError && PAIRING_ERRORS.has(e.body.error ?? "")) setError(`${e.message} Enter the pairing code, then try again.`);
+        // The server's message says what to do. A wrong code is dropped, so
+        // the pairing form shows again.
+        else if (e instanceof ApiError && PAIRING_ERRORS.has(e.body.error ?? "")) setError(e.body.error === "pairing_failed" ? `${e.message} Enter it again, then try again.` : e.message);
         else if (e instanceof ApiError && e.body.error === "case_deleted") setError("The case was deleted. Nothing was saved. The empty case is loaded.");
         else if (e instanceof ApiError && e.status === 409) setError("This record changed since it was shown. The current version is loaded.");
         else setError(e instanceof Error ? e.message : String(e));
