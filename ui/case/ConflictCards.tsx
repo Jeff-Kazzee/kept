@@ -6,7 +6,7 @@ import type { ConflictKind } from "../../src/slots/types.ts";
 import { api, type AppState } from "../api.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
-import { denverShort } from "../format.ts";
+import { shortTime } from "../format.ts";
 import { ReplyCard } from "./ReplyCard.tsx";
 import { SourceQuote } from "./Source.tsx";
 
@@ -88,7 +88,7 @@ export function QuestionCard({ conflictId, state, run, showDraft = true }: { con
         </>
       ) : conflict.answer ? (
         <p className="small">
-          <Icon name="check" size="sm" /> You answered “{conflict.answer.label}” on {denverShort(conflict.answer.answeredAt)}.
+          <Icon name="check" size="sm" /> You answered “{conflict.answer.label}” on {shortTime(conflict.answer.answeredAt)}.
         </p>
       ) : (
         <>

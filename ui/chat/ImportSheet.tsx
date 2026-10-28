@@ -9,7 +9,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { api, type FixtureScenario } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
-import { DEFAULT_EXTRACTION_EFFORT, denverWallNow, denverWallToIso } from "../format.ts";
+import { DEFAULT_EXTRACTION_EFFORT, getCaseZone, wallNow, wallToIso } from "../format.ts";
 import { MAX_MESSAGE } from "./Composer.tsx";
 
 const CHANNELS: Array<{ value: string; label: string }> = [
@@ -76,8 +76,8 @@ export function ImportSheet({
       if (demo) {
         setChannel(demo.channel);
         setFrom(demo.from);
-        setReceived(denverWallNow(Date.parse(demo.received_at)));
-      } else setReceived(denverWallNow());
+        setReceived(wallNow(Date.parse(demo.received_at)));
+      } else setReceived(wallNow());
       if (!dialog.open) dialog.showModal();
       // The sender is the one field never prefilled.
       fromRef.current?.focus();
@@ -85,7 +85,7 @@ export function ImportSheet({
     // Runs when the sheet opens. The fixtures are read at that moment.
   }, [request]);
 
-  const receivedAt = denverWallToIso(received);
+  const receivedAt = wallToIso(received);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!receivedAt) return;
@@ -117,7 +117,7 @@ export function ImportSheet({
           </button>
         </div>
         <p className="small muted">
-          The message goes into your case as a message from the office, not through the chat. The app reads it, and you accept each fact it finds before it counts.
+          The message goes into your case as a message from the office, not through the chat. The app reads it and lists the facts it finds, each with Undo.
         </p>
         <label className="field" htmlFor={`${uid}-channel`}>
           <span>How it came</span>
@@ -134,7 +134,7 @@ export function ImportSheet({
           <input ref={fromRef} id={`${uid}-from`} name="import-from" className="input" value={from} onChange={(e) => setFrom(e.target.value)} required maxLength={200} placeholder="For example, Lantern Hill Clinic" />
         </label>
         <label className="field" htmlFor={`${uid}-received`}>
-          <span>Received (America/Denver time)</span>
+          <span>{`Received (${getCaseZone()} time)`}</span>
           <input id={`${uid}-received`} name="import-received" className="input" type="datetime-local" value={received} onChange={(e) => setReceived(e.target.value)} required />
         </label>
         <label className="field" htmlFor={`${uid}-text`}>

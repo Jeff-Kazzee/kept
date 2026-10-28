@@ -1,21 +1,27 @@
-// The chat column: the thread, the streamed turn and the composer.
-// Assistant text is model output and is labeled so, quietly and the same way
-// every time. The scripted chat (?mockchat=1) labels its text as scripted.
-// Every card renders from the live case view.
+// The chat column: a centered thread, the streamed turn and the floating
+// composer. Assistant text is plain text on the page, labeled as model
+// output quietly and the same way every time. The scripted chat
+// (?mockchat=1) labels its text as scripted. Tool activity shows as quiet
+// lines while a turn runs and folds into one line when it ends. What the
+// agent did shows as receipts with Undo. Every card renders from the live
+// case view.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
 import type { AppState, FixtureScenario } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
-import { denverShort } from "../format.ts";
+import { entriesById, useAgent } from "../agent/AgentContext.tsx";
+import { ModelPicker } from "../agent/ModelPicker.tsx";
+import { Receipts } from "../agent/Receipts.tsx";
+import { shortTime } from "../format.ts";
 import { ClaimsCard } from "../case/ClaimsCard.tsx";
 import { ExplanationCard, QuestionCard } from "../case/ConflictCards.tsx";
-import { ProposalCard } from "../case/ProposalCard.tsx";
 import { ReplyCard } from "../case/ReplyCard.tsx";
+import type { ActivityEntry } from "../contract.ts";
 import { Composer } from "./Composer.tsx";
 import { DEMO_IDS, nextDemoMessage } from "./demo.ts";
 import { ImportSheet, type ImportRequest } from "./ImportSheet.tsx";
-import { turnLost, type ChatState, type PendingTurn } from "./state.ts";
+import { turnLost, type ChatState, type PendingTurn, type ToolLine } from "./state.ts";
 import type { Card, ChatMessage, FactChip } from "./types.ts";
 
 export type ChatViewProps = {
@@ -29,10 +35,12 @@ export type ChatViewProps = {
   onLoadCalendar: (file: File) => Promise<void>;
   onLoadDemo: () => Promise<FixtureScenario["messages"][number] | null>;
   fixtures: FixtureScenario["messages"];
+  // What answers when no provider is set, such as "Recorded responses".
+  modelLabel?: string | null;
 };
 
 export function ChatView(props: ChatViewProps) {
-  const { state, run, chat, streaming, scripted, send, onShowSlot, onLoadCalendar, onLoadDemo, fixtures } = props;
+  const { state, run, chat, streaming, scripted, send, onShowSlot, onLoadCalendar, onLoadDemo, fixtures, modelLabel = null } = props;
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
@@ -101,11 +109,13 @@ export function ChatView(props: ChatViewProps) {
         }}
       >
         <div className="thread-inner">
+          {/* Card headings in the thread are h3, so the thread has its h2. */}
+          {!empty && <h2 className="sr-only">Conversation</h2>}
           {empty && (
             <Welcome
               unavailable={unavailable}
               onPaste={() => fill("")}
-              onAsk={() => void submit("What is confirmed?")}
+              onAsk={(q) => void submit(q)}
               onDemo={async () => {
                 const first = await onLoadDemo();
                 if (first) fill(first.text);
@@ -122,6 +132,7 @@ export function ChatView(props: ChatViewProps) {
                 state={state}
                 run={run}
                 scripted={scripted}
+                tools={chat.toolsByMessage[m.id]}
                 onShowSlot={onShowSlot}
                 onImport={offersImport(m, userTextBefore(chat, i)) ? () => openImport(m.declined ? declinedOriginal(chat, i) : userTextBefore(chat, i)) : undefined}
               />
@@ -157,8 +168,9 @@ export function ChatView(props: ChatViewProps) {
             onAddOfficeMessage={() => {
               openImport(draft);
             }}
+            model={<ModelPicker fallback={modelLabel ?? "Recorded responses"} scripted={scripted} />}
           />
-          <p className="composer-hint">Enter sends. Shift+Enter adds a line. Pasted messages keep their lines.</p>
+          <p className="composer-hint">Enter sends. Shift+Enter adds a line. The assistant acts on your case, and every action has Undo.</p>
         </div>
       </div>
       <ImportSheet
@@ -181,34 +193,47 @@ export function ChatView(props: ChatViewProps) {
   );
 }
 
-function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean; onPaste: () => void; onAsk: () => void; onDemo: () => void }) {
+export const STARTERS = ["What is confirmed?", "What should I bring?"];
+
+function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean; onPaste: () => void; onAsk: (q: string) => void; onDemo: () => void }) {
   return (
     <div className="welcome">
-      <h2>Keep track of appointment changes</h2>
-      <p>
-        Paste a message from the office. The assistant reads the times, places and requests in it, and you accept each fact before it counts. Your schedule stays beside the chat, or one tap away on a phone.
-      </p>
+      <span className="welcome-mark" aria-hidden="true">
+        <Icon name="calendar" />
+      </span>
+      <h2>What changed with your appointments?</h2>
+      <p>Paste a message from the office. The assistant reads it, keeps your schedule up to date and shows you each thing it did, with Undo.</p>
       {unavailable ? (
         <p className="notice">
           <Icon name="info" />
           <span>
-            The chat is not available in this build yet. Your schedule works as usual, and Add an office message in the box below adds a message from the office.
+            The chat is not available in this build yet. Your schedule works as usual, and the attach button below adds a message from the office.
             {/* Only a development build has the scripted chat (App.tsx). */}
             {import.meta.env.DEV && " To try the scripted chat, open this page with ?mockchat=1 at the end of the address."}
           </span>
         </p>
       ) : (
-        <div className="chips" aria-label="Ways to start">
-          <button type="button" className="chip" onClick={onPaste}>
-            <Icon name="message" size="sm" /> Paste a message from the office
-          </button>
-          <button type="button" className="chip" onClick={onAsk}>
-            <Icon name="check" size="sm" /> What is confirmed?
-          </button>
-          <button type="button" className="chip" onClick={onDemo}>
-            <Icon name="sparkle" size="sm" /> Load the demo
-          </button>
-        </div>
+        <>
+          <div className="chips chips-center" aria-label="Ways to start">
+            <button type="button" className="chip" onClick={onPaste}>
+              <Icon name="message" size="sm" /> Paste a message from the office
+            </button>
+            {STARTERS.map((q) => (
+              <button key={q} type="button" className="chip" onClick={() => onAsk(q)}>
+                <Icon name={q.includes("bring") ? "checklist" : "check"} size="sm" /> {q}
+              </button>
+            ))}
+          </div>
+          <div className="demo-offer">
+            <div className="stack-xs">
+              <strong>New here?</strong>
+              <span className="small muted">Try the demo: a synthetic case with four messages from Lantern Hill Clinic and a calendar.</span>
+            </div>
+            <button type="button" className="btn btn-primary" onClick={onDemo}>
+              <Icon name="sparkle" size="sm" /> Try the demo
+            </button>
+          </div>
+        </>
       )}
     </div>
   );
@@ -217,10 +242,12 @@ function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean
 function AssistantHead({ scripted, at }: { scripted: boolean; at?: string }) {
   return (
     <div className="msg-meta">
-      <Icon name="sparkle" size="sm" />
-      <span>Assistant</span>
+      <span className="avatar" aria-hidden="true">
+        <Icon name="sparkle" size="sm" />
+      </span>
+      <span className="msg-who">Assistant</span>
       <span className="model-tag">{scripted ? "Scripted demo reply, not a model" : "Model output"}</span>
-      {at && <time dateTime={at}>{denverShort(at)}</time>}
+      {at && <time dateTime={at}>{shortTime(at)}</time>}
     </div>
   );
 }
@@ -230,8 +257,8 @@ function UserBubble({ text, at }: { text: string; at: string }) {
     <div className="msg msg-user">
       <div className="bubble">{text}</div>
       <div className="msg-meta">
-        <span>You</span>
-        <time dateTime={at}>{denverShort(at)}</time>
+        <span className="sr-only">You</span>
+        <time dateTime={at}>{shortTime(at)}</time>
       </div>
     </div>
   );
@@ -267,8 +294,10 @@ function ImportedItem({ messageId, state, run }: { messageId: string; state: App
   return (
     <article className="msg msg-assistant" aria-label="Office message you added">
       <div className="msg-meta">
-        <Icon name="message" size="sm" />
-        <span>You added an office message</span>
+        <span className="avatar avatar-you" aria-hidden="true">
+          <Icon name="message" size="sm" />
+        </span>
+        <span className="msg-who">You added an office message</span>
       </div>
       <ClaimsCard messageId={messageId} evidenceIds={[]} state={state} run={run} />
     </article>
@@ -287,6 +316,7 @@ function Extras({
   fresh = false,
   cards,
   chips,
+  actions,
   state,
   run,
   onShowSlot,
@@ -295,12 +325,17 @@ function Extras({
   fresh?: boolean;
   cards: Card[];
   chips: FactChip[];
+  actions: ActivityEntry[];
   state: AppState;
   run: Run;
   onShowSlot: (k: string, from?: HTMLElement) => void;
 }): ReactNode {
+  // A claims card shows its own receipt, so its facts are not repeated
+  // as a second one.
+  const withCard = new Set(cards.flatMap((c) => (c.kind === "claims" ? [c.messageId] : [])));
   return (
     <>
+      <Receipts entries={actions} state={state} skipMessages={withCard} />
       {chips.length > 0 && (
         <div className="chips" aria-label="Facts from your schedule">
           {chips.map((c, i) => {
@@ -333,6 +368,7 @@ function MessageItem({
   state,
   run,
   scripted,
+  tools,
   onShowSlot,
   onImport,
 }: {
@@ -340,9 +376,11 @@ function MessageItem({
   state: AppState;
   run: Run;
   scripted: boolean;
+  tools?: ToolLine[];
   onShowSlot: (k: string, from?: HTMLElement) => void;
   onImport?: () => void;
 }) {
+  const { activity } = useAgent();
   if (m.role === "user") return <UserBubble text={m.text} at={m.createdAt} />;
   return (
     <article className="msg msg-assistant" aria-label="Assistant">
@@ -353,10 +391,11 @@ function MessageItem({
       ) : (
         <>
           <AssistantHead scripted={scripted} at={m.createdAt} />
+          {tools && <ToolSummary tools={tools} />}
           {m.text && <p className="assistant-text">{m.text}</p>}
         </>
       )}
-      <Extras messageId={m.id} cards={m.cards} chips={m.chips} state={state} run={run} onShowSlot={onShowSlot} />
+      <Extras messageId={m.id} cards={m.cards} chips={m.chips} actions={entriesById(activity, m.actions ?? [])} state={state} run={run} onShowSlot={onShowSlot} />
     </article>
   );
 }
@@ -393,15 +432,7 @@ function PendingItem({
         ) : (
           <>
             {codeText === null && <AssistantHead scripted={scripted} />}
-            {turn.tools.map((t) => (
-              <div key={t.callId} className="tool-line">
-                {t.ok === null ? <span className="spinner" aria-hidden="true" /> : t.ok ? <Icon name="check" size="sm" /> : <Icon name="alert" size="sm" />}
-                <span>
-                  {t.label}
-                  {t.ok === false && ". It did not finish."}
-                </span>
-              </div>
-            ))}
+            {turn.status === "streaming" ? <ToolLines tools={turn.tools} /> : <ToolSummary tools={turn.tools} />}
             {codeText !== null ? (
               <CodeNotice text={codeText} onImport={offerImport ? onImport : undefined} />
             ) : turn.text ? (
@@ -417,7 +448,7 @@ function PendingItem({
             )}
           </>
         )}
-        <Extras messageId={PENDING_MESSAGE} fresh cards={turn.cards} chips={turn.chips} state={state} run={run} onShowSlot={onShowSlot} />
+        <Extras messageId={PENDING_MESSAGE} fresh cards={turn.cards} chips={turn.chips} actions={turn.actions} state={state} run={run} onShowSlot={onShowSlot} />
         {err && err.code !== "out_of_scope" && !fixed && (
           <div className="turn-error" role="alert">
             <Icon name="alert" />
@@ -429,6 +460,40 @@ function PendingItem({
         )}
       </article>
     </>
+  );
+}
+
+function ToolLines({ tools }: { tools: ToolLine[] }) {
+  if (tools.length === 0) return null;
+  return (
+    <ul className="tool-lines">
+      {tools.map((t) => (
+        <li key={t.callId} className={`tool-line${t.ok === false ? " is-failed" : ""}`}>
+          {t.ok === null ? <span className="spinner" aria-hidden="true" /> : t.ok ? <Icon name="check" size="sm" /> : <Icon name="alert" size="sm" />}
+          <span>
+            {t.label}
+            {t.ok === false && ". It did not finish."}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// A finished turn's tool lines, folded into one line that opens them.
+export function toolSummaryText(tools: ToolLine[]): string {
+  const failed = tools.filter((t) => t.ok === false).length;
+  const steps = `${tools.length} step${tools.length === 1 ? "" : "s"}`;
+  return failed > 0 ? `Worked through ${steps}, ${failed} did not finish` : `Worked through ${steps}`;
+}
+
+function ToolSummary({ tools }: { tools: ToolLine[] }) {
+  if (tools.length === 0) return null;
+  return (
+    <details className="tool-summary">
+      <summary className="small">{toolSummaryText(tools)}</summary>
+      <ToolLines tools={tools} />
+    </details>
   );
 }
 
@@ -466,9 +531,9 @@ function CodeNotice({ text, at, onImport }: { text: string; at?: string; onImpor
       <Icon name="info" />
       <div className="stack-sm">
         <div className="msg-meta">
-          <span>Assistant</span>
+          <span className="msg-who">Assistant</span>
           <span className="model-tag">Written by code</span>
-          {at && <time dateTime={at}>{denverShort(at)}</time>}
+          {at && <time dateTime={at}>{shortTime(at)}</time>}
         </div>
         <p>{text}</p>
         <ImportOffer onImport={onImport} />
@@ -518,16 +583,14 @@ export function CardView({ card, state, run, fresh = false }: { card: Card; stat
       return <ExplanationCard conflictId={card.conflictId} state={state} run={run} />;
     case "reply":
       return <ReplyCard draftId={card.draftId} state={state} run={run} />;
-    case "proposal": {
-      const p = state.proposals.find((x) => x.id === card.proposalId);
-      return p ? (
-        <ProposalCard proposal={p} records={state.records} run={run} />
-      ) : (
-        <div className="card">
-          <p className="small muted">This proposal is no longer in the case.</p>
+    case "proposal":
+      // Agents act directly now. A proposal card from an older chat has
+      // nothing left to act on.
+      return (
+        <div className="card card-quiet">
+          <p className="small muted">Agent proposals are gone. Agents act directly, and the Activity tab lists every action with Undo.</p>
         </div>
       );
-    }
     case "notice":
       return (
         <div className="notice" role="note">

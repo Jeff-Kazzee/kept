@@ -1,15 +1,23 @@
-// A scripted chat for UI work and tests until the case agent's chat route
-// lands (sprint 7A). It follows the chat contract: the same events in the
-// same order (0007, C4), the same cards and the same stored messages. It calls no model. Its replies are
-// written by code from the live case, and it changes the case only through
-// the existing routes (import and read a message, explain, ask), as the
-// agent's tools would. Turn it on in the browser with ?mockchat=1.
+// A scripted chat for UI work and tests. It follows the chat contract: the
+// same events in the same order (0007, C4), the same cards and the same
+// stored messages, plus the sprint 8 action event. It calls no model. Its
+// replies are written by code from the live case. It acts as the
+// agent-first back end will: it imports and reads a message, accepts its
+// facts, and for the demo sets the time zone. It changes the case only
+// through the existing routes (import, read, accept, explain, ask), and
+// records each action in the fake activity (../dev/fakeBackend.ts). Turn
+// it on in the browser with ?mockchat=1.
 //
 // The chat is kept in this tab's sessionStorage, so a reload keeps it.
 // Closing the tab or Delete case clears it.
 import { WITHHELD_USER_TEXT } from "../../src/agent/types.ts";
 import { SCOPE_DECLINE, hasClinicalContent } from "../../src/domain/scope.ts";
+import { slotLabel } from "../../src/slots/labels.ts";
 import type { AppState, FixtureScenario, MessageView } from "../api.ts";
+import { DEFAULT_ZONE, GMAIL_IMPORTED, type ActivityEntry } from "../contract.ts";
+import type { FakeBackend } from "../dev/fakeBackend.ts";
+import { claimWord } from "../format.ts";
+import { DEMO_IDS } from "./demo.ts";
 import type { Card, ChatErrorCode, ChatEvent, ChatLog, ChatMessage, ChatTransport, FactChip } from "./types.ts";
 
 // The parts of the page's API the mock uses.
@@ -18,11 +26,16 @@ export type MockApi = {
   fixtures(): Promise<FixtureScenario[]>;
   addMessage(m: { id?: string; channel: string; from: string; received_at: string; text: string }): Promise<MessageView>;
   extract(id: string, effort: "minimal" | "low", expectedVersion: number): Promise<unknown>;
+  accept(id: string, expectedVersion: number): Promise<unknown>;
   explain(conflictId: string, expectedVersion: number): Promise<unknown>;
   nextQuestion(expectedVersion: number): Promise<unknown>;
 };
 
-export type MockOptions = { api: MockApi; now?: () => string; delayMs?: number; storage?: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null };
+// The fake activity and settings. Without them the mock still reads and
+// accepts facts, and records nothing.
+export type MockAgent = Pick<FakeBackend, "record" | "agentSetTimezone" | "agentAddEvent" | "agentRemoveEvent" | "hasEvent" | "googleNow">;
+
+export type MockOptions = { api: MockApi; now?: () => string; delayMs?: number; storage?: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null; agent?: MockAgent | null };
 
 // Also the marker test/bundle.test.ts looks for: it must not be in the
 // production bundle.
@@ -34,9 +47,10 @@ const STORE_KEY = MOCK_MARKER;
 const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
 // Which script a message runs. Exported for tests.
-export function intentOf(text: string): "message" | "status" | "conflict" | "reply" | "checklist" | "help" {
+export function intentOf(text: string): "message" | "gmail" | "status" | "conflict" | "reply" | "checklist" | "help" {
   const t = text.trim();
   if (t.includes("\n") || t.length >= 90) return "message";
+  if (/\b(e-?mail|gmail|inbox)\b/i.test(t)) return "gmail";
   if (/\b(bring|checklist|to do)\b/i.test(t)) return "checklist";
   if (/\b(reply|draft|answer the office)\b/i.test(t)) return "reply";
   if (/\b(conflict|change|should i|next step|decide|question|move[ds]?)\b/i.test(t)) return "conflict";
@@ -44,7 +58,7 @@ export function intentOf(text: string): "message" | "status" | "conflict" | "rep
   return "help";
 }
 
-export function createMockTransport({ api, now = () => new Date().toISOString(), delayMs = 18, storage = null }: MockOptions): ChatTransport & { reset(): void } {
+export function createMockTransport({ api, now = () => new Date().toISOString(), delayMs = 18, storage = null, agent = null }: MockOptions): ChatTransport & { reset(): void } {
   type Saved = { log: ChatLog; generation: number | null; seq: number };
   let saved: Saved | null = null;
   try {
@@ -91,6 +105,12 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
       emit({ event: "turn.started", data: { turnId, userMessageId } });
       // The answer's text is held until the end, then sent in pieces of
       // about 80 characters, as the agent sends checked text (0007, C1).
+      const actions: string[] = [];
+      const act = (entry: ActivityEntry | null | undefined) => {
+        if (!entry) return;
+        actions.push(entry.id);
+        emit({ event: "action", data: { turnId, entry } });
+      };
       const finish = async (answer: ChatMessage, userText: string, code?: { code: ChatErrorCode; message: string }) => {
         if (answer.chips.length > 0) emit({ event: "facts", data: { turnId, chips: answer.chips } });
         for (const piece of answer.text.match(/[\s\S]{1,80}(\s|$)|[\s\S]{1,80}/g) ?? []) {
@@ -136,46 +156,104 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
         }
       };
 
+      // Imports a message (or finds it already in the case), reads it and
+      // accepts its facts, as the agent-first back end does. A demo
+      // message sets the time zone to the clinic's. Each step is an action
+      // with its activity entry.
+      const takeIn = async (m: { id?: string; channel: string; from: string; received_at: string; text: string }, fixture: boolean, viaGmail = false): Promise<{ words: string } | null> => {
+        const before = await api.state();
+        const already = m.id !== undefined && before.messages.some((x) => x.id === m.id);
+        const view = await tool("read_message", "Reading the message", async () => {
+          let id = m.id ?? null;
+          if (!already) {
+            const imported = await api.addMessage(m);
+            await api.extract(imported.id, "minimal", imported.version).catch(() => undefined);
+            id = imported.id;
+          }
+          const found = (await api.state()).messages.find((x) => x.id === id);
+          if (!found) throw new Error("not imported");
+          // Cards come between their tool's start and finish (0007, C4).
+          if (already) card({ kind: "claims", messageId: found.id, evidenceIds: found.evidenceIds });
+          return found;
+        });
+        if (!view) return null;
+        if (already) return { words: `This message from ${view.message.from} is already in your case. Its facts are below.` };
+        if (viaGmail) act(agent?.record({ actor: "agent", kind: GMAIL_IMPORTED, summary: `Imported a message from ${view.message.from} found in Gmail.`, target: { type: "message", id: view.id }, undoable: false }));
+        if (fixture && m.id !== undefined && DEMO_IDS.includes(m.id)) {
+          act(agent?.agentSetTimezone(DEFAULT_ZONE, `Set the time zone to ${DEFAULT_ZONE}, where ${view.message.from} is, for the demo.`));
+        }
+        let accepted = 0;
+        await tool("accept_facts", "Checking each fact against the message", async () => {
+          const st = await api.state();
+          for (const e of st.evidence.filter((x) => x.messageId === view.id && x.status === "pending")) {
+            await api.accept(e.id, e.version);
+            accepted++;
+            const c = e.claim;
+            const what = claimWord(c.claim_type).toLowerCase();
+            const summary = c.slot.date ? `Accepted the ${what} for ${slotLabel(c.slot.date, c.slot.time)} from ${view.message.from}.` : `Accepted an ${what} from ${view.message.from}.`;
+            act(agent?.record({ actor: "agent", kind: "claim_accepted", summary, target: { type: "claim", id: e.id }, undoable: true }));
+          }
+          card({ kind: "claims", messageId: view.id, evidenceIds: view.evidenceIds });
+        });
+        // With Google Calendar connected, a confirmed appointment goes on
+        // it, and one that is no longer confirmed comes off.
+        if (agent?.googleNow().calendar) {
+          const st = await api.state();
+          // A confirmed time with a change proposed still holds, so it stays.
+          const holds = (state: string) => state === "confirmed" || state === "change_proposed";
+          const confirmed = st.case.slots.filter((x) => x.state === "confirmed" && !agent.hasEvent(x.key));
+          const stale = st.case.slots.filter((x) => !holds(x.state) && agent.hasEvent(x.key));
+          if (confirmed.length + stale.length > 0) {
+            await tool("update_calendar", "Updating your Google Calendar", async () => {
+              for (const x of confirmed) act(agent.agentAddEvent(x.key, `Added ${x.label} with ${view.message.from} to Google Calendar.`));
+              for (const x of stale) act(agent.agentRemoveEvent(x.key, `Removed ${x.label} from Google Calendar, because it is ${x.state === "canceled" ? "canceled" : "no longer confirmed"}.`));
+            });
+          }
+        }
+        const n = view.evidenceIds.length;
+        return {
+          words:
+            n === 0
+              ? view.status === "manual_entry_needed"
+                ? "I could not read facts from this message. You can enter them by hand below."
+                : "I read the message. It has no appointment facts."
+              : `I read the message from ${view.message.from} and accepted ${accepted} fact${accepted === 1 ? "" : "s"}. Each one is below with its quote and Undo.`,
+        };
+      };
+
       switch (intentOf(text)) {
         case "message": {
           fixtures ??= (await api.fixtures()).flatMap((s) => s.messages);
           const match = fixtures.find((m) => m.text.trim() === text.trim());
-          const before = await api.state();
-          const already = match !== undefined && before.messages.some((m) => m.id === match.id);
-          const view = await tool("read_message", "Reading the message", async () => {
-            let id = match?.id ?? null;
-            if (!already) {
-              const imported = await api.addMessage(match ?? { channel: "sms", from: "Pasted message", received_at: now(), text });
-              await api.extract(imported.id, "minimal", imported.version).catch(() => undefined);
-              id = imported.id;
-            }
-            const found = (await api.state()).messages.find((m) => m.id === id);
-            if (!found) throw new Error("not imported");
-            card({ kind: "claims", messageId: found.id, evidenceIds: found.evidenceIds });
-            return found;
-          });
-          if (!view) {
+          const outcome = await takeIn(match ?? { channel: "sms", from: "Pasted message", received_at: now(), text }, match !== undefined);
+          if (!outcome) {
             say("I could not add that message to your case. Nothing was saved.");
             break;
           }
-          const n = view.evidenceIds.length;
-          say(
-            already
-              ? `This message from ${view.message.from} is already in your case. Its facts are below.`
-              : n === 0
-                ? view.status === "manual_entry_needed"
-                  ? "I could not read facts from this message. You can enter them by hand below."
-                  : "I read the message. It has no appointment facts."
-                : `I read the message from ${view.message.from} and found ${n} fact${n === 1 ? "" : "s"}. Review each one below. Nothing counts until you accept it.`,
-          );
+          say(outcome.words);
+          break;
+        }
+        case "gmail": {
+          const google = agent?.googleNow();
+          if (!google?.gmail) {
+            say("Gmail is not connected. Connect Google in Settings, and I can search your email for messages about appointments.");
+            break;
+          }
+          fixtures ??= (await api.fixtures()).flatMap((s) => s.messages);
+          const st = await api.state();
+          const have = new Set(st.messages.map((m) => m.id));
+          const next = fixtures.find((m) => DEMO_IDS.includes(m.id) && !have.has(m.id) && m.channel === "email") ?? fixtures.find((m) => DEMO_IDS.includes(m.id) && !have.has(m.id));
+          const found = await tool("search_gmail", "Searching Gmail for appointment messages", async () => next ?? null);
+          if (!found) {
+            say("I found no new appointment messages in Gmail.");
+            break;
+          }
+          const outcome = await takeIn(found, true, true);
+          say(outcome ? `I found this message in Gmail. ${outcome.words}` : "I could not add the message from Gmail. Nothing was saved.");
           break;
         }
         case "status": {
-          const st = await tool("list_appointments", "Reading your schedule", async () => {
-            const s = await api.state();
-            for (const p of s.proposals.filter((x) => x.status === "pending")) card({ kind: "proposal", proposalId: p.id });
-            return s;
-          });
+          const st = await tool("list_appointments", "Reading your schedule", () => api.state());
           if (!st) {
             say("I could not read your schedule. Nothing was saved.");
             break;
@@ -192,7 +270,6 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
               ? "Nothing is confirmed yet. Each time the office mentioned is below with its state."
               : `Confirmed: ${held.map((s) => s.label).join(" and ")}. Each time is below with its state and source. Tap one to see it in your schedule.`,
           );
-          if (cards.length > 0) say(`An agent proposed ${cards.length === 1 ? "a change" : `${cards.length} changes`}. ${cards.length === 1 ? "It waits" : "They wait"} for you below.`);
           chips.push(...slots.map((s) => ({ slotKey: s.key, label: s.label, stateLabel: s.stateLabel, evidenceIds: s.evidenceIds })));
           break;
         }
@@ -239,12 +316,12 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
         }
         case "help":
           say(
-            "I can read a message you paste from the office, tell you what is confirmed, and walk you through a change the office proposed. This is the scripted chat, so I only follow those paths.",
+            "I can read a message you paste from the office, keep your schedule up to date, search Gmail when Google is connected, and walk you through a change the office proposed. This is the scripted chat, so I only follow those paths.",
           );
           break;
       }
 
-      await finish({ id: nextId("msg"), role: "assistant", text: said, createdAt: now(), cards, chips }, text);
+      await finish({ id: nextId("msg"), role: "assistant", text: said, createdAt: now(), cards, chips, ...(actions.length > 0 ? { actions } : {}) }, text);
     },
   };
 }

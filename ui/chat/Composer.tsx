@@ -1,8 +1,11 @@
-// The message box. Enter sends and Shift+Enter adds a line. A pasted
-// message keeps its lines. The calendar button loads a .ics file through
-// the existing calendar route.
-import { useEffect, useRef, useState, type RefObject } from "react";
+// The message box: a large rounded field that floats at the bottom. Enter
+// sends and Shift+Enter adds a line. A pasted message keeps its lines. The
+// attach button offers a calendar file (the existing calendar route) or an
+// office message (the import sheet). The pill names what powers the
+// assistant and opens Settings.
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Icon } from "../components/Icon.tsx";
+import { useMenu } from "../components/Menu.tsx";
 
 export const MAX_MESSAGE = 20000;
 export const MAX_ROWS = 8;
@@ -34,6 +37,7 @@ export function Composer({
   inputRef,
   onLoadCalendar,
   onAddOfficeMessage,
+  model = null,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -43,8 +47,12 @@ export function Composer({
   inputRef: RefObject<HTMLTextAreaElement | null>;
   onLoadCalendar: (file: File) => Promise<void>;
   onAddOfficeMessage: () => void;
+  // The model and provider indicator with its picker.
+  model?: ReactNode;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const menuId = useId();
+  const attach = useMenu();
   // The box's width, read (never written) when it changes size.
   const [perLine, setPerLine] = useState(Number.POSITIVE_INFINITY);
   useEffect(() => {
@@ -80,12 +88,6 @@ export function Composer({
           if (file) await onLoadCalendar(file);
         }}
       />
-      <button type="button" className="btn btn-ghost btn-icon" onClick={() => fileRef.current?.click()} aria-label="Load a calendar file (.ics)" title="Load a calendar file (.ics)">
-        <Icon name="calendarPlus" />
-      </button>
-      <button type="button" className="btn btn-ghost btn-icon" onClick={onAddOfficeMessage} aria-label="Add an office message" title="Add an office message">
-        <Icon name="messagePlus" />
-      </button>
       <label htmlFor="chat-input" className="sr-only">
         Message
       </label>
@@ -97,7 +99,7 @@ export function Composer({
         value={value}
         maxLength={MAX_MESSAGE}
         disabled={disabled}
-        placeholder={disabled ? "The chat is not available" : "Ask or paste a message"}
+        placeholder={disabled ? "The chat is not available" : "Ask about your appointments, or paste a message from the office"}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -106,9 +108,42 @@ export function Composer({
           }
         }}
       />
-      <button type="submit" className="btn btn-primary btn-icon" disabled={disabled || busy || value.trim() === ""} aria-label="Send">
-        <Icon name="send" />
-      </button>
+      <div className="composer-bar">
+        <div className="attach">
+          <button
+            ref={attach.buttonRef}
+            type="button"
+            className="btn btn-ghost btn-icon btn-round"
+            aria-label="Attach a calendar file or an office message"
+            title="Attach"
+            aria-expanded={attach.open}
+            aria-controls={menuId}
+            onClick={() => attach.setOpen((m) => !m)}
+          >
+            <Icon name="plus" />
+          </button>
+          <div ref={attach.menuRef} id={menuId} className="menu" hidden={!attach.open}>
+            <button type="button" className="menu-item" onClick={() => attach.choose(() => fileRef.current?.click())} aria-label="Load a calendar file (.ics)">
+              <Icon name="calendarPlus" />
+              <span>
+                Calendar file
+                <small>An .ics file. Clashes are checked against it.</small>
+              </span>
+            </button>
+            <button type="button" className="menu-item" onClick={() => attach.choose(onAddOfficeMessage)} aria-label="Add an office message">
+              <Icon name="messagePlus" />
+              <span>
+                Office message
+                <small>Added as a message from the office, outside the chat.</small>
+              </span>
+            </button>
+          </div>
+        </div>
+        {model}
+        <button type="submit" className="send-btn" disabled={disabled || busy || value.trim() === ""} aria-label="Send">
+          {busy ? <span className="spinner spinner-on-accent" aria-hidden="true" /> : <Icon name="send" />}
+        </button>
+      </div>
     </form>
   );
 }

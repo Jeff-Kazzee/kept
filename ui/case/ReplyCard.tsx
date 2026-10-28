@@ -8,7 +8,7 @@ import { api, type AppState } from "../api.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { UntrustedBox } from "../components/Untrusted.tsx";
-import { denverShort } from "../format.ts";
+import { shortTime } from "../format.ts";
 
 const ORIGIN_LABELS: Record<DraftView["origin"], string> = {
   choice: "Started from your answer to the question",
@@ -73,7 +73,7 @@ export function SentCard({ sent }: { sent: SentView }) {
         </span>
       </div>
       <p className="small muted">
-        Approved {denverShort(sent.approvedAt)}
+        Approved {shortTime(sent.approvedAt)}
         {sent.evidenceIds.length > 0 && ` · recorded as ${sent.evidenceIds.join(", ")}`}
       </p>
       {sent.edited && <p className="warn">{EDITED_LABEL}</p>}
@@ -123,7 +123,7 @@ export function DraftCard({ draft, version, run }: { draft: DraftView; version: 
     });
 
   return (
-    <section className="card" aria-label="Reply draft">
+    <section className="card reply-draft" aria-label="Reply draft">
       <div className="card-head">
         <div className="card-title">
           <Icon name="reply" /> {draft.title}: {draft.slotLabel}

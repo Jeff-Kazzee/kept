@@ -5,6 +5,7 @@
 // reads the stored chat again, and the stored messages replace it. A turn
 // the server did not store stays on screen with its error, so the user sees
 // what happened and that nothing was saved.
+import type { ActivityEntry } from "../contract.ts";
 import type { Card, ChatEvent, ChatLog, ChatMessage, FactChip } from "./types.ts";
 
 export type ToolLine = { callId: string; label: string; ok: boolean | null };
@@ -18,6 +19,9 @@ export type PendingTurn = {
   tools: ToolLine[];
   cards: Card[];
   chips: FactChip[];
+  // What the agent did during the turn, as the action events said.
+  actions: ActivityEntry[];
+  assistantMessageId: string | null;
   status: "streaming" | "ended";
   error: { code: string; message: string } | null;
   // True once the page read the stored chat after the turn and found the
@@ -34,6 +38,9 @@ export type ChatState = {
   // server stores a fixed sentence in their place (0007, C2), so this page
   // keeps them, in memory only, for "Add this as an office message".
   declinedText: Record<string, string>;
+  // The tool lines of each answer this page streamed, by assistant message
+  // id, so a stored answer keeps its one-line summary. Memory only.
+  toolsByMessage: Record<string, ToolLine[]>;
 };
 
 export type ChatAction =
@@ -44,7 +51,7 @@ export type ChatAction =
   | { type: "settled"; log: ChatLog | null }
   | { type: "dismiss" };
 
-export const initialChat: ChatState = { status: "loading", chatVersion: 0, messages: [], pending: null, declinedText: {} };
+export const initialChat: ChatState = { status: "loading", chatVersion: 0, messages: [], pending: null, declinedText: {}, toolsByMessage: {} };
 
 // Codes whose turn still stores an answer: the text.delta events carry a
 // fixed sentence written by code, and turn.done follows.
@@ -62,7 +69,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "start":
       return {
         ...state,
-        pending: { turnId: null, userMessageId: null, userText: action.text, createdAt: action.at, text: "", tools: [], cards: [], chips: [], status: "streaming", error: null, unsaved: false },
+        pending: { turnId: null, userMessageId: null, userText: action.text, createdAt: action.at, text: "", tools: [], cards: [], chips: [], actions: [], assistantMessageId: null, status: "streaming", error: null, unsaved: false },
       };
     case "event": {
       const p = state.pending;
@@ -83,8 +90,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           return { ...state, pending: { ...p, cards: [...p.cards, e.data.card] } };
         case "facts":
           return { ...state, pending: { ...p, chips: [...p.chips, ...e.data.chips] } };
-        case "turn.done":
-          return { ...state, chatVersion: Math.max(state.chatVersion, e.data.chatVersion), pending: { ...p, status: "ended" } };
+        case "action":
+          return { ...state, pending: { ...p, actions: [...p.actions.filter((a) => a.id !== e.data.entry.id), e.data.entry] } };
+        case "turn.done": {
+          const toolsByMessage = p.tools.length > 0 ? { ...state.toolsByMessage, [e.data.assistantMessageId]: p.tools } : state.toolsByMessage;
+          return { ...state, toolsByMessage, chatVersion: Math.max(state.chatVersion, e.data.chatVersion), pending: { ...p, status: "ended", assistantMessageId: e.data.assistantMessageId } };
+        }
         case "turn.error": {
           const declinedText = e.data.code === "out_of_scope" && p.userMessageId !== null ? { ...state.declinedText, [p.userMessageId]: p.userText } : state.declinedText;
           // A code whose turn.done follows leaves the turn streaming until then.

@@ -6,7 +6,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, QUESTION_WITHHELD_NOTICE } from "../../src/agent/types.ts";
 import type { AppState } from "../api.ts";
-import { ChatView, turnErrorText, type ChatViewProps } from "./ChatView.tsx";
+import { AgentContext, DEFAULT_AGENT, type AgentState } from "../agent/AgentContext.tsx";
+import type { ActivityEntry, Settings } from "../contract.ts";
+import { DEFAULT_SETTINGS } from "../contract.ts";
+import { ChatView, toolSummaryText, turnErrorText, type ChatViewProps } from "./ChatView.tsx";
 import type { ChatState } from "./state.ts";
 
 const state = {
@@ -17,24 +20,30 @@ const state = {
   case: { slots: [], conflicts: [], question: null, staleEvidenceIds: [], reply: { draft: null, sent: [], options: [], withheld: [], suggestion: null, version: 0 } },
 } as unknown as AppState;
 
-const render = (partial: Omit<ChatState, "declinedText"> & Partial<Pick<ChatState, "declinedText">>, extra: Partial<ChatViewProps> = {}) => {
-  const chat: ChatState = { declinedText: {}, ...partial };
-  return (
-  renderToStaticMarkup(
-    createElement(ChatView, {
-      state,
-      run: async () => {},
-      chat,
-      streaming: chat.pending?.status === "streaming",
-      scripted: false,
-      send: async () => {},
-      onShowSlot: () => {},
-      onLoadCalendar: async () => {},
-      onLoadDemo: async () => null,
-      fixtures: [],
-      ...extra,
-    }),
-  ).replaceAll("&#x27;", "'"));
+type Pending = Omit<NonNullable<ChatState["pending"]>, "actions" | "assistantMessageId"> & Partial<Pick<NonNullable<ChatState["pending"]>, "actions" | "assistantMessageId">>;
+
+const render = (
+  partial: Omit<ChatState, "declinedText" | "toolsByMessage" | "pending"> & Partial<Pick<ChatState, "declinedText" | "toolsByMessage">> & { pending: Pending | null },
+  extra: Partial<ChatViewProps> = {},
+  agent?: Partial<AgentState>,
+) => {
+  const pending = partial.pending ? { actions: [], assistantMessageId: null, ...partial.pending } : null;
+  const chat: ChatState = { declinedText: {}, toolsByMessage: {}, ...partial, pending };
+  const view = createElement(ChatView, {
+    state,
+    run: async () => {},
+    chat,
+    streaming: chat.pending?.status === "streaming",
+    scripted: false,
+    send: async () => {},
+    onShowSlot: () => {},
+    onLoadCalendar: async () => {},
+    onLoadDemo: async () => null,
+    fixtures: [],
+    ...extra,
+  });
+  if (agent) return renderToStaticMarkup(createElement(AgentContext.Provider, { value: { ...DEFAULT_AGENT, ...agent } }, view)).replaceAll("&#x27;", "'");
+  return renderToStaticMarkup(view).replaceAll("&#x27;", "'");
 };
 
 const at = "2026-11-01T08:30:00.000Z";
@@ -44,9 +53,11 @@ afterEach(() => {
 });
 
 describe("chat view", () => {
-  it("an empty chat offers the three ways to start", () => {
+  it("an empty chat offers a welcome line, three suggestions and the demo", () => {
     const html = render({ status: "ready", chatVersion: 0, messages: [], pending: null });
-    for (const s of ["Paste a message from the office", "What is confirmed?", "Load the demo"]) expect(html).toContain(s);
+    expect(html).toContain("<h2>What changed with your appointments?</h2>");
+    expect(html.match(/<button type="button" class="chip">/g)).toHaveLength(3);
+    for (const s of ["Paste a message from the office", "What is confirmed?", "What should I bring?", "Try the demo"]) expect(html).toContain(s);
     expect(html).toContain('id="chat-input"');
     expect(html).toContain('name="message"');
     expect(html).toContain('<label for="chat-input" class="sr-only">Message</label>');
@@ -233,5 +244,58 @@ describe("chat view", () => {
     spy.mockRestore();
     expect(errors.filter((e) => String(e).includes("same key"))).toEqual([]);
     expect(html.match(/data-chip-message="cm2" data-chip-slot="2026-11-16T13:00"/g)).toHaveLength(2);
+  });
+
+  it("shows the agent's actions as receipts with Undo, folds facts of one message into one, and marks an undone action", () => {
+    const at = "2026-11-05T09:00:00-07:00";
+    const entry = (id: string, kind: string, summary: string, target: ActivityEntry["target"], extra: Partial<ActivityEntry> = {}): ActivityEntry => ({ id, at, actor: "agent", kind, summary, target, undoable: true, undone: false, ...extra });
+    const entries = [
+      entry("a3", "timezone_set", "Set the time zone to America/Denver.", null),
+      entry("a1", "claim_accepted", "Accepted the offer.", { type: "claim", id: "m1-e1" }),
+      entry("a2", "claim_accepted", "Accepted the offer.", { type: "claim", id: "m1-e2" }),
+      entry("a4", "note_added", "Added a note to Tuesday.", { type: "note", id: "n1" }, { undone: true, undoneAt: at }),
+    ];
+    const live = {
+      ...state,
+      messages: [{ id: "m1", message: { from: "Lantern Hill Clinic" } }],
+      evidence: [
+        { id: "m1-e1", messageId: "m1" },
+        { id: "m1-e2", messageId: "m1" },
+      ],
+    } as unknown as AppState;
+    const html = render(
+      { status: "ready", chatVersion: 2, pending: null, messages: [{ id: "c2", role: "assistant", text: "Done.", createdAt: at, cards: [], chips: [], actions: ["a3", "a1", "a2", "a4"] }] },
+      { state: live },
+      { activity: { activityVersion: 4, entries } },
+    );
+    expect(html).toContain('aria-label="What the assistant did"');
+    expect(html).toContain("Set the time zone to America/Denver.");
+    expect(html).toContain("Accepted 2 facts from Lantern Hill Clinic");
+    expect(html).not.toContain("Accepted the offer.");
+    expect(html).toContain('aria-label="Undo: Accepted 2 facts from Lantern Hill Clinic"');
+    expect(html).toContain("Added a note to Tuesday.<span class=\"muted\"> · Undone</span>");
+    expect(html).not.toContain('aria-label="Undo: Added a note to Tuesday."');
+    // A refused undo shows its reason beside the receipt.
+    const blocked = render(
+      { status: "ready", chatVersion: 2, pending: null, messages: [{ id: "c2", role: "assistant", text: "Done.", createdAt: at, cards: [], chips: [], actions: ["a3"] }] },
+      { state: live },
+      { activity: { activityVersion: 4, entries }, blocked: { a3: "A later change depends on this one." } },
+    );
+    expect(blocked).toContain('<p class="receipt-blocked" role="status">A later change depends on this one.</p>');
+  });
+
+  it("folds a finished turn's tool lines into one line, and shows the model the composer uses", () => {
+    expect(toolSummaryText([{ callId: "c1", label: "Reading the message", ok: true }])).toBe("Worked through 1 step");
+    expect(toolSummaryText([{ callId: "c1", label: "a", ok: true }, { callId: "c2", label: "b", ok: false }])).toBe("Worked through 2 steps, 1 did not finish");
+    const settings: Settings = { ...DEFAULT_SETTINGS, settingsVersion: 3, provider: "meta", model: "muse-spark-1.3", models: [{ id: "muse-spark-1.3", label: "Muse Spark 1.3", costHint: "lower" }, { id: "muse-wonder", label: "Muse Wonder", costHint: "higher" }], meta: { keySet: true, source: "you" } };
+    const html = render(
+      { status: "ready", chatVersion: 2, pending: null, messages: [{ id: "c2", role: "assistant", text: "Done.", createdAt: at, cards: [], chips: [] }], toolsByMessage: { c2: [{ callId: "x", label: "Reading your schedule", ok: true }] } },
+      {},
+      { settings, settingsAvailable: true },
+    );
+    expect(html).toContain('<summary class="small">Worked through 1 step</summary>');
+    expect(html).toContain("<span>Meta · Muse Spark 1.3</span>");
+    expect(html).toContain("Muse Wonder<small>Higher cost</small>");
+    expect(html).toMatch(/aria-pressed="true"[^>]*>.*Muse Spark 1\.3<small>Lower cost<\/small>/);
   });
 });

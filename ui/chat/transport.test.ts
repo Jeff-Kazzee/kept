@@ -1,5 +1,4 @@
-// The real chat route from the page: the session cookie is the browser's
-// own, and the POST carries the app's header and the case generation like
+// The real chat route from the page: the POST carries the app's header and the case generation like
 // every other write. fetch is replaced, so nothing leaves the test.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "./types.ts";
@@ -43,13 +42,25 @@ describe("chat transport", () => {
     expect(events.map((e) => e.event)).toEqual(["turn.started", "turn.done"]);
   });
 
-  it("GET answers null when the chat route does not exist, and not_paired as an error", async () => {
+  it("GET answers null when the chat route does not exist, and any other refusal as an error", async () => {
     let status = 404;
-    vi.stubGlobal("fetch", async () => ({ ok: status === 200, status, json: async () => ({ error: "not_paired" }) }));
+    vi.stubGlobal("fetch", async () => ({ ok: status === 200, status, json: async () => ({ error: "forbidden_source" }) }));
     const { realTransport } = await import("./transport.ts");
-    const { isNotPaired } = await import("../api.ts");
+    const { ApiError } = await import("../api.ts");
     expect(await realTransport.load()).toBeNull();
-    status = 401;
-    expect(isNotPaired(await realTransport.load().catch((e: unknown) => e))).toBe(true);
+    status = 403;
+    const err = await realTransport.load().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as InstanceType<typeof ApiError>).body.error).toBe("forbidden_source");
+  });
+
+  it("reads the sprint 8 action event and skips names it does not know", async () => {
+    const { createSseParser } = await import("./sse.ts");
+    const events: ChatEvent[] = [];
+    const parser = createSseParser((e) => events.push(e));
+    parser.push('event: action\ndata: {"turnId":"t1","entry":{"id":"act-1","at":"2026-11-05T09:00:00-07:00","actor":"agent","kind":"claim_accepted","summary":"Accepted.","target":null,"undoable":true,"undone":false}}\n\nevent: later.event\ndata: {}\n\n');
+    parser.end();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ event: "action", data: { entry: { id: "act-1", actor: "agent" } } });
   });
 });

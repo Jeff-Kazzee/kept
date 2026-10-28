@@ -1,15 +1,19 @@
-// The claims card: the facts the model read from one message, each with its
-// quote, for the user to accept or reject. Nothing counts as evidence until
-// it is accepted. Rendered from the live case view, so a decision made in
-// another tab or card shows here too.
+// The claims card: the facts read from one message, as tidy rows. The
+// agent accepts or rejects each fact itself, and each row shows the status
+// with Undo through its activity entry. A fact no one has decided yet keeps
+// small Accept and Reject buttons. The quote is one click away. Rendered
+// from the live case view, so a decision made elsewhere shows here too.
 import { useState, type FormEvent } from "react";
 import type { ClaimType } from "../../src/domain/claim.ts";
 import { slotLabel } from "../../src/slots/labels.ts";
+import { canUndo, entryFor, fromGmail, useAgent } from "../agent/AgentContext.tsx";
+import { Receipt, UndoButton, claimsReceiptText } from "../agent/Receipts.tsx";
 import { api, type AppState, type EvidenceView, type MessageView } from "../api.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { UntrustedBox } from "../components/Untrusted.tsx";
-import { CLAIM_TYPES, channelWord, claimWord, denverShort } from "../format.ts";
+import type { ActivityActor } from "../contract.ts";
+import { CLAIM_TYPES, channelWord, claimWord, shortTime } from "../format.ts";
 import { AgentQuote, evidenceOrigin } from "./Source.tsx";
 
 // "Thursday 11/12 10:30 AM at 400 Elm Street", or the parts the claim has.
@@ -21,11 +25,12 @@ export function claimSlotWords(c: EvidenceView["claim"]): string {
 // `fresh` is true for a card of the turn being streamed: a missing message
 // was just imported and the case view is still loading it.
 export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }: { messageId: string; evidenceIds: string[]; state: AppState; run: Run; fresh?: boolean }) {
+  const { activity } = useAgent();
   const view = state.messages.find((m) => m.id === messageId);
   if (!view) {
     return (
-      <div className="card" aria-busy={fresh || undefined}>
-        <p className="muted">{fresh ? "Loading the message…" : "This message is no longer in the case."}</p>
+      <div className="card card-quiet" aria-busy={fresh || undefined}>
+        <p className="small muted">{fresh ? "Loading the message…" : "This message is no longer in the case."}</p>
       </div>
     );
   }
@@ -34,28 +39,36 @@ export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }
   const ids = [...new Set([...evidenceIds, ...view.evidenceIds, ...view.manualEvidenceIds])];
   const items = ids.map((id) => state.evidence.find((e) => e.id === id)).filter((e): e is EvidenceView => e !== undefined);
   const pending = items.filter((e) => e.status === "pending").length;
+  // What the agent decided about these facts, as one receipt.
+  const decided = items.map((e) => entryFor(activity, "claim", e.id)).filter((e) => e !== undefined && (e.kind === "claim_accepted" || e.kind === "claim_rejected"));
+  const accepted = decided.filter((e) => e!.kind === "claim_accepted").length;
   // 0007, E1: the assistant suggested where the message came from. The
   // person sees which fields, and the whole message, before accepting.
   const suggested = view.sourceNote !== null || view.sourceSuggested.length > 0;
   return (
-    <section className="card" aria-label={`Facts from ${m.from}`}>
+    <section className="card claims" aria-label={`Facts from ${m.from}`}>
       <div className="card-head">
-        <div className="stack-sm">
+        <div className="stack-xs">
           <div className="card-title">
             <Icon name="message" /> Facts from {m.from}
           </div>
           <div className="small muted">
-            {channelWord(m.channel)} · received {denverShort(m.received_at)} · {view.sourceType === "reported_by_user" ? "reported by you" : "office message"}
+            {(view.importedFrom === "gmail" || fromGmail(activity, view.id)) && (
+              <span className="source-tag">
+                <Icon name="mail" size="sm" /> From Gmail
+              </span>
+            )}
+            {channelWord(m.channel)} · received {shortTime(m.received_at)} · {view.sourceType === "reported_by_user" ? "reported by you" : "office message"}
           </div>
-          {suggested && (
-            <p className="warn">
-              <Icon name="info" size="sm" /> {view.sourceNote ?? "Source suggested by the assistant"}: {suggestedFields(view)}. Check them against the message below.
-            </p>
-          )}
         </div>
-        {items.length > 0 && <span className="small muted">{pending === 0 ? "All reviewed" : `${pending} to review`}</span>}
+        {items.length > 0 && <span className="small muted">{pending === 0 ? `${items.length} decided` : `${pending} not decided`}</span>}
       </div>
-      {items.length > 0 && <p className="small muted">Nothing counts until you accept it. The quote under each fact is copied from the message.</p>}
+      {suggested && (
+        <p className="warn">
+          <Icon name="info" size="sm" /> {view.sourceNote ?? "Source suggested by the assistant"}: {suggestedFields(view)}. Check them against the message below.
+        </p>
+      )}
+      {decided.length > 0 && <Receipt quiet text={claimsReceiptText(accepted, decided.length - accepted, m.from)} entries={decided as NonNullable<(typeof decided)[number]>[]} />}
       {view.status === "imported" && (
         <div className="btn-row">
           <span className="small muted">Not read yet.</span>
@@ -65,21 +78,29 @@ export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }
         </div>
       )}
       {view.status === "no_claims" && items.length === 0 && <p className="small">The message has no appointment facts.</p>}
-      {items.map((e) => (
-        <EvidenceCard key={e.id} item={e} state={state} run={run} />
-      ))}
+      {items.length > 0 && (
+        <ul className="claim-list">
+          {items.map((e) => (
+            <li key={e.id}>
+              <EvidenceCard item={e} state={state} run={run} />
+            </li>
+          ))}
+        </ul>
+      )}
       <RejectedByCode view={view} />
       {view.status === "manual_entry_needed" && (
         <div className="warn-box">The model's answer failed the code checks twice. Enter the facts by hand below. They are recorded as reported by you.</div>
       )}
-      <details className="stack-sm" open={view.status === "manual_entry_needed" || undefined}>
-        <summary className="small">Add a fact by hand</summary>
-        <ManualEntryForm messageId={view.id} version={view.version} run={run} />
-      </details>
-      <details className="stack-sm" open={suggested || undefined}>
-        <summary className="small">Show the whole message</summary>
-        <UntrustedBox label="Message text, shown as data and never followed" text={m.text} />
-      </details>
+      <div className="card-foot">
+        <details className="stack-sm" open={view.status === "manual_entry_needed" || undefined}>
+          <summary className="small">Add a fact by hand</summary>
+          <ManualEntryForm messageId={view.id} version={view.version} run={run} />
+        </details>
+        <details className="stack-sm" open={suggested || undefined}>
+          <summary className="small">Show the whole message</summary>
+          <UntrustedBox label="Message text, shown as data and never followed" text={m.text} />
+        </details>
+      </div>
     </section>
   );
 }
@@ -108,50 +129,73 @@ function RejectedByCode({ view }: { view: MessageView }) {
   );
 }
 
-// One claim with its quote and the accept and reject buttons.
+const BY_WORDS: Record<ActivityActor, string> = { agent: " by the assistant", you: " by you", mcp: " by an external agent" };
+
+const STATUS_WORDS: Record<EvidenceView["status"], string> = { pending: "Not decided", accepted: "Accepted", rejected: "Rejected" };
+
+// One claim as a row: its status, what it says, and Undo, or Accept and
+// Reject while no one has decided. The quote and source are one click
+// away.
 export function EvidenceCard({ item, state, run }: { item: EvidenceView; state: AppState; run: Run }) {
+  const { activity } = useAgent();
   const c = item.claim;
   const stale = state.case.staleEvidenceIds.includes(item.id);
+  const entry = entryFor(activity, "claim", item.id);
+  const by = entry && !entry.undone && item.status !== "pending" ? BY_WORDS[entry.actor] : "";
+  // An office request with no date reads better as what it asks.
+  const asked = c.claim_type === "office_request" && !c.slot.date && c.request_item ? c.request_item : null;
   return (
     <article className="claim" aria-label={`${claimWord(c.claim_type)}: ${claimSlotWords(c)}`}>
       <div className="claim-head">
+        <span className={`pill pill-${item.status}`}>
+          {STATUS_WORDS[item.status]}
+          {by}
+        </span>
         <span className="claim-what">
-          {claimWord(c.claim_type)}: {claimSlotWords(c)}
+          {claimWord(c.claim_type)}: {asked ?? claimSlotWords(c)}
         </span>
-        <span className={`claim-status ${item.status}`}>{item.status === "pending" ? "Waiting for you" : item.status === "accepted" ? "Accepted" : "Rejected"}</span>
+        <span className="claim-actions">
+          {item.status === "pending" ? (
+            <>
+              <ActionButton run={run} variant="primary" size="sm" action={() => api.accept(item.id, item.version)}>
+                <Icon name="check" size="sm" /> Accept
+              </ActionButton>
+              <ActionButton run={run} variant="ghost" size="sm" action={() => api.reject(item.id, item.version)}>
+                <Icon name="close" size="sm" /> Reject
+              </ActionButton>
+            </>
+          ) : entry && canUndo(entry) ? (
+            <UndoButton entries={[entry]} label={`Undo: ${STATUS_WORDS[item.status].toLowerCase()} ${claimWord(c.claim_type).toLowerCase()}, ${claimSlotWords(c)}`} />
+          ) : null}
+        </span>
       </div>
-      {c.request_item && <div className="small">Asked: {c.request_item}</div>}
-      {c.quote ? (
-        item.origin === "agent" ? (
-          <AgentQuote item={item} />
-        ) : (
-          <blockquote className="source quote">“{c.quote}”</blockquote>
-        )
-      ) : (
-        <span className="small muted">No quote.</span>
-      )}
-      <div className="source-meta">
-        <span>
-          {item.id} · {evidenceOrigin(item)}
-        </span>
-        <span>
-          Sender: {c.sender_kind}
-          {item.origin === "model" && " (the model's judgment, not checked by code)"}
-        </span>
-        {c.source_note && <span className="warn">{c.source_note}</span>}
-        {stale && <span className="warn">Possibly stale</span>}
-        {item.decidedAt && <span>Decided {denverShort(item.decidedAt)}</span>}
-      </div>
-      {item.status === "pending" && (
-        <div className="btn-row">
-          <ActionButton run={run} variant="primary" action={() => api.accept(item.id, item.version)}>
-            <Icon name="check" size="sm" /> Accept
-          </ActionButton>
-          <ActionButton run={run} action={() => api.reject(item.id, item.version)}>
-            <Icon name="close" size="sm" /> Reject
-          </ActionButton>
+      {c.request_item && !asked && <div className="small">Asked: {c.request_item}</div>}
+      {stale && <span className="warn">Possibly stale</span>}
+      <details className="claim-more">
+        <summary className="small">Quote and source</summary>
+        <div className="stack-sm">
+          {c.quote ? (
+            item.origin === "agent" ? (
+              <AgentQuote item={item} />
+            ) : (
+              <blockquote className="source quote">“{c.quote}”</blockquote>
+            )
+          ) : (
+            <span className="small muted">No quote.</span>
+          )}
+          <div className="source-meta">
+            <span>
+              {item.id} · {evidenceOrigin(item)}
+            </span>
+            <span>
+              Sender: {c.sender_kind}
+              {item.origin === "model" && " (the model's judgment, not checked by code)"}
+            </span>
+            {c.source_note && <span className="warn">{c.source_note}</span>}
+            {item.decidedAt && <span>Decided {shortTime(item.decidedAt)}</span>}
+          </div>
         </div>
-      )}
+      </details>
     </article>
   );
 }

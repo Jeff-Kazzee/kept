@@ -5,7 +5,7 @@ import { untrustedLabel } from "../../src/domain/untrusted.ts";
 import { sourceLabel } from "../../src/slots/labels.ts";
 import type { AppState, EvidenceView } from "../api.ts";
 import { UntrustedBox } from "../components/Untrusted.tsx";
-import { channelWord, claimWord, denverShort } from "../format.ts";
+import { channelWord, claimWord, shortTime } from "../format.ts";
 
 // "reported by you through <grant name>" for a confirmed agent report. The
 // name is the grant's, stored on the evidence when the user confirmed it,
@@ -69,7 +69,7 @@ export function SourceQuote({ id, state }: { id: string; state: AppState }) {
         </span>
         {message && (
           <span>
-            {message.message.from} · {channelWord(message.message.channel)} · {denverShort(message.message.received_at)}
+            {message.message.from} · {channelWord(message.message.channel)} · {shortTime(message.message.received_at)}
           </span>
         )}
         <span>

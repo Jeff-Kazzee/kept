@@ -12,6 +12,7 @@ export function ActionButton({
   disabled = false,
   label,
   block = false,
+  size,
 }: {
   run: Run;
   action: () => Promise<unknown>;
@@ -20,9 +21,10 @@ export function ActionButton({
   disabled?: boolean;
   label?: string;
   block?: boolean;
+  size?: "sm";
 }) {
   const [busy, setBusy] = useState(false);
-  const className = ["btn", variant ? `btn-${variant}` : "", block ? "btn-block" : ""].filter(Boolean).join(" ");
+  const className = ["btn", variant ? `btn-${variant}` : "", block ? "btn-block" : "", size ? `btn-${size}` : ""].filter(Boolean).join(" ");
   return (
     <button
       type="button"

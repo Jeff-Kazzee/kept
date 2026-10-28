@@ -30,6 +30,13 @@ const PATHS = {
   archive: "M3 5h18v4H3zM5 9v10h14V9M10 13h4",
   undo: "M9 7L4 12l5 5M4 12h10a6 6 0 0 1 0 12h-2",
   copy: "M8 8h12v12H8zM4 16V4h12",
+  plus: "M12 5v14M5 12h14",
+  chevron: "M9 6l6 6-6 6",
+  chevronDown: "M6 9l6 6 6-6",
+  google: "M20 12a8 8 0 1 1-2.6-5.9M20 12h-7.5",
+  mail: "M3 6h18v12H3zM3 7l9 6 9-6",
+  rail: "M3 5h18v14H3zM9 5v14M15 10l-2 2 2 2",
+  globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z",
   pin: "M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11zM12 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
 } as const;
 
