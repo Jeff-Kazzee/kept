@@ -3,14 +3,20 @@
 // data/app.sqlite in the package. There is no token: whoever can start it
 // can already open that file. It opens no network port. Model calls (for
 // extraction, explanations and questions) use the recorded responses
-// unless APP_LIVE_MODEL=1 and MODEL_API_KEY are set, as for the app. The
-// key stays in the client object and is never logged. Diagnostics go to
+// unless APP_LIVE_MODEL=1 is set, as for the app. Live calls go to the
+// provider and model chosen in the app's settings (0010), read from the
+// settings database beside APP_DB: the user's Meta key, the server's
+// MODEL_API_KEY, or the ChatGPT connection the app saved. Keys and tokens
+// stay in the client objects and are never logged. Diagnostics go to
 // stderr. stdout carries only MCP messages.
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { CaseService } from "../src/case/service.ts";
 import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { IntakeService } from "../src/intake/service.ts";
-import { MetaResponsesClient, type ModelClient } from "../src/model/client.ts";
+import type { ModelClient } from "../src/model/client.ts";
+import { ChatGptAuth } from "../src/model/providers/chatgpt-auth.ts";
+import { createProviderClient } from "../src/model/providers/factory.ts";
+import { SecretsStore, appSecretsPath } from "../src/model/providers/secrets.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { appDbPath } from "../src/paths.ts";
 import { RecordsService } from "../src/records/service.ts";
@@ -24,12 +30,11 @@ import { createMcpServer } from "./server.ts";
 const live = process.env.APP_LIVE_MODEL === "1";
 let client: ModelClient;
 if (live) {
-  const apiKey = process.env.MODEL_API_KEY;
-  if (!apiKey) {
-    console.error("APP_LIVE_MODEL=1 needs MODEL_API_KEY in the environment.");
-    process.exit(2);
-  }
-  client = new MetaResponsesClient({ apiKey });
+  // The same provider factory as the app. The ChatGPT redirect port only
+  // matters for a sign-in, which happens in the app, not here.
+  const secrets = new SecretsStore(appSecretsPath());
+  const auth = new ChatGptAuth({ store: secrets, port: Number(process.env.APP_PORT ?? 5180) });
+  client = createProviderClient({ store: secrets, auth, serverMetaKey: process.env.MODEL_API_KEY || null });
 } else {
   client = RecordedModelClient.fromDirectory();
 }
