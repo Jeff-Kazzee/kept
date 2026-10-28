@@ -242,7 +242,7 @@ function MetaKeyBody({ settings, run }: { settings: Settings; run: Run }) {
     if (k === "") return;
     void run(async () => {
       try {
-        await backend.saveMetaKey(k);
+        await backend.saveMetaKey(k, settings.settingsVersion);
       } finally {
         // The page never keeps the key, saved or not.
         setKey("");
@@ -261,7 +261,7 @@ function MetaKeyBody({ settings, run }: { settings: Settings; run: Run }) {
             run={run}
             variant="ghost"
             action={async () => {
-              await backend.removeMetaKey();
+              await backend.removeMetaKey(settings.settingsVersion);
               await reload();
             }}
           >
@@ -302,7 +302,7 @@ function ChatGptBody({ settings, run }: { settings: Settings; run: Run }) {
           run={run}
           variant="ghost"
           action={async () => {
-            await backend.chatgptSignOut();
+            await backend.chatgptSignOut(settings.settingsVersion);
             await reload();
           }}
         >
@@ -381,7 +381,7 @@ export function GoogleSetting({ run }: { run: Run }) {
           run={run}
           variant="ghost"
           action={async () => {
-            await backend.googleDisconnect();
+            await backend.googleDisconnect(g.version);
             await reload();
           }}
         >

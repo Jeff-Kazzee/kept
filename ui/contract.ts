@@ -62,9 +62,11 @@ export const DEFAULT_SETTINGS: Settings = {
 // Google, through the fourth writer's routes: Gmail read-only search for
 // appointment emails, and Google Calendar events for clashes and the
 // appointments the agent adds.
-export type GoogleStatus = { connected: boolean; email: string | null; gmail: boolean; calendar: boolean; calendarId: string | null };
+// `version` moves with every connect and disconnect. A disconnect states the
+// version it was shown at (Muse round 1, finding 7).
+export type GoogleStatus = { version: number; connected: boolean; email: string | null; gmail: boolean; calendar: boolean; calendarId: string | null };
 
-export const GOOGLE_OFF: GoogleStatus = { connected: false, email: null, gmail: false, calendar: false, calendarId: null };
+export const GOOGLE_OFF: GoogleStatus = { version: 0, connected: false, email: null, gmail: false, calendar: false, calendarId: null };
 
 // Activity kinds the page reads meaning from. The rest it shows by their
 // sentence only. Assumed names until the back ends settle them (0011).

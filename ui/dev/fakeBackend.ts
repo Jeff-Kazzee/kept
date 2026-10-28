@@ -162,23 +162,26 @@ export function createFakeBackend({ storage = null, now = () => new Date().toISO
     },
     async googleConnect() {
       // A synthetic account. The real route answers Google's sign-in page.
-      s.google = { connected: true, email: "sample.person@example.com", gmail: true, calendar: true, calendarId: "primary" };
+      s.google = { version: s.google.version + 1, connected: true, email: "sample.person@example.com", gmail: true, calendar: true, calendarId: "primary" };
       save();
       return { authorizeUrl: "/?mockchat=1&connected=google" };
     },
-    async googleDisconnect() {
-      s.google = { ...GOOGLE_OFF };
+    async googleDisconnect(expectedVersion) {
+      if (expectedVersion !== s.google.version) throw refuse(409, "stale_edit", "The Google connection changed since it was shown.");
+      s.google = { ...GOOGLE_OFF, version: s.google.version + 1 };
       save();
       return {};
     },
-    async saveMetaKey(key) {
+    async saveMetaKey(key, expectedVersion) {
+      checkSettings(expectedVersion);
       // Only that a key is set. The key itself is dropped here.
       if (key.trim().length < 8) throw refuse(400, "invalid_key", "That key looks too short.");
       bumpSettings({ meta: { keySet: true, source: "you" }, provider: s.settings.provider ?? "meta" });
       save();
       return {};
     },
-    async removeMetaKey() {
+    async removeMetaKey(expectedVersion) {
+      checkSettings(expectedVersion);
       bumpSettings({ meta: { keySet: false, source: null }, provider: s.settings.provider === "meta" ? (s.settings.chatgpt.signedIn ? "chatgpt" : null) : s.settings.provider });
       save();
       return {};
@@ -191,7 +194,8 @@ export function createFakeBackend({ storage = null, now = () => new Date().toISO
       // The page came from ?mockchat=1, so the callback keeps it.
       return { authorizeUrl: "/?mockchat=1&signedIn=chatgpt" };
     },
-    async chatgptSignOut() {
+    async chatgptSignOut(expectedVersion) {
+      checkSettings(expectedVersion);
       bumpSettings({ chatgpt: { signedIn: false, name: null, email: null, planUsage: false }, provider: s.settings.provider === "chatgpt" ? (s.settings.meta.keySet ? "meta" : null) : s.settings.provider });
       save();
       return {};

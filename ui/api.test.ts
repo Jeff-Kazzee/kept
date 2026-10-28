@@ -4,13 +4,13 @@
 // test.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-type Sent = { method: string; path: string; generation: string | undefined; app?: string; pairing?: string };
+type Sent = { method: string; path: string; generation: string | undefined; app?: string; pairing?: string; body?: unknown };
 
 function fakeServer(generations: number[], refuse?: (path: string) => { status: number; body: unknown } | null) {
   const sent: Sent[] = [];
   let reads = 0;
-  vi.stubGlobal("fetch", async (path: string, init: { method: string; headers: Record<string, string> }) => {
-    sent.push({ method: init.method, path, generation: init.headers["X-Case-Generation"], app: init.headers["X-Appointments-App"], pairing: init.headers["X-Pairing-Code"] });
+  vi.stubGlobal("fetch", async (path: string, init: { method: string; headers: Record<string, string>; body?: string }) => {
+    sent.push({ method: init.method, path, generation: init.headers["X-Case-Generation"], app: init.headers["X-Appointments-App"], pairing: init.headers["X-Pairing-Code"], ...(init.body ? { body: JSON.parse(init.body as string) } : {}) });
     const refused = refuse?.(path);
     if (refused) return { ok: false, status: refused.status, json: async () => refused.body };
     const body = path === "/api/state" ? { generation: generations[Math.min(reads++, generations.length - 1)] } : {};
@@ -60,13 +60,13 @@ describe("ui api", () => {
     await realBackend.setTimezone("Europe/Berlin", 3);
     await realBackend.setProvider("meta", 4);
     await realBackend.setModel("muse-spark-1.3", 5);
-    await realBackend.saveMetaKey("synthetic-key-for-test");
-    await realBackend.removeMetaKey();
+    await realBackend.saveMetaKey("synthetic-key-for-test", 6);
+    await realBackend.removeMetaKey(6);
     await realBackend.chatgptStart();
-    await realBackend.chatgptSignOut();
+    await realBackend.chatgptSignOut(6);
     await realBackend.undo("act-1", 7);
     await realBackend.googleConnect();
-    await realBackend.googleDisconnect();
+    await realBackend.googleDisconnect(2);
     const writes = sent.filter((s) => s.path !== "/api/state");
     expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([
       "PUT /api/settings/timezone",
@@ -81,6 +81,19 @@ describe("ui api", () => {
       "POST /api/google/disconnect",
     ]);
     expect(writes.every((w) => w.generation === "5" && w.app === "1")).toBe(true);
+    // Muse round 1, finding 7: every change to sign-in states its version.
+    expect(writes.map((w) => w.body)).toEqual([
+      { timezone: "Europe/Berlin", expectedVersion: 3 },
+      { provider: "meta", expectedVersion: 4 },
+      { model: "muse-spark-1.3", expectedVersion: 5 },
+      { key: "synthetic-key-for-test", expectedVersion: 6 },
+      { expectedVersion: 6 },
+      {},
+      { expectedVersion: 6 },
+      { expectedVersion: 7 },
+      {},
+      { expectedVersion: 2 },
+    ]);
   });
 
   it("opens a sign-in address only on this origin or over https", async () => {

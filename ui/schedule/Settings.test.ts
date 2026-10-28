@@ -69,9 +69,9 @@ describe("settings", () => {
   });
 
   it("Google shows Connect, then the account and each permission with Disconnect", () => {
-    const off = withAgent({ google: { connected: false, email: null, gmail: false, calendar: false, calendarId: null } }, createElement(GoogleSetting, { run }));
+    const off = withAgent({ google: { version: 0, connected: false, email: null, gmail: false, calendar: false, calendarId: null } }, createElement(GoogleSetting, { run }));
     expect(off).toContain(" Connect Google</button>");
-    const on = withAgent({ google: { connected: true, email: "sample.person@example.com", gmail: true, calendar: false, calendarId: null } }, createElement(GoogleSetting, { run }));
+    const on = withAgent({ google: { version: 1, connected: true, email: "sample.person@example.com", gmail: true, calendar: false, calendarId: null } }, createElement(GoogleSetting, { run }));
     expect(on).toContain("Connected as sample.person@example.com");
     expect(on).toContain("Gmail, read-only: search for messages about appointments<span class=\"sr-only\">: granted</span>");
     expect(on).toContain("<span class=\"sr-only\">: not granted</span>");
