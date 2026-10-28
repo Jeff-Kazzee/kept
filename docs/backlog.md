@@ -109,8 +109,12 @@ tier. Read-only MCP is the floor.
 - [x] Decide whether Delete case (sprint 5) also removes the case's access log
   and rate counters. Grants are app settings, not case data. Sprint 5 erases
   both and keeps grants (O-a in `docs/decisions/0005-saved-outcome.md`).
-- [ ] Sprint 6 work: a reply can still be drafted for an archived
+- [x] Sprint 6 work: a reply can still be drafted for an archived
   appointment. Decide whether archive hides it from the reply panel.
+  Sprint 6 hides archived appointments from the reply panel and the
+  question queue, and no draft for one can be built or approved until the
+  archive is undone (G-f, A12 and A13 in
+  `docs/decisions/0006-mcp-app.md`).
 - [x] Sprint 5 or 7 work: extraction at effort `minimal` missed m2's
   "arrive 15 minutes early" office request in one of three runs, twice
   across the live runs so far. The checklist in the demo depends on it.
@@ -295,17 +299,35 @@ Acceptance:
 
 Tasks:
 
-- [ ] SP6.1 Grant screen in the app: create, name, choose tier, revoke. It
+- [x] SP6.1 Grant screen in the app: create, name, choose tier, revoke. It
   states that the agent's own model provider may receive the case data.
-- [ ] SP6.2 Proposals from agents in the review queue, labeled with the grant
+- [x] SP6.2 Proposals from agents in the review queue, labeled with the grant
   name. Confirmed proposals show "reported by you through <grant name>".
-- [ ] SP6.3 Live refresh: a note written over MCP shows in the open app
+- [x] SP6.3 Live refresh: a note written over MCP shows in the open app
   without a restart.
 - [ ] SP6.4 Connect test with the demo client: list tools and call
-  `get_appointment` once. Fallback client if it fails.
-- [ ] SP6.5 Secret scan for grant tokens across the repository.
-- [ ] SP6.6 README section on the split between model and code, and on what
+  `get_appointment` once. Fallback client if it fails. Sprint 6 delivered
+  the setup (`--token-file`, `APPT_GRANT_TOKEN_FILE`,
+  `scripts/mcp-stdio.sh`), the guide `docs/connect-agent.md` for Grok
+  Build, OpenCode and Claude Code, and an automated stand-in that runs the
+  launcher with the SDK client (`test/connect.test.ts`). The run with a
+  real client is Jeff's and the coordinator's.
+- [x] SP6.5 Secret scan for grant tokens across the repository.
+  `pnpm scan:secrets`.
+- [x] SP6.6 README section on the split between model and code, and on what
   the server cannot control once data reaches the client.
+
+## Carried over from sprint 6
+
+- [ ] Confirm or change the decisions marked "proposed, pending Jeff" in
+  `docs/decisions/0006-mcp-app.md` (G-a to G-h and A1 to A16).
+- [ ] Run the connect test with Grok Build (grok-4.7, effort high) and with
+  OpenCode, Claude Code as the fallback (SP6.4).
+- [ ] When an agent's report confirms Monday while Thursday is still
+  confirmed, rule 3 holds both and the app asks which one stands. Monday
+  shows "Confirmed · reported by you through <grant name>, change
+  proposed". The optional demo beat stops before the confirmation, so the
+  demo is not affected. Decide whether the demo should show it.
 
 ## Sprint 7: failure testing
 

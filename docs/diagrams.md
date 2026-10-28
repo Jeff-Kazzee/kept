@@ -51,7 +51,8 @@ sequenceDiagram
   MCP->>Store: check grant, tier, rate limit
   MCP->>Store: read case, add note, or queue proposal
   MCP-->>Agent: result, quotes in labeled untrusted fields
-  Store-->>App: live refresh shows the note or proposal
+  App->>Store: poll the case version every 2 seconds
+  Store-->>App: version moved, so the page shows the note or proposal
   You->>App: confirm or reject the proposal
   App->>Store: evidence reported by you through the grant name
   You->>App: revoke grant

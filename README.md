@@ -73,8 +73,8 @@ in this repo is synthetic.
   question, explanation, reply, note, tag and proposal of the case, the log
   of agent calls and the rate-limit counters. It then rewrites the database
   file and empties its WAL, so the removed text is gone from disk, not only
-  hidden. Grants stay, because they are app settings. Revoke them with
-  `pnpm grant revoke`. An MCP server that has the file open keeps running
+  hidden. Grants stay, because they are app settings. Revoke them in the
+  app's grant screen or with `pnpm grant revoke`. An MCP server that has the file open keeps running
   and finds no case. No MCP tool can delete a case. A command that started
   before the delete, such as a model call, a page opened earlier or an
   agent's call, saves nothing afterwards. If the app stops before the file
@@ -88,13 +88,29 @@ in this repo is synthetic.
   server both call it.
 - `src/grants/` holds grants and the `pnpm grant` command.
 - `mcp/` is the MCP server. It runs over stdio and opens no network port.
+  `scripts/mcp-stdio.sh` starts it with a token file, for a client that
+  runs it locally or through `ssh`.
+- The app's "Agent access (MCP)" panel creates, lists and revokes grants.
+  A new token is shown once.
+- Changes an agent proposes wait in the app's review queue beside the
+  extracted claims, labeled with the grant's name. Only you confirm or
+  reject them, in the app.
+- The open app checks every 2 seconds for changes by the MCP server or
+  another tab and reloads the case view, so an agent's note shows without
+  a restart.
+- Archive hides an appointment from the slot list, the question queue and
+  the reply panel. "Show archived" lists it with Undo.
+- `pnpm scan:secrets` checks every tracked file and the whole git history
+  for grant tokens.
 
 See `docs/decisions/0001-stack.md` for the stack and dependency checks,
 `docs/decisions/0002-slot-states.md` for the slot rules,
 `docs/decisions/0003-reply-templates.md` for the reply rules, and
 `docs/decisions/0004-mcp-core.md` for records, grants and the MCP server,
-and `docs/decisions/0005-saved-outcome.md` for the saved case, the
-checklist and Delete case.
+`docs/decisions/0005-saved-outcome.md` for the saved case, the
+checklist and Delete case, and `docs/decisions/0006-mcp-app.md` for agent
+access in the app. `docs/diagrams.md` shows the slot states and the agent
+change flow.
 
 ## Commands
 
@@ -105,6 +121,7 @@ pnpm install
 pnpm test        # offline, no key needed
 pnpm typecheck
 pnpm dev         # http://127.0.0.1:5180 with recorded model responses
+pnpm scan:secrets  # no grant token in any tracked file or commit
 ```
 
 Live model in the UI: set `APP_LIVE_MODEL=1` and provide `MODEL_API_KEY` in
@@ -155,13 +172,16 @@ analytics.
 
 The MCP server lets an agent you already use read your appointment records
 and, if you allow it, add notes and propose changes. Nothing is shared until
-you create a grant.
+you create a grant. `docs/connect-agent.md` is the full guide, with the
+client entries for Grok Build, OpenCode and Claude Code and the connect
+test.
 
 1. Create a grant. Pick a name you will recognize and the lowest tier that
-   does the job:
+   does the job. In the app, use "Agent access (MCP)". Or, on the app's
+   host:
 
    ```sh
-   pnpm grant create --name "Laptop assistant" --tier read
+   pnpm grant create --name "Laptop assistant" --tier read --token-file ~/.config/appointments/grant-token
    ```
 
    | Tier | The agent can |
@@ -170,36 +190,37 @@ you create a grant.
    | `annotate` | Everything in `read`, plus add notes and set tags |
    | `propose` | Everything in `annotate`, plus send proposed changes to your review queue |
 
-   The command prints a token once. Copy it now. It is not stored and
-   cannot be shown again. Treat it like a password. Do not paste it into a
-   chat, a screenshot or a file in this repository.
+   A token is `appt_` and 43 more characters. The app shows it once. The
+   command writes it to the file, readable by you only, and does not print
+   it. Only its hash is stored. Treat it like a password. Do not paste it
+   into a chat, a screenshot or a file in this repository.
 
-2. Add the server to your MCP client's config. The client starts the server
-   itself with Node 24. Put the token in the server's environment there:
+2. Add the server to your MCP client's config as a local command. The
+   launcher reads the token file, by default
+   `~/.config/appointments/grant-token`, so no token is in the config or on
+   a command line:
 
    ```json
    {
      "mcpServers": {
        "appointments": {
-         "command": "node",
-         "args": ["/path/to/meta-hackathon-appointments/mcp/main.ts"],
-         "env": { "APPT_GRANT_TOKEN": "<the token from step 1>" }
+         "command": "/path/to/meta-hackathon-appointments/scripts/mcp-stdio.sh"
        }
      }
    }
    ```
 
-   The server opens the app's event log (`data/app.sqlite`, or `APP_DB` if
-   you set it for the app). Use the same file as the app, or revoking a
-   grant will not reach the agent.
+   From another machine, the command is
+   `ssh <host> /path/to/meta-hackathon-appointments/scripts/mcp-stdio.sh`.
+   The server can also read the token itself from `APPT_GRANT_TOKEN`, or a
+   file named by `APPT_GRANT_TOKEN_FILE`. It refuses a token file that other
+   users can read. It opens the app's event log (`data/app.sqlite`, or
+   `APP_DB` if you set it for the app). Use the same file as the app, or
+   revoking a grant will not reach the agent.
 
-3. To stop an agent, revoke its grant. Its next call fails, even if the
-   client is still running:
-
-   ```sh
-   pnpm grant list
-   pnpm grant revoke <id>
-   ```
+3. To stop an agent, revoke its grant in the app, or with
+   `pnpm grant list` and `pnpm grant revoke <id>`. Its next call fails,
+   even if the client is still running.
 
 What an agent can never do, under any tier: confirm, cancel or change an
 appointment's state, date, time or place directly, contact an office, send
@@ -221,3 +242,53 @@ named `untrusted_quote` or `untrusted_text`, and the tool descriptions tell
 the agent to treat it as data. That lowers the risk of a message steering
 the agent, but it cannot remove it. The server's own checks do not depend
 on the agent following those labels.
+
+## What the model does and what code checks
+
+The app uses a language model for four jobs. Each one only proposes. Code
+checks the output, and you review what is left.
+
+| The model | Code checks | You |
+|---|---|---|
+| Extracts claims from a pasted message | Each quote must appear verbatim in the message, and dates and times must have a valid format. A claim that fails is rejected and shown as rejected. | Accept or reject each claim. Only accepted claims count. |
+| Explains a conflict | Every cited evidence id must exist and belong to the conflict. After two failures the conflict shows with its quotes and no explanation. | Read the sources beside it. |
+| Proposes the next question | The question must name an open conflict and no invented date. After two failures code uses a fixed wording. Code builds the answer choices. | Tap a choice. |
+| Picks a reply template and a slot | The template must fit the slot's state, and every field comes from the case, not the model. C1: when your note states a date or time, the picked slot must match it. The model may also answer that no template fits (`time_not_offered` or `template_not_allowed`), and you pick by hand. | Read back every field and approve. |
+
+Slot states come only from accepted evidence by a fixed table of rules. No
+model output changes a slot. A schema-valid answer can still change the
+meaning, which is why the C1 guard exists: in the live evaluation the model
+once answered "Please accept Wednesday" with "decline Tuesday", and code
+now rejects a pick that does not match the dates in your note. Times you
+did not state, or whose order is unknown, are never treated as known. The
+app raises a conflict instead. Health questions get a fixed decline and
+never reach a model.
+
+Agents reach the case only through the MCP server, and the same split
+applies. Code checks the grant on every call, writes the agent's name from
+the grant and not from the client, and sends every change to a slot to
+your review queue. Notes and tags are the only direct agent writes, and
+clinical text is refused there too. Every write states the version it
+expects, and a stale one writes nothing.
+
+## What the server cannot control
+
+Once the MCP server returns data to an agent's client, it is out of the
+app's hands:
+
+- The client's model provider receives what the agent reads, under that
+  provider's terms. The app cannot recall it or limit how long it is kept.
+- The agent may repeat, summarize or misread what it read. The labels
+  `untrusted_quote` and `untrusted_text` tell it that message text is data,
+  but a model can still follow an instruction hidden in a message. The
+  server's own checks do not depend on the agent obeying the labels, so a
+  steered agent still cannot change a slot, send a reply, delete the case
+  or widen its grant.
+- Anyone who holds the token can use the grant until you revoke it. The
+  token file must stay readable by you only. Revoking stops the next call,
+  not data already read.
+- The rate limit (60 calls a minute) and the access log in the case
+  history show what an agent did. They do not stop an agent that stays
+  under the limit from reading everything its tier allows.
+
+`docs/diagrams.md` shows the agent change flow.
