@@ -346,7 +346,9 @@ mountains, rivers, creeks, hot springs and wildlife, at a high-end polish.
   account, each permission, "Read the calendar again" (`POST
   /api/google/calendar/refresh`) when Calendar is on, "Connect again with
   both" when one is off, and Disconnect. A disconnect that Google did not
-  confirm (`revoked: false`) says so in a toast.
+  confirm (`revoked: false`) says so in a toast. The calendar is named
+  only while the Calendar permission is on, because the server keeps
+  `calendarId` without it.
 - U53. Google's callback comes back to `/?connected=google` or
   `/?google_error=<code>`. Each of the server's codes has its own short
   sentence written by code (`googleErrorSentence`), an unknown code the

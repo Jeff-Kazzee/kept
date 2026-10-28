@@ -99,6 +99,9 @@ describe("settings", () => {
     expect(on).toContain(">Connect again with both</button>");
     // No calendar permission, so nothing to read again.
     expect(on).not.toContain("Read the calendar again");
+    // The server keeps the calendar id, but without the permission the
+    // page does not name it.
+    expect(withAgent({ google: { ...GOOGLE_OFF, configured: true, version: 1, connected: true, email: "sample.person@example.com", gmail: true, calendar: false, calendarId: "primary" } }, createElement(GoogleSetting, { run }))).not.toContain("(calendar primary)");
     const both = withAgent({ google: { ...GOOGLE_OFF, configured: true, version: 2, connected: true, email: "sample.person@example.com", gmail: true, calendar: true, calendarId: "primary" } }, createElement(GoogleSetting, { run }));
     expect(both).toContain(">Read the calendar again</button>");
     expect(both).toContain("(calendar primary)");

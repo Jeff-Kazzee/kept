@@ -370,7 +370,7 @@ export function GoogleSetting({ run }: { run: Run }) {
   };
   const grants: Array<{ on: boolean; label: string }> = [
     { on: g.gmail, label: "Gmail, read-only: search for messages about appointments" },
-    { on: g.calendar, label: `Google Calendar: read events for clashes, and add, update or remove your appointments${g.calendarId ? ` (calendar ${g.calendarId})` : ""}` },
+    { on: g.calendar, label: `Google Calendar: read events for clashes, and add, update or remove your appointments${g.calendar && g.calendarId ? ` (calendar ${g.calendarId})` : ""}` },
   ];
   const grantList = (
     <ul className="grants" aria-label={g.connected ? "Permissions granted" : "Permissions last granted"}>
@@ -395,7 +395,7 @@ export function GoogleSetting({ run }: { run: Run }) {
           <Icon name="alert" size="sm" /> Google needs you to sign in again. The assistant cannot read Gmail or Google Calendar until you reconnect.
         </p>
         {g.email && (
-          <p className="small">
+          <p className="small account-line">
             <Icon name="user" size="sm" /> Last connected as {g.email}
           </p>
         )}
@@ -438,7 +438,7 @@ export function GoogleSetting({ run }: { run: Run }) {
   const missing = !g.gmail || !g.calendar;
   return (
     <div className="stack-sm">
-      <p className="small">
+      <p className="small account-line">
         <Icon name="user" size="sm" /> Connected as {g.email ?? "a Google account"}
       </p>
       {grantList}

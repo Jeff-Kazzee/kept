@@ -833,6 +833,7 @@ figure.source { margin: 0; }
 .nowrap { white-space: nowrap; }
 .provider-alt { display: flex; align-items: center; gap: var(--s-2); font-size: var(--text-sm); color: var(--text-2); }
 .provider-alt::before, .provider-alt::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
+.account-line { display: flex; gap: var(--s-1); align-items: center; }
 .grants { display: grid; gap: var(--s-half); font-size: var(--text-sm); }
 .grants li { display: flex; gap: var(--s-1); align-items: flex-start; }
 .grants li .icon { margin-top: 3px; }
