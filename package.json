@@ -17,7 +17,8 @@
     "recording:key": "node scripts/recording-key.ts",
     "demo:recordings": "node scripts/demo-recordings.ts",
     "demo:check": "node scripts/demo-check.ts",
-    "scan:secrets": "node scripts/scan-secrets.ts"
+    "scan:secrets": "node scripts/scan-secrets.ts",
+    "admin": "node scripts/admin.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.3.1",

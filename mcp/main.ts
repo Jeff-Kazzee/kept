@@ -31,6 +31,13 @@ import { GoogleCalendarEvents } from "../src/google/events.ts";
 import { Gmail } from "../src/google/gmail.ts";
 import type { GoogleServices } from "../src/google/tools.ts";
 
+// Local mode only (0014): the hosted site keeps one workspace per account,
+// and no MCP client is tied to an account.
+if ((process.env.APP_MODE ?? "").trim().toLowerCase() === "hosted") {
+  console.error("The MCP server runs in local mode only. Unset APP_MODE to run it beside a local app.");
+  process.exit(2);
+}
+
 const secrets = new SecretsStore(appSecretsPath());
 // The same provider factory as the app. The ChatGPT redirect port only
 // matters for a sign-in, which happens in the app, not here.

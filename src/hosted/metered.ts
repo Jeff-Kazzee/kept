@@ -51,7 +51,7 @@ export class MeteredClient implements LiveClient {
 
   constructor(options: MeteredOptions) {
     this.#o = options;
-    this.#inner = options.inner ?? (options.serverKey ? new MetaResponsesClient({ apiKey: options.serverKey, url: options.metaUrl }) : null);
+    this.#inner = options.serverKey ? (options.inner ?? new MetaResponsesClient({ apiKey: options.serverKey, url: options.metaUrl })) : null;
   }
 
   call(request: ModelCall): Promise<ModelReply> {
