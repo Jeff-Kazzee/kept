@@ -17,6 +17,8 @@ import { timezoneSettings } from "../src/settings/events.ts";
 import { CaseDeletedError, CompactionError, StaleEditError, StoreBusyError, type EventStore } from "../src/store/event-log.ts";
 import { settingsRoutes, type ProviderSource, type Route } from "./settings.ts";
 import { SecretsBusyError, SecretsFileError } from "../src/model/providers/secrets.ts";
+import { GoogleError } from "../src/google/http.ts";
+import { GoogleBusyError } from "../src/google/intents.ts";
 import { SETTINGS_BUSY_TEXT, SETTINGS_UNREADABLE_TEXT } from "./auth.ts";
 
 // `generation` is the case generation the page last read. Every request
@@ -221,8 +223,16 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
   return Object.assign(handle, { routes: routes.map(([method, pattern]) => ({ method, pattern })) });
 }
 
-function toErrorResponse(err: unknown): ApiResponse {
+export function toErrorResponse(err: unknown): ApiResponse {
   if (err instanceof UndoBlockedError) return { status: 409, body: { error: "undo_blocked", message: err.message } };
+  // An Undo of a Google Calendar entry (0012): another change for the same
+  // appointment is in progress, or Google refused or did not answer. The
+  // messages are fixed sentences, never Google's body or a token.
+  if (err instanceof GoogleBusyError) return { status: 409, body: { error: "google_busy", message: err.message } };
+  if (err instanceof GoogleError) {
+    const status = err.code === "google_unavailable" || err.code === "google_not_configured" ? 503 : err.code === "google_stale" ? 409 : 502;
+    return { status, body: { error: err.code, message: err.message } };
+  }
   // The provider settings database (0010): busy in another process, or not
   // readable. Nothing was written.
   if (err instanceof SecretsBusyError) return { status: 503, body: { error: "settings_busy", retryable: true, message: SETTINGS_BUSY_TEXT } };

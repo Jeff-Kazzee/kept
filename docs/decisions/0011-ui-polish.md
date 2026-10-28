@@ -365,8 +365,10 @@ mountains, rivers, creeks, hot springs and wildlife, at a high-end polish.
 - U55 (for sprint 11). The undo route maps `undo_blocked` to 409, but a
   `GoogleBusyError` from `CaseActions.undoEntry` reaches `server/api.ts`'s
   error mapping unmapped and answers 500 `server_error`. The page handles
-  409 `google_busy` once the server sends it. Until then such an Undo
-  shows "The app could not complete the request. Nothing was saved."
+  409 `google_busy` once the server sends it. Fixed after the merge:
+  `server/api.ts` now answers 409 `google_busy`, and Google's own refusals
+  with their code and fixed sentence (503 for `google_unavailable` and
+  `google_not_configured`, 409 for `google_stale`, 502 otherwise).
 
 ## Measured on the production build
 
