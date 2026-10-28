@@ -548,6 +548,7 @@ describe("review round 2, B3: every public write of the case services runs as on
       a.googleWrite(bot, plan, added, async () => ({ action: "created", slotKey: THU, status: "confirmed", eventId: "appt1", undo: null }), () => added),
     );
     await act("reconcileGoogle", () => a.reconcileGoogle(bot));
+    await act("closeGoogleIntents", () => a.closeGoogleIntents("disconnected"));
     const later = a.activity();
     await act("undoEntry", () => a.undoEntry(you, later.entries.find((e) => e.kind === "timezone_set")!.id, later.activityVersion));
     app.kase.deleteCase(app.kase.caseVersion(), "DELETE");
