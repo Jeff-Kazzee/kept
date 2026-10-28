@@ -176,7 +176,7 @@ server.on("request", async (req, res) => {
   if (problem) return send(res, 403, { error: "forbidden_source", message: problem });
   // No pairing or session (0009, J3): the host check above and the
   // same-origin and app header checks keep other sites out.
-  const hasBody = req.method === "POST" || req.method === "PUT";
+  const hasBody = req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
   if (hasBody && !String(req.headers["content-type"] ?? "").startsWith("application/json")) {
     return send(res, 415, { error: "json_required" });
   }

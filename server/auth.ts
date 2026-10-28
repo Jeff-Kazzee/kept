@@ -5,13 +5,18 @@
 // case does not touch them.
 //
 // GET    /api/settings              the settings view. Never a key or a token.
+// Every write but the sign-in start carries the settingsVersion the page
+// read, and a stale one gets 409 stale_edit with nothing written.
+//
 // PUT    /api/settings/provider     { provider, expectedVersion }
 // PUT    /api/settings/model        { model, expectedVersion }, a model from
 //                                   the current provider's list
-// POST   /api/auth/meta-key         { key } stores the user's Meta key
-// DELETE /api/auth/meta-key         removes it
+// POST   /api/auth/meta-key         { key, expectedVersion } stores the
+//                                   user's Meta key
+// DELETE /api/auth/meta-key         { expectedVersion } removes it
 // POST   /api/auth/chatgpt/start    { authorizeUrl } for the page to open
-// POST   /api/auth/chatgpt/signout  revokes and clears the ChatGPT tokens
+// POST   /api/auth/chatgpt/signout  { expectedVersion } revokes and clears
+//                                   the ChatGPT tokens
 // GET    /auth/callback             the loopback redirect from OpenAI. Not
 //                                   under /api: the browser arrives here
 //                                   from auth.openai.com, so the page's
@@ -66,6 +71,23 @@ export const UNKNOWN_MODEL_TEXT = "That model is not in the list for the current
 export const NOT_READY_TEXT: Record<ProviderKind, string> = {
   meta: "Add a Meta Model API key first, then choose Meta. Nothing was changed.",
   chatgpt: "Sign in with ChatGPT first, then choose ChatGPT. Nothing was changed.",
+};
+
+export const VERSION_REQUIRED: ApiResponse = {
+  status: 400,
+  body: { error: "invalid_body", issues: [{ path: "expectedVersion", message: "Send the settingsVersion this page read, a whole number of 0 or more." }] },
+};
+
+const versionOf = (fields: Record<string, unknown> | null): number | null => {
+  const v = fields?.expectedVersion;
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null;
+};
+
+// A body of only { expectedVersion }.
+const versionOnly = (body: unknown): number | null => {
+  const fields = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
+  if (!fields || Object.keys(fields).some((k) => k !== "expectedVersion")) return null;
+  return versionOf(fields);
 };
 
 // A key is one run of printable characters with no spaces. Nothing more is
@@ -125,6 +147,33 @@ export function createAuth(options: {
 
   const ok = (body: unknown): ApiResponse => ({ status: 200, body });
 
+  // A write made only if the settings still have the version the page saw,
+  // checked in the same read as the write. A stale page gets 409 and
+  // nothing is written. `decide` gives the settings to write, or an answer
+  // that writes nothing.
+  type Decision = { write: StoredSettings } | { answer: ApiResponse };
+  const writeAt = (expectedVersion: number, decide: (settings: StoredSettings, view: SettingsView) => Decision): ApiResponse => {
+    let answer: ApiResponse | null = null;
+    const after = store.update(
+      (settings) => {
+        const view = viewOf(settings);
+        const conflict = stale(view, expectedVersion);
+        if (conflict) {
+          answer = conflict;
+          return null;
+        }
+        const decision = decide(settings, view);
+        if ("answer" in decision) {
+          answer = decision.answer;
+          return null;
+        }
+        return decision.write;
+      },
+      { bump: true },
+    );
+    return answer ?? ok(viewOf(after));
+  };
+
   const routes: Record<string, Partial<Record<string, (body: unknown) => Promise<ApiResponse> | ApiResponse>>> = {
     "/api/settings": { GET: () => ok(viewOf(store.read())) },
     "/api/settings/provider": {
@@ -132,13 +181,12 @@ export function createAuth(options: {
         const parsed = ProviderBody.safeParse(body);
         if (!parsed.success) return invalid(parsed.error);
         const { provider, expectedVersion } = parsed.data;
-        const current = viewOf(store.read());
-        const conflict = stale(current, expectedVersion);
-        if (conflict) return conflict;
-        const ready = provider === "meta" ? current.meta.keySet : current.chatgpt.signedIn;
-        if (!ready) return { status: 422, body: { error: "provider_not_ready", message: NOT_READY_TEXT[provider] } };
-        if (current.provider === provider && store.read().provider === provider) return ok(current);
-        return ok(viewOf(store.update((s) => ({ ...s, provider, modelProblem: null }), { bump: true })));
+        return writeAt(expectedVersion, (settings, current) => {
+          const ready = provider === "meta" ? current.meta.keySet : current.chatgpt.signedIn;
+          if (!ready) return { answer: { status: 422, body: { error: "provider_not_ready", message: NOT_READY_TEXT[provider] } } };
+          if (settings.provider === provider) return { answer: ok(current) };
+          return { write: { ...settings, provider, modelProblem: null } };
+        });
       },
     },
     "/api/settings/model": {
@@ -146,42 +194,32 @@ export function createAuth(options: {
         const parsed = ModelBody.safeParse(body);
         if (!parsed.success) return invalid(parsed.error);
         const { model, expectedVersion } = parsed.data;
-        const settings = store.read();
-        const current = viewOf(settings);
-        const conflict = stale(current, expectedVersion);
-        if (conflict) return conflict;
-        if (!current.provider) return { status: 422, body: { error: "provider_not_ready", message: NO_PROVIDER_MODEL_TEXT } };
-        // Only a listed model. The lists never hold a contributor model.
-        if (!current.models.some((m) => m.id === model)) return { status: 422, body: { error: "unknown_model", message: UNKNOWN_MODEL_TEXT } };
-        const provider = current.provider;
-        return ok(
-          viewOf(
-            store.update(
-              (s) => ({
-                ...s,
-                ...(provider === "meta" ? { metaModel: model } : { chatgpt: { ...s.chatgpt, model } }),
-                modelProblem: null,
-              }),
-              { bump: true },
-            ),
-          ),
-        );
+        return writeAt(expectedVersion, (settings, current) => {
+          if (!current.provider) return { answer: { status: 422, body: { error: "provider_not_ready", message: NO_PROVIDER_MODEL_TEXT } } };
+          // Only a listed model. The lists never hold a contributor model.
+          if (!current.models.some((m) => m.id === model)) return { answer: { status: 422, body: { error: "unknown_model", message: UNKNOWN_MODEL_TEXT } } };
+          const choice = current.provider === "meta" ? { metaModel: model } : { chatgpt: { ...settings.chatgpt, model } };
+          return { write: { ...settings, ...choice, modelProblem: null } };
+        });
       },
     },
     "/api/auth/meta-key": {
       POST: (body) => {
-        const key = (body as { key?: unknown } | null)?.key;
-        const extra = body && typeof body === "object" ? Object.keys(body).filter((k) => k !== "key") : [];
+        const fields = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
+        const version = versionOf(fields);
+        if (version === null) return VERSION_REQUIRED;
+        const key = fields!.key;
+        const extra = Object.keys(fields!).filter((k) => k !== "key" && k !== "expectedVersion");
         // A fixed message: the key itself is never echoed.
         if (typeof key !== "string" || extra.length > 0 || !KEY.test(key.trim())) {
           return { status: 400, body: { error: "invalid_key", message: KEY_FORMAT_TEXT } };
         }
-        return ok(viewOf(store.update((s) => ({ ...s, provider: s.provider ?? "meta", meta: { key: key.trim() } }), { bump: true })));
+        return writeAt(version, (settings) => ({ write: { ...settings, provider: settings.provider ?? "meta", meta: { key: key.trim() } } }));
       },
-      DELETE: () => {
-        const settings = store.read();
-        if (!settings.meta) return ok(viewOf(settings));
-        return ok(viewOf(store.update((s) => ({ ...s, meta: null }), { bump: true })));
+      DELETE: (body) => {
+        const version = versionOnly(body);
+        if (version === null) return VERSION_REQUIRED;
+        return writeAt(version, (settings, current) => (settings.meta ? { write: { ...settings, meta: null } } : { answer: ok(current) }));
       },
     },
     "/api/auth/chatgpt/start": {
@@ -195,9 +233,14 @@ export function createAuth(options: {
       },
     },
     "/api/auth/chatgpt/signout": {
-      POST: async () => {
-        const { revoked } = await auth.signOut();
-        return ok({ ...viewOf(store.read()), notice: revoked ? null : SIGNED_OUT_UNCONFIRMED_TEXT });
+      POST: async (body) => {
+        const version = versionOnly(body);
+        if (version === null) return VERSION_REQUIRED;
+        // Checked under the sign-out lock, so a tab that has not seen a
+        // newer sign-in cannot end it.
+        const result = await auth.signOut({ onlyIf: () => viewOf(store.read()).settingsVersion === version });
+        if (result.refused) return stale(viewOf(store.read()), version)!;
+        return ok({ ...viewOf(store.read()), notice: result.revoked ? null : SIGNED_OUT_UNCONFIRMED_TEXT });
       },
     },
   };

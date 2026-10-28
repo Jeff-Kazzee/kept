@@ -272,9 +272,12 @@ export class SecretsStore {
   }
 
   // Reads, applies `change` and writes the result. `bump` adds one to the
-  // settings version, for a change the settings page can see.
-  update(change: (current: StoredSettings) => StoredSettings, options: { bump: boolean }): StoredSettings {
-    const next = change(this.read());
+  // settings version, for a change the settings page can see. A change that
+  // returns null writes nothing, and the current settings are returned.
+  update(change: (current: StoredSettings) => StoredSettings | null, options: { bump: boolean }): StoredSettings {
+    const current = this.read();
+    const next = change(current);
+    if (next === null) return current;
     const written = StoredSettings.parse(options.bump ? { ...next, version: next.version + 1 } : next);
     this.#write(written);
     return written;

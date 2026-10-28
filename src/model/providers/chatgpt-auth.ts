@@ -396,14 +396,17 @@ export class ChatGptAuth {
   // Signs out: revokes the refresh token, then clears the tokens. Returns
   // whether OpenAI confirmed the revocation. Holds the lock, so a refresh
   // in flight finishes first and its new refresh token is the one revoked.
-  signOut(): Promise<{ revoked: boolean }> {
+  // `onlyIf`, checked under the lock first, can refuse it: nothing is
+  // revoked or cleared, and `refused` is true.
+  signOut(options: { onlyIf?: () => boolean } = {}): Promise<{ revoked: boolean; refused: boolean }> {
     return this.#store.withLock(async () => {
+      if (options.onlyIf && !options.onlyIf()) return { revoked: false, refused: true };
       const { chatgpt } = this.#store.read();
       const session = chatgpt.session;
-      if (!session) return { revoked: true };
+      if (!session) return { revoked: true, refused: false };
       const revoked = session.refreshToken && chatgpt.clientId ? await this.#revoke(session.refreshToken, chatgpt.clientId) : false;
       this.#endSession();
-      return { revoked };
+      return { revoked, refused: false };
     });
   }
 
