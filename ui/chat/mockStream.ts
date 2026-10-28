@@ -238,7 +238,7 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
           const g = await google?.().catch(() => null);
           say(
             !g || !g.configured
-              ? "This server has no Google client, so Gmail is not available. docs/google.md says how to set one up."
+              ? "Google is not set up on this server yet, so Gmail is not available."
               : g.connected && g.gmail
                 ? "Gmail is connected, but this is the scripted chat, so I do not search it. Turn off the scripted chat, and the assistant can search your email for messages about appointments."
                 : g.connected

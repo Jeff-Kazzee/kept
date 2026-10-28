@@ -43,4 +43,10 @@ describe("0015: the shell", () => {
     expect(css).toMatch(/--topbar-h: 56px;/);
     expect(rule(".panel-head")).toMatch(/min-height: 56px/);
   });
+
+  it("review C1: a heading focused from code draws no ring, and Tab stops keep theirs", () => {
+    expect(css).toMatch(/\nh1\[tabindex="-1"\]:focus, h2\[tabindex="-1"\]:focus \{ outline: none; \}/);
+    expect(css).toMatch(/\n:focus-visible \{ outline: 2px solid var\(--focus\);/);
+    expect(css).not.toMatch(/(view-title|panel-title):focus-visible \{ outline: 2px/);
+  });
 });

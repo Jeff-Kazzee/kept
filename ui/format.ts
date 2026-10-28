@@ -153,7 +153,7 @@ const GOOGLE_ERRORS: Record<string, string> = {
   google_unavailable: "Google did not answer. Nothing changed. Try again in a moment.",
   no_id_token: "Google did not say which account signed in, so nothing was connected. Try again in a moment.",
   no_refresh_token: "Google did not give the app lasting access, so nothing was connected. Try again in a moment.",
-  id_token_audience: "Google answered for a different app, so nothing was connected. Check the Google client in docs/google.md.",
+  id_token_audience: "Google answered for a different app, so nothing was connected. The Google setup on this server needs a fix.",
   id_token_issuer: "The sign-in answer did not come from Google, so nothing was connected. Try again in a moment.",
   id_token_expired: "The Google sign-in answer was too old, so nothing was connected. Check this computer's clock, then try again.",
   id_token_nonce: "The Google sign-in answer did not match the one this app asked for, so nothing was connected. Connect again in Connections.",
@@ -161,7 +161,7 @@ const GOOGLE_ERRORS: Record<string, string> = {
   email_unverified: "That Google account has no verified email address, so nothing was connected. Verify it with Google, or use another account.",
   google_error: "Google ended the sign-in with an error. Nothing changed. Try again in a moment.",
   no_code: "Google came back without a sign-in code. Nothing changed. Connect again in Connections.",
-  google_not_configured: "This server has no Google client yet, so nothing was connected. docs/google.md says how to set one up.",
+  google_not_configured: "Google is not set up on this server yet, so nothing was connected.",
   server_error: "The app could not finish the Google sign-in. Nothing changed. Try again in a moment.",
 };
 

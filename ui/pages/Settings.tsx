@@ -382,9 +382,7 @@ export function GoogleSetting({ run }: { run: Run }) {
   const g = googleOrOff(google);
   if (!g.configured) {
     return (
-      <p className="small muted">
-        This server has no Google client yet, so Google cannot be connected. <code>docs/google.md</code> says how to set one up.
-      </p>
+      <p className="small muted">Google is not set up on this server yet, so it cannot be connected here.</p>
     );
   }
   // Opens Google's sign-in page. Google comes back to /?connected=google

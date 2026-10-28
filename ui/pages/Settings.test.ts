@@ -96,9 +96,10 @@ describe("settings", () => {
     expect(withAgent({}, createElement(GoogleSetting, { run }))).toContain("Connecting Google is not available in this build yet.");
   });
 
-  it("Google with no client on the server says so and points to docs/google.md, with no Connect", () => {
+  it("Google with no client on the server says so in plain words, with no docs path and no Connect", () => {
     const html = withAgent({ google: GOOGLE_OFF }, createElement(GoogleSetting, { run }));
-    expect(html).toContain("This server has no Google client yet, so Google cannot be connected. <code>docs/google.md</code> says how to set one up.");
+    expect(html).toContain("Google is not set up on this server yet, so it cannot be connected here.");
+    expect(html).not.toContain("docs/");
     expect(html).not.toContain("<button");
   });
 

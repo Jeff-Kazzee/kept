@@ -95,8 +95,8 @@ export function AgentAccessPage({ onActivity }: { onActivity: () => void }) {
           <CopyButton text={COMMAND} label="Copy the command" />
         </div>
         <p className="small muted">
-          <code>docs/connect-agent.md</code> has the commands for Grok Build and OpenCode, and how to start the agent with only these tools, because an agent with a shell or file tools can
-          change the app's files.
+          Grok Build and OpenCode take the same command in their own MCP settings. Start the agent with only these tools, because an agent that also has shell or file tools can change
+          the app's files.
         </p>
       </section>
     </div>

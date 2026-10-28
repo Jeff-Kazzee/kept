@@ -23,10 +23,10 @@ export const GOOGLE_ERROR_CODES = [
 ] as const;
 export type GoogleErrorCode = (typeof GOOGLE_ERROR_CODES)[number];
 
-const MESSAGES: Record<GoogleErrorCode, string> = {
-  google_not_configured: "Google is not set up on this server. See docs/google.md.",
-  google_not_connected: "Google is not connected. Connect it in the app's settings.",
-  google_reconnect_needed: "The Google connection expired or was revoked. Connect it again in the app's settings.",
+export const GOOGLE_ERROR_TEXT: Record<GoogleErrorCode, string> = {
+  google_not_configured: "Google is not set up on this server yet.",
+  google_not_connected: "Google is not connected. Connect it in Connections.",
+  google_reconnect_needed: "The Google connection expired or was revoked. Connect it again in Connections.",
   google_scope_missing: "The Google connection does not include this permission. Connect again with it turned on.",
   google_unavailable: "Google did not answer. Nothing changed. Try again in a moment.",
   google_refused: "Google refused the request. Nothing changed.",
@@ -52,7 +52,7 @@ export class GoogleError extends Error {
   // Set when the sentence is one of the VARIANTS.
   readonly variant: GoogleErrorVariant | null;
   constructor(code: GoogleErrorCode, status: number | null = null, variant: GoogleErrorVariant | null = null) {
-    super(variant ? VARIANTS[variant] : MESSAGES[code]);
+    super(variant ? VARIANTS[variant] : GOOGLE_ERROR_TEXT[code]);
     this.code = code;
     this.status = status;
     this.variant = variant;

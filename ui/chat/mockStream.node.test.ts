@@ -105,9 +105,9 @@ describe("scripted chat", () => {
       expect(events.some((e) => e.event === "action" || e.event === "tool.started")).toBe(false);
       return events.filter((e) => e.event === "text.delta").map((e) => (e.data as { text: string }).text).join("");
     };
-    expect(await said()).toContain("This server has no Google client, so Gmail is not available. docs/google.md says how to set one up.");
+    expect(await said()).toContain("Google is not set up on this server yet, so Gmail is not available.");
     google.now = null;
-    expect(await said()).toContain("This server has no Google client");
+    expect(await said()).toContain("Google is not set up on this server yet");
     google.now = { ...GOOGLE_OFF, configured: true };
     expect(await said()).toContain("Gmail is not connected. Connect Google in Connections");
     google.now = { ...GOOGLE_OFF, configured: true, needsReconnect: true, email: "sample.person@example.com", gmail: true };

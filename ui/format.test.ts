@@ -102,7 +102,7 @@ describe("format", () => {
     const redirect = "Google can return only to this app on 127.0.0.1, localhost or an HTTPS address in APP_ALLOWED_HOSTS. Open the app at one of those and try again.";
     expect(errorSentence(new ApiError(422, { error: "redirect_unavailable", message: redirect }))).toBe(redirect);
     expect(errorSentence(new ApiError(503, { error: "google_unavailable", message: "Google did not answer. Nothing changed. Try again in a moment." }))).toBe("Google did not answer. Nothing changed. Try again in a moment.");
-    expect(errorSentence(new ApiError(503, { error: "google_not_configured", message: "Google is not set up on this server. See docs/google.md." }))).toBe("Google is not set up on this server. See docs/google.md.");
+    expect(errorSentence(new ApiError(503, { error: "google_not_configured", message: "Google is not set up on this server yet." }))).toBe("Google is not set up on this server yet.");
     const busy = "A Google Calendar change for Thursday 11/12 10:30 AM is still in progress. Try again in a moment.";
     expect(errorSentence(new ApiError(409, { error: "google_busy", message: busy }))).toBe(busy);
     expect(errorSentence(new ApiError(409, { error: "google_stale", message: "The Google connection changed since the page read it. Reload and try again." }))).toBe(

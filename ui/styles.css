@@ -160,6 +160,10 @@ time, .tabular { font-variant-numeric: tabular-nums; }
 ::selection { background: var(--accent-soft); color: var(--text); }
 
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+/* A heading that takes focus only from code, so a screen reader reads where
+   the person landed (0015, Z8), draws no ring. Nothing a person can Tab to
+   is a heading, so every Tab stop keeps its ring. */
+h1[tabindex="-1"]:focus, h2[tabindex="-1"]:focus { outline: none; }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -278,8 +282,6 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
   background: var(--bg); border-bottom: 1px solid var(--hairline);
 }
 .view-title { flex: 1; min-width: 0; font-size: var(--text-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.view-title:focus { outline: none; }
-.view-title:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .brand-mark {
   display: grid; place-items: center; width: 32px; height: 32px; flex: none;
   border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--spring);
@@ -992,8 +994,6 @@ figure.source { margin: 0; }
 .sheet[open] { animation: rise var(--slow) var(--ease); }
 .sheet::backdrop { background: light-dark(rgb(28 35 31 / 0.36), rgb(4 8 6 / 0.62)); }
 
-#panel-title:focus { outline: none; }
-#panel-title:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* The hosted site (0014): sign-in, the account menu and Usage. */
 .signin {
