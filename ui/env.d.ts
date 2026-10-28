@@ -4,5 +4,6 @@
 declare module "*.css";
 
 interface ImportMeta {
-  readonly env: { readonly DEV: boolean };
+  // APP_FAKES: a check build with the development fakes (vite.config.ts).
+  readonly env: { readonly DEV: boolean; readonly APP_FAKES?: boolean };
 }

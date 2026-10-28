@@ -2,7 +2,6 @@
 import type { CaseView, ConflictView } from "../src/case/types.ts";
 import type { ChecklistItem } from "../src/case/checklist.ts";
 import type { Channel, Effort, EvidenceClaim, Message, SourceType } from "../src/domain/claim.ts";
-import type { ProposedChange } from "../src/records/types.ts";
 
 export type { CaseView, ChecklistItem, ConflictView };
 
@@ -35,6 +34,10 @@ export type MessageView = {
   // messages imported any other way.
   sourceSuggested: Array<"channel" | "from" | "received_at">;
   sourceNote: string | null;
+  // Where the message came from when an agent fetched it, such as Gmail.
+  // Assumed field until the Google back end settles it (0011). The page
+  // also reads it from the activity entry of the import.
+  importedFrom?: "gmail";
   status: "imported" | "claims_pending" | "no_claims" | "manual_entry_needed";
   attempts: Attempt[];
   rejections: Rejection[];
@@ -72,9 +75,6 @@ export type AppState = {
   history: HistoryEntry[];
   // Notes, tags and archive of every appointment, archived ones included.
   records: RecordView[];
-  // Every change an agent proposed, pending or decided.
-  proposals: ProposalView[];
-  grants: GrantInfo[];
   // The version this state was read at. The page polls for a newer one.
   live: LiveVersion;
 };
@@ -83,20 +83,6 @@ export type AppState = {
 export type LiveVersion = { generation: number; seq: number };
 
 export const versionChanged = (a: LiveVersion, b: LiveVersion) => a.generation !== b.generation || a.seq !== b.seq;
-
-export type Tier = "read" | "annotate" | "propose";
-
-// A grant as the app lists it. Never holds the token or its hash.
-export type GrantInfo = {
-  id: string;
-  name: string;
-  tier: Tier;
-  status: "active" | "revoked";
-  createdAt: string;
-  revokedAt: string | null;
-  version: number;
-  lastUsedAt: string | null;
-};
 
 export type Actor = { kind: "user" } | { kind: "agent"; grant_id: string; grant_name: string };
 
@@ -107,19 +93,6 @@ export type RecordView = {
   notes: Array<{ id: string; text: string; by: Actor; at: string }>;
   tags: string[];
   history: Array<{ version: number; type: string; by: Actor; at: string; undone: boolean; reverses: number | null }>;
-};
-
-export type ProposalView = {
-  id: string;
-  version: number;
-  grantId: string;
-  grantName: string;
-  change: ProposedChange;
-  recordVersion: number | null;
-  status: "pending" | "confirmed" | "rejected";
-  proposedAt: string;
-  decidedAt: string | null;
-  evidenceIds: string[];
 };
 
 export type FixtureScenario = {
@@ -142,12 +115,6 @@ export class ApiError extends Error {
 // page that has not seen a Delete case is refused by the server.
 let lastGeneration: number | null = null;
 
-// Every /api route answers this until the browser is paired with the app.
-// The server keeps the session in an HttpOnly cookie, which this page
-// cannot read and the browser sends by itself.
-export const NOT_PAIRED = "not_paired";
-export const isNotPaired = (e: unknown) => e instanceof ApiError && e.body.error === NOT_PAIRED;
-
 // The headers of a write: JSON, the app's own header and the case
 // generation this page last read. The server refuses a write without the
 // generation, so a write before the page has read the case reads it first.
@@ -163,30 +130,23 @@ export async function writeHeaders(): Promise<Record<string, string>> {
   };
 }
 
-async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+export async function request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
-    headers: method === "POST" ? await writeHeaders() : {},
+    headers: method === "GET" ? {} : await writeHeaders(),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const json: unknown = await res.json();
+  let json: unknown = {};
+  try {
+    json = await res.json();
+  } catch {
+    // Not JSON, such as a 404 page. The status says enough.
+  }
   if (!res.ok) throw new ApiError(res.status, json as ApiError["body"]);
   return json as T;
 }
 
 export const api = {
-  // Sends the pairing code once. On success the server sets the session
-  // cookie. It needs no case generation, because it reads no case.
-  pair: async (code: string) => {
-    const res = await fetch("/api/pair", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Appointments-App": "1" },
-      body: JSON.stringify({ code }),
-    });
-    const json: unknown = await res.json();
-    if (!res.ok) throw new ApiError(res.status, json as ApiError["body"]);
-    return json as { paired: true };
-  },
   state: async () => {
     const state = await request<AppState>("GET", "/api/state");
     lastGeneration = state.generation;
@@ -220,13 +180,6 @@ export const api = {
   deleteCase: (expectedVersion: number, confirmation: string) =>
     request<{ erased: number }>("POST", "/api/case/delete", { expectedVersion, confirmation }),
   liveVersion: () => request<LiveVersion>("GET", "/api/case/version"),
-  // The response holds the new token. It is shown once and never stored here.
-  createGrant: (name: string, tier: Tier) => request<{ grant: GrantInfo; token: string }>("POST", "/api/grants", { name, tier }),
-  revokeGrant: (id: string, expectedVersion: number) => request<GrantInfo>("POST", `/api/grants/${encodeURIComponent(id)}/revoke`, { expectedVersion }),
-  confirmProposal: (id: string, expectedVersion: number, recordVersion?: number) =>
-    request<ProposalView>("POST", `/api/proposals/${encodeURIComponent(id)}/confirm`, { expectedVersion, recordVersion }),
-  rejectProposal: (id: string, expectedVersion: number) =>
-    request<ProposalView>("POST", `/api/proposals/${encodeURIComponent(id)}/reject`, { expectedVersion }),
   archive: (id: string, expectedVersion: number) => request<RecordView>("POST", `/api/records/${encodeURIComponent(id)}/archive`, { expectedVersion }),
   undo: (id: string, version: number, expectedVersion: number) =>
     request<RecordView>("POST", `/api/records/${encodeURIComponent(id)}/undo`, { expectedVersion, version }),

@@ -26,7 +26,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-const READS = new Set(["state", "fixtures", "calendar", "liveVersion", "pair"]);
+const READS = new Set(["state", "fixtures", "calendar", "liveVersion"]);
 
 describe("ui api", () => {
   it("reads the case before its first write, then sends the generation on every write", async () => {
@@ -46,19 +46,51 @@ describe("ui api", () => {
     expect(sent.every((s) => s.method === "POST" && s.generation === "3")).toBe(true);
     // Sprint 6 review, finding 1: every write carries the app's header.
     expect(sent.every((s) => s.app === "1")).toBe(true);
-    // The session is an HttpOnly cookie the browser sends. No code header.
+    // Pairing is gone: no code header.
     expect(sent.some((s) => s.pairing !== undefined)).toBe(false);
   });
 
-  it("pairs with one request that needs no case read, and reports not_paired so the page can show the pairing screen", async () => {
-    const sent = fakeServer([3], (p) => (p === "/api/state" ? { status: 401, body: { error: "not_paired", message: "Pair this browser with the app first." } } : null));
-    const { api, isNotPaired } = await import("./api.ts");
-    await api.pair("ABCD-EFGH");
-    expect(sent).toEqual([{ method: "POST", path: "/api/pair", generation: undefined, app: "1", pairing: undefined }]);
-    const err = await api.state().catch((e: unknown) => e);
-    expect(isNotPaired(err)).toBe(true);
-    // A write before any read of the case is refused the same way.
-    expect(isNotPaired(await api.accept("m2-e1", 1).catch((e: unknown) => e))).toBe(true);
+  it("sends settings, activity and sign-in writes with the same headers, and reads a missing route as not available", async () => {
+    const sent = fakeServer([5], (p) => (p === "/api/settings" || p === "/api/activity" || p === "/api/google" ? { status: 404, body: { error: "not_found" } } : null));
+    const { realBackend } = await import("./agentApi.ts");
+    expect(await realBackend.settings()).toBeNull();
+    expect(await realBackend.activity()).toBeNull();
+    expect(await realBackend.google()).toBeNull();
+    sent.length = 0;
+    await realBackend.setTimezone("Europe/Berlin", 3);
+    await realBackend.setProvider("meta", 4);
+    await realBackend.setModel("muse-spark-1.3", 5);
+    await realBackend.saveMetaKey("synthetic-key-for-test");
+    await realBackend.removeMetaKey();
+    await realBackend.chatgptStart();
+    await realBackend.chatgptSignOut();
+    await realBackend.undo("act-1", 7);
+    await realBackend.googleConnect();
+    await realBackend.googleDisconnect();
+    const writes = sent.filter((s) => s.path !== "/api/state");
+    expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([
+      "PUT /api/settings/timezone",
+      "PUT /api/settings/provider",
+      "PUT /api/settings/model",
+      "POST /api/auth/meta-key",
+      "DELETE /api/auth/meta-key",
+      "POST /api/auth/chatgpt/start",
+      "POST /api/auth/chatgpt/signout",
+      "POST /api/activity/act-1/undo",
+      "POST /api/google/connect",
+      "POST /api/google/disconnect",
+    ]);
+    expect(writes.every((w) => w.generation === "5" && w.app === "1")).toBe(true);
+  });
+
+  it("opens a sign-in address only on this origin or over https", async () => {
+    const { safeAuthorizeUrl } = await import("./agentApi.ts");
+    const origin = "http://127.0.0.1:5180";
+    expect(safeAuthorizeUrl("/?signedIn=chatgpt", origin)).toBe("http://127.0.0.1:5180/?signedIn=chatgpt");
+    expect(safeAuthorizeUrl("https://auth.example.com/authorize?x=1", origin)).toBe("https://auth.example.com/authorize?x=1");
+    expect(safeAuthorizeUrl("javascript:alert(1)", origin)).toBeNull();
+    expect(safeAuthorizeUrl("http://evil.example.com/", origin)).toBeNull();
+    expect(safeAuthorizeUrl("data:text/html,hi", origin)).toBeNull();
   });
 
   it("sends the new generation after Delete case reloads the state", async () => {
