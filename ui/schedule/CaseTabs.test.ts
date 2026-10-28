@@ -56,8 +56,8 @@ describe("sprint 5 panels", () => {
 
   it("SP5.4: Delete case says what it erases and that it cannot be undone, and starts disabled", () => {
     const html = renderToStaticMarkup(createElement(DeleteCasePanel, { version: 12, run }));
-    expect(html).toContain("erases every message, claim, review, slot, question, explanation, reply, note, tag and proposal");
-    expect(html).toContain("Grants stay");
+    expect(html).toContain("erases every message, claim, review, slot, question, explanation, reply, note and tag of this case, the chat, its activity");
+    expect(html).not.toContain("Grants");
     expect(html).toContain("Type DELETE to confirm");
     expect(html).toContain('disabled="">Delete this case and all its data permanently. This cannot be undone.</button>');
     expect(html).toContain('name="delete-confirm"');

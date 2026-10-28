@@ -10,18 +10,17 @@ import { api, type AppState, type EvidenceView, type RecordView } from "../api.t
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { StateBadge } from "../components/StateBadge.tsx";
-import { TIME_ZONE, denverTime } from "../format.ts";
+import { stampTime, wallParts } from "../format.ts";
 import { AgentQuote, UntrustedText } from "../case/Source.tsx";
+import { onGoogleCalendar, useAgent } from "../agent/AgentContext.tsx";
 
 export const slotElementId = (key: string) => `slot-${slotIdPart(key)}`;
 
-const DENVER_PARTS = new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-
-// A calendar time on the case's clock. A UTC time is moved to America/Denver.
+// A calendar time on the case's clock. A UTC time is moved to the case
+// time zone.
 export function icsLocal(t: IcsTime): { date: string; time: string | null } {
   if (!t.utc || t.time === null) return { date: t.date, time: t.time };
-  const p = Object.fromEntries(DENVER_PARTS.formatToParts(new Date(`${t.date}T${t.time}:00Z`)).map((x) => [x.type, x.value]));
-  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
+  return wallParts(Date.parse(`${t.date}T${t.time}:00Z`));
 }
 
 export function icsTimeText(t: IcsTime | null): string {
@@ -55,7 +54,7 @@ export function Agenda({
     return (
       <div className="empty">
         <Icon name="calendar" />
-        <p>No appointments yet. Paste a message from the office in the chat, then accept the facts it finds.</p>
+        <p>No appointments yet. Paste a message from the office in the chat. The assistant adds the times it finds here.</p>
       </div>
     );
   }
@@ -78,9 +77,16 @@ export function Agenda({
         <input id="show-archived" name="show-archived" type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
         <span>Show archived ({archivedCount})</span>
       </label>
-      {[...byDay].map(([date, dayRows]) => (
+      {[...byDay].map(([date, dayRows]) => {
+        const n = dayRows.filter((r) => r.kind === "slot").length;
+        return (
         <section key={date} className="day" aria-label={dateLabel(date)}>
-          <h3 className="day-head">{dateLabel(date)}</h3>
+          <h3 className="day-head">
+            {dateLabel(date)}
+            <span className="day-count">
+              {n} appointment{n === 1 ? "" : "s"}
+            </span>
+          </h3>
           {dayRows.map((r) =>
             r.kind === "slot" ? (
               <SlotRow key={r.slot.key} slot={r.slot} record={records.get(r.slot.key)} state={state} run={run} highlight={highlight === r.slot.key} />
@@ -89,7 +95,8 @@ export function Agenda({
             ),
           )}
         </section>
-      ))}
+        );
+      })}
       {shown.length === 0 && <p className="muted">Every appointment is archived. Tick Show archived to see them.</p>}
     </div>
   );
@@ -117,14 +124,24 @@ function CalendarRow({ event }: { event: IcsEvent }) {
 function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; record: RecordView | undefined; state: AppState; run: Run; highlight: boolean }) {
   const kase = state.case;
   const archiveVersion = activeArchive(record);
+  const { activity } = useAgent();
   const options = kase.reply.options.filter((o) => o.slotKey === s.key);
+  const clashes = s.clashes ?? [];
+  const onGoogle = onGoogleCalendar(activity, s.key);
   return (
-    <article id={slotElementId(s.key)} tabIndex={-1} className={["slot", record?.archived ? "archived" : "", highlight ? "highlight" : ""].filter(Boolean).join(" ")} aria-label={`${s.label}: ${s.stateLabel}`}>
+    <article id={slotElementId(s.key)} tabIndex={-1} data-state={s.state} className={["slot", record?.archived ? "archived" : "", highlight ? "highlight" : ""].filter(Boolean).join(" ")} aria-label={`${s.label}: ${s.stateLabel}`}>
       <div className="slot-time">{s.time ? timeLabel(s.time) : "No time"}</div>
       <div className="slot-body">
         <div className="slot-line">
           <StateBadge state={s.state} />
           <span className="small muted">{s.sourceLabel}</span>
+          {clashes.length > 0 && <span className="badge badge-clash">Clash</span>}
+          {onGoogle && (
+            <span className="gcal-mark" title="The assistant added this to Google Calendar">
+              <Icon name="google" size="sm" />
+              <span>On Google Calendar</span>
+            </span>
+          )}
           {record?.archived && <span className="badge">Archived</span>}
         </div>
         <span className="slot-place">
@@ -137,8 +154,8 @@ function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; r
           </p>
         )}
         {s.staleEvidenceIds.length > 0 && <p className="warn">A reminder for this time may be out of date: {s.staleEvidenceIds.join(", ")}</p>}
-        {s.clashes !== null && s.clashes.length > 0
-          ? s.clashes.map((c, i) => (
+        {clashes.length > 0
+          ? clashes.map((c, i) => (
               <p key={i} className="clash">
                 <Icon name="alert" size="sm" /> Clashes with {c.summary} ({icsTimeText(c.start)}
                 {c.end ? ` to ${icsTimeText(c.end)}` : ""})
@@ -201,10 +218,10 @@ export function RecordNotes({ record }: { record: RecordView | undefined }) {
       {record.tags.length > 0 && <p className="small">Tags: {record.tags.join(", ")}</p>}
       {record.notes.map((n) =>
         n.by.kind === "agent" ? (
-          <UntrustedText key={n.id} label={`Note by ${n.by.grant_name}, ${denverTime(n.at)}`} text={n.text} />
+          <UntrustedText key={n.id} label={`Note by ${n.by.grant_name}, ${stampTime(n.at)}`} text={n.text} />
         ) : (
           <p key={n.id} className="small">
-            Note by you, {denverTime(n.at)}: {n.text}
+            Note by you, {stampTime(n.at)}: {n.text}
           </p>
         ),
       )}

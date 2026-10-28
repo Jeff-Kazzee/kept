@@ -1,7 +1,9 @@
-// The sprint 6 panels as the user sees them: the grant screen, an agent
-// proposal in the review queue, agent notes, the archived toggle and the
-// live refresh check. Rendered to static markup with the server renderer,
-// from state the real API returns. Moved to the sprint 7B components.
+// What an agent wrote, as the user sees it: agent notes and agent reports
+// as untrusted text, the archived toggle and the live refresh check.
+// Rendered to static markup with the server renderer, from state the real
+// API returns. The grant screen, proposal cards and pairing screen are gone
+// (sprint 9, 0011). The records service still takes a confirmed agent
+// report, which is how an external agent's words reach the case here.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -14,11 +16,8 @@ import { ReplyService } from "../src/reply/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { acceptMessages, intake } from "../test/helpers.ts";
 import { versionChanged, type AppState } from "./api.ts";
-import { ProposalCard } from "./case/ProposalCard.tsx";
 import { ReplyPanel } from "./case/ReplyCard.tsx";
-import { denverTime } from "./format.ts";
-import { PairingScreen } from "./PairingScreen.tsx";
-import { GrantPanel, PROVIDER_NOTICE, TOKEN_NOTICE } from "./schedule/Access.tsx";
+import { stampTime } from "./format.ts";
 import { Agenda, RecordNotes, activeArchive } from "./schedule/Agenda.tsx";
 import { ChecklistPanel } from "./schedule/CaseTabs.tsx";
 
@@ -44,48 +43,7 @@ async function caseState(clock = () => "2026-11-06T17:00:00.000Z") {
   return { store, records, grants, state };
 }
 
-describe("sprint 6 panels", () => {
-  it("G-a: the grant screen states what the provider may receive and lists name, tier, created, last used and status", async () => {
-    const { state } = await caseState();
-    const html = renderToStaticMarkup(createElement(GrantPanel, { grants: (await state()).grants, run })).replaceAll("&#x27;", "'");
-    expect(html).toContain(PROVIDER_NOTICE);
-    expect(PROVIDER_NOTICE).toBe("Your agent's model provider may receive the case data it reads.");
-    expect(TOKEN_NOTICE).toBe(
-      "Shown once. Anyone with this token can use the access you chose. Your agent's model provider may receive the case data it reads.",
-    );
-    for (const h of ["Tier", "Created", "Last used"]) expect(html).toContain(`<dt>${h}</dt>`);
-    expect(html).toContain("<strong>Phone helper</strong>");
-    expect(html).toContain("Active");
-    expect(html).toContain("<dt>Tier</dt><dd>propose</dd>");
-    expect(html).toContain("2026-11-06 10:00 MST");
-    expect(html).toContain("not in this case");
-    expect(html).toContain('maxLength="60"');
-    expect(html).toContain('name="grant-name"');
-    expect(html).toContain('<button type="button" class="btn">Revoke</button>');
-    // Nothing secret is on the list.
-    expect(html).not.toMatch(/appt_|[0-9a-f]{64}/);
-  });
-
-  it("G-e: a proposal shows the grant name, the change in plain words and the statement as untrusted text", async () => {
-    const { state, records } = await caseState();
-    const s = await state();
-    const html = renderToStaticMarkup(createElement(ProposalCard, { proposal: s.proposals[0]!, records: s.records, run }));
-    expect(html).toContain("Proposed by Phone helper");
-    expect(html).toContain("<strong>The office confirmed Monday 11/16 1:00 PM.</strong>");
-    expect(html).toContain(
-      '<div class="untrusted"><div class="label">What Phone helper says you told it. Untrusted text, shown as data.</div><pre>Dana says the office confirmed Monday by phone.</pre></div>',
-    );
-    expect(html).toContain("Confirming records this as reported by you through Phone helper.");
-    expect(html).toContain(">Confirm</button>");
-    expect(html).toContain(">Reject</button>");
-
-    records.confirmProposal(s.proposals[0]!.id, s.proposals[0]!.version);
-    const after = await state();
-    const done = renderToStaticMarkup(createElement(ProposalCard, { proposal: after.proposals[0]!, records: after.records, run }));
-    expect(done).toContain("Confirmed");
-    expect(done).not.toContain("<button");
-  });
-
+describe("agent text in the case", () => {
   it("an agent's note is labeled with its grant and shown as untrusted text, never as markup", async () => {
     const { state } = await caseState();
     const html = renderToStaticMarkup(createElement(RecordNotes, { record: (await state()).records.find((r) => r.id === THU) }));
@@ -113,7 +71,7 @@ describe("sprint 6 panels", () => {
 
   it("a confirmed agent report shows its statement as untrusted text in the slot list", async () => {
     const { state, records } = await caseState();
-    const p = (await state()).proposals[0]!;
+    const p = records.proposals().find((x) => x.status === "pending")!;
     records.confirmProposal(p.id, p.version);
     const html = renderToStaticMarkup(createElement(Agenda, { state: await state(), run }));
     expect(html).toContain("Confirmed · reported by you through Phone helper");
@@ -168,17 +126,10 @@ describe("sprint 6 panels", () => {
     expect(html).toContain(`<code class="small muted">${p.id}-1</code><div class="untrusted"><div class="label">Words from Phone helper. Untrusted text, shown as data.</div><pre>Dana says Monday is in Suite 9.</pre></div>`);
   });
 
-  it("B1: the pairing screen asks for the code from the app's terminal", () => {
-    const html = renderToStaticMarkup(createElement(PairingScreen, { onPaired: () => {} }));
-    expect(html).toContain("Pair this browser with the app");
-    expect(html).toContain("The browser stays paired until the app restarts. An agent cannot see that terminal.");
-    expect(html).toContain('name="pairing-code"');
-  });
-
   it("times show in America/Denver across the 2026-11-01 change", () => {
-    expect(denverTime("2026-11-01T07:30:00.000Z")).toBe("2026-11-01 01:30 MDT");
-    expect(denverTime("2026-11-01T08:30:00.000Z")).toBe("2026-11-01 01:30 MST");
-    expect(denverTime("2026-10-31T18:00:00.000Z")).toBe("2026-10-31 12:00 MDT");
+    expect(stampTime("2026-11-01T07:30:00.000Z")).toBe("2026-11-01 01:30 MDT");
+    expect(stampTime("2026-11-01T08:30:00.000Z")).toBe("2026-11-01 01:30 MST");
+    expect(stampTime("2026-10-31T18:00:00.000Z")).toBe("2026-10-31 12:00 MDT");
   });
 
   it("G-d: the page reloads only when the generation or the event number moved", () => {

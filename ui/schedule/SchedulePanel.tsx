@@ -1,5 +1,5 @@
-// The schedule panel beside the chat: Schedule, Checklist, Activity, Access
-// and Settings. The Schedule tab starts with what waits for the user, so
+// The schedule panel beside the chat: Schedule, Checklist, Activity and
+// Settings. The Schedule tab starts with what waits for the user, so
 // nothing depends on finding the right chat card.
 import { useRef, type KeyboardEvent } from "react";
 import type { AppState } from "../api.ts";
@@ -9,20 +9,18 @@ import { EvidenceCard } from "../case/ClaimsCard.tsx";
 import { ExplanationCard, QuestionCard } from "../case/ConflictCards.tsx";
 import { api } from "../api.ts";
 import { ActionButton } from "../components/ActionButton.tsx";
-import { ProposalCard } from "../case/ProposalCard.tsx";
 import { ReplyPanel } from "../case/ReplyCard.tsx";
-import { GrantPanel } from "./Access.tsx";
+import { zoneWithShortName } from "../format.ts";
 import { Agenda } from "./Agenda.tsx";
-import { ChecklistPanel, HistoryPanel } from "./CaseTabs.tsx";
+import { ActivityTab, ChecklistPanel } from "./CaseTabs.tsx";
 import { SettingsPanel } from "./Settings.tsx";
 
-export type PanelTab = "schedule" | "checklist" | "activity" | "access" | "settings";
+export type PanelTab = "schedule" | "checklist" | "activity" | "settings";
 
-const TABS: Array<{ id: PanelTab; label: string; icon: IconName }> = [
+export const TABS: Array<{ id: PanelTab; label: string; icon: IconName }> = [
   { id: "schedule", label: "Schedule", icon: "calendar" },
   { id: "checklist", label: "Checklist", icon: "checklist" },
   { id: "activity", label: "Activity", icon: "activity" },
-  { id: "access", label: "Access", icon: "key" },
   { id: "settings", label: "Settings", icon: "settings" },
 ];
 
@@ -34,12 +32,11 @@ export function unaskedConflict(state: AppState) {
   return state.case.conflicts.find((c) => c.status === "open" && c.askable && c.archivedSlotKeys.length === 0);
 }
 
-// How many things wait for the user: claims and proposals to review, the
-// open question or a conflict waiting for one, and the open reply draft.
+// How many things wait for the user: facts no one has decided, the open
+// question or a conflict waiting for one, and the open reply draft.
 export function waitingCount(state: AppState): number {
   return (
     state.evidence.filter((e) => e.status === "pending").length +
-    state.proposals.filter((p) => p.status === "pending").length +
     (state.case.question || unaskedConflict(state) ? 1 : 0) +
     (state.case.reply.draft ? 1 : 0)
   );
@@ -52,6 +49,7 @@ export function SchedulePanel({
   onTab,
   highlight,
   onClose,
+  onCollapse,
 }: {
   state: AppState;
   run: Run;
@@ -59,6 +57,8 @@ export function SchedulePanel({
   onTab: (t: PanelTab) => void;
   highlight: string | null;
   onClose?: () => void;
+  // On a laptop, folds the panel to a narrow rail.
+  onCollapse?: () => void;
 }) {
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const waiting = waitingCount(state);
@@ -76,6 +76,11 @@ export function SchedulePanel({
         <h2 id="panel-title" tabIndex={-1}>
           Your schedule
         </h2>
+        {onCollapse && (
+          <button type="button" className="btn btn-ghost btn-icon panel-collapse" onClick={onCollapse} aria-label="Fold the schedule to a rail" title="Fold to a rail">
+            <Icon name="rail" />
+          </button>
+        )}
         {onClose && (
           <button type="button" className="btn btn-ghost btn-icon panel-close" onClick={onClose} aria-label="Close the schedule">
             <Icon name="close" />
@@ -97,7 +102,7 @@ export function SchedulePanel({
             tabIndex={tab === t.id ? 0 : -1}
             onClick={() => onTab(t.id)}
           >
-            <Icon name={t.icon} />
+            <Icon name={t.icon} size="sm" />
             {t.label}
             {t.id === "schedule" && waiting > 0 && (
               <span className="count" aria-label={`${waiting} waiting for you`}>
@@ -110,8 +115,7 @@ export function SchedulePanel({
       <div className="panel-body" role="tabpanel" id={`tabpanel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
         {tab === "schedule" && <ScheduleTab state={state} run={run} highlight={highlight} />}
         {tab === "checklist" && <ChecklistPanel items={state.case.checklist} />}
-        {tab === "activity" && <HistoryPanel entries={state.history} />}
-        {tab === "access" && <GrantPanel grants={state.grants} run={run} />}
+        {tab === "activity" && <ActivityTab history={state.history} />}
         {tab === "settings" && <SettingsPanel mode={state.mode} modelClient={state.modelClient} version={state.caseVersion} erasePending={state.erasePending} run={run} />}
       </div>
     </>
@@ -121,11 +125,10 @@ export function SchedulePanel({
 export function ScheduleTab({ state, run, highlight }: { state: AppState; run: Run; highlight: string | null }) {
   const kase = state.case;
   const pending = state.evidence.filter((e) => e.status === "pending");
-  const proposals = state.proposals.filter((p) => p.status === "pending");
   const reply = kase.reply;
   const replyWaiting = reply.draft !== null || reply.suggestion !== null;
   const conflict = unaskedConflict(state);
-  const needsYou = pending.length + proposals.length > 0 || kase.question !== null || conflict !== undefined || replyWaiting;
+  const needsYou = pending.length > 0 || kase.question !== null || conflict !== undefined || replyWaiting;
   return (
     <div className="stack">
       {needsYou && (
@@ -133,9 +136,6 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
           <h3 id="needs-you">Waiting for you</h3>
           {pending.map((e) => (
             <EvidenceCard key={e.id} item={e} state={state} run={run} />
-          ))}
-          {proposals.map((p) => (
-            <ProposalCard key={p.id} proposal={p} records={state.records} run={run} />
           ))}
           {kase.question && kase.conflicts.find((c) => c.id === kase.question!.conflictId)?.explanation && (
             <ExplanationCard conflictId={kase.question.conflictId} state={state} run={run} />
@@ -157,9 +157,9 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
       <section className="stack" aria-labelledby="appointments">
         <div className="section-head">
           <h3 id="appointments">Appointments</h3>
-          <span className="small muted">Times in America/Denver</span>
+          <span className="small muted">Times in {zoneWithShortName()}</span>
         </div>
-        <p className="small muted">Built by code from the facts you accepted. Model output never changes an appointment.</p>
+        <p className="small muted">Built by code from the accepted facts. Model text never changes an appointment.</p>
         <CalendarLine state={state} />
         <Agenda state={state} run={run} highlight={highlight} />
       </section>

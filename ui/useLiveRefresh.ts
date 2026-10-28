@@ -2,7 +2,7 @@
 // app, the MCP server, another tab or the chat) and reloads when it did.
 // One request at a time.
 import { useEffect, useRef } from "react";
-import { api, isNotPaired, versionChanged, type LiveVersion } from "./api.ts";
+import { api, versionChanged, type LiveVersion } from "./api.ts";
 
 export const POLL_MS = 2000;
 
@@ -17,10 +17,8 @@ export function useLiveRefresh(current: LiveVersion | null, refresh: () => Promi
       try {
         const now = await api.liveVersion();
         if (latest.current && versionChanged(now, latest.current)) await refresh();
-      } catch (e) {
-        // After a restart the session is gone. The reload shows the pairing
-        // screen. Any other failure is tried again at the next poll.
-        if (isNotPaired(e)) await refresh();
+      } catch {
+        // Tried again at the next poll.
       } finally {
         busy = false;
       }

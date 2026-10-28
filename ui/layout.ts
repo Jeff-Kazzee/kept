@@ -2,8 +2,9 @@
 // fact chip again to give focus back to it.
 import { useEffect, useState } from "react";
 
-export const PHONE = "(max-width: 767px)";
-export const TABLET = "(min-width: 768px) and (max-width: 1023px)";
+// The schedule is a column (or a rail) beside the chat from this width up,
+// and a sheet below it (styles.css uses the same breakpoints).
+export const LAPTOP = "(min-width: 1024px)";
 
 export function useMedia(query: string): boolean {
   const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
