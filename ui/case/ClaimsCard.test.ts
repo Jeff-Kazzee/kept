@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { CLAIM_TYPES as DOMAIN_CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT as DOMAIN_EFFORT } from "../../src/domain/claim.ts";
 import type { AppState, EvidenceView } from "../api.ts";
+import { SOURCE_SUGGESTED_LABEL } from "../../src/agent/types.ts";
 import { CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT } from "../format.ts";
 import { ClaimsCard, EvidenceCard } from "./ClaimsCard.tsx";
 import { SourceQuote, evidenceOrigin } from "./Source.tsx";
@@ -68,6 +69,8 @@ describe("claims card", () => {
     version: 2,
     message: { id: "m9", channel: "sms", from: "Lantern Hill Clinic", received_at: "2026-11-01T07:30:00Z", text: "See you <b>Monday</b>." },
     sourceType: "office_message",
+    sourceSuggested: [],
+    sourceNote: null,
     status: "claims_pending",
     attempts: [],
     rejections: [],
@@ -99,5 +102,22 @@ describe("claims card", () => {
   it("keeps its claim types and default effort the same as the domain's", () => {
     expect([...CLAIM_TYPES]).toEqual([...DOMAIN_CLAIM_TYPES]);
     expect(DEFAULT_EXTRACTION_EFFORT).toBe(DOMAIN_EFFORT);
+  });
+
+  it("7A E1: a message the chat imported shows the unknown channel and which source fields the assistant suggested, with the whole message", () => {
+    const suggested = {
+      ...message,
+      message: { ...message.message, channel: "unknown", from: "Unknown sender" },
+      sourceSuggested: ["channel", "from", "received_at"],
+      sourceNote: SOURCE_SUGGESTED_LABEL,
+    };
+    const claim = { ...pending, claim: { ...pending.claim, source_note: SOURCE_SUGGESTED_LABEL } };
+    const st2 = { ...st, messages: [suggested], evidence: [claim] } as unknown as AppState;
+    const html = renderToStaticMarkup(createElement(ClaimsCard, { messageId: "m9", evidenceIds: ["m9-e1"], state: st2, run: async () => {} }));
+    expect(html).toContain("Channel not stated · received");
+    expect(html).toContain("Source suggested by the assistant: how it came, sender, time received. Check them against the message below.");
+    // On the claim too, and the whole message is open.
+    expect(html.split(SOURCE_SUGGESTED_LABEL).length - 1).toBe(2);
+    expect(html).toMatch(/<details class="stack-sm" open="">\s*<summary class="small">Show the whole message<\/summary>/);
   });
 });

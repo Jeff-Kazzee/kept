@@ -6,7 +6,7 @@
 // facts it finds wait for review like any other, and the page shows their
 // claims card in the thread.
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { api } from "../api.ts";
+import { api, type FixtureScenario } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { DEFAULT_EXTRACTION_EFFORT, denverWallNow, denverWallToIso } from "../format.ts";
@@ -21,10 +21,20 @@ const CHANNELS: Array<{ value: string; label: string }> = [
 
 export type ImportRequest = { text: string };
 
+type Fixture = FixtureScenario["messages"][number];
+
+// A synthetic demo message whose text the sheet holds exactly. It keeps the
+// fixture's id, so its recorded extraction applies, as the chat does for a
+// pasted fixture message in recorded mode (0007).
+export function fixtureFor(text: string, fixtures: Fixture[]): Fixture | null {
+  const t = text.trim();
+  return t === "" ? null : (fixtures.find((m) => m.text.trim() === t) ?? null);
+}
+
 // Imports the message and reads it. A failed read leaves the message in the
 // case for manual entry, so the claims card can still show it.
-export async function importOfficeMessage(input: { channel: string; from: string; receivedAt: string; text: string }): Promise<string> {
-  const message = await api.addMessage({ channel: input.channel as never, from: input.from.trim(), received_at: input.receivedAt, text: input.text });
+export async function importOfficeMessage(input: { id?: string; channel: string; from: string; receivedAt: string; text: string }): Promise<string> {
+  const message = await api.addMessage({ ...(input.id ? { id: input.id } : {}), channel: input.channel as never, from: input.from.trim(), received_at: input.receivedAt, text: input.text });
   try {
     await api.extract(message.id, DEFAULT_EXTRACTION_EFFORT, message.version);
   } catch {
@@ -33,7 +43,21 @@ export async function importOfficeMessage(input: { channel: string; from: string
   return message.id;
 }
 
-export function ImportSheet({ request, run, onClose, onImported }: { request: ImportRequest | null; run: Run; onClose: () => void; onImported: (messageId: string) => void }) {
+export function ImportSheet({
+  request,
+  run,
+  onClose,
+  onImported,
+  fixtures = [],
+  importedIds = new Set(),
+}: {
+  request: ImportRequest | null;
+  run: Run;
+  onClose: () => void;
+  onImported: (messageId: string) => void;
+  fixtures?: Fixture[];
+  importedIds?: ReadonlySet<string>;
+}) {
   const ref = useRef<HTMLDialogElement>(null);
   const fromRef = useRef<HTMLInputElement>(null);
   const uid = useId();
@@ -48,11 +72,17 @@ export function ImportSheet({ request, run, onClose, onImported }: { request: Im
     if (!dialog) return;
     if (request) {
       setText(request.text);
-      setReceived(denverWallNow());
+      const demo = fixtureFor(request.text, fixtures);
+      if (demo) {
+        setChannel(demo.channel);
+        setFrom(demo.from);
+        setReceived(denverWallNow(Date.parse(demo.received_at)));
+      } else setReceived(denverWallNow());
       if (!dialog.open) dialog.showModal();
       // The sender is the one field never prefilled.
       fromRef.current?.focus();
     } else if (dialog.open) dialog.close();
+    // Runs when the sheet opens. The fixtures are read at that moment.
   }, [request]);
 
   const receivedAt = denverWallToIso(received);
@@ -61,9 +91,15 @@ export function ImportSheet({ request, run, onClose, onImported }: { request: Im
     if (!receivedAt) return;
     setBusy(true);
     const out: { id: string | null } = { id: null };
-    await run(async () => {
-      out.id = await importOfficeMessage({ channel, from, receivedAt, text });
-    });
+    const demo = fixtureFor(text, fixtures);
+    if (demo && importedIds.has(demo.id)) {
+      // Already in the case: show its card instead of importing it twice.
+      out.id = demo.id;
+    } else {
+      await run(async () => {
+        out.id = await importOfficeMessage({ id: demo?.id, channel, from, receivedAt, text });
+      });
+    }
     setBusy(false);
     if (out.id) {
       setFrom("");

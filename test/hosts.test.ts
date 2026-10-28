@@ -137,7 +137,12 @@ describe("the server with APP_ALLOWED_HOSTS", () => {
       await call(app.port, "GET", "/api/chat", { Host: host, Cookie: cookie }),
       await call(app.port, "POST", "/api/chat", { ...page, Cookie: cookie, Accept: "text/event-stream" }, { text: "What is confirmed?", expectedVersion: 0 }),
     ];
-    expect(responses.map((r) => r.status).slice(0, 4)).toEqual([200, 401, 403, 200]);
+    expect(responses.map((r) => r.status)).toEqual([200, 401, 403, 200, 200, 200]);
+    // 7A's chat: GET is JSON, POST is the event stream, and the headers do
+    // not change either.
+    expect(responses[4]!.headers["content-type"]).toBe("application/json");
+    expect(responses[5]!.headers["content-type"]).toBe("text/event-stream");
+    expect(String(responses[5]!.body)).toContain("event: turn.done");
     for (const r of responses) {
       expect(r.headers["x-content-type-options"]).toBe("nosniff");
       expect(r.headers["content-security-policy"]).toBe("default-src 'none'; frame-ancestors 'none'");

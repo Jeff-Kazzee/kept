@@ -7,9 +7,10 @@
 //
 // The chat is kept in this tab's sessionStorage, so a reload keeps it.
 // Closing the tab or Delete case clears it.
+import { WITHHELD_USER_TEXT } from "../../src/agent/types.ts";
 import { SCOPE_DECLINE, hasClinicalContent } from "../../src/domain/scope.ts";
 import type { AppState, FixtureScenario, MessageView } from "../api.ts";
-import type { Card, ChatEvent, ChatLog, ChatMessage, ChatTransport, FactChip } from "./types.ts";
+import type { Card, ChatErrorCode, ChatEvent, ChatLog, ChatMessage, ChatTransport, FactChip } from "./types.ts";
 
 // The parts of the page's API the mock uses.
 export type MockApi = {
@@ -28,9 +29,7 @@ export type MockOptions = { api: MockApi; now?: () => string; delayMs?: number; 
 export const MOCK_MARKER = "appointments-mock-chat";
 const STORE_KEY = MOCK_MARKER;
 
-// The sentence the chat stores in place of a message it declined (0007,
-// C2). After 7A merges this comes from src/agent/types.ts.
-export const WITHHELD_USER_TEXT = "Not saved: this message asked about health, which this app does not handle.";
+
 
 const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
@@ -92,7 +91,7 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
       emit({ event: "turn.started", data: { turnId, userMessageId } });
       // The answer's text is held until the end, then sent in pieces of
       // about 80 characters, as the agent sends checked text (0007, C1).
-      const finish = async (answer: ChatMessage, userText: string, code?: { code: string; message: string }) => {
+      const finish = async (answer: ChatMessage, userText: string, code?: { code: ChatErrorCode; message: string }) => {
         if (answer.chips.length > 0) emit({ event: "facts", data: { turnId, chips: answer.chips } });
         for (const piece of answer.text.match(/[\s\S]{1,80}(\s|$)|[\s\S]{1,80}/g) ?? []) {
           emit({ event: "text.delta", data: { turnId, text: piece } });

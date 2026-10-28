@@ -36,4 +36,20 @@ describe("waiting for you", () => {
     expect(html).toContain(state.case.question!.text.replaceAll("'", "&#x27;"));
     expect(html.match(/aria-label="Reply draft"/g)).toHaveLength(1);
   });
+
+  it("offers a conflict that waits for a question, with Explain and Ask, when the chat has not asked it", async () => {
+    const store = new EventStore(":memory:");
+    const svc = intake(store);
+    const client = RecordedModelClient.fromDirectory();
+    const kase = new CaseService(store, svc, client, { userName: "Dana Reyes" });
+    const api = createApi(svc, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, svc, kase));
+    await acceptMessages(svc, ["m1", "m2", "m3"]);
+    const state = (await api({ method: "GET", path: "/api/state", body: undefined })).body as AppState;
+    expect(state.case.question).toBeNull();
+    expect(waitingCount(state)).toBe(1);
+    const html = renderToStaticMarkup(createElement(ScheduleTab, { state, run: async () => {}, highlight: null }));
+    expect(html).toContain('aria-label="Explanation"');
+    expect(html).toContain(" Explain with the model</button>");
+    expect(html).toContain(">Ask me the question about this</button>");
+  });
 });

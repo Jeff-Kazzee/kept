@@ -6,7 +6,9 @@ import type { AppState } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
 import { Icon, type IconName } from "../components/Icon.tsx";
 import { EvidenceCard } from "../case/ClaimsCard.tsx";
-import { QuestionCard } from "../case/ConflictCards.tsx";
+import { ExplanationCard, QuestionCard } from "../case/ConflictCards.tsx";
+import { api } from "../api.ts";
+import { ActionButton } from "../components/ActionButton.tsx";
 import { ProposalCard } from "../case/ProposalCard.tsx";
 import { ReplyPanel } from "../case/ReplyCard.tsx";
 import { GrantPanel } from "./Access.tsx";
@@ -24,13 +26,21 @@ const TABS: Array<{ id: PanelTab; label: string; icon: IconName }> = [
   { id: "settings", label: "Settings", icon: "settings" },
 ];
 
+// A conflict that waits to be asked about, when no question is open. The
+// chat usually asks it. Without the chat, or when the chat cannot answer,
+// the Schedule tab offers it (0008, B19).
+export function unaskedConflict(state: AppState) {
+  if (state.case.question) return undefined;
+  return state.case.conflicts.find((c) => c.status === "open" && c.askable && c.archivedSlotKeys.length === 0);
+}
+
 // How many things wait for the user: claims and proposals to review, the
-// open question and the open reply draft.
+// open question or a conflict waiting for one, and the open reply draft.
 export function waitingCount(state: AppState): number {
   return (
     state.evidence.filter((e) => e.status === "pending").length +
     state.proposals.filter((p) => p.status === "pending").length +
-    (state.case.question ? 1 : 0) +
+    (state.case.question || unaskedConflict(state) ? 1 : 0) +
     (state.case.reply.draft ? 1 : 0)
   );
 }
@@ -63,7 +73,9 @@ export function SchedulePanel({
   return (
     <>
       <div className="panel-head">
-        <h2 id="panel-title">Your schedule</h2>
+        <h2 id="panel-title" tabIndex={-1}>
+          Your schedule
+        </h2>
         {onClose && (
           <button type="button" className="btn btn-ghost btn-icon panel-close" onClick={onClose} aria-label="Close the schedule">
             <Icon name="close" />
@@ -112,7 +124,8 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
   const proposals = state.proposals.filter((p) => p.status === "pending");
   const reply = kase.reply;
   const replyWaiting = reply.draft !== null || reply.suggestion !== null;
-  const needsYou = pending.length + proposals.length > 0 || kase.question !== null || replyWaiting;
+  const conflict = unaskedConflict(state);
+  const needsYou = pending.length + proposals.length > 0 || kase.question !== null || conflict !== undefined || replyWaiting;
   return (
     <div className="stack">
       {needsYou && (
@@ -125,6 +138,16 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
             <ProposalCard key={p.id} proposal={p} records={state.records} run={run} />
           ))}
           {kase.question && <QuestionCard conflictId={kase.question.conflictId} state={state} run={run} showDraft={false} />}
+          {conflict && (
+            <>
+              <ExplanationCard conflictId={conflict.id} state={state} run={run} />
+              <div className="btn-row">
+                <ActionButton run={run} variant="primary" action={() => api.nextQuestion(kase.questionsVersion)}>
+                  Ask me the question about this
+                </ActionButton>
+              </div>
+            </>
+          )}
           {replyWaiting && <ReplyPanel reply={{ ...reply, sent: [] }} run={run} />}
         </section>
       )}

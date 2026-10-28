@@ -64,6 +64,7 @@ const CHANNEL_WORDS: Record<string, string> = {
   portal: "Portal message",
   voicemail_transcript: "Voicemail transcript",
   user_report: "Your own report",
+  unknown: "Channel not stated",
 };
 
 export const channelWord = (c: string) => CHANNEL_WORDS[c] ?? c;

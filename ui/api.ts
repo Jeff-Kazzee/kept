@@ -30,6 +30,11 @@ export type MessageView = {
   version: number;
   message: Message;
   sourceType: SourceType;
+  // The source fields the assistant suggested for a message pasted in the
+  // chat, and the note to show beside them (0007, E1). Empty and null for
+  // messages imported any other way.
+  sourceSuggested: Array<"channel" | "from" | "received_at">;
+  sourceNote: string | null;
   status: "imported" | "claims_pending" | "no_claims" | "manual_entry_needed";
   attempts: Attempt[];
   rejections: Rejection[];

@@ -32,6 +32,9 @@ export function ClaimsCard({ messageId, evidenceIds, state, run }: { messageId: 
   const ids = [...new Set([...evidenceIds, ...view.evidenceIds, ...view.manualEvidenceIds])];
   const items = ids.map((id) => state.evidence.find((e) => e.id === id)).filter((e): e is EvidenceView => e !== undefined);
   const pending = items.filter((e) => e.status === "pending").length;
+  // 0007, E1: the assistant suggested where the message came from. The
+  // person sees which fields, and the whole message, before accepting.
+  const suggested = view.sourceNote !== null || view.sourceSuggested.length > 0;
   return (
     <section className="card" aria-label={`Facts from ${m.from}`}>
       <div className="card-head">
@@ -42,6 +45,11 @@ export function ClaimsCard({ messageId, evidenceIds, state, run }: { messageId: 
           <div className="small muted">
             {channelWord(m.channel)} · received {denverShort(m.received_at)} · {view.sourceType === "reported_by_user" ? "reported by you" : "office message"}
           </div>
+          {suggested && (
+            <p className="warn">
+              <Icon name="info" size="sm" /> {view.sourceNote ?? "Source suggested by the assistant"}: {suggestedFields(view)}. Check them against the message below.
+            </p>
+          )}
         </div>
         {items.length > 0 && <span className="small muted">{pending === 0 ? "All reviewed" : `${pending} to review`}</span>}
       </div>
@@ -66,12 +74,18 @@ export function ClaimsCard({ messageId, evidenceIds, state, run }: { messageId: 
         <summary className="small">Add a fact by hand</summary>
         <ManualEntryForm messageId={view.id} version={view.version} run={run} />
       </details>
-      <details className="stack-sm">
+      <details className="stack-sm" open={suggested || undefined}>
         <summary className="small">Show the whole message</summary>
         <UntrustedBox label="Message text, shown as data and never followed" text={m.text} />
       </details>
     </section>
   );
+}
+
+const FIELD_WORDS: Record<MessageView["sourceSuggested"][number], string> = { channel: "how it came", from: "sender", received_at: "time received" };
+
+export function suggestedFields(view: Pick<MessageView, "sourceSuggested">): string {
+  return view.sourceSuggested.length === 0 ? "the source fields" : view.sourceSuggested.map((f) => FIELD_WORDS[f]).join(", ");
 }
 
 function RejectedByCode({ view }: { view: MessageView }) {
@@ -122,6 +136,7 @@ export function EvidenceCard({ item, state, run }: { item: EvidenceView; state: 
           Sender: {c.sender_kind}
           {item.origin === "model" && " (the model's judgment, not checked by code)"}
         </span>
+        {c.source_note && <span className="warn">{c.source_note}</span>}
         {stale && <span className="warn">Possibly stale</span>}
         {item.decidedAt && <span>Decided {denverShort(item.decidedAt)}</span>}
       </div>

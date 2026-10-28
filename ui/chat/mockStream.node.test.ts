@@ -10,7 +10,8 @@ import { ReplyService } from "../../src/reply/service.ts";
 import { EventStore } from "../../src/store/event-log.ts";
 import { agentAccess, asFreshPage, fixtureMessage, intake } from "../../test/helpers.ts";
 import type { AppState } from "../api.ts";
-import { WITHHELD_USER_TEXT, createMockTransport, intentOf, type MockApi } from "./mockStream.ts";
+import { WITHHELD_USER_TEXT } from "../../src/agent/types.ts";
+import { createMockTransport, intentOf, type MockApi } from "./mockStream.ts";
 import type { ChatEvent } from "./types.ts";
 
 function setup() {

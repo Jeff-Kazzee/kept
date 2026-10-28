@@ -36,4 +36,12 @@ describe("import sheet", () => {
     expect(html).toContain("Received (America/Denver time)");
     expect(html).toContain("Add and read the message");
   });
+
+  it("recognizes a demo fixture message by its exact text, so its recorded extraction applies", async () => {
+    const { fixtureFor } = await import("./ImportSheet.tsx");
+    const m1 = { id: "m1", channel: "sms" as const, from: "Lantern Hill Clinic", received_at: "2026-10-30T15:04:00-06:00", text: "Lantern Hill Clinic: Hi Dana, we can see you Tuesday." };
+    expect(fixtureFor(`  ${m1.text}\n`, [m1])).toBe(m1);
+    expect(fixtureFor(`${m1.text} Thanks.`, [m1])).toBeNull();
+    expect(fixtureFor("", [m1])).toBeNull();
+  });
 });
