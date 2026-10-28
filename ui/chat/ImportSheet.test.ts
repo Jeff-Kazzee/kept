@@ -29,11 +29,12 @@ describe("import sheet", () => {
     expect(writes.every((w) => w.headers["X-Case-Generation"] === "2" && w.headers["X-Appointments-App"] === "1")).toBe(true);
   });
 
-  it("every field has a label, an id and a name, and the time is America/Denver", async () => {
+  it("every field has a label, an id and a name, and the time is typed in the case zone", async () => {
     const { ImportSheet } = await import("./ImportSheet.tsx");
     const html = renderToStaticMarkup(createElement(ImportSheet, { request: null, run: async () => {}, onClose: () => {}, onImported: () => {} }));
     for (const name of ["import-channel", "import-from", "import-received", "import-text"]) expect(html).toMatch(new RegExp(`<(input|select|textarea)[^>]*id="[^"]+"[^>]*name="${name}"`));
-    expect(html).toContain("Received (America/Denver time)");
+    // The app's default zone is UTC until settings name another.
+    expect(html).toContain("Received (UTC time)");
     expect(html).toContain("Add and read the message");
   });
 

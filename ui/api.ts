@@ -114,7 +114,7 @@ export type FixtureScenario = {
 
 export class ApiError extends Error {
   readonly status: number;
-  readonly body: { error?: string; message?: string; issues?: Array<{ path: string; message: string }> };
+  readonly body: { error?: string; message?: string; issues?: Array<{ path: string; message: string }>; retryable?: boolean };
   constructor(status: number, body: ApiError["body"]) {
     super(body.message ?? body.issues?.map((i) => `${i.path}: ${i.message}`).join("; ") ?? body.error ?? `HTTP ${status}`);
     this.status = status;

@@ -96,6 +96,23 @@ describe("ui api", () => {
     ]);
   });
 
+  it("sprint 10: tries a settings write once more when the settings were busy, and only then", async () => {
+    const { retryBusy } = await import("./agentApi.ts");
+    const { ApiError } = await import("./api.ts");
+    const busy = new ApiError(503, { error: "settings_busy", retryable: true, message: "Busy." });
+    let calls = 0;
+    const wait = async () => {};
+    expect(await retryBusy(async () => (++calls === 1 ? Promise.reject(busy) : "saved"), wait)).toBe("saved");
+    expect(calls).toBe(2);
+    calls = 0;
+    await expect(retryBusy(async () => (++calls, Promise.reject(busy)), wait)).rejects.toBe(busy);
+    expect(calls).toBe(2);
+    calls = 0;
+    const stale = new ApiError(409, { error: "stale_edit" });
+    await expect(retryBusy(async () => (++calls, Promise.reject(stale)), wait)).rejects.toBe(stale);
+    expect(calls).toBe(1);
+  });
+
   it("opens a sign-in address only on this origin or over https", async () => {
     const { safeAuthorizeUrl } = await import("./agentApi.ts");
     const origin = "http://127.0.0.1:5180";

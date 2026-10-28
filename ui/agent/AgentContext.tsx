@@ -26,6 +26,11 @@ export type AgentState = {
   openSettings: () => void;
   // Says what went wrong in a plain sentence (a toast).
   report: (e: unknown) => void;
+  // A plain note from the server, such as the sign-out notice (a toast).
+  notify: (text: string) => void;
+  // "recorded" or "live": a provider and model are picked either way, but
+  // in recorded mode the answers come from recordings.
+  mode: "recorded" | "live";
 };
 
 const noop = async () => {};
@@ -59,6 +64,8 @@ export const DEFAULT_AGENT: AgentState = {
   reload: noop,
   openSettings: () => {},
   report: () => {},
+  notify: () => {},
+  mode: "recorded",
 };
 
 export const AgentContext = createContext<AgentState>(DEFAULT_AGENT);

@@ -21,6 +21,11 @@ import { ReplyPanel } from "./case/ReplyCard.tsx";
 import { stampTime } from "./format.ts";
 import { Agenda, RecordNotes, UNCONFIRMED_WORDS, activeArchive } from "./schedule/Agenda.tsx";
 import { ChecklistPanel } from "./schedule/CaseTabs.tsx";
+import { setCaseZone } from "./format.ts";
+
+// These tests read times as the demo shows them, in the clinic's zone. The
+// app's own default is UTC, as the server's.
+setCaseZone("America/Denver");
 
 const run = async () => {};
 const THU = "2026-11-12T10:30";

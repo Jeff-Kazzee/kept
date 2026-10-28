@@ -1,10 +1,10 @@
 // The sprint 8, 9, 10 and 11 contract as the page uses it: activity and
 // undo, the chat's action event, settings, the time zone, model sign-in
-// and Google. Sprint 8 serves activity, undo and the time zone. The
-// provider, model, sign-in and Google routes come with sprints 10 and 11.
-// Until then a development build fakes only those (ui/dev/fakeBackend.ts),
-// and a production build says they are not available yet. Runs in the
-// browser and in Node.
+// and Google. Sprint 8 serves activity, undo and the time zone, and sprint
+// 10 the provider, model and sign-in. Google comes with sprint 11. Until
+// then a development build fakes only `/api/google`
+// (ui/dev/fakeBackend.ts), and a production build says it is not
+// available yet. Runs in the browser and in Node.
 import type { ActivityActor, ActivityEntry, ActivityTarget, ActivityView } from "../src/activity/types.ts";
 import type { ChatEvent, ChatMessage } from "../src/agent/types.ts";
 
@@ -17,16 +17,18 @@ export type Provider = "meta" | "chatgpt";
 
 export type ModelOption = { id: string; label: string; costHint: "lower" | "higher" | null };
 
-// What GET /api/settings answers. Sprint 8 serves the time zone part and
-// the provider part as not set. The model part comes with sprint 10.
-// `providersInBuild` is the page's own: true when the server sent the
-// model list, so the provider, model and sign-in routes exist (0011, U37).
+// What GET /api/settings answers (0009 and 0010). One settingsVersion
+// covers the time zone and the provider part, and every settings and
+// sign-in write states it.
 export type Settings = {
   settingsVersion: number;
-  // The model of the current provider, and the models it offers.
+  // The model of the current provider, and the models it offers. Empty
+  // with no provider.
   model: string;
   models: ModelOption[];
-  providersInBuild: boolean;
+  // Set when the chosen model failed something the app needs. Shown under
+  // the model choice.
+  modelNotice: string | null;
   timezone: string;
   timezoneSource: "you" | "agent" | "browser" | "default";
   provider: Provider | null;
@@ -34,15 +36,15 @@ export type Settings = {
   chatgpt: { signedIn: boolean; name: string | null; email: string | null; planUsage: boolean };
 };
 
-// The zone the app uses until settings say otherwise. The demo's messages
-// come from a clinic in America/Denver.
-export const DEFAULT_ZONE = "America/Denver";
+// The zone the app uses until settings say otherwise, the server's own
+// default (0009, A12). Loading the demo sets America/Denver.
+export const DEFAULT_ZONE = "UTC";
 
 export const DEFAULT_SETTINGS: Settings = {
   settingsVersion: 0,
   model: "",
   models: [],
-  providersInBuild: false,
+  modelNotice: null,
   timezone: DEFAULT_ZONE,
   timezoneSource: "default",
   provider: null,

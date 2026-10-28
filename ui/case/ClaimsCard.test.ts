@@ -13,6 +13,11 @@ import { CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT } from "../format.ts";
 import { ClaimsCard, EvidenceCard, factLine } from "./ClaimsCard.tsx";
 import { AgentContext, DEFAULT_AGENT } from "../agent/AgentContext.tsx";
 import { SourceQuote, evidenceOrigin } from "./Source.tsx";
+import { setCaseZone } from "../format.ts";
+
+// These tests read times as the demo shows them, in the clinic's zone. The
+// app's own default is UTC, as the server's.
+setCaseZone("America/Denver");
 
 const item: EvidenceView = {
   id: "p-1a2b3c4d-1",

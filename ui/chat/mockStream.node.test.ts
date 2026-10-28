@@ -99,35 +99,45 @@ describe("scripted chat", () => {
     expect(deltas.join("")).toBe(stored.messages[1]!.text);
   });
 
-  it("the hybrid backend sends the time zone, activity and undo to sprint 8's routes, and only the provider part and Google to the fake", async () => {
+  it("the hybrid backend sends everything to the server but Google, and undoes each entry where it came from", async () => {
     const { turn, call, agent, activity } = setup();
     await turn(fixtureMessage("m1").text);
+    const calls: string[] = [];
+    const server = (name: string) => async () => {
+      calls.push(name);
+      return {};
+    };
     const real = {
       kind: "real" as const,
-      settings: async () => ({ ...((await call("GET", "/api/settings")) as object), model: undefined, models: undefined }) as never,
+      settings: async () => (await call("GET", "/api/settings")) as never,
       setTimezone: (zone: string, v: number, from?: "browser" | "you") => call("PUT", "/api/settings/timezone", { timezone: zone, expectedVersion: v, ...(from === "browser" ? { source: "browser" } : {}) }),
-      setProvider: async () => Promise.reject(new Error("not on sprint 8")),
-      setModel: async () => Promise.reject(new Error("not on sprint 8")),
-      saveMetaKey: async () => Promise.reject(new Error("not on sprint 8")),
-      removeMetaKey: async () => Promise.reject(new Error("not on sprint 8")),
-      chatgptStart: async () => Promise.reject(new Error("not on sprint 8")),
-      chatgptSignOut: async () => Promise.reject(new Error("not on sprint 8")),
+      setProvider: server("setProvider"),
+      setModel: server("setModel"),
+      saveMetaKey: server("saveMetaKey"),
+      removeMetaKey: server("removeMetaKey"),
+      chatgptStart: async () => ({ authorizeUrl: "https://auth.example.com/authorize" }),
+      chatgptSignOut: server("chatgptSignOut"),
       activity,
       undo: (id: string, v: number) => call("POST", `/api/activity/${id}/undo`, { expectedVersion: v }),
-      google: async () => null,
-      googleConnect: async () => Promise.reject(new Error("not on sprint 8")),
-      googleDisconnect: async () => Promise.reject(new Error("not on sprint 8")),
+      google: server("google") as never,
+      googleConnect: server("googleConnect") as never,
+      googleDisconnect: server("googleDisconnect"),
     };
     const hybrid = createHybridBackend(real, agent);
-    // The provider part is the fake's, so it works before sprint 10.
+    // Sprint 10's provider, model and sign-in routes are the server's.
     await hybrid.saveMetaKey("synthetic-demo-key-0000", 0);
-    expect((await hybrid.settings())!).toMatchObject({ provider: "meta", model: "muse-spark-1.3", providersInBuild: true });
+    await hybrid.setModel("muse-wonder-1.0", 1);
+    await hybrid.removeMetaKey(2);
+    await hybrid.chatgptSignOut(3);
+    expect(calls).toEqual(["saveMetaKey", "setModel", "removeMetaKey", "chatgptSignOut"]);
+    // Google is the fake's until sprint 11.
+    expect(await hybrid.google()).toMatchObject({ connected: false, version: 0 });
+    expect(calls).not.toContain("google");
     // An accepted fact is undone by the server.
     const log = (await hybrid.activity())!;
     const fact = log.entries.find((e) => e.kind === "claim_accepted")!;
     await hybrid.undo(fact.id, log.activityVersion);
-    const after = (await activity()).entries.find((e) => e.id === fact.id)!;
-    expect(after.undone).toBe(true);
+    expect((await activity()).entries.find((e) => e.id === fact.id)!.undone).toBe(true);
     // The first-load zone goes to the server with source "browser".
     const s = (await hybrid.settings())!;
     await hybrid.setTimezone("Europe/Berlin", s.settingsVersion, "browser");

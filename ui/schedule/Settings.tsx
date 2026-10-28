@@ -56,7 +56,7 @@ export function SettingsPanel({ mode, modelClient, version, erasePending, run }:
       </section>
       <section className="card stack-sm" aria-labelledby="set-model">
         <h3 id="set-model">Model provider</h3>
-        {settingsAvailable && settings.providersInBuild ? (
+        {settingsAvailable ? (
           <>
             <ProviderSetting settings={settings} run={run} />
             <ModelSelect />
@@ -219,11 +219,18 @@ export function ProviderSetting({ settings, run }: { settings: Settings; run: Ru
                     {i === 0 && <span className="model-tag">Default</span>}
                   </span>
                 </label>
-                {current === p.id && <span className="pill pill-accepted">In use</span>}
+                {current === p.id && (ready ? <span className="pill pill-accepted">In use</span> : <span className="pill pill-pending">Needs setup</span>)}
               </div>
               <p className="small muted">{p.receives}</p>
               <p.Body settings={settings} run={run} />
-              {!ready && <p className="small muted">{p.id === "meta" ? "Add a key to use Meta." : "Sign in to use ChatGPT."}</p>}
+              {!ready &&
+                (current === p.id ? (
+                  <p className="small warn" role="status">
+                    {p.id === "meta" ? "Meta is still the provider, but it has no key. Add a key, or pick another provider." : "ChatGPT is still the provider, but you are signed out. Sign in again, or pick another provider."}
+                  </p>
+                ) : (
+                  <p className="small muted">{p.id === "meta" ? "Add a key to use Meta." : "Sign in to use ChatGPT."}</p>
+                ))}
             </section>
           </div>
         );
@@ -288,7 +295,7 @@ function MetaKeyBody({ settings, run }: { settings: Settings; run: Run }) {
 }
 
 function ChatGptBody({ settings, run }: { settings: Settings; run: Run }) {
-  const { backend, reload } = useAgent();
+  const { backend, reload, notify } = useAgent();
   const c = settings.chatgpt;
   if (c.signedIn) {
     return (
@@ -302,7 +309,9 @@ function ChatGptBody({ settings, run }: { settings: Settings; run: Run }) {
           run={run}
           variant="ghost"
           action={async () => {
-            await backend.chatgptSignOut(settings.settingsVersion);
+            const answer = (await backend.chatgptSignOut(settings.settingsVersion)) as { notice?: string | null } | undefined;
+            // ChatGPT may not confirm the sign-out on its side (0010).
+            if (answer?.notice) notify(answer.notice);
             await reload();
           }}
         >

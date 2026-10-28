@@ -1,10 +1,20 @@
 // Times in the case time zone with its short name, and errors as plain
 // sentences. The zone is America/Denver until settings set another.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api.ts";
-import { clockTime, errorSentence, getCaseZone, setCaseZone, shortTime, stampTime, wallNow, wallSkipped, wallToIso, zoneShortName } from "./format.ts";
+import { clockTime, errorSentence, getCaseZone, setCaseZone, shortTime, signInErrorSentence, stampTime, wallNow, wallSkipped, wallToIso, zoneShortName } from "./format.ts";
+
+// The demo's zone. The app's own default is UTC, as the server's.
+setCaseZone("America/Denver");
 
 describe("format", () => {
+  it("defaults to UTC, the server's zone, until settings name another", async () => {
+    vi.resetModules();
+    const fresh = await import("./format.ts");
+    expect(fresh.getCaseZone()).toBe("UTC");
+    expect(fresh.stampTime("2026-11-01T08:30:00.000Z")).toBe("2026-11-01 08:30 UTC");
+  });
+
   it("times show in America/Denver across the 2026-11-01 change", () => {
     expect(stampTime("2026-11-01T07:30:00.000Z")).toBe("2026-11-01 01:30 MDT");
     expect(stampTime("2026-11-01T08:30:00.000Z")).toBe("2026-11-01 01:30 MST");
@@ -51,6 +61,17 @@ describe("format", () => {
     expect(wallSkipped("2026-03-08T02:30", "America/Denver")).toBe(true);
     expect(wallSkipped("2026-03-08T03:30", "America/Denver")).toBe(false);
     expect(wallSkipped("not a time", "America/Denver")).toBe(false);
+  });
+
+  it("sprint 10: shows the server's own sentence for settings refusals, and a plain one for a failed sign-in", () => {
+    const sentence = (status: number, error: string, message: string) => errorSentence(new ApiError(status, { error, message }));
+    expect(sentence(422, "provider_not_ready", "Add a Meta Model API key first, then choose Meta. Nothing was changed.")).toBe("Add a Meta Model API key first, then choose Meta. Nothing was changed.");
+    expect(sentence(422, "unknown_model", "That model is not in the list for the current provider. Pick one from the list. Nothing was changed.")).toContain("Pick one from the list.");
+    expect(sentence(400, "invalid_key", "That does not look like a Meta Model API key. Paste the key on its own, with no spaces. Nothing was saved.")).not.toMatch(/Nothing was saved\. Nothing was saved/);
+    expect(errorSentence(new ApiError(503, { error: "settings_busy", retryable: true, message: "The app's settings are busy in another window or process. Try again in a moment. Nothing was changed." }))).toContain("busy in another window");
+    expect(errorSentence(new ApiError(400, { error: "invalid_body", issues: [{ path: "expectedVersion", message: "Send the settingsVersion" }] }))).toBe("The page sent a request the app could not read. Nothing was saved.");
+    expect(signInErrorSentence("access_denied")).toBe("ChatGPT sign-in was canceled. Nothing changed. You can try again in Settings.");
+    expect(signInErrorSentence("something_new")).toBe("The ChatGPT sign-in did not finish. Nothing changed. Try again in Settings.");
   });
 
   it("an undo the server refused shows the server's reason as it is", () => {

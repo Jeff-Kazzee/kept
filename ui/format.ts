@@ -97,6 +97,29 @@ export const channelWord = (c: string) => CHANNEL_WORDS[c] ?? c;
 
 const NOTHING_SAVED = "Nothing was saved.";
 
+// Codes whose message is shown as the server wrote it.
+const SERVER_SENTENCE_CODES = new Set(["provider_not_ready", "unknown_model", "invalid_key", "settings_busy", "settings_unreadable", "sign_in_unavailable"]);
+
+// A failed ChatGPT sign-in comes back to /?signInError=<code> (0010). The
+// code is the server's, the sentence the page's. An unknown code gets the
+// general sentence.
+const SIGN_IN_ERRORS: Record<string, string> = {
+  access_denied: "ChatGPT sign-in was canceled. Nothing changed. You can try again in Settings.",
+  expired: "The ChatGPT sign-in took too long and expired. Start it again in Settings.",
+  state_mismatch: "That ChatGPT sign-in did not match one this app started. Start it again in Settings.",
+  authorization_failed: "ChatGPT did not complete the sign-in. Nothing changed. Try again in a moment.",
+  exchange_failed: "ChatGPT did not complete the sign-in. Nothing changed. Try again in a moment.",
+  registration_incomplete: "ChatGPT sign-in is not set up on its side yet. Use a Meta key for now.",
+  client_mismatch: "ChatGPT answered for a different app. Nothing changed. Start the sign-in again in Settings.",
+  identity_unavailable: "ChatGPT sign-in is not reachable just now. Try again in a moment, or use a Meta key.",
+  identity_invalid: "ChatGPT sent an account this app could not check. Nothing changed. Try again in a moment.",
+  account_mismatch: "That ChatGPT account is not the one this app signed in before. Sign out first, then sign in again.",
+  settings_busy: "The app's settings were busy, so the sign-in was not saved. Try again in a moment.",
+  server_error: "The app could not finish the ChatGPT sign-in. Nothing changed. Try again in a moment.",
+};
+
+export const signInErrorSentence = (code: string) => SIGN_IN_ERRORS[code] ?? "The ChatGPT sign-in did not finish. Nothing changed. Try again in Settings.";
+
 // What went wrong, as a plain sentence that says nothing was saved. Never
 // shows a raw response body.
 export function errorSentence(e: unknown): string {
@@ -105,6 +128,9 @@ export function errorSentence(e: unknown): string {
     // Undo refused because a later action depends on this one. The
     // server's sentence says why.
     if (code === "undo_blocked" && typeof e.body.message === "string" && e.body.message.trim() !== "") return e.body.message.trim();
+    // Sprint 10's settings and sign-in refusals carry their own plain
+    // sentence, which already says what was changed (0010).
+    if (code && SERVER_SENTENCE_CODES.has(code) && typeof e.body.message === "string" && e.body.message.trim() !== "") return e.body.message.trim();
     if (code === "case_deleted") return "The case was deleted in another tab or window. Nothing was saved. The empty case is loaded.";
     if (code === "stale_edit" || e.status === 409) return "This changed since it was shown. Nothing was saved. The current version is loaded.";
     if (code === "busy") return "The app is busy with another change. Nothing was saved. Try again in a moment.";

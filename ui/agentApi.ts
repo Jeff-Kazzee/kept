@@ -1,5 +1,6 @@
 // The routes of the agent-first contract (ui/contract.ts): settings, the
-// time zone, the model provider, sign-in, activity and undo. Every write
+// time zone, the model provider and model (sprint 10), sign-in, activity
+// and undo. Every write
 // carries the app header and the case generation, like every other write
 // (api.ts). A route the server does not have yet answers 404, and the page
 // says the part is not available in this build.
@@ -20,7 +21,8 @@ export type AgentBackend = {
   saveMetaKey(key: string, expectedVersion: number): Promise<unknown>;
   removeMetaKey(expectedVersion: number): Promise<unknown>;
   chatgptStart(): Promise<{ authorizeUrl: string }>;
-  chatgptSignOut(expectedVersion: number): Promise<unknown>;
+  // Answers the settings and, when ChatGPT did not confirm, a notice.
+  chatgptSignOut(expectedVersion: number): Promise<{ notice?: string | null } | unknown>;
   // Null when this build has no activity route yet.
   activity(): Promise<ActivityLog | null>;
   undo(id: string, expectedVersion: number): Promise<unknown>;
@@ -42,34 +44,37 @@ async function orNull<T>(read: () => Promise<T>): Promise<T | null> {
   }
 }
 
-// The settings as the page uses them. A server without the model routes
-// (sprint 10) sends no model list, and the page then says choosing a
-// provider is not available in this build.
-export function normalizeSettings(raw: Partial<Settings> & Pick<Settings, "settingsVersion" | "timezone" | "timezoneSource">): Settings {
-  return {
-    provider: null,
-    meta: { keySet: false, source: null },
-    chatgpt: { signedIn: false, name: null, email: null, planUsage: false },
-    ...raw,
-    model: raw.model ?? "",
-    models: raw.models ?? [],
-    providersInBuild: Array.isArray(raw.models),
-  };
+// A settings or sign-in write that met another window holding the
+// settings (503 settings_busy, retryable) is tried once more, after a short
+// wait. Nothing was written the first time (0010).
+export async function retryBusy<T>(write: () => Promise<T>, wait = (ms: number) => new Promise((r) => setTimeout(r, ms))): Promise<T> {
+  try {
+    return await write();
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 503 && e.body.retryable === true)) throw e;
+    await wait(400);
+    return write();
+  }
 }
+
+// What the sign-out answers: the settings, and a notice when ChatGPT did
+// not confirm the sign-out on its side.
+export type SignOutAnswer = Settings & { notice: string | null };
 
 export const realBackend: AgentBackend = {
   kind: "real",
   settings: async () => {
-    const raw = await orNull(() => request<Parameters<typeof normalizeSettings>[0]>("GET", "/api/settings"));
-    return raw ? normalizeSettings(raw) : null;
+    const raw = await orNull(() => request<Settings>("GET", "/api/settings"));
+    return raw ? { ...raw, modelNotice: raw.modelNotice ?? null } : null;
   },
-  setTimezone: (timezone, expectedVersion, from) => request("PUT", "/api/settings/timezone", { timezone, expectedVersion, ...(from === "browser" ? { source: "browser" } : {}) }),
-  setProvider: (provider, expectedVersion) => request("PUT", "/api/settings/provider", { provider, expectedVersion }),
-  setModel: (model, expectedVersion) => request("PUT", "/api/settings/model", { model, expectedVersion }),
-  saveMetaKey: (key, expectedVersion) => request("POST", "/api/auth/meta-key", { key, expectedVersion }),
-  removeMetaKey: (expectedVersion) => request("DELETE", "/api/auth/meta-key", { expectedVersion }),
-  chatgptStart: () => request<{ authorizeUrl: string }>("POST", "/api/auth/chatgpt/start", {}),
-  chatgptSignOut: (expectedVersion) => request("POST", "/api/auth/chatgpt/signout", { expectedVersion }),
+  setTimezone: (timezone, expectedVersion, from) =>
+    retryBusy(() => request("PUT", "/api/settings/timezone", { timezone, expectedVersion, ...(from === "browser" ? { source: "browser" } : {}) })),
+  setProvider: (provider, expectedVersion) => retryBusy(() => request("PUT", "/api/settings/provider", { provider, expectedVersion })),
+  setModel: (model, expectedVersion) => retryBusy(() => request("PUT", "/api/settings/model", { model, expectedVersion })),
+  saveMetaKey: (key, expectedVersion) => retryBusy(() => request("POST", "/api/auth/meta-key", { key, expectedVersion })),
+  removeMetaKey: (expectedVersion) => retryBusy(() => request("DELETE", "/api/auth/meta-key", { expectedVersion })),
+  chatgptStart: () => retryBusy(() => request<{ authorizeUrl: string }>("POST", "/api/auth/chatgpt/start", {})),
+  chatgptSignOut: (expectedVersion) => retryBusy(() => request<SignOutAnswer>("POST", "/api/auth/chatgpt/signout", { expectedVersion })),
   activity: () => orNull(() => request<ActivityLog>("GET", "/api/activity")),
   undo: (id, expectedVersion) => request("POST", `/api/activity/${encodeURIComponent(id)}/undo`, { expectedVersion }),
   google: () => orNull(() => request<GoogleStatus>("GET", "/api/google")),

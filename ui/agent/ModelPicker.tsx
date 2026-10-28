@@ -22,19 +22,25 @@ export function modelLabel(s: Settings): string | null {
 }
 
 // The short form a phone shows: "Meta · Spark 1.3".
-export const shortModelLabel = (label: string) => label.replace(/\bMuse /, "").replace(/ \(sample connection\)/, "");
+export const shortModelLabel = (label: string) => label.replace(/\bMuse /, "").replace(/ \((scripted|recorded)\)$/, "");
+
+// True when the provider is set but has lost what it needs: a key, or the
+// ChatGPT sign-in. The server never switches provider by itself (0010).
+export const providerNeedsSetup = (s: Settings) => (s.provider === "meta" && !s.meta.keySet) || (s.provider === "chatgpt" && !s.chatgpt.signedIn);
 
 // `fallback` names what answers when the build has no settings route or no
 // provider is set, such as "Recorded responses".
 export function ModelPicker({ fallback, scripted = false }: { fallback: string; scripted?: boolean }) {
-  const { settings, settingsAvailable, backend, reload, openSettings, report } = useAgent();
+  const { settings, settingsAvailable, backend, reload, openSettings, report, mode } = useAgent();
   const menu = useMenu();
   const id = useId();
   const [busy, setBusy] = useState(false);
-  const ready = settingsAvailable && settings.providersInBuild;
+  const ready = settingsAvailable;
   const chosen = ready ? modelLabel(settings) : null;
-  // The scripted chat answers whatever is picked, and says so.
-  const label = chosen ? (scripted ? `${chosen} (scripted)` : chosen) : fallback;
+  // The scripted chat and recorded responses answer whatever is picked,
+  // and say so. A provider that lost its key or sign-in needs setup.
+  const setup = ready && providerNeedsSetup(settings);
+  const label = chosen ? (setup ? `${chosen} (needs setup)` : scripted ? `${chosen} (scripted)` : mode === "recorded" ? `${chosen} (recorded)` : chosen) : fallback;
   const pick = async (model: string) => {
     setBusy(true);
     try {
@@ -61,7 +67,7 @@ export function ModelPicker({ fallback, scripted = false }: { fallback: string; 
         <Icon name="sparkle" size="sm" />
         <span className="model-long">{label}</span>
         <span className="model-short" aria-hidden="true">
-          {shortModelLabel(chosen ?? fallback)}
+          {shortModelLabel(chosen ? (setup ? `${chosen} (needs setup)` : chosen) : fallback)}
         </span>
         <Icon name="chevronDown" size="sm" />
       </button>
@@ -69,6 +75,7 @@ export function ModelPicker({ fallback, scripted = false }: { fallback: string; 
         {ready && settings.models.length > 0 ? (
           <>
             <p className="menu-label">{settings.provider ? `${PROVIDER_SHORT[settings.provider]} models` : "Models"}</p>
+            {settings.modelNotice && <p className="menu-note warn">{settings.modelNotice}</p>}
             {settings.models.map((m) => (
               <button
                 key={m.id}
@@ -106,29 +113,37 @@ export function ModelSelect() {
   const uid = useId();
   if (!settings.provider || settings.models.length === 0) return null;
   return (
-    <label className="field" htmlFor={`${uid}-model`}>
-      <span>Model</span>
-      <select
-        id={`${uid}-model`}
-        name="model"
-        className="select"
-        value={settings.model}
-        onChange={async (e) => {
-          try {
-            await backend.setModel(e.target.value, settings.settingsVersion);
-          } catch (err) {
-            report(err);
-          }
-          await reload();
-        }}
-      >
-        {settings.models.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.label}
-            {costWords(m) ? ` (${costWords(m)!.toLowerCase()})` : ""}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div className="stack-sm">
+      <label className="field" htmlFor={`${uid}-model`}>
+        <span>Model</span>
+        <select
+          id={`${uid}-model`}
+          name="model"
+          className="select"
+          value={settings.model}
+          onChange={async (e) => {
+            try {
+              await backend.setModel(e.target.value, settings.settingsVersion);
+            } catch (err) {
+              report(err);
+            }
+            await reload();
+          }}
+        >
+          {settings.models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+              {costWords(m) ? ` (${costWords(m)!.toLowerCase()})` : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      {/* Set when the chosen model failed something the app needs (0010). */}
+      {settings.modelNotice && (
+        <p className="warn" role="status">
+          <Icon name="alert" size="sm" /> {settings.modelNotice}
+        </p>
+      )}
+    </div>
   );
 }

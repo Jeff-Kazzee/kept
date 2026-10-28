@@ -7,6 +7,11 @@ import { describe, expect, it } from "vitest";
 import type { ReplyView } from "../../src/reply/types.ts";
 import type { AppState } from "../api.ts";
 import { ReplyCard, ReplyPanel, readbackDone } from "./ReplyCard.tsx";
+import { setCaseZone } from "../format.ts";
+
+// These tests read times as the demo shows them, in the clinic's zone. The
+// app's own default is UTC, as the server's.
+setCaseZone("America/Denver");
 
 const draft = {
   id: "d1",

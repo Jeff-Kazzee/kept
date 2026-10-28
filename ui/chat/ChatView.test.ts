@@ -11,6 +11,11 @@ import type { ActivityEntry, Settings } from "../contract.ts";
 import { DEFAULT_SETTINGS } from "../contract.ts";
 import { ChatView, toolSummaryText, turnErrorText, type ChatViewProps } from "./ChatView.tsx";
 import type { ChatState } from "./state.ts";
+import { setCaseZone } from "../format.ts";
+
+// These tests read times as the demo shows them, in the clinic's zone. The
+// app's own default is UTC, as the server's.
+setCaseZone("America/Denver");
 
 const state = {
   messages: [],
@@ -288,16 +293,22 @@ describe("chat view", () => {
   it("folds a finished turn's tool lines into one line, and shows the model the composer uses", () => {
     expect(toolSummaryText([{ callId: "c1", label: "Reading the message", ok: true }])).toBe("Worked through 1 step");
     expect(toolSummaryText([{ callId: "c1", label: "a", ok: true }, { callId: "c2", label: "b", ok: false }])).toBe("Worked through 2 steps, 1 did not finish");
-    const settings: Settings = { ...DEFAULT_SETTINGS, providersInBuild: true, settingsVersion: 3, provider: "meta", model: "muse-spark-1.3", models: [{ id: "muse-spark-1.3", label: "Muse Spark 1.3", costHint: "lower" }, { id: "muse-wonder", label: "Muse Wonder", costHint: "higher" }], meta: { keySet: true, source: "you" } };
+    const settings: Settings = { ...DEFAULT_SETTINGS, settingsVersion: 3, provider: "meta", model: "muse-spark-1.3", models: [{ id: "muse-spark-1.3", label: "Muse Spark 1.3", costHint: "lower" }, { id: "muse-wonder", label: "Muse Wonder", costHint: "higher" }], meta: { keySet: true, source: "you" } };
     const html = render(
       { status: "ready", chatVersion: 2, pending: null, messages: [{ id: "c2", actions: [], role: "assistant", text: "Done.", createdAt: at, cards: [], chips: [] }], toolsByMessage: { c2: [{ callId: "x", label: "Reading your schedule", ok: true }] } },
       {},
-      { settings, settingsAvailable: true },
+      { settings, settingsAvailable: true, mode: "live" },
     );
     expect(html).toContain('<summary class="small">Worked through 1 step</summary>');
     expect(html).toContain('<span class="model-long">Meta · Muse Spark 1.3</span>');
     // A phone shows the short form.
     expect(html).toContain('<span class="model-short" aria-hidden="true">Meta · Spark 1.3</span>');
+    // With recorded responses the label says so, and a provider that lost
+    // its key says it needs setup (sprint 10 never switches it).
+    const recorded = render({ status: "ready", chatVersion: 0, messages: [], pending: null }, {}, { settings, settingsAvailable: true, mode: "recorded" });
+    expect(recorded).toContain('<span class="model-long">Meta · Muse Spark 1.3 (recorded)</span>');
+    const lost = render({ status: "ready", chatVersion: 0, messages: [], pending: null }, {}, { settings: { ...settings, meta: { keySet: false, source: null } }, settingsAvailable: true, mode: "live" });
+    expect(lost).toContain('<span class="model-long">Meta · Muse Spark 1.3 (needs setup)</span>');
     expect(html).toContain("Muse Wonder<small>Higher cost</small>");
     expect(html).toMatch(/aria-pressed="true"[^>]*>.*Muse Spark 1\.3<small>Lower cost<\/small>/);
   });

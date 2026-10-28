@@ -21,7 +21,7 @@ import { realTransport } from "./chat/transport.ts";
 import type { ChatTransport } from "./chat/types.ts";
 import { useChat } from "./chat/useChat.ts";
 import { createFakeBackend, createHybridBackend, type FakeBackend } from "./dev/fakeBackend.ts";
-import { errorSentence, setCaseZone } from "./format.ts";
+import { errorSentence, setCaseZone, signInErrorSentence } from "./format.ts";
 import { SchedulePanel, TABS, waitingCount, type PanelTab } from "./schedule/SchedulePanel.tsx";
 import { slotElementId } from "./schedule/Agenda.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
@@ -120,12 +120,16 @@ export function App() {
     void refresh();
     // The ChatGPT sign-in comes back to /?signedIn=chatgpt.
     const params = new URLSearchParams(window.location.search);
-    // Google comes back to /?connected=google.
+    // Google comes back to /?connected=google. A failed ChatGPT sign-in
+    // comes back to /?signInError=<code> (0010).
     const back = params.get("signedIn") === "chatgpt" ? "chatgpt" : params.get("connected") === "google" ? "google" : null;
-    if (back) {
-      toast("info", back === "chatgpt" ? "Signed in with ChatGPT. Settings shows it under Model provider." : "Connected Google. Settings lists what the assistant may use.");
+    const failed = params.get("signInError");
+    if (back || failed) {
+      if (failed) toast("error", signInErrorSentence(failed));
+      else toast("info", back === "chatgpt" ? "Signed in with ChatGPT. Settings shows it under Model provider." : "Connected Google. Settings lists what the assistant may use.");
       params.delete("signedIn");
       params.delete("connected");
+      params.delete("signInError");
       const rest = params.toString();
       window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
     }
@@ -368,9 +372,9 @@ function Shell({
 
   const waiting = waitingCount(state);
   // What the composer's indicator says when no provider is picked.
-  // A server without the provider routes (sprint 8 alone) answers with the
-  // live model or recorded responses, so the label says which.
-  const modelLabel = scripted ? "Scripted demo, no model" : settings?.providersInBuild ? "No model set" : state.mode === "live" ? "Live model" : "Recorded responses";
+  // What the composer's indicator says when no provider is picked, or when
+  // the settings cannot be read.
+  const modelLabel = scripted ? "Scripted demo, no model" : settings ? "No model set" : state.mode === "live" ? "Live model" : "Recorded responses";
 
   const agent: AgentState = {
     backend,
@@ -383,6 +387,8 @@ function Shell({
     // Undo waits while a turn streams or another undo runs (finding 4).
     undoBusy: streaming || undoing,
     report: (e) => toast("error", errorSentence(e)),
+    notify: (text) => toast("info", text),
+    mode: state.mode,
     reload: refresh,
     openSettings: () => openPanel("settings"),
   };

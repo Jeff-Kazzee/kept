@@ -585,6 +585,7 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
   animation: rise var(--fast) var(--ease);
 }
 .menu-wide { min-width: 280px; }
+.menu-note { padding: 2px var(--s-1) var(--s-half); }
 .menu-label { padding: 6px var(--s-1) 2px; font-size: var(--text-xs); font-weight: 620; color: var(--text-2); }
 .menu-item {
   display: flex; align-items: flex-start; gap: var(--s-2); min-height: var(--touch); padding: var(--s-1);
