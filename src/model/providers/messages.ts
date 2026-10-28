@@ -27,6 +27,8 @@ export const CHATGPT_REQUEST_REFUSED_TEXT =
 export const SETTINGS_FILE_TEXT =
   "The app could not read its settings file, so no model was called. The app's terminal says why. Nothing in your case changed.";
 
+export const SETTINGS_BUSY_TEXT = "The app's settings are busy in another window or process, so no model was called. Try again in a moment. Nothing in your case changed.";
+
 export function providerError(
   text: string,
   options: { status?: number | null; latencyMs?: number; type?: string | null; code?: string | null; param?: string | null } = {},

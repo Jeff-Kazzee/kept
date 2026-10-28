@@ -14,10 +14,10 @@ import { MetaResponsesClient, ModelCallError, type ModelCall, type ModelClient, 
 import type { ToolCall, ToolModelClient, ToolReply } from "../responses.ts";
 import { ChatGptAuth } from "./chatgpt-auth.ts";
 import { ChatGptResponsesClient } from "./chatgpt-client.ts";
-import { META_KEY_MISSING_TEXT, NO_PROVIDER_TEXT, SETTINGS_FILE_TEXT, providerError } from "./messages.ts";
+import { META_KEY_MISSING_TEXT, NO_PROVIDER_TEXT, SETTINGS_BUSY_TEXT, SETTINGS_FILE_TEXT, providerError } from "./messages.ts";
 import { capabilityProblem, chatGptModel, currentModel, metaModel, modelOptions, modelProblemText } from "./models.ts";
 import type { FetchLike } from "./oidc.ts";
-import { SecretsFileError, type ProviderKind, type SecretsStore, type StoredSettings } from "./secrets.ts";
+import { SecretsBusyError, SecretsFileError, type ProviderKind, type SecretsStore, type StoredSettings } from "./secrets.ts";
 
 export type LiveClient = ModelClient & ToolModelClient;
 
@@ -115,6 +115,7 @@ export class ProviderModelClient implements LiveClient {
       ctx = this.context();
     } catch (err) {
       if (err instanceof SecretsFileError) throw providerError(SETTINGS_FILE_TEXT, { type: "provider", code: "settings_file" });
+      if (err instanceof SecretsBusyError) throw providerError(SETTINGS_BUSY_TEXT, { type: "provider", code: "settings_busy" });
       throw err;
     }
     const kind = activeProvider(ctx);
@@ -137,7 +138,12 @@ export class ProviderModelClient implements LiveClient {
       if (capability === null) throw err;
       const problem = { provider: kind, model, capability };
       if (JSON.stringify(settings.modelProblem) !== JSON.stringify(problem)) {
-        this.#store.update((s) => ({ ...s, modelProblem: problem }), { bump: true });
+        try {
+          this.#store.update((s) => ({ ...s, modelProblem: problem }), { bump: true });
+        } catch {
+          // The call still fails with the sentence below. The settings
+          // notice waits for the next failure.
+        }
       }
       const label = modelOptions(settings, kind).find((m) => m.id === model)?.label ?? model;
       const text = modelProblemText(problem, label);

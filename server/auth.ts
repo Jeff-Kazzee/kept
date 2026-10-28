@@ -31,7 +31,7 @@ import { CALLBACK_PATH, ChatGptAuth, type CallbackCode } from "../src/model/prov
 import { activeProvider, metaKey } from "../src/model/providers/factory.ts";
 import { currentModel, modelOptions, modelProblemText, type ModelOption } from "../src/model/providers/models.ts";
 import { IdentityError } from "../src/model/providers/oidc.ts";
-import { ProviderKind, SecretsFileError, type SecretsStore, type StoredSettings } from "../src/model/providers/secrets.ts";
+import { ProviderKind, SecretsBusyError, SecretsFileError, type SecretsStore, type StoredSettings } from "../src/model/providers/secrets.ts";
 import type { ApiResponse } from "./api.ts";
 
 export { CALLBACK_PATH };
@@ -72,6 +72,9 @@ export const NOT_READY_TEXT: Record<ProviderKind, string> = {
   meta: "Add a Meta Model API key first, then choose Meta. Nothing was changed.",
   chatgpt: "Sign in with ChatGPT first, then choose ChatGPT. Nothing was changed.",
 };
+
+export const SETTINGS_BUSY_TEXT = "The app's settings are busy in another window or process. Try again in a moment. Nothing was changed.";
+export const SETTINGS_BUSY: ApiResponse = { status: 503, body: { error: "settings_busy", retryable: true, message: SETTINGS_BUSY_TEXT } };
 
 export const VERSION_REQUIRED: ApiResponse = {
   status: 400,
@@ -238,7 +241,7 @@ export function createAuth(options: {
         if (version === null) return VERSION_REQUIRED;
         // Checked under the sign-out lock, so a tab that has not seen a
         // newer sign-in cannot end it.
-        const result = await auth.signOut({ onlyIf: () => viewOf(store.read()).settingsVersion === version });
+        const result = await auth.signOut({ onlyIf: (settings) => viewOf(settings).settingsVersion === version });
         if (result.refused) return stale(viewOf(store.read()), version)!;
         return ok({ ...viewOf(store.read()), notice: result.revoked ? null : SIGNED_OUT_UNCONFIRMED_TEXT });
       },
@@ -258,6 +261,9 @@ export function createAuth(options: {
       try {
         return await run(req.body);
       } catch (err) {
+        // Another process kept the settings busy: nothing was written, and
+        // trying again is safe.
+        if (err instanceof SecretsBusyError) return SETTINGS_BUSY;
         if (err instanceof SecretsFileError) {
           // The path and the reason, never the file's contents.
           console.error(err.message);
@@ -271,14 +277,14 @@ export function createAuth(options: {
     // outcome as a code in the query, never a token or the OAuth code.
     async callback(method: string, query: URLSearchParams): Promise<{ status: number; location: string | null }> {
       if (method !== "GET") return { status: 405, location: null };
-      let code: CallbackCode | "server_error";
+      let code: CallbackCode | "server_error" | "settings_busy";
       try {
         const result = await auth.callback(query);
         if (result.ok) return { status: 302, location: "/?signedIn=chatgpt" };
         code = result.code;
       } catch (err) {
         if (err instanceof SecretsFileError) console.error(err.message);
-        code = err instanceof IdentityError ? "identity_unavailable" : "server_error";
+        code = err instanceof IdentityError ? "identity_unavailable" : err instanceof SecretsBusyError ? "settings_busy" : "server_error";
       }
       return { status: 302, location: `/?signInError=${code}` };
     },

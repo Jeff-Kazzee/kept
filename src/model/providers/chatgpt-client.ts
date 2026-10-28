@@ -24,12 +24,13 @@ import {
   CHATGPT_SIGNED_OUT_TEXT,
   CHATGPT_UNAVAILABLE_TEXT,
   PLAN_USAGE_OFF_TEXT,
+  SETTINGS_BUSY_TEXT,
   SETTINGS_FILE_TEXT,
   chatGptFailureText,
   providerError,
 } from "./messages.ts";
 import type { FetchLike } from "./oidc.ts";
-import { SecretsFileError, SecretsLockError } from "./secrets.ts";
+import { SecretsBusyError, SecretsFileError } from "./secrets.ts";
 
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 export const TOOL_NAMESPACE = "case_tools";
@@ -148,7 +149,7 @@ export class ChatGptResponsesClient implements ModelClient, ToolModelClient {
     } catch (err) {
       if (err instanceof ChatGptAuthError) throw authFailure(err);
       if (err instanceof SecretsFileError) throw providerError(SETTINGS_FILE_TEXT, { type: "chatgpt_auth", code: "settings_file" });
-      if (err instanceof SecretsLockError) throw providerError(CHATGPT_UNAVAILABLE_TEXT, { type: "chatgpt_auth", code: "settings_locked" });
+      if (err instanceof SecretsBusyError) throw providerError(SETTINGS_BUSY_TEXT, { type: "chatgpt_auth", code: "settings_busy" });
       throw err;
     }
   }
