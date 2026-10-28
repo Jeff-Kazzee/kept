@@ -183,13 +183,14 @@ pnpm scan:secrets  # tokens and keys in the repository, see "What the secret sca
 
 With `pnpm dev`, add `?mockchat=1` to the page address for the scripted
 chat, which plays the demo through the existing routes with no model. Its
-replies are labeled "Scripted demo reply, not a model". It also turns on a
-development fake of the Google routes, which do not exist yet. The time
-zone, activity, undo, the model provider, the model and sign-in are the
-real routes (`docs/decisions/0011-ui-polish.md`, U37 and U47). The production
-build (`pnpm build`, `pnpm start`) leaves both out and ignores the
-parameter.
-`APP_UI_FAKES=1 pnpm build` makes a check build with them, for a browser
+replies are labeled "Scripted demo reply, not a model". The development
+build fakes no route: the time zone, activity, undo, the model provider,
+the model, sign-in, Gmail and Google Calendar are the server's in every
+build (`docs/decisions/0011-ui-polish.md`, U51). The scripted chat does not
+search Gmail or write to Google Calendar. Asked about email, it says where
+the Google connection stands. The production build (`pnpm build`,
+`pnpm start`) leaves the scripted chat out and ignores the parameter.
+`APP_UI_FAKES=1 pnpm build` makes a check build with it, for a browser
 check of the minified bundle. Never ship that build.
 
 To reach the app through a private proxy on the same computer, such as
