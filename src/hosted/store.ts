@@ -169,7 +169,8 @@ CREATE TABLE IF NOT EXISTS judge_codes (
   revoked_at INTEGER,
   account_id TEXT UNIQUE REFERENCES accounts (id),
   redeemed_at INTEGER,
-  revoke_due INTEGER NOT NULL DEFAULT 0
+  revoke_due INTEGER NOT NULL DEFAULT 0,
+  revoke_hold_max INTEGER NOT NULL DEFAULT 0
 ) STRICT;`;
 
 const isBusy = (err: unknown) => {
@@ -220,6 +221,7 @@ export class AccountsStore {
       // A database made before review round 1 gains the revoke column.
       const cols = (db.prepare("PRAGMA table_info(judge_codes)").all() as Row[]).map((c) => String(c.name));
       if (!cols.includes("revoke_due")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_due INTEGER NOT NULL DEFAULT 0");
+      if (!cols.includes("revoke_hold_max")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_hold_max INTEGER NOT NULL DEFAULT 0");
     } catch (err) {
       db.close();
       if (err instanceof AccountsFileError) throw err;
@@ -388,8 +390,10 @@ export class AccountsStore {
     return num(r.credit) - num(r.spent) - num(r.held);
   }
 
+  // The balance a person may spend: what a revoked code still owes the
+  // account is not part of it.
   balance(accountId: string): number {
-    return this.#read((db) => this.#balance(db, accountId));
+    return this.#read((db) => Math.max(0, this.#balance(db, accountId) - this.#due(db, accountId)));
   }
 
   // The model cost of the UTC day so far: every charge's cost and every
@@ -505,7 +509,7 @@ export class AccountsStore {
         whole_hold: charge ? 0 : 1,
       });
       if (holdAmount > charged) this.#insert(db, { account_id: accountId, kind: "release", amount: holdAmount - charged, hold_id: holdId, ...ctx });
-      this.#collectDue(db, accountId);
+      this.#collectDue(db, accountId, holdId, charged);
       return { charged };
     });
   }
@@ -527,7 +531,7 @@ export class AccountsStore {
         turn: (h.turn as string | null) ?? null,
         model: h.model as string,
       });
-      this.#collectDue(db, String(h.account_id));
+      this.#collectDue(db, String(h.account_id), holdId, 0);
     });
   }
 
@@ -538,19 +542,26 @@ export class AccountsStore {
     return num(r.due);
   }
 
-  // After a hold closes: a revoked code's credit that the hold gave back
-  // leaves the balance. Once no hold is open, nothing more is owed, so the
-  // revoked credit is fully gone.
-  #collectDue(db: DatabaseSync, accountId: string): void {
-    const owed = db.prepare("SELECT id, revoke_due FROM judge_codes WHERE account_id = ? AND revoked_at IS NOT NULL AND revoke_due > 0").all(accountId) as Row[];
-    if (owed.length === 0) return;
+  // After a hold closes (final review, finding 1). A hold that was open
+  // when a code was revoked may have spent the code's credit: what it
+  // charged counts against the code first, so it lowers what the code
+  // owes. Once the last of those holds has closed, what is still owed
+  // leaves the balance. It came back from those holds, and no hold since
+  // could draw on it, so no other credit is taken.
+  #collectDue(db: DatabaseSync, accountId: string, holdId: number, charged: number): void {
+    const owed = db.prepare("SELECT id, revoke_due, revoke_hold_max FROM judge_codes WHERE account_id = ? AND revoked_at IS NOT NULL AND revoke_due > 0").all(accountId) as Row[];
     for (const c of owed) {
-      const take = Math.min(num(c.revoke_due), Math.max(0, this.#balance(db, accountId)));
-      if (take > 0) this.#insert(db, { account_id: accountId, kind: "adjust", amount: -take, source: `judge_revoked:${String(c.id)}` });
-      db.prepare("UPDATE judge_codes SET revoke_due = revoke_due - ? WHERE id = ?").run(take, String(c.id));
-    }
-    if (!db.prepare("SELECT 1 FROM ledger WHERE account_id = ? AND kind = 'hold' AND open = 1").get(accountId)) {
-      db.prepare("UPDATE judge_codes SET revoke_due = 0 WHERE account_id = ? AND revoked_at IS NOT NULL").run(accountId);
+      const codeId = String(c.id);
+      const holdMax = num(c.revoke_hold_max);
+      let due = num(c.revoke_due);
+      if (holdId <= holdMax) due = Math.max(0, due - charged);
+      const waiting = db.prepare("SELECT 1 FROM ledger WHERE account_id = ? AND kind = 'hold' AND open = 1 AND id <= ?").get(accountId, holdMax);
+      if (!waiting) {
+        const take = Math.min(due, Math.max(0, this.#balance(db, accountId)));
+        if (take > 0) this.#insert(db, { account_id: accountId, kind: "adjust", amount: -take, source: `judge_revoked:${codeId}` });
+        due = 0;
+      }
+      db.prepare("UPDATE judge_codes SET revoke_due = ? WHERE id = ?").run(due, codeId);
     }
   }
 
@@ -680,14 +691,19 @@ export class AccountsStore {
       const accountId = String(c.account_id);
       const account = this.#account(db, accountId);
       if (account?.kind === "judge") db.prepare("DELETE FROM sessions WHERE account_id = ?").run(accountId);
-      // The unspent part leaves the balance now. What sits inside open
-      // holds is owed, refused to new holds, and taken as those holds
-      // close (review round 1, finding 2).
+      // The unspent part leaves the balance. With no hold open it goes at
+      // once. With holds open, those holds may still spend it, so all of
+      // it is owed: no new hold may draw on it, what the open holds charge
+      // counts against it first, and the rest goes once they close (review
+      // round 1, finding 2, and the final review, finding 1).
       const unspent = num(c.cap) - this.#spent(db, c);
-      const take = Math.min(unspent, Math.max(0, this.#balance(db, accountId)));
-      if (take > 0) this.#insert(db, { account_id: accountId, kind: "adjust", amount: -take, source: `judge_revoked:${id}` });
-      const open = db.prepare("SELECT 1 FROM ledger WHERE account_id = ? AND kind = 'hold' AND open = 1").get(accountId);
-      if (open && unspent > take) db.prepare("UPDATE judge_codes SET revoke_due = ? WHERE id = ?").run(unspent - take, id);
+      const lastHold = db.prepare("SELECT MAX(id) AS id FROM ledger WHERE account_id = ? AND kind = 'hold' AND open = 1").get(accountId) as Row;
+      if (lastHold.id === null) {
+        const take = Math.min(unspent, Math.max(0, this.#balance(db, accountId)));
+        if (take > 0) this.#insert(db, { account_id: accountId, kind: "adjust", amount: -take, source: `judge_revoked:${id}` });
+      } else if (unspent > 0) {
+        db.prepare("UPDATE judge_codes SET revoke_due = ?, revoke_hold_max = ? WHERE id = ?").run(unspent, num(lastHold.id), id);
+      }
     });
   }
 
