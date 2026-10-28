@@ -27,7 +27,7 @@ import { z } from "zod";
 import { DELETE_CONFIRMATION } from "../src/case/constants.ts";
 import type { FetchLike } from "../src/google/http.ts";
 import { OAuthError, type OAuthClient } from "../src/google/oauth.ts";
-import { formatUsd, type HostedConfig } from "../src/hosted/config.ts";
+import { formatBalance, formatCharge, formatUsd, type HostedConfig } from "../src/hosted/config.ts";
 import { MeteredClient } from "../src/hosted/metered.ts";
 import { PRICES, turnCostMicros } from "../src/hosted/prices.ts";
 import { AddressLimiter, clientAddress } from "../src/hosted/rate-limit.ts";
@@ -140,7 +140,7 @@ export function usageLines(charges: ChargeRow[]): UsageLine[] {
     const last = lines.at(-1);
     if (c.turn && last && last.turn === c.turn) {
       last.costMicros += c.amountMicros;
-      last.cost = formatUsd(last.costMicros);
+      last.cost = formatCharge(last.costMicros);
       last.calls++;
       last.at = Math.max(last.at, c.at);
       continue;
@@ -152,7 +152,7 @@ export function usageLines(charges: ChargeRow[]): UsageLine[] {
       model: c.model,
       modelLabel: META_MODELS.find((m) => m.id === c.model)?.label ?? c.model,
       costMicros: c.amountMicros,
-      cost: formatUsd(c.amountMicros),
+      cost: formatCharge(c.amountMicros),
       calls: 1,
     });
   }
@@ -234,7 +234,7 @@ export function createHostedApp(o: HostedOptions) {
       signedIn: true,
       account: { kind: account.kind, email: account.email, name: account.name },
       balanceMicros: balance,
-      balance: formatUsd(balance),
+      balance: formatBalance(balance),
       expiresAt,
       googleSignIn: signIn.configured,
     };
@@ -244,7 +244,7 @@ export function createHostedApp(o: HostedOptions) {
     const balance = store.balance(account.id);
     return {
       balanceMicros: balance,
-      balance: formatUsd(balance),
+      balance: formatBalance(balance),
       markup: (config.markupHundredths / 100).toString(),
       charges: usageLines(store.charges(account.id, 100)).slice(0, 30),
       plans: PLANS.map((p) => ({ ...p, available: false })),

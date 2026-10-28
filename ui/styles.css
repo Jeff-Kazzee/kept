@@ -943,6 +943,7 @@ figure.source { margin: 0; }
   .model-long { display: none; }
   .model-short { display: inline; }
   .account-btn { padding: 0 var(--s-1); }
+  .menu-down { position: fixed; top: calc(var(--topbar-h) + env(safe-area-inset-top)); left: auto; right: max(var(--s-1), env(safe-area-inset-right)); max-width: calc(100vw - 2 * var(--s-1)); }
   .signin-card { padding: var(--s-3) var(--s-2); }
 }
 

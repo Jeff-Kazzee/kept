@@ -84,3 +84,15 @@ export function formatUsd(micros: number): string {
   if (frac.length < 2) frac = frac.padEnd(2, "0");
   return `${sign}$${whole}.${frac}`;
 }
+
+// A balance as the page shows it: whole cents, rounded down, so the page
+// never shows more credit than there is.
+export function formatBalance(micros: number): string {
+  return formatUsd(Math.floor(Math.max(0, micros) / 10_000) * 10_000);
+}
+
+// A charge as the page shows it: at most four decimals, rounded up, so the
+// page never shows less than was charged.
+export function formatCharge(micros: number): string {
+  return formatUsd(Math.ceil(Math.max(0, micros) / 100) * 100);
+}

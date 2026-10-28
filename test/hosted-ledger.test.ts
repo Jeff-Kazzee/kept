@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ConfigError, formatUsd, parseUsd, readHostedConfig } from "../src/hosted/config.ts";
+import { ConfigError, formatBalance, formatCharge, formatUsd, parseUsd, readHostedConfig } from "../src/hosted/config.ts";
 import { MeteredClient } from "../src/hosted/metered.ts";
 import { MAX_OUTPUT_TOKENS, PRICES, billedOutput, chargeMicros, holdFor, inputTokenBound, modelCostMicros, priceOf, turnCostMicros } from "../src/hosted/prices.ts";
 import { AccountsStore, STALE_HOLD_MS } from "../src/hosted/store.ts";
@@ -114,6 +114,10 @@ describe("prices and config", () => {
     }
     expect(parseUsd("0.000001")).toBe(1);
     expect(parseUsd("0.0000001")).toBeNull();
+    // The page shows a balance rounded down to cents and a charge rounded
+    // up to four decimals.
+    expect([formatBalance(4_982_675), formatBalance(9_999), formatBalance(-5)]).toEqual(["$4.98", "$0.00", "$0.00"]);
+    expect([formatCharge(17_325), formatCharge(1), formatCharge(1_250_000)]).toEqual(["$0.0174", "$0.0001", "$1.25"]);
     expect([formatUsd(0), formatUsd(1), formatUsd(1_250_000), formatUsd(20_000_000), formatUsd(12_345)]).toEqual(["$0.00", "$0.000001", "$1.25", "$20.00", "$0.012345"]);
   });
 });
