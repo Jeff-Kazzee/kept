@@ -59,7 +59,10 @@ export class ModelCallError extends Error {
   }
 }
 
-const identifier = (v: unknown): string | null => (typeof v === "string" && /^[A-Za-z0-9_.:-]{1,64}$/.test(v) ? v : null);
+// API error types, codes and params are lower-case identifiers such as
+// invalid_request_error or text.format. Anything else, such as mixed-case
+// text that could be an echoed key, is dropped.
+const identifier = (v: unknown): string | null => (typeof v === "string" && /^[a-z][a-z0-9_.:-]{0,63}$/.test(v) ? v : null);
 
 // The error type and code from an API error body or stream event, such as
 // { "error": { "type": "invalid_request_error", "code": "..." } }.
@@ -86,8 +89,9 @@ export type LiveClientOptions = {
 };
 
 // Calls the Meta Model API. The key stays in this object and is never logged.
-// Error messages carry the HTTP status and a short slice of the body, never
-// request headers.
+// Error messages carry the HTTP status and the API's error type and code,
+// checked as short identifiers. Never body text, which could echo a key,
+// and never request headers. Extraction stores the message in the event log.
 export class MetaResponsesClient implements ModelClient, ToolModelClient {
   readonly label = "meta-responses";
   readonly #apiKey: string;
@@ -126,7 +130,7 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
     }
     const raw = await res.text();
     const latencyMs = elapsed(started);
-    if (!res.ok) throw new ModelCallError(`Model call returned HTTP ${res.status}: ${raw.slice(0, 200)}`, res.status, latencyMs);
+    if (!res.ok) throw httpError(res.status, latencyMs, apiError(parseJson(raw)));
     let json: unknown;
     try {
       json = JSON.parse(raw);
@@ -169,7 +173,7 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
     }
     if (!res.ok) {
       const raw = await res.text();
-      throw new ModelCallError(`Model call returned HTTP ${res.status}: ${raw.slice(0, 200)}`, res.status, elapsed(started), apiError(parseJson(raw)));
+      throw httpError(res.status, elapsed(started), apiError(parseJson(raw)));
     }
     if (!request.body.stream) {
       let json: unknown;
@@ -201,6 +205,14 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
     }
     throw new ModelCallError("Model stream ended before response.completed.", res.status, elapsed(started));
   }
+}
+
+// A failed HTTP call, described by its status and identifiers only.
+function httpError(status: number, latencyMs: number, error: { type: string | null; code: string | null; param: string | null }): ModelCallError {
+  const err = new ModelCallError("", status, latencyMs, error);
+  const ids = [err.errorType && `type ${err.errorType}`, err.errorCode && `code ${err.errorCode}`].filter(Boolean).join(", ");
+  err.message = `Model call returned HTTP ${status}${ids ? ` (${ids})` : ""}.`;
+  return err;
 }
 
 function elapsed(started: number): number {
