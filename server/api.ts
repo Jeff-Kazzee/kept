@@ -10,9 +10,10 @@ import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } f
 import { ReplyService } from "../src/reply/service.ts";
 import { CaseDeletedError, CompactionError, StaleEditError } from "../src/store/event-log.ts";
 
-// `generation` is the case generation the page last read. A write from a
-// page opened before a Delete case is refused instead of landing in the
-// empty case. Absent means the current generation.
+// `generation` is the case generation the page last read. Every request
+// that changes state must carry it, and a write from a page opened before a
+// Delete case is refused instead of landing in the empty case. Only GET may
+// leave it out.
 export type ApiRequest = { method: string; path: string; body: unknown; generation?: number };
 export type ApiResponse = { status: number; body: unknown };
 
@@ -131,6 +132,12 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       const match = pattern.exec(req.path);
       if (!match) continue;
       if (req.method !== method) return { status: 405, body: { error: "method_not_allowed" } };
+      if (method !== "GET" && !(Number.isSafeInteger(req.generation) && req.generation! >= 0)) {
+        return {
+          status: 400,
+          body: { error: "generation_required", message: "This request does not say which case it was made for. Reload the page and try again. Nothing was saved." },
+        };
+      }
       try {
         // One command on the case: every write it makes checks the case
         // generation inside its transaction.

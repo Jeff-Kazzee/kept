@@ -20,7 +20,7 @@ import { ReplyService } from "../src/reply/service.ts";
 import { OFFICE_REPLIED_NOTICE } from "../src/reply/view.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import type { HistoryEntry } from "../src/case/history.ts";
-import { fixtureMessage } from "./helpers.ts";
+import { asFreshPage, fixtureMessage } from "./helpers.ts";
 
 const THU = "2026-11-12T10:30";
 const MON = "2026-11-16T13:00";
@@ -43,7 +43,7 @@ function start(file: string) {
   const client = RecordedModelClient.fromDirectory();
   const intake = new IntakeService(store, client);
   const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
-  const handle = createApi(intake, kase, { mode: "recorded" }, new ReplyService(store, kase, client));
+  const handle = asFreshPage(createApi(intake, kase, { mode: "recorded" }, new ReplyService(store, kase, client)), kase);
   const call = async (method: string, p: string, body?: unknown) => {
     const res = await handle({ method, path: p, body });
     if (res.status !== 200) throw new Error(`${method} ${p}: ${res.status} ${JSON.stringify(res.body)}`);

@@ -207,6 +207,12 @@ export class EventStore {
   // nested call is a savepoint: its failure undoes only its own writes.
   // `fn` must be synchronous.
   transaction<T>(fn: () => T): T {
+    return this.#write(fn);
+  }
+
+  // The body of transaction. Called directly only for the store's own
+  // bookkeeping outside any case command, such as clearing the erase mark.
+  #write<T>(fn: () => T): T {
     const savepoint = `sp${this.#depth}`;
     if (this.#depth === 0) this.#lock();
     else this.#db.exec(`SAVEPOINT ${savepoint}`);
@@ -347,13 +353,26 @@ export class EventStore {
   }
 
   // True when a Delete case committed and the file was not compacted yet.
+  // The mark holds the generation whose erase is pending, so finishing one
+  // erase cannot clear the mark of a later one.
   erasePending(): boolean {
-    return this.#meta("erase_pending") === 1;
+    return this.#pendingGeneration() !== null;
+  }
+
+  #pendingGeneration(): number | null {
+    const row = this.#db.prepare("SELECT value FROM case_meta WHERE key = 'erase_pending'").get() as { value: number } | undefined;
+    return row?.value ?? null;
   }
 
   #meta(key: string): number {
     const row = this.#db.prepare("SELECT value FROM case_meta WHERE key = ?").get(key) as { value: number } | undefined;
     return row?.value ?? 0;
+  }
+
+  // True inside a command started with inCase. A test uses it to prove that
+  // every service write runs as one.
+  inCaseScope(): boolean {
+    return this.#scope.getStore() !== undefined;
   }
 
   // Runs `fn` as one command on the case. Every write transaction it starts,
@@ -393,7 +412,12 @@ export class EventStore {
       this.#db.exec(NO_DELETE_TRIGGER);
       this.#db.exec("DELETE FROM rate_windows");
       this.#db.prepare("INSERT INTO case_meta (key, value) VALUES ('generation', 1) ON CONFLICT (key) DO UPDATE SET value = value + 1").run();
-      this.#db.prepare("INSERT INTO case_meta (key, value) VALUES ('erase_pending', 1) ON CONFLICT (key) DO UPDATE SET value = 1").run();
+      this.#db
+        .prepare(
+          "INSERT INTO case_meta (key, value) VALUES ('erase_pending', (SELECT value FROM case_meta WHERE key = 'generation')) " +
+            "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        )
+        .run();
       return Number(changes);
     });
     this.finishPendingErase();
@@ -405,22 +429,34 @@ export class EventStore {
   // server call it at start, before they serve. A TRUNCATE checkpoint, VACUUM
   // and a second TRUNCATE checkpoint leave the database file without the
   // removed text and the WAL empty. Only then is the pending mark cleared,
-  // so a crash at any point leaves it set. Returns true when it compacted.
+  // so a crash at any point leaves it set. The mark is cleared in a write
+  // transaction and only if it still names the generation read before the
+  // compaction. If another process deleted the next case meanwhile, its
+  // mark stays for its own compaction or the next start. Returns true when
+  // it compacted.
   finishPendingErase(): boolean {
-    if (!this.erasePending()) return false;
+    const pending = this.#pendingGeneration();
+    if (pending === null) return false;
     this.#db.exec("PRAGMA temp_store = MEMORY");
     try {
       if (this.#file) this.#checkpoint();
       this.#db.exec("VACUUM");
       if (this.#file) this.#checkpoint();
-      // A plain statement, not a case command: the generation already moved.
-      this.#db.exec("DELETE FROM case_meta WHERE key = 'erase_pending'");
+      this.beforeClearPending();
+      // Outside any case command, because the generation already moved.
+      this.#scope.exit(() =>
+        this.#write(() => this.#db.prepare("DELETE FROM case_meta WHERE key = 'erase_pending' AND value = ?").run(pending)),
+      );
     } catch (err) {
-      if (isBusy(err)) throw new CompactionError();
+      if (isBusy(err) || err instanceof StoreBusyError) throw new CompactionError();
       throw err;
     }
     return true;
   }
+
+  // A seam for a test that pauses one process between its compaction and
+  // clearing the mark. It does nothing here.
+  protected beforeClearPending(): void {}
 
   #checkpoint(): void {
     const row = this.#db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number } | undefined;

@@ -105,6 +105,10 @@ export class IntakeService {
   // first (S11). A clinical report gets the fixed decline, and nothing is
   // recorded, so no model call can follow.
   importMessage(input: Message): MessageView {
+    return this.#store.inCase(() => this.#importMessage(input));
+  }
+
+  #importMessage(input: Message): MessageView {
     const message = Message.parse(input);
     if (message.channel === "user_report" && hasClinicalContent(message.text)) throw new OutOfScopeError();
     const event: MessageEvent = {
@@ -180,10 +184,18 @@ export class IntakeService {
   }
 
   accept(evidenceId: string, expectedVersion: number): EvidenceView {
+    return this.#store.inCase(() => this.#accept(evidenceId, expectedVersion));
+  }
+
+  #accept(evidenceId: string, expectedVersion: number): EvidenceView {
     return this.#decide(evidenceId, expectedVersion, { type: "claim_accepted", data: {} });
   }
 
   reject(evidenceId: string, expectedVersion: number): EvidenceView {
+    return this.#store.inCase(() => this.#reject(evidenceId, expectedVersion));
+  }
+
+  #reject(evidenceId: string, expectedVersion: number): EvidenceView {
     return this.#decide(evidenceId, expectedVersion, { type: "claim_rejected_by_user", data: {} });
   }
 
@@ -205,6 +217,10 @@ export class IntakeService {
   // transaction, so a repeated or concurrent submit is a stale edit and
   // cannot add a duplicate claim.
   enterManually(messageId: string, expectedVersion: number, input: ManualClaimInput): EvidenceView {
+    return this.#store.inCase(() => this.#enterManually(messageId, expectedVersion, input));
+  }
+
+  #enterManually(messageId: string, expectedVersion: number, input: ManualClaimInput): EvidenceView {
     const claimInput = ManualClaimInput.parse(input);
     this.#store.assertVersion(messageStream(messageId), expectedVersion, this.#describeMessage);
     const before = this.message(messageId);

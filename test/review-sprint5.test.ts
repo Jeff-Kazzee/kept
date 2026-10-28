@@ -23,7 +23,8 @@ import { USER, proposalStream } from "../src/records/events.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { CaseDeletedError, EventStore, type StoreOptions, type StoredEvent } from "../src/store/event-log.ts";
-import { acceptMessages, ev, intake } from "./helpers.ts";
+import { acceptMessages, ev, fixtureMessage, intake } from "./helpers.ts";
+import { IntakeService } from "../src/intake/service.ts";
 
 const CLOCK = () => "2026-11-06T17:00:00.000Z";
 const THU = "2026-11-12T10:30";
@@ -349,5 +350,196 @@ describe("finding 6: the checklist merges requests that differ only in punctuati
       ["Bring new insurance card", ["a", "b", "c", "d", "e"]],
       ["Bring the new insurance card", ["f"]],
     ]);
+  });
+});
+
+describe("review round 2, B1: every write states its case generation", () => {
+  it("refuses a write with no generation or a malformed one, and writes nothing", async () => {
+    const store = new EventStore(":memory:", CLOCK);
+    const app = services(store);
+    const api = createApi(app.intake, app.kase, { mode: "recorded" }, app.reply);
+    const calendar = { name: "dana.ics", text: readFixtureText("calendar/dana.ics"), expectedVersion: 0 };
+    for (const generation of [undefined, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(await api({ method: "POST", path: "/api/calendar", body: calendar, generation }), String(generation)).toMatchObject({
+        status: 400,
+        body: { error: "generation_required" },
+      });
+    }
+    expect(caseEvents(store)).toEqual([]);
+    // The failing case from the review: after Delete case, the stale page's
+    // request without the header no longer lands in the empty case.
+    expect((await api({ method: "POST", path: "/api/calendar", body: calendar, generation: 0 })).status).toBe(200);
+    const state = (await api({ method: "GET", path: "/api/state", body: undefined })).body as { caseVersion: number };
+    expect((await api({ method: "POST", path: "/api/case/delete", body: { expectedVersion: state.caseVersion, confirmation: "DELETE" }, generation: 0 })).status).toBe(200);
+    expect((await api({ method: "POST", path: "/api/calendar", body: calendar })).status).toBe(400);
+    expect((await api({ method: "POST", path: "/api/calendar", body: calendar, generation: 0 })).body).toMatchObject({ error: "case_deleted" });
+    expect(caseEvents(store)).toEqual([]);
+    // Reads need no generation.
+    expect((await api({ method: "GET", path: "/api/state", body: undefined })).status).toBe(200);
+  });
+});
+
+describe("review round 2, B2: finishing one erase never clears the mark of a later one", () => {
+  const filesWith = (dir: string, text: string) => readdirSync(dir).filter((f) => readFileSync(path.join(dir, f)).includes(Buffer.from(text, "utf8")));
+  const SECOND = "Rv2-second-case-marker-3318";
+
+  // Process A pauses after its compaction and before it clears the mark.
+  class PausingStore extends EventStore {
+    onPause: (() => void) | null = null;
+    protected override beforeClearPending(): void {
+      const pause = this.onPause;
+      this.onPause = null;
+      pause?.();
+    }
+  }
+  // Process B stops right after its delete commits.
+  class StopsAfterCommit extends EventStore {
+    override finishPendingErase(): boolean {
+      throw new Error("B stopped here.");
+    }
+  }
+
+  it("A's late clear leaves B's mark, and the next start clears B's text", async () => {
+    const { dir, file } = tempFile();
+    const a = services(new PausingStore(file, CLOCK));
+    cleanups.push(() => a.store.close());
+    await acceptMessages(a.intake, ["m2"]);
+    const bStore = new StopsAfterCommit(file, CLOCK);
+    cleanups.push(() => bStore.close());
+    const b = services(bStore);
+
+    (a.store as PausingStore).onPause = () => {
+      // While A is paused, B writes a new case and deletes it.
+      b.intake.importMessage({ id: "later-1", channel: "email", from: "Front Desk", received_at: "2026-11-07T09:00:00-07:00", text: `Bring the form ${SECOND}.` });
+      expect(() => b.kase.deleteCase(b.kase.caseVersion(), "DELETE")).toThrow("B stopped here.");
+      expect(a.store.caseGeneration()).toBe(2);
+    };
+    a.kase.deleteCase(a.kase.caseVersion(), "DELETE");
+
+    // A finished generation 1 and left the mark for generation 2.
+    expect(a.store.erasePending()).toBe(true);
+    expect(filesWith(dir, SECOND).length).toBeGreaterThan(0);
+    // The next start finishes B's erase.
+    const next = new EventStore(file);
+    cleanups.push(() => next.close());
+    expect(next.finishPendingErase()).toBe(true);
+    expect(next.erasePending()).toBe(false);
+    expect(filesWith(dir, SECOND)).toEqual([]);
+  });
+});
+
+describe("review round 2, B3: every public write of the case services runs as one case command", () => {
+  // Fails any write transaction that does not run inside inCase.
+  class ScopedOnly extends EventStore {
+    strict = false;
+    override transaction<T>(fn: () => T): T {
+      if (this.strict && !this.inCaseScope()) throw new Error("A case write ran outside inCase.");
+      return super.transaction(fn);
+    }
+  }
+
+  // Reads, and the scope and transaction primitives the MCP server uses.
+  const NOT_WRITES: Record<string, string[]> = {
+    IntakeService: ["modelLabel", "message", "evidenceItem", "messages", "evidence", "reviewQueue", "acceptedEvidence"],
+    CaseService: ["view", "history", "caseVersion", "replyState", "generation", "inCase", "erasePending"],
+    ReplyService: [],
+    RecordsService: ["transaction", "withWriteGuard", "caseGeneration", "inCase", "record", "appointments", "appointment", "openQuestions", "proposals", "proposal", "reviewQueue", "accessLog"],
+  };
+  const classes = { IntakeService, CaseService, ReplyService, RecordsService };
+  const publicMethods = (cls: { prototype: object }) => Object.getOwnPropertyNames(cls.prototype).filter((n) => n !== "constructor");
+
+  it("exercises each one under a store that refuses unscoped writes", async () => {
+    const store = new ScopedOnly(":memory:", CLOCK);
+    const app = services(store);
+    const { grant } = app.grants.create("Laptop assistant", "propose");
+    const agent = { kind: "agent" as const, grant_id: grant.id, grant_name: grant.name };
+    store.strict = true;
+
+    const called = new Map<string, Set<string>>(Object.keys(classes).map((k) => [k, new Set<string>()]));
+    const step = async (cls: keyof typeof classes, name: string, run: () => unknown) => {
+      called.get(cls)!.add(name);
+      await run();
+    };
+    const acceptAll = async () => {
+      for (const e of app.intake.reviewQueue()) await step("IntakeService", "accept", () => app.intake.accept(e.id, e.version));
+    };
+    for (const id of ["m2", "m3"]) {
+      const m = await (async () => {
+        let view!: ReturnType<IntakeService["importMessage"]>;
+        await step("IntakeService", "importMessage", () => (view = app.intake.importMessage(fixtureMessage(id))));
+        return view;
+      })();
+      await step("IntakeService", "extract", () => app.intake.extract(id, { effort: "minimal", expectedVersion: m.version }));
+      await acceptAll();
+    }
+    await step("IntakeService", "importMessage", () =>
+      app.intake.importMessage({ id: "pasted-1", channel: "email", from: "Front Desk", received_at: "2026-11-05T09:00:00-07:00", text: "Please bring the form." }),
+    );
+    await step("IntakeService", "enterManually", () =>
+      app.intake.enterManually("pasted-1", 1, { claim_type: "office_request", date: null, time: null, location: null, quote: null, request_item: "the form" }),
+    );
+    const manual = app.intake.reviewQueue()[0]!;
+    await step("IntakeService", "reject", () => app.intake.reject(manual.id, manual.version));
+
+    await step("CaseService", "loadCalendar", () => app.kase.loadCalendar("dana.ics", readFixtureText("calendar/dana.ics"), 0));
+    const conflict = app.kase.view().conflicts[0]!;
+    await step("CaseService", "explain", () => app.kase.explain(conflict.id, conflict.version));
+    await step("CaseService", "askNext", () => app.kase.askNext(app.kase.view().questionsVersion));
+    let view = app.kase.view();
+    const monday = view.question!.choices.find((c) => c.label.includes("Monday"))!;
+    await step("CaseService", "answer", () => app.kase.answer(view.question!.id, monday.id, view.questionsVersion, view.reply.version));
+    view = app.kase.view();
+    await step("ReplyService", "edit", () => app.reply.edit(view.reply.draft!.id, "Monday works for me.", view.reply.version));
+    view = app.kase.view();
+    await step("ReplyService", "discard", () => app.reply.discard(view.reply.draft!.id, view.reply.version));
+    await step("ReplyService", "suggest", () => app.reply.suggest("I want Monday.", app.kase.view().reply.version));
+    await step("ReplyService", "start", () => app.reply.start("accept_offer", "2026-11-16T13:00", app.kase.view().reply.version));
+    view = app.kase.view();
+    await step("ReplyService", "approve", () => app.reply.approve(view.reply.draft!.id, view.reply.draft!.fields.map((f) => f.name), view.reply.version));
+
+    await step("RecordsService", "addNote", () => app.records.addNote(THU, "Parking is on Elm Street.", 0, USER));
+    await step("RecordsService", "setTags", () => app.records.setTags(THU, ["moved"], 1, agent));
+    await step("RecordsService", "archive", () => app.records.archive(THU, 2));
+    await step("RecordsService", "undo", () => app.records.undo(THU, 3, 3));
+    const report = { kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: "Dana confirmed Monday by phone." };
+    let p = app.records.proposals()[0];
+    await step("RecordsService", "propose", () => (p = app.records.propose(report, grant)));
+    await step("RecordsService", "confirmProposal", () => app.records.confirmProposal(p!.id, p!.version));
+    await step("RecordsService", "propose", () => (p = app.records.propose({ ...report, statement: "Dana said it again." }, grant)));
+    await step("RecordsService", "rejectProposal", () => app.records.rejectProposal(p!.id, p!.version));
+    await step("RecordsService", "logAccess", () =>
+      app.records.logAccess({ grant_id: grant.id, grant_name: grant.name, tool: "list_appointments", result: "ok", appointment_id: null }),
+    );
+    await step("CaseService", "deleteCase", () => app.kase.deleteCase(app.kase.caseVersion(), "DELETE"));
+    expect(caseEvents(store)).toEqual([]);
+
+    // Every public method is a read or a write this test exercised, so a
+    // new write fails here until it is added and shown to run in scope.
+    for (const [name, cls] of Object.entries(classes)) {
+      const writes = publicMethods(cls).filter((m) => !NOT_WRITES[name]!.includes(m));
+      expect([...called.get(name)!].sort(), name).toEqual(writes.sort());
+    }
+  });
+
+  it("the strict store does catch an unscoped write", () => {
+    const store = new ScopedOnly(":memory:", CLOCK);
+    store.strict = true;
+    expect(() => store.append("calendar", 0, [{ type: "calendar_loaded", data: { name: "x", text: "" } }])).toThrow("A case write ran outside inCase.");
+    expect(store.inCase(() => store.append("calendar", 0, [{ type: "calendar_loaded", data: { name: "x", text: "" } }]))).toHaveLength(1);
+  });
+
+  it("the failing case from the review: archive on a never-written record after another process deleted the case", async () => {
+    const { file } = tempFile();
+    const app = services(new EventStore(file, CLOCK));
+    cleanups.push(() => app.store.close());
+    await acceptMessages(app.intake, ["m2"]);
+    const other = new DeleteBeforeWrite(file, CLOCK);
+    cleanups.push(() => other.close());
+    const direct = services(other);
+    other.deleteNow = () => app.kase.deleteCase(app.kase.caseVersion(), "DELETE");
+    // archive reads the slot, then writes in its first transaction.
+    other.at = 1;
+    expect(() => direct.records.archive(THU, 0)).toThrow(CaseDeletedError);
+    expect(caseEvents(app.store)).toEqual([]);
   });
 });

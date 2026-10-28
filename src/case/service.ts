@@ -104,6 +104,10 @@ export class CaseService {
   #describeVersion = (_streamId: string, events: StoredEvent[]) => ({ version: events.at(-1)?.version ?? 0 });
 
   loadCalendar(name: string, text: string, expectedVersion: number): CaseView {
+    return this.#store.inCase(() => this.#loadCalendar(name, text, expectedVersion));
+  }
+
+  #loadCalendar(name: string, text: string, expectedVersion: number): CaseView {
     if (text.length > MAX_CALENDAR_CHARS) throw new InvalidRequestError("The calendar file is too large.");
     try {
       parseIcs(text);
@@ -137,6 +141,10 @@ export class CaseService {
   // App only, after the user types the confirmation. No MCP tool calls it.
   // The version check runs in the same transaction as the delete.
   deleteCase(expectedVersion: number, confirmation: string): { erased: number } {
+    return this.#store.inCase(() => this.#deleteCase(expectedVersion, confirmation));
+  }
+
+  #deleteCase(expectedVersion: number, confirmation: string): { erased: number } {
     if (confirmation !== DELETE_CONFIRMATION) throw new InvalidRequestError(`Type ${DELETE_CONFIRMATION} to confirm.`);
     const erased = this.#store.eraseCase(KEPT_ON_DELETE, () => {
       const current = this.caseVersion();
@@ -324,6 +332,10 @@ export class CaseService {
   // its draft in the same transaction, so it also states the expected
   // version of the reply stream.
   answer(questionId: string, choiceId: string, expectedVersion: number, replyVersion?: number): CaseView {
+    return this.#store.inCase(() => this.#answer(questionId, choiceId, expectedVersion, replyVersion));
+  }
+
+  #answer(questionId: string, choiceId: string, expectedVersion: number, replyVersion?: number): CaseView {
     this.#store.assertVersion(QUESTIONS_STREAM, expectedVersion, this.#describeQueue);
     const { evidence, current, replyContext, replies } = this.#build();
     if (!current || current.id !== questionId) throw new InvalidRequestError(`Question ${questionId} is not open.`);

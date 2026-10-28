@@ -213,6 +213,10 @@ export class RecordsService {
 
   // The user archives a record in the app. An agent can only propose it.
   archive(id: string, expectedVersion: number): RecordView {
+    return this.#store.inCase(() => this.#archive(id, expectedVersion));
+  }
+
+  #archive(id: string, expectedVersion: number): RecordView {
     const slot = this.#slot(id);
     this.#store.assertVersion(recordStream(slot.key), expectedVersion, this.#describeRecord);
     if (this.record(slot.key).archived) throw new InvalidRequestError(`Appointment ${slot.key} is already archived.`);
@@ -224,6 +228,10 @@ export class RecordsService {
   // The user undoes one event: a note, a tag change or an archive. Undo
   // appends a reversing event. The reversed event stays in history.
   undo(id: string, version: number, expectedVersion: number): RecordView {
+    return this.#store.inCase(() => this.#undo(id, version, expectedVersion));
+  }
+
+  #undo(id: string, version: number, expectedVersion: number): RecordView {
     const key = parse(AppointmentId, id, "appointment id");
     this.#store.assertVersion(recordStream(key), expectedVersion, this.#describeRecord);
     const target = this.record(key).history.find((h) => h.version === version);
@@ -296,6 +304,10 @@ export class RecordsService {
   // states `recordVersion`, the record version they saw, and a record that
   // moved on since is a stale edit.
   confirmProposal(id: string, expectedVersion: number, options: { recordVersion?: number } = {}): ProposalView {
+    return this.#store.inCase(() => this.#confirmProposal(id, expectedVersion, options));
+  }
+
+  #confirmProposal(id: string, expectedVersion: number, options: { recordVersion?: number } = {}): ProposalView {
     // Read and check before the lock. The proposal version is checked again
     // inside the transaction, and an append-only stream at the same version
     // has not changed.
@@ -342,6 +354,10 @@ export class RecordsService {
   }
 
   rejectProposal(id: string, expectedVersion: number): ProposalView {
+    return this.#store.inCase(() => this.#rejectProposal(id, expectedVersion));
+  }
+
+  #rejectProposal(id: string, expectedVersion: number): ProposalView {
     this.#store.assertVersion(proposalStream(id), expectedVersion, this.#describeProposal);
     const proposal = this.proposal(id);
     if (proposal.status !== "pending") throw new InvalidRequestError(`Proposal ${id} was already ${proposal.status}.`);
@@ -352,6 +368,10 @@ export class RecordsService {
 
   // A system event with no expected version. See docs/decisions/0004-mcp-core.md (M-f).
   logAccess(entry: AccessEvent["data"]): void {
+    return this.#store.inCase(() => this.#logAccess(entry));
+  }
+
+  #logAccess(entry: AccessEvent["data"]): void {
     this.#store.appendSystem(ACCESS_LOG_STREAM, [asEvent({ type: "tool_called", data: entry })]);
   }
 }

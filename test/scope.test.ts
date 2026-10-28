@@ -9,7 +9,7 @@ import { loadScenarios } from "../src/fixtures/load.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
-import { acceptMessages, fixtureMessage, intake } from "./helpers.ts";
+import { acceptMessages, asFreshPage, fixtureMessage, intake } from "./helpers.ts";
 
 const S11_TEXT = loadScenarios().find((s) => s.id === "S11")!.messages[0]!.text;
 
@@ -96,7 +96,7 @@ describe("SP3.9 S11: a clinical question gets the fixed decline", () => {
 
   it("returns the decline from the API as out_of_scope", async () => {
     const { intake: service, kase, reply } = await setup(["m1"]);
-    const api = createApi(service, kase, { mode: "recorded" }, reply);
+    const api = asFreshPage(createApi(service, kase, { mode: "recorded" }, reply), kase);
     const pasted = await api({ method: "POST", path: "/api/messages", body: fixtureMessage("s11-question") });
     expect(pasted).toEqual({ status: 422, body: { error: "out_of_scope", message: SCOPE_DECLINE } });
     const note = await api({ method: "POST", path: "/api/reply/suggest", body: { expectedVersion: 0, intent: S11_TEXT } });

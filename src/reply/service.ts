@@ -59,6 +59,10 @@ export class ReplyService {
   // slot's state does not allow (S9) or that needs a field the slot lacks
   // (S7).
   start(template: string, slotKey: string, expectedVersion: number): CaseView {
+    return this.#store.inCase(() => this.#start(template, slotKey, expectedVersion));
+  }
+
+  #start(template: string, slotKey: string, expectedVersion: number): CaseView {
     this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
     if (!(TEMPLATE_IDS as readonly string[]).includes(template)) throw new InvalidRequestError(`No reply template ${template}.`);
     const { context, log } = this.#kase.replyState();
@@ -147,6 +151,10 @@ export class ReplyService {
   // The scope check still applies (R-f): an edit that asks for clinical
   // content gets the fixed decline and nothing is recorded.
   edit(draftId: string, text: string, expectedVersion: number): CaseView {
+    return this.#store.inCase(() => this.#edit(draftId, text, expectedVersion));
+  }
+
+  #edit(draftId: string, text: string, expectedVersion: number): CaseView {
     this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
     const draft = this.#open(draftId);
     if (text.trim().length === 0) throw new InvalidRequestError("The reply text is empty.");
@@ -159,6 +167,10 @@ export class ReplyService {
   }
 
   discard(draftId: string, expectedVersion: number): CaseView {
+    return this.#store.inCase(() => this.#discard(draftId, expectedVersion));
+  }
+
+  #discard(draftId: string, expectedVersion: number): CaseView {
     this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
     this.#open(draftId);
     const event: ReplyEvent = { type: "reply_discarded", data: { draft_id: draftId, reason: "by_user" } };
@@ -175,6 +187,10 @@ export class ReplyService {
   // if the user confirms the statement code builds from the template
   // (R-h). The send is only the local event: no network call is made (S12).
   approve(draftId: string, confirmedFields: string[], expectedVersion: number, options: { confirmClaim?: boolean } = {}): CaseView {
+    return this.#store.inCase(() => this.#approve(draftId, confirmedFields, expectedVersion, options));
+  }
+
+  #approve(draftId: string, confirmedFields: string[], expectedVersion: number, options: { confirmClaim?: boolean } = {}): CaseView {
     this.#store.assertVersion(REPLY_STREAM, expectedVersion, this.#describe);
     const { context, view } = this.#kase.replyState();
     const draft = this.#open(draftId);

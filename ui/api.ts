@@ -87,6 +87,9 @@ export class ApiError extends Error {
 let lastGeneration: number | null = null;
 
 async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  // The server refuses a write without the generation. A write before the
+  // page has read the case reads it first.
+  if (method === "POST" && lastGeneration === null) await api.state();
   const res = await fetch(path, {
     method,
     headers: {

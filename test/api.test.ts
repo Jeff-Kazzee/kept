@@ -11,8 +11,9 @@ import { RecordedModelClient } from "../src/model/recorded.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import type { ReplyView } from "../src/reply/types.ts";
 import { fromPackage } from "../src/paths.ts";
+import { readFixtureText } from "../src/fixtures/load.ts";
 import { EventStore } from "../src/store/event-log.ts";
-import { fixtureMessage } from "./helpers.ts";
+import { asFreshPage, fixtureMessage } from "./helpers.ts";
 
 const M1 = {
   id: "m1",
@@ -27,7 +28,7 @@ function setup() {
   const client = RecordedModelClient.fromDirectory();
   const service = new IntakeService(store, client);
   const kase = new CaseService(store, service, client, { userName: "Dana Reyes" });
-  return createApi(service, kase, { mode: "recorded" }, new ReplyService(store, kase, client));
+  return asFreshPage(createApi(service, kase, { mode: "recorded" }, new ReplyService(store, kase, client)), kase);
 }
 
 describe("local API", () => {
@@ -198,6 +199,30 @@ describe("dev server", () => {
       req.end();
     });
 
+  const getJson = (port: number) =>
+    new Promise<unknown>((resolve, reject) => {
+      const req = request({ host: "127.0.0.1", port, path: "/api/state", headers: { Host: `127.0.0.1:${port}` } }, (res) => {
+        let text = "";
+        res.on("data", (d: Buffer) => (text += d.toString()));
+        res.on("end", () => resolve(JSON.parse(text)));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+
+  const post = (port: number, p: string, body: unknown, generation: string | undefined) =>
+    new Promise<{ status: number; body: any }>((resolve, reject) => {
+      const headers: Record<string, string> = { Host: `127.0.0.1:${port}`, "Content-Type": "application/json" };
+      if (generation !== undefined) headers["X-Case-Generation"] = generation;
+      const req = request({ host: "127.0.0.1", port, path: p, method: "POST", headers }, (res) => {
+        let text = "";
+        res.on("data", (d: Buffer) => (text += d.toString()));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text) }));
+      });
+      req.on("error", reject);
+      req.end(JSON.stringify(body));
+    });
+
   it("binds to 127.0.0.1 in recorded mode and refuses other host names", async () => {
     const port = 20000 + Math.floor(Math.random() * 20000);
     const env = { ...process.env, APP_PORT: String(port), APP_DB: path.join(dir, "dev.sqlite"), APP_LIVE_MODEL: "", MODEL_API_KEY: "" };
@@ -214,5 +239,24 @@ describe("dev server", () => {
     expect(line).toContain(`http://127.0.0.1:${port} (model: recorded responses)`);
     expect(await get(port, `127.0.0.1:${port}`)).toBe(200);
     expect(await get(port, `attacker.example:${port}`)).toBe(403);
+
+    // Sprint 5 review round 2, B1: every write must carry a well-formed
+    // X-Case-Generation header, and a stale page's write is refused with or
+    // without one.
+    const calendar = { name: "dana.ics", text: readFixtureText("calendar/dana.ics"), expectedVersion: 0 };
+    expect(await post(port, "/api/calendar", calendar, "0")).toMatchObject({ status: 200 });
+    const state = (await getJson(port)) as { caseVersion: number; generation: number; case: { calendar: unknown } };
+    expect(state.generation).toBe(0);
+    expect(await post(port, "/api/case/delete", { expectedVersion: state.caseVersion, confirmation: "DELETE" }, "0")).toMatchObject({ status: 200 });
+    // The stale page's request, replayed without the header and with
+    // malformed ones: refused before anything runs.
+    for (const header of [undefined, "", "abc", "-1", "1.5", "1e3", "0x1", "9999999999999999"]) {
+      expect(await post(port, "/api/calendar", calendar, header), String(header)).toMatchObject({ status: 400, body: { error: "generation_required" } });
+    }
+    // With the page's own header: refused as stale.
+    expect(await post(port, "/api/calendar", calendar, "0")).toMatchObject({ status: 409, body: { error: "case_deleted" } });
+    expect(((await getJson(port)) as { case: { calendar: unknown }; generation: number })).toMatchObject({ case: { calendar: null }, generation: 1 });
+    // A GET needs no header.
+    expect(await get(port, `127.0.0.1:${port}`)).toBe(200);
   }, 20_000);
 });

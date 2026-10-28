@@ -105,6 +105,8 @@ server.on("request", async (req, res) => {
     return send(res, 400, { error: err instanceof Error ? err.message : "bad_body" });
   }
   const header = req.headers["x-case-generation"];
+  // A missing or malformed header leaves it undefined, and the API refuses
+  // the write.
   const generation = typeof header === "string" && /^\d{1,15}$/.test(header) ? Number(header) : undefined;
   const result = await api({ method: req.method ?? "GET", path: url.pathname, body, generation });
   send(res, result.status, result.body);

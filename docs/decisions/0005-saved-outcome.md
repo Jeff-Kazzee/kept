@@ -169,6 +169,26 @@ Code: `src/store/event-log.ts` (`eraseCase`), `src/case/service.ts`
   either end of the request, so "Bring new insurance card?" and "Bring new
   insurance card" are one item.
 
+## Review round 2
+
+- B1. Every request that changes state must carry the case generation the
+  page last read, in the `X-Case-Generation` header. A missing or malformed
+  one is refused with HTTP 400 `generation_required` before anything runs.
+  Only GET may leave it out. The UI reads the case before its first write
+  if it has not yet, and sends the generation from its latest read, so the
+  first write after a Delete case uses the new one.
+- B2. The `erase_pending` mark holds the generation whose erase is pending.
+  `finishPendingErase` reads it before compacting and, after compacting,
+  clears it in a write transaction only if it still holds that generation.
+  So a process that finishes one erase late cannot clear the mark of a
+  later delete by another process.
+- B3. Every public write of the intake, case, reply and records services
+  runs as one case command (`inCase`), not only the ones with a model call
+  or a pre-read. A test runs each of them on a store that refuses any
+  write outside a command, and lists every public method as a read or an
+  exercised write, so a new unscoped write fails it. Grants are app
+  settings and stay outside this rule.
+
 ## Live evaluation finding
 
 - C2. In the second live run of the O-g change, effort `minimal` once

@@ -6,6 +6,7 @@ import type { FixtureMessage } from "../src/fixtures/schema.ts";
 import type { AnswerMeta, EvidenceView } from "../src/intake/events.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
+import type { ApiRequest, ApiResponse } from "../server/api.ts";
 
 const corpus = corpusMessages(loadScenarios());
 
@@ -63,6 +64,15 @@ export async function acceptMessages(service: IntakeService, ids: string[]): Pro
     const { evidence } = await service.extract(id, { effort: "low", expectedVersion: imported.version });
     for (const e of evidence) service.accept(e.id, e.version);
   }
+}
+
+// A local API handler as a page that just read the state uses it: every
+// request carries the current case generation unless the test gives one.
+export function asFreshPage(
+  handle: (req: ApiRequest) => Promise<ApiResponse>,
+  kase: { generation(): number },
+): (req: ApiRequest) => Promise<ApiResponse> {
+  return (req) => handle(req.generation === undefined ? { ...req, generation: kase.generation() } : req);
 }
 
 export function intake(store: ConstructorParameters<typeof IntakeService>[0], now = () => "2026-11-06T10:00:00.000Z") {
