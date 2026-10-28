@@ -253,6 +253,37 @@ mountains, rivers, creeks, hot springs and wildlife, at a high-end polish.
 - R1-13. A wall time the clocks skip is refused after a round trip, and
   the import sheet says to pick a time an hour later.
 
+## On sprint 8's back end (rebased onto `sprint/08-agent-first`)
+
+- U37. The page uses sprint 8's routes for activity, undo, the time zone
+  part of the settings and the `action` chat event, and sprint 8's types
+  (`src/activity/types.ts`, `ChatMessage.actions`) in place of its own.
+  The fakes cover only what is still missing: the provider, model and
+  sign-in parts of the settings and `/api/google`. A server that sends no
+  model list (`models`) has no provider routes, and Settings says choosing
+  a provider is not available in this build. In a development or check
+  build, `createHybridBackend` joins the real routes and the fake: the
+  real settings with the fake's provider part, and the real activity with
+  the fake's Gmail and Google Calendar entries, each undone where it came
+  from.
+- U38. The scripted chat writes through the routes, so the server logs
+  each import, read and accept, and the chat streams those entries as
+  actions. Loading the demo calendar sets the demo's zone on the server
+  (0009, A14), so the scripted chat no longer sets it.
+- U39. The first-load zone call sends `source: "browser"` (0009). This
+  closes U12.
+- U40. Agent reports the office never confirmed (`unconfirmedEvidenceIds`,
+  0009 D1) show on their slot as a muted line, "Reported through an
+  external agent, not confirmed", and under Details with the agent's
+  words as untrusted text. They never set the slot's state.
+- U41. `PASTE_TURN_NOTICE` and `IMPORT_AFTER_ACTION_NOTICE` (0009 D2) show
+  as notices written by code, and a `waits_for_person` error shows the
+  paste notice.
+- U42. Records name an agent by `name` ("the assistant", "an external
+  agent"), and old grant records keep their grant name.
+- U43. `src/records/types.ts`, sprint 8's shim for the old proposal card,
+  is deleted. `ui/case/ProposalCard.tsx` was already gone.
+
 ## Measured on the production build
 
 Measured 2026-10-28 on the server with a temporary database, in Chrome
