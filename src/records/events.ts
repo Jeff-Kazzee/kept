@@ -9,8 +9,10 @@
 //   user's decision on it. A proposal changes nothing until the user
 //   confirms it in the app.
 // - The `access_log` stream holds one system event per MCP tool call.
-import type { ClaimType } from "../domain/claim.ts";
 import type { RateWindow, StoredEvent } from "../store/event-log.ts";
+import type { ProposedChange } from "./types.ts";
+
+export type { ProposedChange };
 
 export const RECORD_PREFIX = "record:";
 export const PROPOSAL_PREFIX = "proposal:";
@@ -97,29 +99,6 @@ export function projectRecords(events: StoredEvent[]): Map<string, RecordView> {
   }
   return records;
 }
-
-// A change an agent proposes. Validated by src/records/inputs.ts before it
-// is stored. `statement` is the agent's own words, kept as untrusted text.
-export type ProposedChange =
-  | {
-      kind: "new_appointment";
-      date: string;
-      time: string;
-      location: string | null;
-      status: "offered" | "confirmed";
-      statement: string;
-    }
-  | {
-      kind: "user_report";
-      claim_type: ClaimType;
-      date: string | null;
-      time: string | null;
-      location: string | null;
-      request_item: string | null;
-      statement: string;
-    }
-  | { kind: "detail_edit"; appointment_id: string; location: string; statement: string }
-  | { kind: "archive"; appointment_id: string; statement: string };
 
 export type ProposalEvent =
   | {

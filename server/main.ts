@@ -11,8 +11,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { createServer as createVite } from "vite";
 import { CaseService } from "../src/case/service.ts";
+import { GrantStore } from "../src/grants/grants.ts";
 import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { IntakeService } from "../src/intake/service.ts";
+import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { MetaResponsesClient, type ModelClient } from "../src/model/client.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
@@ -48,7 +50,10 @@ try {
 }
 const intake = new IntakeService(store, client);
 const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
-const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, new ReplyService(store, kase, client));
+const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, new ReplyService(store, kase, client), {
+  records: new RecordsService(store, intake, kase),
+  grants: new GrantStore(store),
+});
 
 const allowedHosts = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]);
 

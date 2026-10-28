@@ -6,9 +6,11 @@ import { CaseService } from "../src/case/service.ts";
 import { Channel, DEFAULT_EXTRACTION_EFFORT, Effort } from "../src/domain/claim.ts";
 import { OutOfScopeError } from "../src/domain/scope.ts";
 import { loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
+import { GrantStore } from "../src/grants/grants.ts";
 import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } from "../src/intake/service.ts";
+import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
-import { CaseDeletedError, CompactionError, StaleEditError } from "../src/store/event-log.ts";
+import { CaseDeletedError, CompactionError, StaleEditError, StoreBusyError } from "../src/store/event-log.ts";
 
 // `generation` is the case generation the page last read. Every request
 // that changes state must carry it, and a write from a page opened before a
@@ -45,23 +47,44 @@ const ApproveBody = z
   .object({ expectedVersion: Version, confirmedFields: z.array(z.string().max(50)).max(20), confirmClaim: z.boolean().optional() })
   .strict();
 
+const CreateGrantBody = z.object({ name: z.string().max(200), tier: z.string().max(20) }).strict();
+const ConfirmProposalBody = z.object({ expectedVersion: Version, recordVersion: Version.optional() }).strict();
+const UndoBody = z.object({ expectedVersion: Version, version: Version }).strict();
+
 export type ApiOptions = { mode: "recorded" | "live" };
 
-export function createApi(service: IntakeService, kase: CaseService, options: ApiOptions, reply: ReplyService) {
+// The records service and the grant store, which the MCP server also uses.
+export type AgentAccess = { records: RecordsService; grants: GrantStore };
+
+export function createApi(service: IntakeService, kase: CaseService, options: ApiOptions, reply: ReplyService, access: AgentAccess) {
   const scenarios = loadScenarios();
+  const { records, grants } = access;
 
   const routes: Array<[string, RegExp, (m: RegExpExecArray, body: unknown) => Promise<unknown> | unknown]> = [
-    ["GET", /^\/api\/state$/, () => ({
-      mode: options.mode,
-      modelClient: service.modelLabel,
-      messages: service.messages(),
-      evidence: service.evidence(),
-      case: kase.view(),
-      caseVersion: kase.caseVersion(),
-      generation: kase.generation(),
-      erasePending: kase.erasePending(),
-      history: kase.history(),
-    })],
+    ["GET", /^\/api\/state$/, () => {
+      // Read first, so a write that lands during this read makes the page
+      // poll again instead of being missed.
+      const live = kase.liveVersion();
+      const used = grants.lastUsed();
+      return {
+        mode: options.mode,
+        modelClient: service.modelLabel,
+        messages: service.messages(),
+        evidence: service.evidence(),
+        case: kase.view(),
+        caseVersion: kase.caseVersion(),
+        generation: kase.generation(),
+        erasePending: kase.erasePending(),
+        history: kase.history(),
+        records: records.appointments({ includeArchived: true }).map((a) => a.record),
+        proposals: records.proposals(),
+        grants: grants.list().map((g) => ({ ...g, lastUsedAt: used.get(g.id) ?? null })),
+        live,
+      };
+    }],
+    // G-d: a cheap read the page polls to learn that the app, the MCP server
+    // or another tab wrote something.
+    ["GET", /^\/api\/case\/version$/, () => kase.liveVersion()],
     ["GET", /^\/api\/fixtures$/, () =>
       scenarios.map((s) => ({
         id: s.id,
@@ -105,6 +128,31 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     ["POST", /^\/api\/case\/delete$/, (_m, body) => {
       const { expectedVersion, confirmation } = DeleteCaseBody.parse(body);
       return kase.deleteCase(expectedVersion, confirmation);
+    }],
+    // Grants are app settings. No MCP tool reaches these routes. The token
+    // is in this response only, once.
+    ["POST", /^\/api\/grants$/, (_m, body) => {
+      const { name, tier } = CreateGrantBody.parse(body);
+      return grants.create(name, tier as never);
+    }],
+    ["POST", /^\/api\/grants\/([^/]+)\/revoke$/, (m, body) =>
+      grants.revoke(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+    ],
+    // Agent proposals. Only the user confirms or rejects one, here. No MCP
+    // tool does.
+    ["POST", /^\/api\/proposals\/([^/]+)\/confirm$/, (m, body) => {
+      const { expectedVersion, recordVersion } = ConfirmProposalBody.parse(body);
+      return records.confirmProposal(decodeURIComponent(m[1]!), expectedVersion, { recordVersion });
+    }],
+    ["POST", /^\/api\/proposals\/([^/]+)\/reject$/, (m, body) =>
+      records.rejectProposal(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+    ],
+    ["POST", /^\/api\/records\/([^/]+)\/archive$/, (m, body) =>
+      records.archive(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+    ],
+    ["POST", /^\/api\/records\/([^/]+)\/undo$/, (m, body) => {
+      const { expectedVersion, version } = UndoBody.parse(body);
+      return records.undo(decodeURIComponent(m[1]!), version, expectedVersion);
     }],
     ["POST", /^\/api\/reply\/suggest$/, (_m, body) => {
       const { expectedVersion, intent } = SuggestBody.parse(body);
@@ -158,6 +206,7 @@ function toErrorResponse(err: unknown): ApiResponse {
   if (err instanceof NotFoundError) return { status: 404, body: { error: "not_found", message: err.message } };
   if (err instanceof CaseDeletedError) return { status: 409, body: { error: "case_deleted", message: err.message } };
   if (err instanceof CompactionError) return { status: 503, body: { error: "compaction_incomplete", message: err.message } };
+  if (err instanceof StoreBusyError) return { status: 503, body: { error: "busy", message: err.message } };
   if (err instanceof InvalidRequestError) return { status: 422, body: { error: "invalid_request", message: err.message } };
   if (err instanceof z.ZodError) {
     return { status: 400, body: { error: "invalid_body", issues: err.issues.map((i) => ({ path: i.path.join("."), message: i.message })) } };

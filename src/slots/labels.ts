@@ -60,3 +60,17 @@ export function stateLabel(state: SlotState, source: string): string {
   const base = `${STATE_WORDS[state]} · ${source}`;
   return state === "change_proposed" ? `${base}, change proposed` : base;
 }
+
+// What a state means for the user, in words code chooses. The MCP server
+// returns it so an agent need not guess, for example, that a requested
+// slot is not booked yet.
+const STATE_MEANINGS: Record<SlotState, string> = {
+  offered: "The office offered this time. You have not accepted it.",
+  requested: "You asked the office for this time. The office has not confirmed it yet.",
+  confirmed: "This time is confirmed.",
+  change_proposed: "This time is confirmed, but a change to it is proposed and not settled.",
+  canceled: "This time is canceled.",
+  declined: "You declined this time.",
+};
+
+export const stateMeaning = (state: SlotState): string => STATE_MEANINGS[state];

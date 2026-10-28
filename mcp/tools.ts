@@ -8,7 +8,7 @@ import type { EvidenceView } from "../src/intake/events.ts";
 import type { Actor, HistoryEntry, ProposalView } from "../src/records/events.ts";
 import { AppointmentId, ExpectedVersion, MAX_NOTE_CHARS, MAX_TAGS, MAX_TAG_CHARS, NoteText, ProposedChangeInput, Tags } from "../src/records/inputs.ts";
 import type { Appointment, RecordsService } from "../src/records/service.ts";
-import { sourceLabel } from "../src/slots/labels.ts";
+import { sourceLabel, stateMeaning } from "../src/slots/labels.ts";
 import { untrustedQuote, untrustedText } from "./sanitize.ts";
 
 const ADMIN_ONLY =
@@ -33,6 +33,8 @@ const AppointmentSummary = z
     label: z.string(),
     state: z.enum(["offered", "requested", "confirmed", "change_proposed", "canceled", "declined"]),
     state_label: z.string(),
+    // Written by code from the state.
+    state_meaning: z.string(),
     location: UntrustedText.nullable(),
     location_disputed: z.boolean(),
     missing: z.array(z.enum(["time", "location"])),
@@ -99,6 +101,7 @@ export function summary(a: Appointment): AppointmentSummary {
     label: s.label,
     state: s.state,
     state_label: s.stateLabel,
+    state_meaning: stateMeaning(s.state),
     location: s.location === null ? null : untrustedText(s.location),
     location_disputed: s.locationDisputed,
     missing: s.missing,

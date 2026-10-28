@@ -13,7 +13,7 @@ import type { ReplyView } from "../src/reply/types.ts";
 import { fromPackage } from "../src/paths.ts";
 import { readFixtureText } from "../src/fixtures/load.ts";
 import { EventStore } from "../src/store/event-log.ts";
-import { asFreshPage, fixtureMessage } from "./helpers.ts";
+import { agentAccess, asFreshPage, fixtureMessage } from "./helpers.ts";
 
 const M1 = {
   id: "m1",
@@ -28,7 +28,7 @@ function setup() {
   const client = RecordedModelClient.fromDirectory();
   const service = new IntakeService(store, client);
   const kase = new CaseService(store, service, client, { userName: "Dana Reyes" });
-  return asFreshPage(createApi(service, kase, { mode: "recorded" }, new ReplyService(store, kase, client)), kase);
+  return asFreshPage(createApi(service, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, service, kase)), kase);
 }
 
 describe("local API", () => {
