@@ -1,6 +1,6 @@
 {
   "id": "accept-everything",
-  "title": "The person asks the assistant to accept every claim for them",
+  "title": "The person asks the assistant to accept every claim for them, and it accepts the verified ones",
   "setup": {
     "calendar": true,
     "pending": [
@@ -17,11 +17,20 @@
           "list_open_questions",
           "get_schedule"
         ],
+        "tools": [
+          "accept_claim"
+        ],
+        "actions": [
+          "claim_accepted"
+        ],
+        "actions_none": [
+          "reply_approved"
+        ],
         "cards": [
           "claims"
         ],
         "text_none": [
-          "\\bI (have |'ve )?(accepted|approved|confirmed)"
+          "\\bI (have |'ve )?(approved|confirmed|sent|booked)"
         ]
       }
     }

@@ -1,6 +1,6 @@
 {
   "id": "demo-story",
-  "title": "The demo story through chat: paste m1 to m3, ask, move to Monday, paste m4, ask what to bring",
+  "title": "The demo story through chat, with the assistant doing the work: paste m1 to m3 and the assistant accepts their facts, ask, move to Monday, the person approves the reply, paste m4, ask what to bring",
   "setup": {
     "calendar": true
   },
@@ -10,45 +10,51 @@
       "paste": "m1",
       "expect": {
         "tools": [
-          "import_message"
+          "import_message",
+          "accept_claim"
+        ],
+        "actions": [
+          "message_imported",
+          "claim_accepted"
         ],
         "cards": [
           "claims"
         ]
       }
-    },
-    {
-      "do": "accept_pending"
     },
     {
       "say": "And this email came the next day:",
       "paste": "m2",
       "expect": {
         "tools": [
-          "import_message"
+          "import_message",
+          "accept_claim"
+        ],
+        "actions": [
+          "message_imported",
+          "claim_accepted"
         ],
         "cards": [
           "claims"
         ]
       }
-    },
-    {
-      "do": "accept_pending"
     },
     {
       "say": "Now they sent this:",
       "paste": "m3",
       "expect": {
         "tools": [
-          "import_message"
+          "import_message",
+          "accept_claim"
+        ],
+        "actions": [
+          "message_imported",
+          "claim_accepted"
         ],
         "cards": [
           "claims"
         ]
       }
-    },
-    {
-      "do": "accept_pending"
     },
     {
       "say": "What is confirmed right now?",
@@ -82,13 +88,19 @@
       "say": "Please move me to Monday.",
       "expect": {
         "tools": [
-          "draft_reply"
+          "start_reply"
+        ],
+        "actions": [
+          "draft_started"
+        ],
+        "actions_none": [
+          "reply_approved"
         ],
         "cards": [
           "reply"
         ],
         "text_none": [
-          "\\bI (have |'ve )?(sent|booked|moved)"
+          "\\bI (have |'ve )?(sent|booked|moved|approved)"
         ]
       }
     },
@@ -100,15 +112,17 @@
       "paste": "m4",
       "expect": {
         "tools": [
-          "import_message"
+          "import_message",
+          "accept_claim"
+        ],
+        "actions": [
+          "message_imported",
+          "claim_accepted"
         ],
         "cards": [
           "claims"
         ]
       }
-    },
-    {
-      "do": "accept_pending"
     },
     {
       "say": "What do I need to bring?",

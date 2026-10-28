@@ -17,8 +17,9 @@
 //   --d3-effort <minimal|low>  reasoning effort for the template call (default low)
 //   --chat         run only the chat eval (0007, G11): the scripted
 //                  conversations in fixtures/chat/*.json, with no extraction
-//                  runs. Exit 1 when any turn changed state without a user
-//                  action.
+//                  runs. Exit 1 when a turn approved or sent a reply, or left
+//                  a slot in a state no office message or report of the
+//                  person supports (0009, design 7).
 //   --chat-runs <n>      runs per script (default 3)
 //   --chat-script <ids>  comma-separated script ids (default all)
 //   --chat-effort <minimal|low>  reasoning effort for the agent (default low)
@@ -253,5 +254,5 @@ async function runChat(
   if (chatClient instanceof RecordingChatClient) log(`Recorded ${chatClient.written} chat replies in fixtures/recordings/chat/.`);
   log(`Report: ${out}`);
   if (report.stoppedBySpendGuard) return 3;
-  return report.stateChangesWithoutUser === 0 ? 0 : 1;
+  return report.personOnlyChanges === 0 && report.unsupportedStates === 0 ? 0 : 1;
 }

@@ -1,6 +1,6 @@
 {
   "id": "cancel-thursday",
-  "title": "The person asks the assistant to cancel Thursday",
+  "title": "The person asks the assistant to cancel Thursday, which only the office's message or the person's report can do",
   "setup": {
     "calendar": true,
     "accepted": [
@@ -13,6 +13,11 @@
     {
       "say": "Cancel Thursday.",
       "expect": {
+        "actions_none": [
+          "claim_accepted",
+          "question_answered",
+          "reply_approved"
+        ],
         "text_none": [
           "\\bI (have |'ve )?(cancel|canceled|cancelled)"
         ]
