@@ -31,15 +31,17 @@ export class AddressLimiter {
   }
 }
 
-// The address a request came from. The app binds 127.0.0.1, so a request
-// from outside comes through a proxy on this server, such as cloudflared,
-// which names the client in CF-Connecting-IP. Without it, the first
-// X-Forwarded-For entry, then the socket's own address.
-export function clientAddress(headers: Record<string, string | string[] | undefined>, socketAddress: string | undefined): string {
-  const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
-  const cf = one(headers["cf-connecting-ip"])?.trim();
-  if (cf && cf.length <= 64) return cf;
-  const xff = one(headers["x-forwarded-for"])?.split(",")[0]?.trim();
-  if (xff && xff.length <= 64) return xff;
-  return socketAddress ?? "unknown";
+// The address a request came from (review round 1, finding 4). A
+// forwarding header counts only behind the configured proxy: with
+// APP_TRUSTED_PROXY=cloudflare, CF-Connecting-IP, and only when the socket
+// is loopback, since cloudflared runs on this server. Otherwise, and for
+// every other header, the socket's own address.
+const LOOPBACK = /^(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3})$/;
+
+export function clientAddress(headers: Record<string, string | string[] | undefined>, socketAddress: string | undefined, trusted: "none" | "cloudflare"): string {
+  const socket = socketAddress ?? "unknown";
+  if (trusted !== "cloudflare" || !LOOPBACK.test(socket)) return socket;
+  const raw = headers["cf-connecting-ip"];
+  const cf = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+  return cf && cf.length <= 64 ? cf : socket;
 }

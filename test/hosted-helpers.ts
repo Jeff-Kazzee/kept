@@ -76,12 +76,20 @@ export type Browser = {
 
 export type Hosted = Awaited<ReturnType<typeof startHosted>>;
 
-export async function startHosted(options: { env?: Record<string, string>; config?: Partial<HostedConfig>; serverKey?: string | null; google?: boolean; now?: () => number } = {}) {
+export async function startHosted(
+  options: { env?: Record<string, string>; config?: Partial<HostedConfig>; serverKey?: string | null; google?: boolean; now?: () => number; maxWorkspaces?: number } = {},
+) {
   const dir = mkdtempSync(path.join(tmpdir(), "hosted-"));
   const port = 20000 + Math.floor(Math.random() * 20000);
   const google = options.google === false ? null : signedGoogle();
   const logs: string[] = [];
-  const config = { ...readHostedConfig({ APP_MODE: "hosted", ...options.env }), ...options.config };
+  // J19: hosted mode needs both caps set. The tests set them, and trust
+  // Cloudflare's header from their loopback socket, unless a test says
+  // otherwise.
+  const config = {
+    ...readHostedConfig({ APP_MODE: "hosted", APP_DAILY_COST_CAP_USD: "20", APP_JUDGE_TOTAL_CAP_USD: "100", APP_TRUSTED_PROXY: "cloudflare", ...options.env }),
+    ...options.config,
+  };
   const app = createHostedApp({
     config,
     port,
@@ -96,6 +104,7 @@ export async function startHosted(options: { env?: Record<string, string>; confi
     workspacesDir: path.join(dir, "accounts"),
     ...(google ? { googleFetch: google.fetch } : {}),
     ...(options.now ? { now: options.now } : {}),
+    ...(options.maxWorkspaces ? { maxWorkspaces: options.maxWorkspaces } : {}),
     log: (line) => logs.push(line),
   });
   const server: Server = createServer((req, res) => void app.handle(req, res));
@@ -170,7 +179,7 @@ export async function startHosted(options: { env?: Record<string, string>; confi
 
   // A judge code made through the store, as the admin command does.
   const judgeCode = (label = "Judge", capUsd = 5, days = 30) =>
-    app.store.createJudgeCode({ label, capMicros: capUsd * 1_000_000, expiresAt: (options.now ?? Date.now)() + days * 86_400_000, totalCapMicros: config.judgeTotalCapMicros });
+    app.store.createJudgeCode({ label, capMicros: capUsd * 1_000_000, expiresAt: (options.now ?? Date.now)() + days * 86_400_000, totalCapMicros: config.judgeTotalCapMicros ?? 0 });
 
   return {
     dir,

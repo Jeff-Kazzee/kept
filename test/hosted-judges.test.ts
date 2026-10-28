@@ -21,7 +21,8 @@ afterEach(async () => {
 function adminEnv(extra: Record<string, string> = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "admin-"));
   dirs.push(dir);
-  return { APP_DB: path.join(dir, "app.sqlite"), ...extra };
+  // J19: the total cap has no default.
+  return { APP_DB: path.join(dir, "app.sqlite"), APP_JUDGE_TOTAL_CAP_USD: "100", ...extra };
 }
 
 describe("the admin command", () => {

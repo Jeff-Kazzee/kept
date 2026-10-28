@@ -1,26 +1,39 @@
 // The app's two modes (0014, design item 1) and the settings of hosted
-// mode, read from the environment once at start. A value that does not
-// parse stops the app, so a typo cannot widen a cap or turn a guard off.
+// mode, read from the environment once at start. APP_MODE is checked in
+// both modes. The hosted-only settings are read and checked only in hosted
+// mode, so local mode runs as it did before sprint 13 (review round 1,
+// finding 7). A value that does not parse stops the app, so a typo cannot
+// widen a cap or turn a guard off.
 //
 //   APP_MODE                 local (the default) or hosted
 //   APP_MARKUP               what a person pays per unit of model cost,
 //                            default 3, at most two decimals
 //   APP_DAILY_COST_CAP_USD   the most the server key may cost Jeff in one
-//                            UTC day, default 20
-//   APP_JUDGE_TOTAL_CAP_USD  the most all judge codes together may grant,
-//                            default 100
+//                            UTC day. No default (J19).
+//   APP_JUDGE_TOTAL_CAP_USD  the most all judge codes together may grant.
+//                            No default (J19).
 //   APP_SERVER_KEY           off stops every call on the server key
+//   APP_TRUSTED_PROXY        cloudflare trusts CF-Connecting-IP from a
+//                            loopback socket. none, the default, trusts no
+//                            forwarding header (finding 4).
 //
-// Money is kept in micro-dollars (millionths of a dollar), as integers.
+// J19: while either cap is unset the server key is off, and `missing`
+// names what to set. Money is kept in micro-dollars (millionths of a
+// dollar), as integers.
 export type AppMode = "local" | "hosted";
+export type TrustedProxy = "none" | "cloudflare";
 
 export type HostedConfig = {
   mode: AppMode;
   // The markup in hundredths: 300 is 3 times the model's cost.
   markupHundredths: number;
-  dailyCapMicros: number;
-  judgeTotalCapMicros: number;
+  dailyCapMicros: number | null;
+  judgeTotalCapMicros: number | null;
+  // False when APP_SERVER_KEY is off, or a cap is unset (J19).
   serverKeyOn: boolean;
+  trustedProxy: TrustedProxy;
+  // The required settings that are not set.
+  missing: string[];
 };
 
 export class ConfigError extends Error {
@@ -44,17 +57,21 @@ export function parseUsd(raw: string): number | null {
   return parseDecimal(raw, 6);
 }
 
-function usd(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+// A required amount, or null when it is not set.
+function usd(env: NodeJS.ProcessEnv, name: string): number | null {
   const raw = env[name];
-  if (raw === undefined || raw.trim() === "") return fallback * MICROS_PER_USD;
+  if (raw === undefined || raw.trim() === "") return null;
   const v = parseUsd(raw);
   if (v === null) throw new ConfigError(`${name} must be an amount in dollars, such as 20 or 2.50. It is "${raw}".`);
   return v;
 }
 
+const LOCAL: Omit<HostedConfig, "mode"> = { markupHundredths: 300, dailyCapMicros: null, judgeTotalCapMicros: null, serverKeyOn: false, trustedProxy: "none", missing: [] };
+
 export function readHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedConfig {
   const modeRaw = (env.APP_MODE ?? "").trim().toLowerCase();
   if (modeRaw !== "" && modeRaw !== "local" && modeRaw !== "hosted") throw new ConfigError(`APP_MODE must be local or hosted. It is "${env.APP_MODE}".`);
+  if (modeRaw !== "hosted") return { mode: "local", ...LOCAL };
   const markupRaw = env.APP_MARKUP;
   let markupHundredths = 300;
   if (markupRaw !== undefined && markupRaw.trim() !== "") {
@@ -65,12 +82,19 @@ export function readHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedCo
   }
   const keyRaw = (env.APP_SERVER_KEY ?? "").trim().toLowerCase();
   if (keyRaw !== "" && keyRaw !== "on" && keyRaw !== "off") throw new ConfigError(`APP_SERVER_KEY must be on or off. It is "${env.APP_SERVER_KEY}".`);
+  const proxyRaw = (env.APP_TRUSTED_PROXY ?? "").trim().toLowerCase();
+  if (proxyRaw !== "" && proxyRaw !== "none" && proxyRaw !== "cloudflare") throw new ConfigError(`APP_TRUSTED_PROXY must be cloudflare or none. It is "${env.APP_TRUSTED_PROXY}".`);
+  const dailyCapMicros = usd(env, "APP_DAILY_COST_CAP_USD");
+  const judgeTotalCapMicros = usd(env, "APP_JUDGE_TOTAL_CAP_USD");
+  const missing = [...(dailyCapMicros === null ? ["APP_DAILY_COST_CAP_USD"] : []), ...(judgeTotalCapMicros === null ? ["APP_JUDGE_TOTAL_CAP_USD"] : [])];
   return {
-    mode: modeRaw === "hosted" ? "hosted" : "local",
+    mode: "hosted",
     markupHundredths,
-    dailyCapMicros: usd(env, "APP_DAILY_COST_CAP_USD", 20),
-    judgeTotalCapMicros: usd(env, "APP_JUDGE_TOTAL_CAP_USD", 100),
-    serverKeyOn: keyRaw !== "off",
+    dailyCapMicros,
+    judgeTotalCapMicros,
+    serverKeyOn: keyRaw !== "off" && missing.length === 0,
+    trustedProxy: proxyRaw === "cloudflare" ? "cloudflare" : "none",
+    missing,
   };
 }
 

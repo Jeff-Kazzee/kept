@@ -64,11 +64,21 @@ describe("app modes", () => {
     expect((await s.ready).code).toBeNull();
     expect(s.out()).toContain("hosted mode");
     expect(s.out()).toContain("No Google client is set, so only judge codes can sign in.");
+    // J19: neither cap has a default, so the start log names both and the
+    // server key is off.
+    expect(s.out()).toContain("APP_DAILY_COST_CAP_USD is not set, so the server key is off.");
+    expect(s.out()).toContain("APP_JUDGE_TOTAL_CAP_USD is not set, so the server key is off.");
     expect(s.out()).not.toContain("server-key-for-mode-test");
     expect(await get(s.port, "/api/session")).toEqual({ status: 200, body: { mode: "hosted", signedIn: false, googleSignIn: false } });
     expect((await get(s.port, "/api/state")).status).toBe(401);
     const db = path.join(s.dir, "hosted", "accounts.sqlite");
     expect(statSync(db).mode & 0o777).toBe(0o600);
+  }, 30_000);
+
+  it("review round 1, finding 7: local mode ignores hosted-only settings, as before sprint 13", async () => {
+    const s = start({ APP_MARKUP: "0.5", APP_SERVER_KEY: "maybe", APP_DAILY_COST_CAP_USD: "lots", APP_TRUSTED_PROXY: "x" });
+    expect((await s.ready).code).toBeNull();
+    expect(await get(s.port, "/api/session")).toEqual({ status: 200, body: { mode: "local" } });
   }, 30_000);
 
   it("a bad mode setting stops the app at start", async () => {

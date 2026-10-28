@@ -13,8 +13,9 @@
 //   pnpm admin judges grant --id <id> --usd <n>
 //       Raises a code's cap. A redeemed code's account gets the credit.
 //
-// APP_JUDGE_TOTAL_CAP_USD (default 100) caps every code together: a new
-// code or a grant that would pass it is refused. APP_DB names the data
+// APP_JUDGE_TOTAL_CAP_USD caps every code together: a new code or a grant
+// that would pass it is refused. It has no default (J19): while it is
+// unset, create and grant refuse. APP_DB names the data
 // folder as for the app.
 import { parseArgs } from "node:util";
 import { ConfigError, formatUsd, parseUsd, readHostedConfig } from "../src/hosted/config.ts";
@@ -52,12 +53,18 @@ export function runAdmin(argv: string[], env: NodeJS.ProcessEnv = process.env, n
   }
   let config;
   try {
-    config = readHostedConfig(env);
+    // The admin works on hosted mode's data, whatever APP_MODE says here.
+    config = readHostedConfig({ ...env, APP_MODE: "hosted" });
   } catch (e) {
     if (e instanceof ConfigError) return fail(e.message);
     throw e;
   }
   const v = parsed.values;
+  // J19: no total cap has a default, so nothing is granted without one.
+  const totalCap = config.judgeTotalCapMicros;
+  if ((command === "create" || command === "grant") && totalCap === null) {
+    return fail(`APP_JUDGE_TOTAL_CAP_USD is not set, so no judge credit can be granted. Set it to the most all judge codes together may grant, in dollars.`);
+  }
   const store = new AccountsStore(accountsPath(env), { now });
   try {
     switch (command) {
@@ -65,7 +72,7 @@ export function runAdmin(argv: string[], env: NodeJS.ProcessEnv = process.env, n
         const cap = v["cap-usd"] ? parseUsd(v["cap-usd"]) : null;
         const expiresAt = v.expires ? expiryOf(v.expires) : null;
         if (!v.label || cap === null || cap <= 0 || expiresAt === null) return fail(`create needs --label, --cap-usd above 0 and --expires as YYYY-MM-DD.\n${USAGE}`);
-        const { id, code } = store.createJudgeCode({ label: v.label, capMicros: cap, expiresAt, totalCapMicros: config.judgeTotalCapMicros });
+        const { id, code } = store.createJudgeCode({ label: v.label, capMicros: cap, expiresAt, totalCapMicros: totalCap! });
         out.push(`Made judge code ${id} for "${v.label.trim()}", cap ${formatUsd(cap)}, works through ${day(expiresAt)} UTC.`);
         out.push("The code, shown this once. Give it to the judge. It is not stored and cannot be shown again:");
         out.push(code);
@@ -78,7 +85,7 @@ export function runAdmin(argv: string[], env: NodeJS.ProcessEnv = process.env, n
         for (const c of codes) {
           out.push([c.id, JSON.stringify(c.label), `cap ${formatUsd(c.capMicros)}`, `spent ${formatUsd(c.spentMicros)}`, c.status, `through ${day(c.expiresAt)}`, c.accountKind === "google" ? "on a Google account" : ""].filter(Boolean).join("  "));
         }
-        out.push(`Committed ${formatUsd(committedMicros)} of the ${formatUsd(config.judgeTotalCapMicros)} total cap.`);
+        out.push(totalCap === null ? `Committed ${formatUsd(committedMicros)}. APP_JUDGE_TOTAL_CAP_USD is not set.` : `Committed ${formatUsd(committedMicros)} of the ${formatUsd(totalCap)} total cap.`);
         return { code: 0, out, err };
       }
       case "revoke": {
@@ -90,7 +97,7 @@ export function runAdmin(argv: string[], env: NodeJS.ProcessEnv = process.env, n
       case "grant": {
         const amount = v.usd ? parseUsd(v.usd) : null;
         if (!v.id || !JUDGE_CODE_ID.test(v.id) || amount === null || amount <= 0) return fail(`grant needs --id and --usd above 0.\n${USAGE}`);
-        store.grantJudgeCode(v.id, amount, config.judgeTotalCapMicros);
+        store.grantJudgeCode(v.id, amount, totalCap!);
         out.push(`Granted ${formatUsd(amount)} more on judge code ${v.id}.`);
         return { code: 0, out, err };
       }
