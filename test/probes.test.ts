@@ -10,53 +10,10 @@ import { loadChatScripts, runChatEval, type ChatScript } from "../src/eval/chat-
 import { despaced, hasClinicalContent } from "../src/domain/scope.ts";
 import { checkSlotValues, parseMentions } from "../src/domain/datetime.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
-import { mayContainPaste } from "../src/agent/tools.ts";
-import type { InputItem, OutputItem } from "../src/model/responses.ts";
-import { RuleModel, currentUserText, fnCall, message, turnOutputs } from "./agent-helpers.ts";
+import { probeModel } from "./script-model.ts";
 
 const PROBES = ["clinical-evasions", "meaning-flips", "contradiction"];
 const scripts = (): ChatScript[] => loadChatScripts().filter((s) => PROBES.includes(s.id));
-
-const ADMIN_ONLY = "I can only help with appointment times, places and confirmations. Please ask the office.";
-const WORDS: Record<string, string> = { offered: "offered. It is not booked yet", requested: "requested", confirmed: "confirmed", change_proposed: "confirmed", canceled: "canceled", declined: "declined" };
-
-// A careful stand-in: it imports the pasted part of a message and accepts
-// its claims, reads the schedule before it answers, and keeps to
-// administrative words. `hostile` answers the dressed-up asks clinically.
-function probeModel(hostile = false) {
-  const first = (input: InputItem[]): OutputItem[] | undefined => {
-    if (turnOutputs(input).length > 0) return undefined;
-    const text = currentUserText(input);
-    if (/game|nurse|doctor gave|how much of it/i.test(text)) return [message(hostile ? "Ice the knee and take two pills before the visit." : ADMIN_ONLY)];
-    if (mayContainPaste(text)) {
-      // Words of the person's own end with a colon before the paste.
-      const cut = text.indexOf("\n\n");
-      const pasted = cut !== -1 && text.slice(0, cut).trim().endsWith(":") ? text.slice(cut + 2) : text;
-      return [fnCall("import_message", { text: pasted, channel: null, from: null, received_at: null })];
-    }
-    return [fnCall("get_schedule", {})];
-  };
-  const answer = (input: InputItem[]): OutputItem[] | undefined => {
-    const last = turnOutputs(input).at(-1);
-    if (!last) return undefined;
-    const o = last.output;
-    const text = currentUserText(input);
-    switch (last.name) {
-      case "import_message":
-        if (!o.claims?.length) return [message("I added the office's message. It holds no change to your appointments.")];
-        return [fnCall("accept_claim", { claims: o.claims.map((c: { evidence_id: string; version: number }) => ({ evidence_id: c.evidence_id, expected_version: c.version })) })];
-      case "accept_claim":
-        return [message(`I accepted ${o.decided} claims. You can undo each one in the activity log.`)];
-      case "get_schedule": {
-        const key = /monday/i.test(text) ? "2026-11-16T13:00" : "2026-11-12T10:30";
-        const slot = o.appointments.find((a: { slot_key: string }) => a.slot_key === key);
-        return [message(`${slot.label} is ${WORDS[slot.state]}.`)];
-      }
-    }
-    return undefined;
-  };
-  return new RuleModel([first, answer]);
-}
 
 async function run(hostile = false) {
   return runChatEval({ chatClient: probeModel(hostile), client: RecordedModelClient.fromDirectory(), scripts: scripts(), runs: 1, maxUsd: 1 });

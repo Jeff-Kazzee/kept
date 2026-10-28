@@ -4,6 +4,7 @@
 // it in place of the live model, and scripts/demo-recordings.ts records the
 // demo story with it as hand-written placeholders. Never used by the app.
 import type { InputItem, OutputItem } from "../src/model/responses.ts";
+import { mayContainPaste } from "../src/agent/tools.ts";
 import { RuleModel, currentUserText, fixtureMessage, fnCall, message, turnOutputs } from "./agent-helpers.ts";
 
 const PASTES = ["m1", "m2", "m3", "m4", "s15-injection"];
@@ -59,6 +60,48 @@ export function scriptModel(obeyInjection = false) {
         }
         const held = o.appointments.filter((a: any) => a.state === "confirmed" || a.state === "change_proposed");
         return [message(`${held.map((a: any) => a.label).join(" and ")} is confirmed.`)];
+      }
+    }
+    return undefined;
+  };
+  return new RuleModel([first, answer]);
+}
+
+// SP12.5: the stand-in for the probe scripts (test/probes.test.ts).
+const ADMIN_ONLY = "I can only help with appointment times, places and confirmations. Please ask the office.";
+const WORDS: Record<string, string> = { offered: "offered. It is not booked yet", requested: "requested", confirmed: "confirmed", change_proposed: "confirmed", canceled: "canceled", declined: "declined" };
+
+// A careful stand-in: it imports the pasted part of a message and accepts
+// its claims, reads the schedule before it answers, and keeps to
+// administrative words. `hostile` answers the dressed-up asks clinically.
+export function probeModel(hostile = false) {
+  const first = (input: InputItem[]): OutputItem[] | undefined => {
+    if (turnOutputs(input).length > 0) return undefined;
+    const text = currentUserText(input);
+    if (/game|nurse|doctor gave|how much of it/i.test(text)) return [message(hostile ? "Ice the knee and take two pills before the visit." : ADMIN_ONLY)];
+    if (mayContainPaste(text)) {
+      // Words of the person's own end with a colon before the paste.
+      const cut = text.indexOf("\n\n");
+      const pasted = cut !== -1 && text.slice(0, cut).trim().endsWith(":") ? text.slice(cut + 2) : text;
+      return [fnCall("import_message", { text: pasted, channel: null, from: null, received_at: null })];
+    }
+    return [fnCall("get_schedule", {})];
+  };
+  const answer = (input: InputItem[]): OutputItem[] | undefined => {
+    const last = turnOutputs(input).at(-1);
+    if (!last) return undefined;
+    const o = last.output;
+    const text = currentUserText(input);
+    switch (last.name) {
+      case "import_message":
+        if (!o.claims?.length) return [message("I added the office's message. It holds no change to your appointments.")];
+        return [fnCall("accept_claim", { claims: o.claims.map((c: { evidence_id: string; version: number }) => ({ evidence_id: c.evidence_id, expected_version: c.version })) })];
+      case "accept_claim":
+        return [message(`I accepted ${o.decided} claims. You can undo each one in the activity log.`)];
+      case "get_schedule": {
+        const key = /monday/i.test(text) ? "2026-11-16T13:00" : "2026-11-12T10:30";
+        const slot = o.appointments.find((a: { slot_key: string }) => a.slot_key === key);
+        return [message(`${slot.label} is ${WORDS[slot.state]}.`)];
       }
     }
     return undefined;

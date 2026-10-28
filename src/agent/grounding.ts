@@ -291,15 +291,28 @@ const VERB_RES = VERBS.map((v) => ({
   kinds: v.kinds,
 }));
 
+// A verb joined by "and" to the assistant's own verb in the same sentence,
+// as in "I saved your message and confirmed Monday" (the live
+// meaning-flips run). The words between must not hold another subject with
+// its own verb, so in "I see the office confirmed Monday and canceled
+// Thursday" the cancel is the office's.
+const OTHER_SUBJECT = /\b(?:that|which|who|they|it|he|she|you|office|clinic|desk|doctor|they've|it's)\s+(?:has\s+|have\s+|had\s+|just\s+|already\s+)*[a-z]+(?:ed|t)\b/;
+const JOINED_RES = VERBS.map((v) => ({
+  re: new RegExp(`${SUBJECT}${HELPERS}\\s+[a-z']+\\b([^.!?;]*?)\\band\\s+(?:also\\s+|then\\s+)?(?:${v.past})\\b`, "g"),
+  kinds: v.kinds,
+}));
+
 // True when the text claims the assistant did something the turn's
 // actions do not show. `done` holds the kinds of this turn's entries.
 export function claimsAction(text: string, done: ReadonlySet<string> = new Set()): boolean {
   const t = normalizeForScope(text).toLowerCase().replace(/[’‘]/g, "'");
-  return VERB_RES.some(({ re, kinds }) => {
+  const untrue = (kinds: string[]) => !kinds.some((k) => (k === ANY_ACTION ? done.size > 0 : done.has(k)));
+  const direct = VERB_RES.some(({ re, kinds }) => {
     re.lastIndex = 0;
-    if (!re.test(t)) return false;
-    return !kinds.some((k) => (k === ANY_ACTION ? done.size > 0 : done.has(k)));
+    return re.test(t) && untrue(kinds);
   });
+  if (direct) return true;
+  return JOINED_RES.some(({ re, kinds }) => [...t.matchAll(re)].some((m) => !OTHER_SUBJECT.test(m[1] ?? "") && untrue(kinds)));
 }
 
 export function checkAnswer(text: string, grounds: Grounds): TextProblem[] {

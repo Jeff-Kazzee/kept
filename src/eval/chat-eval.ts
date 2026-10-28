@@ -233,6 +233,9 @@ export type TurnResult = {
   // SP12.1: each answer code did not show, with its problems. Model output
   // about synthetic data, kept so the cause of a replacement can be read.
   rejected: Array<{ text: string; problems: string[] }>;
+  // Each claim the agent accepted in the turn, as it was accepted: its
+  // type, status, slot, quote and sender kind (the live meaning-flips run).
+  acceptedClaims: AcceptedClaim[];
   // SP12.2: where the turn's time went. Each call of the agent with its
   // kind, each call a tool made (extraction, explanation, question,
   // template) by key, each tool and each answer check, in milliseconds.
@@ -245,6 +248,29 @@ export type TurnResult = {
 
 type Percentiles = { p50: number | null; p95: number | null };
 const percentiles = (values: number[]): Percentiles => ({ p50: percentile(values, 50), p95: percentile(values, 95) });
+
+export type AcceptedClaim = {
+  evidenceId: string;
+  messageId: string | null;
+  claimType: string;
+  status: string;
+  date: string | null;
+  time: string | null;
+  quote: string | null;
+  senderKind: string;
+  eventTime: string | null;
+};
+
+// The claims the turn's claim_accepted entries name, as the case holds them.
+export function acceptedClaims(app: { intake: IntakeService }, actions: Array<{ kind: string; target: { type: string; id: string } | null }>): AcceptedClaim[] {
+  const evidence = new Map(app.intake.evidence().map((e) => [e.id, e]));
+  return actions.flatMap((a) => {
+    const e = a.kind === "claim_accepted" && a.target?.type === "claim" ? evidence.get(a.target.id) : undefined;
+    if (!e) return [];
+    const c = e.claim;
+    return [{ evidenceId: e.id, messageId: e.messageId, claimType: c.claim_type, status: e.status, date: c.slot.date, time: c.slot.time, quote: c.quote, senderKind: c.sender_kind, eventTime: c.event_time }];
+  });
+}
 
 export type TurnTiming = {
   agentCalls: Array<{ kind: string; ms: number; firstByteMs: number | null; inputTokens: number; outputTokens: number }>;
@@ -476,6 +502,7 @@ export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalRep
             slotProblems,
             text: finalText,
             rejected: report.rejected.map((r) => ({ text: r.text, problems: [...r.problems] })),
+            acceptedClaims: acceptedClaims(app, report.actions),
             timing: {
               agentCalls: report.calls.map((c) => ({
                 kind: c.kind ?? "loop",

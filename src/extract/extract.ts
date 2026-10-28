@@ -13,6 +13,7 @@ import {
 import { checkSlotValues, type SlotIssue } from "../domain/datetime.ts";
 import { phraseAppearsIn, quoteAppearsIn, wordsAppearIn } from "../domain/quote.ts";
 import { ModelCallError, type ModelClient } from "../model/client.ts";
+import { negatedInMessage } from "../domain/negation.ts";
 import {
   MODEL,
   ModelOutput,
@@ -30,6 +31,9 @@ export type ClaimProblem =
   | "location_not_in_source"
   | "missing_request_item"
   | "request_item_not_in_quote"
+  // The sentence that holds the quote negates the claim, such as a confirm
+  // claim from "is not confirmed yet" (src/domain/negation.ts).
+  | "negated_in_message"
   | SlotIssue;
 export type AttemptProblem = "call_failed" | "not_json" | "schema_mismatch" | "claim_checks_failed";
 
@@ -80,6 +84,7 @@ export function checkClaim(claim: ModelClaim, message: Message): ClaimProblem[] 
     }),
   );
   if (claim.location !== null && !phraseAppearsIn(claim.location, message.text)) problems.push("location_not_in_source");
+  if (negatedInMessage(claim.claim_type, claim.quote, message.text)) problems.push("negated_in_message");
   if (claim.claim_type === "office_request") {
     if (!claim.request_item?.trim()) problems.push("missing_request_item");
     else if (!wordsAppearIn(claim.request_item, claim.quote)) problems.push("request_item_not_in_quote");

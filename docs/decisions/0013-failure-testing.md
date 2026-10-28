@@ -241,6 +241,58 @@ it.
   still match. When any cannot be confirmed it sends no signal, keeps the
   temporary database and fails the check.
 
+## The live chat eval on cd91699 (Muse Spark 1.3, 3 runs)
+
+The coordinator's run confirmed SP12.1 (booked-monday 9/9, no first
+answer failed) and the SP12.2 target (demo-story p50 4.3 s, p95 8.2 s).
+Clinical answers 0, injection 6/6. meaning-flips failed text checks 2/6
+and slot checks 6/15, for two reasons. Tests:
+`test/meaning-flips-live.test.ts`.
+
+- L1. Run 1, step 1: a negated confirmation held the slot. The office
+  message "Your Monday 11/16 1:00 PM visit is not confirmed yet." gave a
+  confirm claim, the agent accepted it, and Monday became held. The report
+  did not list the claim, but only a confirm claim on Monday gives that
+  state. Nothing in code read the negation: the quote check proves the
+  quote is in the message, and the date check proves the date and time are
+  in the quote. Now `checkClaim` refuses a confirm, cancel, offer or move
+  claim when the sentence of the message that holds its quote negates the
+  claim's own state word ("not confirmed", "can't confirm", "has not been
+  canceled", "no longer available", "unconfirmed"), with
+  `negated_in_message` (`src/domain/negation.ts`). It reads the whole
+  sentence, so a quote that leaves the negation out is caught. The
+  extraction instructions also say a negated sentence gives no claim of
+  that type. The rule errs toward refusing, and the person can still enter
+  a claim by hand.
+- L2. The chat eval report now lists, per turn, each claim the agent
+  accepted: type, status, slot, quote, sender kind and event time
+  (`acceptedClaims`).
+- L3. Step 4, every run: m4's confirmation of Monday and cancel of Thursday
+  never applied. The product was wrong, not the script. The script matches
+  S3's D2 checkpoint, which the slot rules pass. The live extraction of m4,
+  pasted in the chat with channel unknown and from "Unknown sender", gave
+  its claims sender_kind unknown. Under 0002 an office message whose sender
+  kind is unknown has an unknown event time (`src/slots/time.ts`), so rules
+  4 and 5 cannot order m4's cancel against m2's confirmation or its
+  confirmation against the offers, raise a conflict and keep the earlier
+  states. That is the rule working: code must not guess an order. With
+  sender_kind person, as the recorded m4 has and as in the demo story,
+  Monday is confirmed and Thursday canceled. The extraction instructions
+  did not say what sender_kind means. They now say: person when a person
+  at the office wrote the message, such as one with a greeting or signed by
+  the front desk or a name, automated for an automatic reminder or system
+  message, unknown only when the text gives no sign, and that a pasted
+  message's from and channel may be unknown. The agent's "recorded the
+  cancel for Thursday 11/12, no time" read the claim's own label, since the
+  cancel sentence states no time. A date-only cancel joins the one timed
+  slot on its date (0002, step 1).
+- L4. Found in the same runs: "I saved your office message and confirmed
+  Monday 11/16 1:00 PM." passed the action check, which read "I" and the
+  verb only side by side. A verb joined by "and" to the assistant's own
+  verb in one sentence is now held to the activity log too, unless another
+  subject with its own verb sits between them ("I see the office confirmed
+  Monday and canceled Thursday").
+
 ## Questions for Jeff
 
 - Answered by the coordinator: the scripted chat behind `?mockchat=1`
