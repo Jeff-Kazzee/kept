@@ -382,10 +382,10 @@ Sprint 7B tasks (branch `sprint/07b-web-app`):
 - [x] SP7B.7 `APP_ALLOWED_HOSTS` and a Secure cookie over HTTPS (P3).
 - [x] SP7B.9 "Add an office message" outside the chat, under the scope
   decline and in the composer (W9, proposed).
-- [ ] SP7B.8 After 7A merges, rebase and switch the page to the real
+- [x] SP7B.8 After 7A merges, rebase and switch the page to the real
   `/api/chat` route.
 - [ ] Confirm or change the decisions in `docs/decisions/0008-web-app.md`
-  (W1 to W9, P1 to P3, B1 to B18).
+  (W1 to W9, P1 to P3, B1 to B22).
 
 ## Sprint 8: failure testing
 

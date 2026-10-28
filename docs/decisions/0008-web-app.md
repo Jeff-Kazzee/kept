@@ -5,7 +5,7 @@ Status: proposed, pending Jeff (2026-10-28)
 This records how sprint 7B builds the web app: the chat beside the
 schedule, the cards, the design system, the production build and the host
 setting for a private proxy. W1 to W8 and P1 to P3 came with the sprint,
-and W9 with a coordinator note. B1 to B18 are choices the writer made
+and W9 with a coordinator note. B1 to B22 are choices the writer made
 while building it. The chat route and the case agent are sprint 7A
 (0007). Both work to the chat contract below.
 
@@ -50,7 +50,8 @@ paired session cookie. `/api/chat` follows the same rule for POST and GET.
   entity's expected version. The chat adds no route that changes slot
   state.
 
-The types are in `ui/chat/types.ts`.
+The types and fixed sentences are 7A's, in `src/agent/types.ts`. The page
+imports them (`ui/chat/types.ts` adds only how it reaches the chat).
 
 ## Coordinator decisions
 
@@ -210,6 +211,43 @@ The types are in `ui/chat/types.ts`.
 - B18. The received time in the sheet is typed in America/Denver and sent
   with its offset. An hour that happens twice on 2026-11-01 is read as the
   first one (MDT).
+
+- B19. The Schedule tab offers a conflict that waits for a question when
+  none is open: its explanation card (with Explain) and "Ask me the
+  question about this", which uses the existing route. The chat usually
+  asks it. Without that, the story could not finish when the chat cannot
+  answer, as in recorded mode before live chat recordings exist.
+- B20. The page uses the real `/api/chat` (SP7B.8). Answer text arrives
+  after the checks, so tool lines and a typing state show while it is
+  held. The page takes ids from `turn.started` and `turn.done` and the
+  chat version from `turn.done` and `GET /api/chat`, never a count, since
+  an import also writes an imported-lines record (0007, R2-10).
+- B21. The fixed sentences 7A's code writes in place of an answer
+  (`UNGROUNDED_TEXT`, `MODEL_UNAVAILABLE_TEXT`, the limit and malformed
+  sentences, `PARTIAL_TEXT`) show as notices tagged "Written by code", in
+  the stream and in the stored chat. Notice cards, such as
+  `QUESTION_WITHHELD_NOTICE`, carry the same tag. Under
+  `MODEL_UNAVAILABLE_TEXT`, and under a turn that failed without an
+  answer, "Add this as an office message" opens the import sheet with the
+  person's text. The claims card shows the `unknown` channel as "Channel
+  not stated", and for a message the chat imported shows "Source
+  suggested by the assistant" with the fields it suggested, on the
+  message and on each claim, with the whole message open (0007, E1).
+- B22. The import sheet recognizes a synthetic demo message by its exact
+  text and imports it with the fixture's id, sender, channel and time, as
+  the chat does for a pasted fixture message in recorded mode. A demo
+  message already in the case shows its claims card instead of a second
+  import.
+- Review round 2 (low): build files are opened once with `O_NOFOLLOW` and
+  checked with fstat on that handle. Chips are keyed by slot and position
+  and carry their message id and slot key, so focus finds the live chip
+  again. On a phone, Escape on the Schedule view goes back to Chat and
+  focuses the chip or the Chat tab. The tablet sheet is a modal dialog
+  while open (`role="dialog"`, `aria-modal`), the header and the chat are
+  inert, and opening it moves focus to its heading. Without field-sizing,
+  the message box counts the rows a long line wraps to at the box's width.
+  The bundle test scans every emitted file, maps and decompressed copies
+  included.
 
 ## Host setting (P3)
 
