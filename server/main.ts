@@ -12,6 +12,9 @@
 //   MODEL_API_KEY      the server's Meta key, used when the user set none
 //   APP_ALLOWED_HOSTS  more host names, comma-separated, for a private
 //                      proxy such as Tailscale serve (see hosts.ts)
+//   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+//                      the Google OAuth client, for the built-in Gmail and
+//                      Calendar connection (docs/google.md)
 import { mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -38,6 +41,8 @@ import type { ToolModelClient } from "../src/model/responses.ts";
 import { APP_HEADER, requestSourceProblem } from "./guard.ts";
 import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
 import { API_SECURITY_HEADERS, createStaticHandler } from "./static.ts";
+import { GoogleConnection, clientFromEnv } from "../src/google/connection.ts";
+import { GOOGLE_CALLBACK_PATH, createGoogleRoutes } from "./google.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.APP_PORT ?? 5180);
@@ -109,6 +114,15 @@ const chat = createChat(
 );
 
 const allowed = appHosts(PORT, extraHosts);
+// The Google connection (0012). Its token file sits beside the event log,
+// outside it, with mode 600.
+const google = createGoogleRoutes({
+  connection: new GoogleConnection({ client: clientFromEnv(), file: path.join(path.dirname(dbPath), "google-secrets.json") }),
+  generation: () => kase.generation(),
+  port: PORT,
+  extraHosts,
+  onCallbackError: (code) => console.error(`Google connect failed: ${code}.`),
+});
 const appOrigins = allowed.origins;
 
 function readBody(req: IncomingMessage): Promise<unknown> {
@@ -172,6 +186,13 @@ server.on("request", async (req, res) => {
     res.writeHead(result.status, { ...API_SECURITY_HEADERS, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", ...(result.location ? { Location: result.location } : {}) });
     return res.end();
   }
+  if (url.pathname === GOOGLE_CALLBACK_PATH) {
+    if (req.method !== "GET") return send(res, 405, { error: "method_not_allowed" });
+    const secure = req.headers["x-forwarded-proto"] === "https";
+    const { location, setCookie } = await google.callback(url, req.headers.cookie, secure);
+    res.writeHead(303, { ...API_SECURITY_HEADERS, Location: location, "Set-Cookie": setCookie, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
+    return res.end();
+  }
   if (!url.pathname.startsWith("/api/")) return ui(req, res);
   // Set before any route runs, so a route that writes its own response,
   // such as the chat's event stream, carries them too.
@@ -232,6 +253,12 @@ server.on("request", async (req, res) => {
     }
     return;
   }
+  if (google.handles(url.pathname)) {
+    const secure = (headerOf("origin") ?? "").startsWith("https://") || headerOf("x-forwarded-proto") === "https";
+    const g = await google.api({ method: req.method ?? "GET", path: url.pathname, body, generation, host: headerOf("host"), secure });
+    if (g.setCookie) res.setHeader("Set-Cookie", g.setCookie);
+    return send(res, g.status, g.body);
+  }
   const result = await api({ method: req.method ?? "GET", path: url.pathname, body, generation });
   send(res, result.status, result.body);
 });
@@ -240,6 +267,7 @@ server.listen(PORT, HOST, () => {
   console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? `live, ${client.label}` : "recorded responses"})`);
   if (live) console.log("The model provider is chosen in the app's settings. ChatGPT sign-in finishes only in a browser on this computer, or through an SSH tunnel to this port.");
   if (extraHosts.length > 0) console.log(`Also answers to: ${extraHosts.join(", ")}`);
+  if (clientFromEnv()) console.log(`Google redirect URIs for the OAuth client: ${google.redirectUris().join(" ")}`);
   // Last, so a script that waits for this line has read the others.
   console.log(serveBuild ? "Serving the production build from dist/ui." : "Serving the UI through Vite for development.");
 });
