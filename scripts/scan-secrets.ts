@@ -47,9 +47,16 @@
 //   the app's settings database (app-secrets.sqlite) or a copy of it. Every
 //   file and blob up to 8 MB that starts with the SQLite header is opened
 //   from a private read-only copy.
+// - a judge access code (0014) in the shape the admin command prints it:
+//   "judge_" and 43 base64url characters, on its own.
+// - a SQLite file, under any name, that is hosted mode's accounts database
+//   or a copy of it: one with a judge_codes or sessions table. It holds
+//   only hashes of codes and sessions, but also email addresses.
 // - a file or folder name that is the app's settings file
 //   (app-secrets.sqlite and its -wal, -shm and -journal files, or the
-//   older app-secrets.json and its temporary file) or a
+//   older app-secrets.json and its temporary file), hosted mode's
+//   accounts database (accounts.sqlite and its -wal, -shm and -journal
+//   files), or a
 //   local env file (.env.local, .env.<name>.local), in the working tree or
 //   in any tree in history.
 // The key's own shape is not known to this scan, so it does not look for a
@@ -92,6 +99,8 @@ const ASSIGNMENT = /(?<![A-Za-z0-9_])MODEL_API_KEY[ \t]*=[ \t]*["']?([^\s"'`$<>\
 // A redaction a log tool already made is not a key.
 const PLACEHOLDER = /^redacted/i;
 const BEARER = /(?<![A-Za-z0-9_])Bearer[ \t]+([A-Za-z0-9._~+/=|-]{24,})/g;
+// A judge access code, as src/hosted/store.ts makes it.
+const JUDGE = /(?<![A-Za-z0-9_-])(judge_[A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/g;
 const MIXED = (v: string) => /[A-Z]/.test(v) && /[a-z]/.test(v) && /\d/.test(v);
 
 // Provider secrets as the settings file writes them (0010). The value
@@ -165,7 +174,9 @@ export function jsonSecretFields(text: string): string[] {
 }
 
 // The app's settings file and local env files must never be tracked.
-const SECRET_FILE_NAME = /^(?:app-secrets\.sqlite(?:-wal|-shm|-journal)?|app-secrets\.json|\.app-secrets\.json\..*\.tmp|\.env\.local|\.env\.[^/]+\.local)$/;
+const SECRET_FILE_NAME = /^(?:app-secrets\.sqlite(?:-wal|-shm|-journal)?|accounts\.sqlite(?:-wal|-shm|-journal)?|app-secrets\.json|\.app-secrets\.json\..*\.tmp|\.env\.local|\.env\.[^/]+\.local)$/;
+
+export const ACCOUNTS_DB = "accounts database";
 
 const SQLITE_MAGIC = Buffer.from("SQLite format 3\0", "latin1");
 export const isSqlite = (b: Buffer) => b.length >= SQLITE_MAGIC.length && b.subarray(0, SQLITE_MAGIC.length).equals(SQLITE_MAGIC);
@@ -181,6 +192,8 @@ export function sqliteSecretFields(bytes: Buffer): string[] {
     writeFileSync(file, bytes, { mode: 0o600 });
     const db = new DatabaseSync(file, { readOnly: true });
     try {
+      // Hosted mode's accounts database (0014), under any name.
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name IN ('judge_codes', 'sessions')").get()) return [ACCOUNTS_DB];
       const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings'").get();
       if (!table) return [];
       const out: string[] = [];
@@ -204,7 +217,7 @@ export function lineSecrets(b: Buffer, start = 0, end = b.length): Range[] {
   const line = b.toString("latin1", start, end);
   const out: Range[] = [];
   fieldSecrets(line, start, out);
-  for (const re of [ASSIGNMENT, BEARER]) {
+  for (const re of [ASSIGNMENT, BEARER, JUDGE]) {
     for (const m of line.matchAll(re)) {
       const value = m[1]!;
       if (re === BEARER && !MIXED(value)) continue;
@@ -383,7 +396,7 @@ function scanWorkingTree(repo: string, hit: Hit, note: (text: string) => void): 
       if (json) {
         const whole = Buffer.concat(json);
         if (isJsonPath(file)) for (const field of jsonSecretFields(whole.toString("utf8"))) hit(`${name} (JSON field ${redact(field)})`);
-        for (const field of sqliteSecretFields(whole)) hit(`${name} (settings database field ${redact(field)})`);
+        for (const field of sqliteSecretFields(whole)) hit(field === ACCOUNTS_DB ? `${name} (${ACCOUNTS_DB})` : `${name} (settings database field ${redact(field)})`);
       }
     } finally {
       closeSync(fd);
@@ -502,7 +515,7 @@ async function scanObjects(repo: string, refs: string[], hit: Hit): Promise<{ co
     if (b.whole) {
       const bytes = Buffer.concat(b.tree);
       if (b.whole.json) for (const field of jsonSecretFields(bytes.toString("utf8"))) hit(`${b.whole.where} (JSON field ${redact(field)})`);
-      for (const field of sqliteSecretFields(bytes)) hit(`${b.whole.where} (settings database field ${redact(field)})`);
+      for (const field of sqliteSecretFields(bytes)) hit(field === ACCOUNTS_DB ? `${b.whole.where} (${ACCOUNTS_DB})` : `${b.whole.where} (settings database field ${redact(field)})`);
     }
     if (b.type === "commit") {
       commits++;
