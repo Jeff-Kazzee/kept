@@ -31,6 +31,9 @@ export type MessageEvent =
         // For source reported_by_user_via_agent: the agent that reported
         // it, set by code (0009, D1).
         agent_name?: string;
+        // Set when the assistant added text that may be the person's own
+        // report. Its claims wait until the person says (0009, D1').
+        own_report?: "offered";
       };
     }
   | {
@@ -55,7 +58,16 @@ export type MessageEvent =
   | { type: "manual_entry_recorded"; data: { evidence_id: string } }
   // Undo of adding the message (0009, design 3). The message and its
   // claims leave the case. Pasting it again adds it anew.
-  | { type: "message_withdrawn"; data: Record<string, never> };
+  | { type: "message_withdrawn"; data: Record<string, never> }
+  // The person's answer to "Record this as your own report?" (0009, D1').
+  // Yes makes the message and its claims the person's own report.
+  | { type: "own_report_decided"; data: { answer: "yes" | "no" } }
+  // Undo of that answer. The question is open again.
+  | { type: "own_report_undone"; data: Record<string, never> };
+
+// Whether the person was asked if the message is their own report, and
+// their answer. Null when they were not asked.
+export type OwnReport = "offered" | "yes" | "no" | null;
 
 export type ExtractionOutcome = "claims_pending" | "no_claims" | "manual_entry_needed";
 
@@ -70,7 +82,10 @@ export type EvidenceEvent =
   // confirmed. Kept so old cases still project.
   | { type: "agent_report_confirmed"; data: { proposal_id: string; grant_id: string; claim: EvidenceClaim } }
   | { type: "claim_decision_undone"; data: Record<string, never> }
-  | { type: "evidence_withdrawn"; data: Record<string, never> };
+  | { type: "evidence_withdrawn"; data: Record<string, never> }
+  // The claim's source changes with its message's own-report answer
+  // (0009, D1').
+  | { type: "claim_source_set"; data: { source_type: SourceType } };
 
 // Where an answer item came from. `clarifies` names the evidence item whose
 // date or time the answer resolves. `after` is the latest evidence time in
@@ -106,6 +121,9 @@ export type MessageView = {
   // The agent that reported the message, for source
   // reported_by_user_via_agent. Null otherwise.
   agentName: string | null;
+  // "offered" while the person has not said whether the message is their
+  // own report. Its claims wait for that answer (0009, D1').
+  ownReport: OwnReport;
   status: "imported" | ExtractionOutcome;
   attempts: Array<Extract<MessageEvent, { type: "extraction_attempted" }>["data"]>;
   rejections: Array<Extract<MessageEvent, { type: "claim_rejected" }>["data"]>;
@@ -151,6 +169,7 @@ export function projectMessages(events: StoredEvent[]): Map<string, MessageView>
         sourceSuggested: event.data.source_suggested ?? [],
         sourceNote: event.data.source_note ?? null,
         agentName: event.data.agent_name ?? null,
+        ownReport: event.data.own_report ?? null,
         status: "imported",
         attempts: [],
         rejections: [],
@@ -171,6 +190,12 @@ export function projectMessages(events: StoredEvent[]): Map<string, MessageView>
       view.manualEvidenceIds.push(event.data.evidence_id);
     } else if (event.type === "message_withdrawn") {
       views.delete(id);
+    } else if (event.type === "own_report_decided") {
+      view.ownReport = event.data.answer;
+      if (event.data.answer === "yes") view.sourceType = "reported_by_user";
+    } else if (event.type === "own_report_undone") {
+      view.ownReport = "offered";
+      view.sourceType = "office_message";
     }
   }
   return views;
@@ -251,6 +276,8 @@ export function projectEvidence(events: StoredEvent[]): Map<string, EvidenceView
       view.decidedAt = null;
     } else if (event.type === "evidence_withdrawn") {
       views.delete(id);
+    } else if (event.type === "claim_source_set") {
+      view.claim = { ...view.claim, source_type: event.data.source_type };
     }
   }
   return views;

@@ -16,6 +16,8 @@ export const ACTIVITY_STREAM = "activity";
 export type UndoSpec =
   // Adding a message: it and its claims leave the case.
   | { kind: "message_import"; message_id: string }
+  // The person's answer about their own report: the question opens again.
+  | { kind: "own_report"; message_id: string }
   // A review decision. `version` is the evidence version the decision left.
   | { kind: "claim_decision"; evidence_id: string; version: number }
   | { kind: "question_answer"; question_id: string; evidence_ids: string[]; settled_ids: string[]; draft_id: string | null }

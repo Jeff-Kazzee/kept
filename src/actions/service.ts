@@ -234,6 +234,18 @@ export class CaseActions {
     );
   }
 
+  // The person's answer to "Record this as your own report?" (D1'). The
+  // person only: the tap is their confirmation.
+  recordOwnReport(by: By, messageId: string, answer: "yes" | "no", expectedVersion: number): MessageView {
+    this.#personOnly(by, "say whether a message is your own report");
+    return this.#act(by, () => this.#intake.decideOwnReport(messageId, answer, expectedVersion), (m) => ({
+      kind: "own_report_recorded",
+      summary: answer === "yes" ? `Recorded message ${m.id} as your own report.` : `Kept message ${m.id} as a message, not your own report.`,
+      target: { type: "message", id: m.id },
+      undo: { kind: "own_report", message_id: m.id },
+    }));
+  }
+
   // Review decisions. An agent accepts only a fact whose quote and values
   // pass the extraction checks again, in the same transaction (design 1).
   acceptClaim(by: By, evidenceId: string, expectedVersion: number): EvidenceView {
@@ -248,6 +260,14 @@ export class CaseActions {
     return this.#act(
       by,
       () => {
+        if (by.actor !== "you") {
+          // D1': the claims of a message that may be the person's own report
+          // wait until the person says whether it is.
+          const from = this.#intake.evidenceItem(evidenceId).messageId;
+          if (from !== null && this.#intake.message(from).ownReport === "offered") {
+            throw new InvalidRequestError(`Message ${from} waits for you to say whether it is your own report. Answer that on its card first.`);
+          }
+        }
         if (decision === "accept" && by.actor !== "you") {
           const problem = this.#intake.verificationProblem(evidenceId);
           if (problem) throw new InvalidRequestError(problem);
@@ -539,11 +559,18 @@ export class CaseActions {
       return `A reply for ${listLabels(approved.slot_keys)} was approved after this and depends on it. A sent reply cannot be unsent, so this cannot be undone.`;
     }
     switch (spec.kind) {
+      case "own_report": {
+        const m = this.#intake.messages().find((x) => x.id === spec.message_id);
+        if (!m) return `Message ${spec.message_id} is no longer in the case.`;
+        if (m.evidenceIds.some((id) => this.#intake.evidenceItem(id).status !== "pending")) return `A fact from message ${m.id} was reviewed after this. Undo that review first.`;
+        return null;
+      }
       case "message_import": {
         const m = this.#intake.messages().find((x) => x.id === spec.message_id);
         if (!m) return `Message ${spec.message_id} is no longer in the case.`;
-        if (m.manualEvidenceIds.length > 0) {
-          const typed = later.find((r) => r.kind === "claim_entered" && m.manualEvidenceIds.includes(r.target?.id ?? ""));
+        const standing = m.manualEvidenceIds.filter((id) => this.#intake.evidenceItem(id).status !== "rejected");
+        if (standing.length > 0) {
+          const typed = later.find((r) => r.kind === "claim_entered" && standing.includes(r.target?.id ?? ""));
           return `A fact was entered by hand for message ${m.id}${typed ? ` (${typed.id})` : ""} after this, and depends on it. Reject that fact instead.`;
         }
         const ids = new Set([...m.evidenceIds, ...m.manualEvidenceIds]);
@@ -607,6 +634,9 @@ export class CaseActions {
   // Writes the reversing event. Inside the undo's transaction.
   #reverse(by: By, spec: UndoSpec): void {
     switch (spec.kind) {
+      case "own_report":
+        this.#intake.undoOwnReport(spec.message_id);
+        return;
       case "message_import":
         this.#intake.withdrawMessage(spec.message_id);
         return;

@@ -3,7 +3,7 @@
 // claim accepted evidence. Message text is data. Nothing in a message or a
 // claim triggers an action.
 import { z } from "zod";
-import { CLAIM_TYPES, ClaimType, Effort, Message, sourceTypeForChannel, type EvidenceClaim } from "../domain/claim.ts";
+import { CLAIM_TYPES, ClaimType, Effort, Message, sourceTypeForChannel, type EvidenceClaim, type SourceType } from "../domain/claim.ts";
 import { checkSlotFormats } from "../domain/datetime.ts";
 import { zonedIso } from "../domain/zone.ts";
 import { caseTimeZone } from "../settings/events.ts";
@@ -50,7 +50,9 @@ const asEvent = (e: MessageEvent | EvidenceEvent) => ({ type: e.type, data: e.da
 // source fields an agent suggested (0007, E1). `agentName` is set for the
 // report of something the person told an external agent: its claims are
 // then reported through that agent, not by the person (0009, D1).
-export type ImportSource = { suggested: Array<"channel" | "from" | "received_at">; note: string; agentName?: string };
+// `ownReport` is set when the assistant added text that may be the
+// person's own report: the person is asked, and its claims wait (D1').
+export type ImportSource = { suggested: Array<"channel" | "from" | "received_at">; note: string; agentName?: string; ownReport?: boolean };
 
 // An extracted claim carries its message's source: its source type, the
 // note on suggested fields and the reporting agent.
@@ -139,6 +141,7 @@ export class IntakeService {
         source_type: source?.agentName ? "reported_by_user_via_agent" : sourceTypeForChannel(message.channel),
         ...(source && source.suggested.length > 0 ? { source_suggested: source.suggested, source_note: source.note } : {}),
         ...(source?.agentName ? { agent_name: source.agentName } : {}),
+        ...(source?.ownReport ? { own_report: "offered" as const } : {}),
       },
     };
     // A message added again after an undo withdrew it starts anew on its
@@ -169,8 +172,11 @@ export class IntakeService {
     this.#store.transaction(() => {
       const m = this.message(messageId);
       const ids = [...m.evidenceIds, ...m.manualEvidenceIds];
-      if (m.manualEvidenceIds.length > 0) throw new InvalidRequestError(`A fact was entered by hand for message ${messageId}. Reject that fact instead.`);
-      const decided = ids.map((id) => this.evidenceItem(id)).filter((e) => e.status !== "pending");
+      // A fact the person entered by hand depends on the message while it
+      // is pending or accepted. A rejected one leaves with the message.
+      const manual = m.manualEvidenceIds.map((id) => this.evidenceItem(id));
+      if (manual.some((e) => e.status !== "rejected")) throw new InvalidRequestError(`A fact was entered by hand for message ${messageId}. Reject that fact instead.`);
+      const decided = m.evidenceIds.map((id) => this.evidenceItem(id)).filter((e) => e.status !== "pending");
       if (decided.length > 0) {
         throw new InvalidRequestError(`${decided.length === 1 ? "A fact" : `${decided.length} facts`} from message ${messageId} ${decided.length === 1 ? "was" : "were"} reviewed. Undo those reviews first.`);
       }
@@ -271,6 +277,46 @@ export class IntakeService {
     }
     this.#store.append(evidenceStream(evidenceId), expectedVersion, [asEvent(event)], this.#describeEvidence);
     return this.evidenceItem(evidenceId);
+  }
+
+  // The person's answer to "Record this as your own report?" (0009, D1').
+  // Yes makes the message and every claim from it the person's own report,
+  // in one transaction, after the same scope check a typed report gets.
+  // The claims stay pending.
+  decideOwnReport(messageId: string, answer: "yes" | "no", expectedVersion: number): MessageView {
+    return this.#store.inCase(() =>
+      this.#store.transaction(() => {
+        this.#store.assertVersion(messageStream(messageId), expectedVersion, this.#describeMessage);
+        const m = this.message(messageId);
+        if (m.ownReport !== "offered") throw new InvalidRequestError(`Message ${messageId} has no open question about whether it is your own report.`);
+        if (answer === "yes" && hasClinicalContent(m.message.text)) throw new OutOfScopeError();
+        const event: MessageEvent = { type: "own_report_decided", data: { answer } };
+        this.#store.appendMany([
+          { streamId: messageStream(messageId), expectedVersion, events: [asEvent(event)] },
+          ...(answer === "yes" ? this.#sourceWrites(m, "reported_by_user") : []),
+        ]);
+        return this.message(messageId);
+      }),
+    );
+  }
+
+  // Undo of that answer: the question is open again and the claims are the
+  // message's again. For the activity log, inside its transaction, which
+  // has checked that no claim of the message was reviewed since.
+  undoOwnReport(messageId: string): void {
+    this.#store.inCase(() => {
+      const m = this.message(messageId);
+      const event: MessageEvent = { type: "own_report_undone", data: {} };
+      this.#store.appendMany([
+        { streamId: messageStream(messageId), expectedVersion: m.version, events: [asEvent(event)] },
+        ...(m.ownReport === "yes" ? this.#sourceWrites(m, "office_message") : []),
+      ]);
+    });
+  }
+
+  #sourceWrites(m: MessageView, sourceType: SourceType): StreamWrite[] {
+    const event: EvidenceEvent = { type: "claim_source_set", data: { source_type: sourceType } };
+    return m.evidenceIds.map((id) => ({ streamId: evidenceStream(id), expectedVersion: this.#store.streamVersion(evidenceStream(id)), events: [asEvent(event)] }));
   }
 
   // Undo of a review decision (0009, design 3): the item waits for review

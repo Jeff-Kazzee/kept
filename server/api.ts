@@ -36,6 +36,7 @@ const PastedMessage = z
 
 const ExtractBody = z.object({ effort: Effort.default(DEFAULT_EXTRACTION_EFFORT), expectedVersion: z.number().int().nonnegative() }).strict();
 const ReviewBody = z.object({ expectedVersion: z.number().int().nonnegative() }).strict();
+const OwnReportBody = z.object({ expectedVersion: z.number().int().nonnegative(), answer: z.enum(["yes", "no"]) }).strict();
 const ManualBody = z.object({ expectedVersion: z.number().int().nonnegative(), claim: ManualClaimInput }).strict();
 const CalendarBody = z
   .object({ name: z.string().trim().min(1).max(200), text: z.string().min(1), expectedVersion: z.number().int().nonnegative() })
@@ -116,6 +117,12 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     ["POST", /^\/api\/messages\/([^/]+)\/manual$/, (m, body) => {
       const { expectedVersion, claim } = ManualBody.parse(body);
       return actions.enterManually(YOU, decodeURIComponent(m[1]!), expectedVersion, claim);
+    }],
+    // "Record this as your own report?" on an own_report card (0009, D1').
+    // `expectedVersion` is the message's version. Answers the message.
+    ["POST", /^\/api\/messages\/([^/]+)\/own-report$/, (m, body) => {
+      const { expectedVersion, answer } = OwnReportBody.parse(body);
+      return actions.recordOwnReport(YOU, decodeURIComponent(m[1]!), answer, expectedVersion);
     }],
     ["POST", /^\/api\/evidence\/([^/]+)\/accept$/, (m, body) =>
       actions.acceptClaim(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),

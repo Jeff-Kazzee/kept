@@ -91,6 +91,13 @@ function label(e: StoredEvent): string | null {
       return `Code rejected a model claim (${event.data.problems.join(", ")})`;
     case "extraction_finished":
       return `Extraction finished: ${EXTRACTION_OUTCOME[event.data.outcome]}`;
+    case "own_report_decided":
+      return event.data.answer === "yes" ? `Message ${after(e.streamId, "message:")} recorded as your own report` : `Message ${after(e.streamId, "message:")} kept as a message, not your own report`;
+    case "own_report_undone":
+      return `Answer about message ${after(e.streamId, "message:")} as your own report undone`;
+    case "claim_source_set":
+      // Written with the answer, whose label already says it.
+      return null;
     case "manual_entry_recorded":
       return `Claim ${event.data.evidence_id} entered by you`;
     case "claim_extracted":
