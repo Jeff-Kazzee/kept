@@ -11,6 +11,7 @@ import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import type { InputItem, OutputItem, ToolCall, ToolModelClient, ToolReply } from "../src/model/responses.ts";
+import { meterAdd, meterCheck } from "../src/model/meter.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import type { EventStore } from "../src/store/event-log.ts";
@@ -18,8 +19,7 @@ import { fixtureMessage } from "./helpers.ts";
 
 export const CLOCK = () => "2026-11-05T17:00:00.000Z";
 
-export function services(store: EventStore, now: () => string = CLOCK) {
-  const client = RecordedModelClient.fromDirectory();
+export function services(store: EventStore, now: () => string = CLOCK, client: RecordedModelClient = RecordedModelClient.fromDirectory()) {
   const intake = new IntakeService(store, client, { now });
   const kase = new CaseService(store, intake, client, { now, userName: loadCaseProfile().user_name });
   const reply = new ReplyService(store, kase, client, { now });
@@ -29,10 +29,17 @@ export function services(store: EventStore, now: () => string = CLOCK) {
 
 export type App = ReturnType<typeof services>;
 
+// Each reading of the agent's clock is one minute after the last, so
+// pasted messages are sent in order, as in real use.
+export function steppingClock(start = CLOCK()) {
+  let n = 0;
+  return () => new Date(Date.parse(start) + n++ * 60_000).toISOString();
+}
+
 export function agentFor(app: App, client: ToolModelClient, options: AgentOptions = {}) {
   let n = 0;
   return new CaseAgent(app.store, app, client, {
-    now: CLOCK,
+    now: steppingClock(),
     newTurnId: () => `t${++n}`,
     messageIdFor: fixtureMessageIds(defaultMessageId),
     ...options,
@@ -116,12 +123,23 @@ export class RuleModel implements ToolModelClient {
   }
 
   async respond(request: ToolCall): Promise<ToolReply> {
+    meterCheck();
     this.calls.push(structuredClone(request));
+    let reply: ToolReply = {
+      output: [reasoning(), message("I can help with your appointments.")],
+      usage: { input: 1000, cachedInput: 0, output: 20, reasoning: 5 },
+      latencyMs: 500,
+      firstByteMs: 200,
+    };
     for (const rule of this.#rules) {
       const items = rule(request.body.input, request);
-      if (items) return { output: [reasoning(), ...items], usage: { input: 1200, cachedInput: 0, output: 60, reasoning: 20 }, latencyMs: 900, firstByteMs: 300 };
+      if (items) {
+        reply = { output: [reasoning(), ...items], usage: { input: 1200, cachedInput: 0, output: 60, reasoning: 20 }, latencyMs: 900, firstByteMs: 300 };
+        break;
+      }
     }
-    return { output: [reasoning(), message("I can help with your appointments.")], usage: { input: 1000, cachedInput: 0, output: 20, reasoning: 5 }, latencyMs: 500, firstByteMs: 200 };
+    meterAdd(reply.usage);
+    return reply;
   }
 }
 

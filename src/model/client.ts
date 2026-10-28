@@ -2,6 +2,7 @@
 // a fallback host can replace the Meta endpoint later without other changes.
 import type { Effort } from "../domain/claim.ts";
 import { assertAllowedModel, parseResponseBody, type ResponsesRequestBody, type TokenUsage } from "./request.ts";
+import { meterAdd, meterCheck } from "./meter.ts";
 import { readCompletedBody, readSse, type ToolCall, type ToolModelClient, type ToolReply } from "./responses.ts";
 
 export { assertAllowedModel };
@@ -65,6 +66,13 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
   async call(request: ModelCall): Promise<ModelReply> {
     assertAllowedModel(request.body.model);
     if (request.body.store !== false) throw new Error("Requests must set store: false.");
+    meterCheck();
+    const reply = await this.#call(request);
+    meterAdd(reply.usage);
+    return reply;
+  }
+
+  async #call(request: ModelCall): Promise<ModelReply> {
     const started = performance.now();
     let res: Response;
     try {
@@ -97,6 +105,13 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
   async respond(request: ToolCall): Promise<ToolReply> {
     assertAllowedModel(request.body.model);
     if (request.body.store !== false) throw new Error("Requests must set store: false.");
+    meterCheck();
+    const reply = await this.#respond(request);
+    meterAdd(reply.usage);
+    return reply;
+  }
+
+  async #respond(request: ToolCall): Promise<ToolReply> {
     const started = performance.now();
     let res: Response;
     try {

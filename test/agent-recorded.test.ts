@@ -15,8 +15,8 @@ import {
   chatRecordingKey,
   fixtureMessageIds,
 } from "../src/agent/recorded.ts";
-import { defaultMessageId } from "../src/agent/tools.ts";
-import type { InputItem } from "../src/model/responses.ts";
+import { defaultMessageId, functionTools } from "../src/agent/tools.ts";
+import { buildToolRequest, type InputItem } from "../src/model/responses.ts";
 import { hasClinicalContent } from "../src/domain/scope.ts";
 import { fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
@@ -47,12 +47,33 @@ async function demoCase() {
 }
 
 describe("G10: recorded chat turns", () => {
-  it("keys a request by its canonical input, without encrypted reasoning", () => {
-    const a: InputItem[] = [{ role: "user", content: "Hi" }, { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "AAA" }];
-    const b: InputItem[] = [{ content: "Hi", role: "user" }, { encrypted_content: "BBB", summary: [], id: "rs_1", type: "reasoning" }];
-    expect(chatRecordingKey(a)).toMatch(/^[0-9a-f]{16}$/);
-    expect(chatRecordingKey(a)).toBe(chatRecordingKey(b));
-    expect(chatRecordingKey(a)).not.toBe(chatRecordingKey([{ role: "user", content: "Hi!" }]));
+  it("keys a request by its model, effort, tool choice, instructions, tools and input, without encrypted reasoning", () => {
+    const input: InputItem[] = [{ role: "user", content: "Hi" }, { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "AAA" }];
+    const body = buildToolRequest({ model: "muse-spark-1.3", effort: "low", instructions: "x", input, tools: functionTools() });
+    const reordered = JSON.parse(JSON.stringify({ ...body, input: [{ content: "Hi", role: "user" }, { encrypted_content: "BBB", summary: [], id: "rs_1", type: "reasoning" }] }));
+    expect(chatRecordingKey(body)).toMatch(/^[0-9a-f]{16}$/);
+    expect(chatRecordingKey(reordered)).toBe(chatRecordingKey(body));
+    // Finding 13: each of these changes the key.
+    const variants = [
+      { ...body, input: [{ role: "user" as const, content: "Hi!" }] },
+      { ...body, reasoning: { effort: "minimal" as const } },
+      { ...body, model: "muse-spark-1.4" },
+      { ...body, tool_choice: "none" as const },
+      { ...body, instructions: "y" },
+      { ...body, tools: functionTools().slice(1) },
+    ];
+    for (const v of variants) expect(chatRecordingKey(v)).not.toBe(chatRecordingKey(body));
+    // Streaming does not change the answer, so it is not keyed.
+    expect(chatRecordingKey({ ...body, stream: false } as typeof body)).toBe(chatRecordingKey(body));
+  });
+
+  it("a low-effort recording does not answer a minimal-effort turn", async () => {
+    const dir = tempDir();
+    const first = await demoCase();
+    await say(agentFor(first, new RecordingChatClient(scheduleModel(), dir)), first, "Am I booked Monday?");
+    const second = await demoCase();
+    const r = await say(agentFor(second, RecordedChatClient.fromDirectory(dir), { effort: "minimal" }), second, "Am I booked Monday?");
+    expect(r.of("turn.error").map((e) => e.code)).toEqual(["model_unavailable"]);
   });
 
   it("a recorded turn replays offline with the same events, and recordings keep no encrypted reasoning", async () => {
@@ -108,15 +129,15 @@ describe("G10: recorded chat turns", () => {
 
   it("pnpm recording:key prints the key of a request file", () => {
     const dir = tempDir();
-    const input: InputItem[] = [{ role: "user", content: "Am I booked Monday?" }];
+    const request = buildToolRequest({ model: "muse-spark-1.3", effort: "low", instructions: "x", input: [{ role: "user", content: "Am I booked Monday?" }], tools: functionTools() });
     const body = path.join(dir, "body.json");
     const bare = path.join(dir, "input.json");
-    writeFileSync(body, JSON.stringify({ model: "muse-spark-1.3", input }));
-    writeFileSync(bare, JSON.stringify(input));
-    expect(keyForFile(body)).toBe(chatRecordingKey(input));
-    expect(keyForFile(bare)).toBe(chatRecordingKey(input));
+    writeFileSync(body, JSON.stringify(request));
+    writeFileSync(bare, JSON.stringify(request.input));
+    expect(keyForFile(body)).toBe(chatRecordingKey(request));
+    expect(() => keyForFile(bare)).toThrow(/whole request body/);
     const out = execFileSync(process.execPath, [fromPackage("scripts/recording-key.ts"), body], { encoding: "utf8" });
-    expect(out.trim()).toBe(chatRecordingKey(input));
+    expect(out.trim()).toBe(chatRecordingKey(request));
   });
 
   it("in recorded mode a pasted fixture message keeps its fixture id, so its extraction replays", () => {

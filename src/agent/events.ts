@@ -40,7 +40,11 @@ export type ChatEventData =
         outcome: AssistantOutcome;
         cards: Card[];
         chips: FactChip[];
-        tools: Array<{ tool: string; ok: boolean }>;
+        // Each tool call with its result code, such as ok or not_from_user.
+        tools: Array<{ tool: string; ok: boolean; code?: string }>;
+        // Lines of the person's message that a tool imported (finding 8).
+        // History sends a reference in their place.
+        imported?: Array<{ message_id: string; first_line: number; last_line: number }>;
         // Problem codes from the checks of the model's final text, attempt by
         // attempt. Never the text itself.
         problems: string[][];
@@ -48,17 +52,26 @@ export type ChatEventData =
       };
     };
 
-export type ChatLog = { version: number; messages: ChatMessage[] };
+// `imported` maps a user message id to the lines its turn imported.
+export type ChatLog = {
+  version: number;
+  messages: ChatMessage[];
+  imported: Map<string, Array<{ message_id: string; first_line: number; last_line: number }>>;
+};
 
 export function projectChat(events: StoredEvent[]): ChatLog {
-  const log: ChatLog = { version: 0, messages: [] };
+  const log: ChatLog = { version: 0, messages: [], imported: new Map() };
+  const userOfTurn = new Map<string, string>();
   for (const e of events) {
     if (e.streamId !== CHAT_STREAM) continue;
     log.version = e.version;
     const event = { type: e.type, data: e.data } as ChatEventData;
     if (event.type === "chat_user_message") {
+      userOfTurn.set(event.data.turn_id, event.data.message_id);
       log.messages.push({ id: event.data.message_id, role: "user", text: event.data.text, createdAt: caseIso(e.recordedAt), cards: [], chips: [] });
     } else if (event.type === "chat_assistant_message") {
+      const user = userOfTurn.get(event.data.turn_id);
+      if (user && event.data.imported?.length) log.imported.set(user, event.data.imported);
       log.messages.push({
         id: event.data.message_id,
         role: "assistant",

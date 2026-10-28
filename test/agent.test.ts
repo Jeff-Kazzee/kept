@@ -123,7 +123,7 @@ describe("G2: the tools", () => {
     ];
     const model = sequence(...calls.map((c) => reply(c)), reply(message("Here is your schedule.")));
     const r = await say(agentFor(app, model), app, "Show me everything");
-    expect(r.report.tools).toEqual(calls.map((c) => ({ tool: (c as unknown as { name: string }).name, ok: true })));
+    expect(r.report.tools).toEqual(calls.map((c) => ({ tool: (c as unknown as { name: string }).name, ok: true, code: "ok" })));
     expect(fingerprint(app)).toBe(before);
 
     const outputs = turnOutputs(model.calls.at(-1)!.body.input);
@@ -164,7 +164,7 @@ describe("G2: the tools", () => {
       reply(message("I could not do that.")),
     );
     const r = await say(agentFor(app, model), app, "Cancel Thursday");
-    expect(r.report.tools).toEqual([{ tool: "draft_reply", ok: false }]);
+    expect(r.report.tools).toEqual([{ tool: "draft_reply", ok: false, code: "invalid_arguments" }]);
     expect(turnOutputs(model.calls[1]!.body.input)[0]!.output.error).toBe("invalid_arguments");
     expect(app.kase.view().reply.draft).toBeNull();
     expect(fingerprint(app)).toBe(before);
@@ -206,7 +206,7 @@ describe("G3: import_message takes only text the person pasted", () => {
     );
     const r = await say(agentFor(app, model), app, pasted("m1"));
     expect(turnOutputs(model.calls[1]!.body.input)[0]!.output).toMatchObject({ error: "not_from_user" });
-    expect(r.report.tools).toEqual([{ tool: "import_message", ok: false }]);
+    expect(r.report.tools).toEqual([{ tool: "import_message", ok: false, code: "not_from_user" }]);
     expect(app.intake.messages()).toEqual([]);
     expect(r.of("card")).toEqual([]);
   });
@@ -222,8 +222,8 @@ describe("G3: import_message takes only text the person pasted", () => {
     );
     const r = await say(agentFor(app, model), app, m2.text);
     expect(r.report.tools).toEqual([
-      { tool: "import_message", ok: false },
-      { tool: "import_message", ok: true },
+      { tool: "import_message", ok: false, code: "not_from_user" },
+      { tool: "import_message", ok: true, code: "ok" },
     ]);
     expect(app.intake.messages().map((m) => m.id)).toEqual(["m2"]);
   });
@@ -284,7 +284,11 @@ describe("G4: grounding", () => {
       reply(message("I've cancelled Thursday 11/12 10:30 AM for you.")),
     );
     const r = await say(agentFor(app, model), app, "cancel Thursday");
-    expect(r.report.problems).toEqual([["claims_action"], ["claims_action"]]);
+    // Thursday is not canceled either, so both answers also misstate it.
+    expect(r.report.problems).toEqual([
+      ["state_mismatch", "claims_action"],
+      ["state_mismatch", "claims_action"],
+    ]);
     expect(r.report.outcome).toBe("ungrounded");
     expect(fingerprint(app)).toBe(before);
   });
@@ -354,7 +358,7 @@ describe("G7: draft safety", () => {
     const app = await demoCase();
     const model = sequence(reply(fnCall("draft_reply", { template: "accept_offer", slot_key: THU })), reply(message("That reply is not possible.")));
     const r = await say(agentFor(app, model), app, "Accept Thursday");
-    expect(r.report.tools).toEqual([{ tool: "draft_reply", ok: false }]);
+    expect(r.report.tools).toEqual([{ tool: "draft_reply", ok: false, code: "blocked" }]);
     expect(app.kase.view().reply.draft).toBeNull();
   });
 });

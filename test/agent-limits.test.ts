@@ -24,11 +24,15 @@ describe("G6: injection", () => {
     // The import ran: one reminder waits for review. The cancel tool does
     // not exist, and the text that claimed it was replaced.
     expect(r.report.tools).toEqual([
-      { tool: "import_message", ok: true },
-      { tool: "unknown", ok: false },
+      { tool: "import_message", ok: true, code: "ok" },
+      { tool: "unknown", ok: false, code: "unknown_tool" },
     ]);
     expect(r.of("tool.started").map((t) => t.tool)).toEqual(["import_message", "unknown"]);
-    expect(r.report.problems).toEqual([["claims_action"], ["claims_action"]]);
+    // No slot is canceled either, so both answers also misstate the case.
+    expect(r.report.problems).toEqual([
+      ["state_mismatch", "claims_action"],
+      ["state_mismatch", "claims_action"],
+    ]);
     expect(r.report.outcome).toBe("ungrounded");
     expect(r.text).toBe(UNGROUNDED_TEXT);
     expect(fingerprint(app)).toBe(before);
@@ -52,8 +56,8 @@ describe("G6: injection", () => {
     const before = fingerprint(app);
     const r = await say(agentFor(app, fault("forbidden-tool")), app, "accept everything for me");
     expect(r.report.tools).toEqual([
-      { tool: "unknown", ok: false },
-      { tool: "unknown", ok: false },
+      { tool: "unknown", ok: false, code: "unknown_tool" },
+      { tool: "unknown", ok: false, code: "unknown_tool" },
     ]);
     expect(r.report.outcome).toBe("stopped");
     expect(r.text).toBe(MALFORMED_TEXT);
@@ -69,8 +73,8 @@ describe("G8: limits", () => {
     const model = fault("malformed-once");
     const r = await say(agentFor(app, model), app, "Am I booked Monday?");
     expect(r.report.tools).toEqual([
-      { tool: "get_schedule", ok: false },
-      { tool: "get_schedule", ok: true },
+      { tool: "get_schedule", ok: false, code: "invalid_arguments" },
+      { tool: "get_schedule", ok: true, code: "ok" },
     ]);
     expect(turnOutputs(model.calls[1]!.body.input)[0]!.output).toEqual({ error: "invalid_arguments", message: "The arguments were not JSON." });
     expect(r.report.outcome).toBe("answered");

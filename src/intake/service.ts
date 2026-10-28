@@ -104,16 +104,22 @@ export class IntakeService {
   // stale edit. A report the user typed is checked for clinical content
   // first (S11). A clinical report gets the fixed decline, and nothing is
   // recorded, so no model call can follow.
-  importMessage(input: Message): MessageView {
-    return this.#store.inCase(() => this.#importMessage(input));
+  // `source` marks the fields the case agent suggested (0007, E1). Its
+  // note is copied onto every claim extracted from the message.
+  importMessage(input: Message, source?: { suggested: Array<"channel" | "from" | "received_at">; note: string }): MessageView {
+    return this.#store.inCase(() => this.#importMessage(input, source));
   }
 
-  #importMessage(input: Message): MessageView {
+  #importMessage(input: Message, source?: { suggested: Array<"channel" | "from" | "received_at">; note: string }): MessageView {
     const message = Message.parse(input);
     if (message.channel === "user_report" && hasClinicalContent(message.text)) throw new OutOfScopeError();
     const event: MessageEvent = {
       type: "message_imported",
-      data: { message, source_type: sourceTypeForChannel(message.channel) },
+      data: {
+        message,
+        source_type: sourceTypeForChannel(message.channel),
+        ...(source && source.suggested.length > 0 ? { source_suggested: source.suggested, source_note: source.note } : {}),
+      },
     };
     this.#store.append(messageStream(message.id), 0, [asEvent(event)], this.#describeMessage);
     return this.message(message.id);
@@ -164,7 +170,7 @@ export class IntakeService {
     const evidenceWrites: StreamWrite[] = result.passed.map((claim, i) => {
       const event: EvidenceEvent = {
         type: "claim_extracted",
-        data: { message_id: messageId, claim, effort, attempt: finalAttempt },
+        data: { message_id: messageId, claim: before.sourceNote ? { ...claim, source_note: before.sourceNote } : claim, effort, attempt: finalAttempt },
       };
       return { streamId: evidenceStream(this.#newId(`${messageId}-e${i + 1}`)), expectedVersion: 0, events: [asEvent(event)] };
     });

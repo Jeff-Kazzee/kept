@@ -52,6 +52,26 @@ const TERMS = [
   "injections?",
   "pain(?:s|ful)?",
   "mental health",
+  // Preparation and diet instructions (sprint 7A review, finding 7). Each
+  // is a phrase, so "arrive 15 minutes early", "bring your insurance card"
+  // and a calendar entry such as "Lunch with Sam" still pass.
+  "fasting",
+  "fast (?:after|before|from|for|overnight|until|beginning)",
+  "(?:what|can|should|may|must|do) (?:i|we|you) (?:eat|drink)",
+  "(?:eat|eating|drink|drinking) (?:or|and) (?:skip|avoid|drink|eat|not)",
+  "(?:skip|avoid|stop|no|only|limit) (?:eating|drinking|food|foods|meals?|breakfast|liquids?|caffeine|alcohol|coffee|water)",
+  "(?:nothing|not) to (?:eat|drink)",
+  "(?:don't|do not|cannot|can't|must not|should not|shouldn't) (?:eat|drink)",
+  "drink only",
+  "only (?:drink|water|clear)",
+  "clear (?:liquids?|fluids?)",
+  "empty stomach",
+  "diet(?:ary|s)?",
+  "nil by mouth",
+  "npo",
+  "(?:eat|drink|food|meals?) (?:the night before|the morning of|after midnight|before (?:the|your) (?:visit|appointment))",
+  "prep(?:aration)? instructions?",
+  "bowel prep\\w*",
 ];
 
 const CLINICAL = new RegExp(`\\b(?:${TERMS.join("|")})\\b`, "i");

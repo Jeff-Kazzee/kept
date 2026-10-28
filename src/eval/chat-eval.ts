@@ -82,7 +82,8 @@ export const ChatScript = z
   .object({
     id: z.string().regex(/^[a-z0-9-]+$/),
     title: z.string(),
-    // The app clock for the run, so dates and recordings repeat.
+    // The app clock's start for the run. Each reading moves it 10 seconds
+    // on, so pasted messages are sent in order and runs repeat exactly.
     now: z.iso.datetime().default("2026-11-05T17:00:00.000Z"),
     setup: z
       .object({
@@ -159,6 +160,9 @@ export type TurnResult = {
   expectedTools: string[];
   expectedToolsAny: string[];
   toolsCalled: string[];
+  // Each call's result code: "ok", or the error such as not_from_user or
+  // invalid_arguments. Codes only, no text.
+  toolResults: Array<{ tool: string; code: string }>;
   toolsOk: boolean;
   expectedCards: string[];
   cards: string[];
@@ -279,7 +283,8 @@ export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalRep
     const skipped: SkippedAction[] = [];
     let runsCompleted = 0;
     for (let run = 1; run <= runs; run++) {
-      const clock = () => script.now;
+      let tick = 0;
+      const clock = () => new Date(Date.parse(script.now) + tick++ * 10_000).toISOString();
       const store = new EventStore(":memory:", clock);
       try {
         const app = build(store, guard, clock);
@@ -329,6 +334,7 @@ export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalRep
             expectedTools: e.tools,
             expectedToolsAny: e.tools_any,
             toolsCalled: tools,
+            toolResults: report.tools.map((t) => ({ tool: t.tool, code: t.code })),
             toolsOk: has(tools, e.tools) && (e.tools_any.length === 0 || e.tools_any.some((t) => tools.includes(t))) && (!e.no_model_call || report.modelCalls === 0),
             expectedCards: e.cards,
             cards,

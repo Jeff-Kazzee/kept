@@ -1,37 +1,57 @@
-// Checks on the agent's final text (0007, G4 and G5) and the fact chips.
-// Code collects a fact for each slot, claim and calendar event that a tool
-// returned during the turn. Every date, weekday and time the text states
-// must match one of them as a unit, the same way explanation text is
-// checked against its cited evidence. The text also must not be clinical
-// and must not say the agent changed anything, because no tool can.
+// Checks on the agent's final text (0007, G4, G5 and review round 1) and
+// the fact chips. Code collects the facts the turn's tool results hold:
+// each slot with its state, each claim, each calendar event, and statuses
+// such as "a claim was accepted" or "a reply was sent". The text is read as
+// the scope check reads it, with dates and times rewritten into forms the
+// shared parser reads (dates.ts), and then:
+// - every date, weekday and time must match the facts as a unit. A time
+//   with no date must belong to a date in the same sentence, or to the
+//   facts' single date. Date-like text code cannot read fails.
+// - every state word (confirmed, booked, requested, canceled, declined,
+//   moved, rescheduled) must agree with the state of the slots its clause
+//   or sentence names, negation included. With no slot named, a positive
+//   state needs a slot in that state among the facts. Questions assert
+//   nothing and are not checked for states.
+// - a statement that a claim, reply or proposal was accepted, rejected,
+//   approved, sent or confirmed needs that status among the facts.
+// - no first-person claim that the assistant changed anything, because no
+//   tool can.
+// - no clinical content.
 import { parseMentions, weekdayOf, type Mention } from "../domain/datetime.ts";
 import { hasClinicalContent, normalizeForScope } from "../domain/scope.ts";
+import type { SlotState } from "../domain/claim.ts";
 import { timeLabel } from "../slots/labels.ts";
 import type { SlotView } from "../slots/types.ts";
+import { canonicalDates, loneDays } from "./dates.ts";
 import type { FactChip } from "./types.ts";
 
-// A point in time from a tool result: a date, with a time when one is known.
-export type Fact = { date: string; time: string | null };
+// A point in time from a tool result. A slot carries its state.
+export type Fact = { date: string; time: string | null; state?: SlotState };
 
-export type TextProblem = "ungrounded" | "clinical_content" | "claims_action" | "empty";
+// Statuses a tool result showed. Code-written, never model text.
+export type Status = "claim:accepted" | "claim:rejected" | "reply:sent" | "proposal:confirmed" | "proposal:rejected";
+
+// `scheduleRead` is true when a tool read the whole schedule this turn, so
+// a statement such as "nothing is confirmed" has the case behind it.
+export type Grounds = { facts: Fact[]; statuses: Set<Status>; today: string | null; scheduleRead?: boolean };
+
+export type TextProblem = "ungrounded" | "state_mismatch" | "clinical_content" | "claims_action" | "empty";
 
 export const MAX_ANSWER_CHARS = 1200;
 
-function dateMatches(m: Mention, f: Fact): boolean {
+function dateMatches(m: Mention, f: { date: string }): boolean {
   if (m.monthDay !== null && m.monthDay !== f.date.slice(5, 10)) return false;
   if (m.year !== null && m.year !== Number(f.date.slice(0, 4))) return false;
   if (m.weekday !== null && m.weekday !== weekdayOf(f.date)) return false;
   return true;
 }
 
-// A mention matches when its date parts fit a fact and each time it states
-// fits a fact on that same date. "Friday 11/13 9:15 AM, after the 9:00 AM
-// meeting" needs Friday 11/13 at 9:15 AM and at 9:00 AM. A time needs a
+const hasDate = (m: Mention) => m.monthDay !== null || m.weekday !== null;
+
+// Each time a mention states fits a fact among `onDate`. A time needs a
 // fact with that time: unknown times are never treated as known. A bare
 // "10:30" passes when either reading fits.
-function mentionMatches(m: Mention, facts: Fact[]): boolean {
-  const onDate = facts.filter((f) => dateMatches(m, f));
-  if (onDate.length === 0) return false;
+function timesFit(m: Mention, onDate: Fact[]): boolean {
   if (!m.times.every((t) => onDate.some((f) => f.time === t))) return false;
   for (let i = 0; i < m.ambiguousTimes.length; i += 2) {
     if (!onDate.some((f) => f.time === m.ambiguousTimes[i] || f.time === m.ambiguousTimes[i + 1])) return false;
@@ -39,28 +59,145 @@ function mentionMatches(m: Mention, facts: Fact[]): boolean {
   return true;
 }
 
-// True when each date, weekday and time mention in `text` matches the facts.
-export function grounded(text: string, facts: Fact[]): boolean {
-  return parseMentions(text).every((m) => mentionMatches(m, facts));
+// The sentences of canonical text. Times are already "1:00 pm", so a period
+// ends a sentence.
+const sentences = (text: string) => text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+
+// A day written alone ("the 16th") becomes the facts' one date with that
+// day, or stays unreadable.
+function resolveLoneDays(text: string, facts: Fact[]): { text: string; ok: boolean } {
+  let ok = true;
+  let out = text;
+  for (const d of loneDays(text).reverse()) {
+    const dates = [...new Set(facts.filter((f) => Number(f.date.slice(8, 10)) === d.day).map((f) => f.date))];
+    if (dates.length !== 1) {
+      ok = false;
+      continue;
+    }
+    const date = dates[0]!;
+    out = `${out.slice(0, d.index)}${date.slice(5, 7)}/${date.slice(8, 10)}/${date.slice(0, 4)}${out.slice(d.index + d.match.length)}`;
+  }
+  return { text: out, ok };
+}
+
+// True when each date, weekday and time in `text` matches the facts.
+export function grounded(text: string, facts: Fact[], today: string | null = null): boolean {
+  const canonical = canonicalDates(text, today);
+  if (canonical.unreadable.length > 0) return false;
+  const lone = resolveLoneDays(canonical.text, facts);
+  if (!lone.ok) return false;
+  const dates = [...new Set(facts.map((f) => f.date))];
+  for (const s of sentences(lone.text)) {
+    const mentions = parseMentions(s);
+    const dated = mentions.filter(hasDate);
+    for (const m of mentions) {
+      if (hasDate(m)) {
+        const onDate = facts.filter((f) => dateMatches(m, f));
+        if (onDate.length === 0 || !timesFit(m, onDate)) return false;
+        continue;
+      }
+      // A time with no date of its own.
+      const onDate =
+        dated.length > 0 ? facts.filter((f) => dated.some((d) => dateMatches(d, f))) : dates.length === 1 ? facts.filter((f) => f.date === dates[0]) : [];
+      if (onDate.length === 0 || !timesFit(m, onDate)) return false;
+    }
+  }
+  return true;
+}
+
+// State words and the slot states that make them true. A moved or
+// rescheduled slot is canceled. A change that is only proposed has not
+// moved anything. "Moved to Monday" names the new slot, which fits when it
+// is held and another slot was canceled.
+const STATE_WORDS: Array<{ re: RegExp; states: SlotState[]; moved?: boolean }> = [
+  { re: /\b(?:confirmed|booked)\b/g, states: ["confirmed", "change_proposed"] },
+  { re: /\brequested\b/g, states: ["requested"] },
+  { re: /\b(?:canceled|cancelled)\b/g, states: ["canceled"] },
+  { re: /\bdeclined\b/g, states: ["declined"] },
+  { re: /\b(?:moved|rescheduled)\b/g, states: ["canceled"], moved: true },
+];
+
+const NEGATION = /\b(?:not|never|no|none|nothing|neither|nor|yet to|no longer|cannot)\b|n't\b/;
+
+// Statuses of claims, replies and proposals.
+const STATUS_WORDS: Array<{ re: RegExp; noun: RegExp; statuses: Status[] }> = [
+  { re: /\baccepted\b/, noun: /\b(?:claims?|items?|evidence|facts?)\b/, statuses: ["claim:accepted"] },
+  { re: /\brejected\b/, noun: /\b(?:claims?|items?|evidence|facts?|proposals?|changes?)\b/, statuses: ["claim:rejected", "proposal:rejected"] },
+  { re: /\b(?:approved|sent)\b/, noun: /\b(?:repl(?:y|ies)|drafts?|answers?)\b/, statuses: ["reply:sent"] },
+  { re: /\b(?:confirmed|accepted|approved)\b/, noun: /\b(?:proposals?|proposed changes?)\b/, statuses: ["proposal:confirmed"] },
+];
+
+// A colon splits a clause only before a space, so "10:30" stays whole.
+const clauses = (s: string) => s.split(/[,;]|:\s|\b(?:and|but|while|whereas|so|although|though)\b/).map((c) => c.trim()).filter(Boolean);
+
+// The slots among the facts that the mentions name.
+function slotsNamed(mentions: Mention[], facts: Fact[]): Fact[] {
+  return facts.filter(
+    (f) => f.state !== undefined && mentions.some((m) => hasDate(m) && dateMatches(m, f) && (m.times.length === 0 || (f.time !== null && m.times.includes(f.time)))),
+  );
+}
+
+// True when every state and status the text asserts agrees with the facts.
+export function statesAgree(text: string, grounds: Grounds): boolean {
+  const canonical = canonicalDates(text, grounds.today).text;
+  const slots = grounds.facts.filter((f) => f.state !== undefined);
+  const fitsWord = (w: (typeof STATE_WORDS)[number]) => (f: Fact) =>
+    w.states.includes(f.state!) || (w.moved === true && (f.state === "confirmed" || f.state === "requested") && slots.some((x) => x.state === "canceled"));
+  let carried: Fact[] = [];
+  for (const s of sentences(canonical)) {
+    const sentenceSlots = slotsNamed(parseMentions(s), grounds.facts);
+    // A question asserts nothing.
+    if (s.endsWith("?")) {
+      if (sentenceSlots.length > 0) carried = sentenceSlots;
+      continue;
+    }
+    for (const c of clauses(s)) {
+      const clauseSlots = slotsNamed(parseMentions(c), grounds.facts);
+      const targets = clauseSlots.length > 0 ? clauseSlots : sentenceSlots.length > 0 ? sentenceSlots : carried;
+      for (const w of STATE_WORDS) {
+        const fits = fitsWord(w);
+        for (const m of c.matchAll(w.re)) {
+          const negated = NEGATION.test(c.slice(0, m.index));
+          if (targets.length > 0) {
+            // A positive state needs a named slot in it. A negated one needs
+            // a named slot outside it.
+            if (negated ? targets.every(fits) : !targets.some(fits)) return false;
+          } else if (negated ? slots.length === 0 && grounds.scheduleRead !== true : !slots.some(fits)) {
+            return false;
+          }
+        }
+      }
+      for (const w of STATUS_WORDS) {
+        const at = c.search(w.re);
+        if (at === -1 || !w.noun.test(c)) continue;
+        if (!NEGATION.test(c.slice(0, at)) && !w.statuses.some((x) => grounds.statuses.has(x))) return false;
+      }
+    }
+    if (sentenceSlots.length > 0) carried = sentenceSlots;
+  }
+  return true;
 }
 
 // The agent has no tool that changes the schedule, so a first-person claim
-// that it did is false whatever the case holds.
-const ACTION_CLAIM =
-  /\bI(?:'ve|’ve| have| just)?\s+(?:already\s+)?(?:accepted|approved|confirmed|canceled|cancelled|sent|rejected|declined|booked|rescheduled|moved|archived|deleted|answered|submitted)\b/i;
+// that it did is false whatever the case holds. "We" counts, as the
+// assistant speaking for the app.
+const SUBJECT = String.raw`\b(?:i|we)(?:'ve|'d)?`;
+const HELPERS = String.raw`(?:\s+(?:have|has|had|just|already|now|also|successfully|went ahead and|gone ahead and))*`;
+const PAST = "accepted|approved|confirmed|canceled|cancelled|sent|rejected|declined|booked|rescheduled|moved|archived|deleted|answered|submitted|changed|updated|removed";
+const BASE = "accept|approve|confirm|cancel|send|reject|decline|book|reschedule|move|archive|delete|answer|submit|change|update|remove";
+const ACTION_CLAIM = new RegExp(`${SUBJECT}${HELPERS}\\s+(?:${PAST})\\b|${SUBJECT}${HELPERS}\\s+did\\s+(?:${BASE})\\b`);
 
 export function claimsAction(text: string): boolean {
-  return ACTION_CLAIM.test(normalizeForScope(text));
+  return ACTION_CLAIM.test(normalizeForScope(text).toLowerCase().replace(/[’‘]/g, "'"));
 }
 
-// Every check reads the text as the scope check does: compatibility forms
-// folded, so fullwidth digits are digits, and format characters removed.
-export function checkAnswer(text: string, facts: Fact[]): TextProblem[] {
-  const problems: TextProblem[] = [];
+export function checkAnswer(text: string, grounds: Grounds): TextProblem[] {
   const normalized = normalizeForScope(text);
   if (normalized.trim() === "") return ["empty"];
+  const problems: TextProblem[] = [];
   if (hasClinicalContent(text)) problems.push("clinical_content");
-  if (!grounded(normalized, facts) || text.length > MAX_ANSWER_CHARS) problems.push("ungrounded");
+  if (!grounded(text, grounds.facts, grounds.today) || text.length > MAX_ANSWER_CHARS) problems.push("ungrounded");
+  if (!statesAgree(text, grounds)) problems.push("state_mismatch");
   if (claimsAction(text)) problems.push("claims_action");
   return problems;
 }
@@ -83,13 +220,11 @@ export const MAX_CHIPS = 8;
 // The chips for a turn: the slots from the turn's tool results that the
 // final text mentions. When the text mentions none of them, or code
 // replaced the text, every slot the tools returned, up to MAX_CHIPS.
-export function chipsFor(slots: SlotView[], text: string | null): FactChip[] {
+export function chipsFor(slots: SlotView[], text: string | null, today: string | null = null): FactChip[] {
   const unique = [...new Map(slots.map((s) => [s.key, s])).values()];
   if (text !== null) {
-    const mentions = parseMentions(text);
-    const named = unique.filter((s) =>
-      mentions.some((m) => (m.monthDay !== null || m.weekday !== null) && dateMatches(m, s) && (m.times.length === 0 || m.times.includes(s.time ?? ""))),
-    );
+    const mentions = parseMentions(canonicalDates(text, today).text);
+    const named = unique.filter((s) => mentions.some((m) => hasDate(m) && dateMatches(m, s) && (m.times.length === 0 || m.times.includes(s.time ?? ""))));
     if (named.length > 0) return named.slice(0, MAX_CHIPS).map(chipFor);
   }
   return unique.slice(0, MAX_CHIPS).map(chipFor);

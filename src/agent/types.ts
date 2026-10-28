@@ -64,5 +64,13 @@ export const MODEL_UNAVAILABLE_TEXT = "The assistant could not answer just now. 
 export const TOOL_LIMIT_TEXT = "I stopped after the step limit for one answer. Nothing in your case changed. Ask again with one thing at a time.";
 export const MALFORMED_TEXT = "I could not finish that request. Nothing in your case changed. Try asking another way.";
 export const TOKEN_LIMIT_TEXT = "That answer grew too long, so I stopped. Nothing in your case changed. Ask again with one thing at a time.";
+// A turn that stopped after a tool already wrote something, such as an
+// imported message or a draft (finding 11).
+export const PARTIAL_TEXT = "I stopped before finishing. Check the cards above.";
+export const PARTIAL_ERROR_TEXT = "The assistant stopped before finishing. Check the cards above, then reload the chat.";
+// Shown beside source fields of a pasted message that the assistant
+// suggested (E1).
+export const SOURCE_SUGGESTED_LABEL = "Source suggested by the assistant";
+export const QUESTION_WITHHELD_NOTICE = "The question's wording did not pass the chat checks. Answer it in the schedule panel.";
 export const DRAFT_OPEN_NOTICE = "A reply draft is already open. Finish or discard it before starting another.";
 export const WITHHELD_USER_TEXT = "Not saved: this message asked about health, which this app does not handle.";

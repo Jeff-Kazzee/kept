@@ -7,6 +7,8 @@
 //   fixtures/recordings/chat/faults/<name>.json    hand-written faults, each
 //                                                  a sequence of replies
 // `pnpm recording:key <request file>` prints the key for a request body.
+// The key covers the model, effort, tool choice, instructions, tools and
+// input, so a recording answers only the request it was made for.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -15,7 +17,8 @@ import { corpusMessages, loadScenarios } from "../fixtures/load.ts";
 import { normalizeWhitespace } from "../domain/quote.ts";
 import { ModelCallError } from "../model/client.ts";
 import { assertAllowedModel } from "../model/request.ts";
-import { OutputItem, type InputItem, type ToolCall, type ToolModelClient, type ToolReply } from "../model/responses.ts";
+import { meterAdd, meterCheck } from "../model/meter.ts";
+import { OutputItem, type ToolCall, type ToolModelClient, type ToolReply, type ToolRequestBody } from "../model/responses.ts";
 import { RECORDINGS_DIR } from "../paths.ts";
 
 export const CHAT_RECORDINGS_DIR = path.join(RECORDINGS_DIR, "chat");
@@ -37,12 +40,24 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
-// The recording key: the first 16 hex digits of the SHA-256 of the request
-// input, written canonically without encrypted reasoning. Instructions and
-// tool descriptions are not in the key, so wording changes keep the
-// recordings.
-export function chatRecordingKey(input: InputItem[]): string {
-  return createHash("sha256").update(canonical(input)).digest("hex").slice(0, 16);
+// The parts of a request that decide the answer.
+export type KeyedRequest = Pick<ToolRequestBody, "model" | "reasoning" | "tool_choice" | "instructions" | "tools" | "input">;
+
+// The recording key: the first 16 hex digits of the SHA-256 of the
+// request's model, effort, tool choice, instructions, tool schemas and
+// input, written canonically without encrypted reasoning. A recording made
+// at one effort, or with other instructions or tools, never answers
+// another request (sprint 7A review, finding 13).
+export function chatRecordingKey(body: KeyedRequest): string {
+  const keyed = {
+    model: body.model,
+    effort: body.reasoning.effort,
+    tool_choice: body.tool_choice,
+    instructions: body.instructions,
+    tools: body.tools,
+    input: body.input,
+  };
+  return createHash("sha256").update(canonical(keyed)).digest("hex").slice(0, 16);
 }
 
 const Usage = z
@@ -118,7 +133,7 @@ export class RecordedChatClient implements ToolModelClient {
   // like a model call that got no answer.
   static fromDirectory(dir: string = CHAT_RECORDINGS_DIR): RecordedChatClient {
     return new RecordedChatClient((request) => {
-      const file = path.join(dir, `${chatRecordingKey(request.body.input)}.json`);
+      const file = path.join(dir, `${chatRecordingKey(request.body)}.json`);
       return existsSync(file) ? ChatRecording.parse(JSON.parse(readFileSync(file, "utf8"))).reply : undefined;
     });
   }
@@ -133,10 +148,13 @@ export class RecordedChatClient implements ToolModelClient {
   async respond(request: ToolCall): Promise<ToolReply> {
     assertAllowedModel(request.body.model);
     if (request.body.store !== false) throw new Error("Requests must set store: false.");
+    meterCheck();
     this.calls.push(structuredClone(request));
     const reply = this.#next(request);
     if (!reply) throw new ModelCallError(`No chat recording for ${request.key}.`);
-    return toReply(reply);
+    const out = toReply(reply);
+    meterAdd(out.usage);
+    return out;
   }
 }
 
@@ -158,7 +176,7 @@ export class RecordingChatClient implements ToolModelClient {
 
   async respond(request: ToolCall): Promise<ToolReply> {
     const reply = await this.#inner.respond(request);
-    const key = chatRecordingKey(request.body.input);
+    const key = chatRecordingKey(request.body);
     const recording: ChatRecording = {
       key,
       source: "live",
