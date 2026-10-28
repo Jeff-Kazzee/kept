@@ -9,6 +9,7 @@ import { EvidenceCard } from "../case/ClaimsCard.tsx";
 import { ExplanationCard, QuestionCard } from "../case/ConflictCards.tsx";
 import { api } from "../api.ts";
 import { ActionButton } from "../components/ActionButton.tsx";
+import { OwnReportCard, openOwnReports } from "../case/OwnReportCard.tsx";
 import { ReplyPanel } from "../case/ReplyCard.tsx";
 import { zoneWithShortName } from "../format.ts";
 import { Agenda } from "./Agenda.tsx";
@@ -33,10 +34,12 @@ export function unaskedConflict(state: AppState) {
   return state.case.conflicts.find((c) => c.status === "open" && c.askable && c.archivedSlotKeys.length === 0);
 }
 
-// How many things wait for the user: facts no one has decided, the open
-// question or a conflict waiting for one, and the open reply draft.
+// How many things wait for the user: an own-report question, facts no one
+// has decided, the open question or a conflict waiting for one, and the
+// open reply draft.
 export function waitingCount(state: AppState): number {
   return (
+    openOwnReports(state).length +
     state.evidence.filter((e) => e.status === "pending").length +
     (state.case.question || unaskedConflict(state) ? 1 : 0) +
     (state.case.reply.draft ? 1 : 0)
@@ -129,12 +132,16 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
   const reply = kase.reply;
   const replyWaiting = reply.draft !== null || reply.suggestion !== null;
   const conflict = unaskedConflict(state);
-  const needsYou = pending.length > 0 || kase.question !== null || conflict !== undefined || replyWaiting;
+  const owns = openOwnReports(state);
+  const needsYou = owns.length > 0 || pending.length > 0 || kase.question !== null || conflict !== undefined || replyWaiting;
   return (
     <div className="stack">
       {needsYou && (
         <section className="stack" aria-labelledby="needs-you">
           <h3 id="needs-you">Waiting for you</h3>
+          {owns.map((m) => (
+            <OwnReportCard key={m.id} messageId={m.id} state={state} run={run} />
+          ))}
           {pending.map((e) => (
             <EvidenceCard key={e.id} item={e} state={state} run={run} />
           ))}

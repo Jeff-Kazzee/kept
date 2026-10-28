@@ -614,6 +614,13 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
 .card-foot > details { flex: 1 1 200px; min-width: 0; }
 .card-foot > details[open] { flex-basis: 100%; padding-bottom: var(--s-2); }
 
+/* The own-report question: one line with Yes and No, easy to spot,
+   because the assistant waits on it. Answered, it folds to a receipt. */
+.own-report { gap: var(--s-1); border-color: var(--accent-line); background: var(--accent-soft); }
+.own-report.is-answered { background: var(--surface); border-color: var(--hairline); padding: var(--s-1) var(--s-2); }
+.own-report-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); }
+.own-report-text { flex: 1 1 220px; min-width: 0; }
+
 /* The reply card stays prominent: only you approve the simulated send. */
 .reply-draft { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-float); }
 .reply-draft .card-title .icon { color: var(--accent-text); }

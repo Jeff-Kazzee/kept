@@ -7,7 +7,7 @@
 // case view.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Mark, RidgeScene } from "../components/Art.tsx";
-import { IMPORT_AFTER_ACTION_NOTICE, MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
+import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
 import type { AppState, FixtureScenario } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
@@ -17,6 +17,7 @@ import { Receipts } from "../agent/Receipts.tsx";
 import { shortTime } from "../format.ts";
 import { ClaimsCard } from "../case/ClaimsCard.tsx";
 import { ExplanationCard, QuestionCard } from "../case/ConflictCards.tsx";
+import { OwnReportCard } from "../case/OwnReportCard.tsx";
 import { ReplyCard } from "../case/ReplyCard.tsx";
 import type { ActivityEntry } from "../contract.ts";
 import { Composer } from "./Composer.tsx";
@@ -537,10 +538,9 @@ function ToolSummary({ tools }: { tools: ToolLine[] }) {
 
 // The fixed sentences the chat's code writes in place of an answer (0007).
 // They show as notices written by code, not as model output.
-// The two notices of 0009, D2 are written by code too: an action that came
-// with a pasted message waits (`waits_for_person`), and so does a paste
-// after another action.
-const CODE_SENTENCES = new Set([UNGROUNDED_TEXT, MODEL_UNAVAILABLE_TEXT, TOOL_LIMIT_TEXT, MALFORMED_TEXT, TOKEN_LIMIT_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, IMPORT_AFTER_ACTION_NOTICE]);
+// The paste-turn notice of 0009, D2 is written by code too: an action that
+// came with a pasted message waits for the person (`waits_for_person`).
+const CODE_SENTENCES = new Set([UNGROUNDED_TEXT, MODEL_UNAVAILABLE_TEXT, TOOL_LIMIT_TEXT, MALFORMED_TEXT, TOKEN_LIMIT_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE]);
 export const isCodeSentence = (text: string) => CODE_SENTENCES.has(text.trim());
 
 // Text that reads as a pasted message, not a question: more than one line,
@@ -629,6 +629,8 @@ export function CardView({ card, state, run, fresh = false }: { card: Card; stat
       return <ExplanationCard conflictId={card.conflictId} state={state} run={run} />;
     case "reply":
       return <ReplyCard draftId={card.draftId} state={state} run={run} />;
+    case "own_report":
+      return <OwnReportCard messageId={card.messageId} state={state} run={run} />;
     case "notice":
       return (
         <div className="notice" role="note">

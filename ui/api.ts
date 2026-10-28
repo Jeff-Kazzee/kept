@@ -39,6 +39,9 @@ export type MessageView = {
   // also reads it from the activity entry of the import.
   importedFrom?: "gmail";
   status: "imported" | "claims_pending" | "no_claims" | "manual_entry_needed";
+  // "Record this as your own report?" (0009, D1'): "offered" while the
+  // question is open, then the person's answer. Null when never asked.
+  ownReport: "offered" | "yes" | "no" | null;
   attempts: Attempt[];
   rejections: Rejection[];
   evidenceIds: string[];
@@ -167,6 +170,10 @@ export const api = {
     request("POST", `/api/messages/${encodeURIComponent(id)}/extract`, { effort, expectedVersion }),
   manual: (id: string, expectedVersion: number, claim: unknown) =>
     request<EvidenceView>("POST", `/api/messages/${encodeURIComponent(id)}/manual`, { expectedVersion, claim }),
+  // The person's answer on an own_report card. `expectedVersion` is the
+  // message's version. Answers the message.
+  ownReport: (id: string, answer: "yes" | "no", expectedVersion: number) =>
+    request<MessageView>("POST", `/api/messages/${encodeURIComponent(id)}/own-report`, { expectedVersion, answer }),
   accept: (id: string, expectedVersion: number) =>
     request<EvidenceView>("POST", `/api/evidence/${encodeURIComponent(id)}/accept`, { expectedVersion }),
   reject: (id: string, expectedVersion: number) =>
