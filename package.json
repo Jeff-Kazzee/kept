@@ -12,7 +12,8 @@
     "dev": "node server/main.ts",
     "mcp": "node mcp/main.ts",
     "grant": "node src/grants/cli.ts",
-    "eval:live": "node scripts/eval-live.ts"
+    "eval:live": "node scripts/eval-live.ts",
+    "scan:secrets": "node scripts/scan-secrets.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.3.1",
