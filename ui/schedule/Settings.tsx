@@ -3,7 +3,7 @@
 // was shown at. A key goes to the server once and is never shown again.
 import { useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { DELETE_CONFIRMATION } from "../../src/case/constants.ts";
-import { safeAuthorizeUrl } from "../agentApi.ts";
+import { safeAuthorizeUrl, type GoogleGrants } from "../agentApi.ts";
 import { googleOrOff, useAgent } from "../agent/AgentContext.tsx";
 import { ModelSelect } from "../agent/ModelPicker.tsx";
 import { api } from "../api.ts";
@@ -340,60 +340,127 @@ function ChatGptBody({ settings, run }: { settings: Settings; run: Run }) {
 
 // Google: Gmail, read-only, to search for appointment emails, and Google
 // Calendar, for clashes and the appointments the assistant adds. Every
-// event the assistant adds is an action with Undo.
+// event the assistant adds is an action with Undo. Each connect and
+// disconnect states the connection version it was shown at (0012, G2).
 export function GoogleSetting({ run }: { run: Run }) {
-  const { backend, google, reload } = useAgent();
+  const { backend, google, reload, notify } = useAgent();
+  const uid = useId();
+  const [want, setWant] = useState<GoogleGrants>({ gmail: true, calendar: true });
   if (google === null) return <p className="small muted">Connecting Google is not available in this build yet.</p>;
   const g = googleOrOff(google);
+  if (!g.configured) {
+    return (
+      <p className="small muted">
+        This server has no Google client yet, so Google cannot be connected. <code>docs/google.md</code> says how to set one up.
+      </p>
+    );
+  }
+  // Opens Google's sign-in page. Google comes back to /?connected=google
+  // or /?google_error=<code>.
+  const connect = (grants: GoogleGrants) => async () => {
+    const { authorizeUrl } = await backend.googleConnect(g.version, grants);
+    const url = safeAuthorizeUrl(authorizeUrl, window.location.origin);
+    if (!url) throw new Error("The sign-in address was not one this app opens.");
+    window.location.assign(url);
+  };
+  const disconnect = async () => {
+    const answer = await backend.googleDisconnect(g.version);
+    if (!answer.revoked) notify("Disconnected Google. Google did not confirm it removed the app's access, so you can remove it in your Google Account's security settings.");
+    await reload();
+  };
   const grants: Array<{ on: boolean; label: string }> = [
     { on: g.gmail, label: "Gmail, read-only: search for messages about appointments" },
     { on: g.calendar, label: `Google Calendar: read events for clashes, and add, update or remove your appointments${g.calendarId ? ` (calendar ${g.calendarId})` : ""}` },
   ];
+  const grantList = (
+    <ul className="grants" aria-label={g.connected ? "Permissions granted" : "Permissions last granted"}>
+      {grants.map((x) => (
+        <li key={x.label} className={x.on ? "is-on" : "is-off"}>
+          <Icon name={x.on ? "check" : "close"} size="sm" />
+          <span>
+            {x.label}
+            <span className="sr-only">{x.on ? ": granted" : ": not granted"}</span>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+  if (g.needsReconnect) {
+    // Reconnect asks again for what was connected, or both when the
+    // server no longer knows.
+    const again = g.gmail || g.calendar ? { gmail: g.gmail, calendar: g.calendar } : { gmail: true, calendar: true };
+    return (
+      <div className="stack-sm">
+        <p className="warn" role="status">
+          <Icon name="alert" size="sm" /> Google needs you to sign in again. The assistant cannot read Gmail or Google Calendar until you reconnect.
+        </p>
+        {g.email && (
+          <p className="small">
+            <Icon name="user" size="sm" /> Last connected as {g.email}
+          </p>
+        )}
+        {(g.gmail || g.calendar) && grantList}
+        <div className="btn-row">
+          <ActionButton run={run} action={connect(again)}>
+            <Icon name="google" size="sm" /> Reconnect Google
+          </ActionButton>
+          <ActionButton run={run} variant="ghost" action={disconnect}>
+            Disconnect
+          </ActionButton>
+        </div>
+      </div>
+    );
+  }
   if (!g.connected) {
     return (
       <div className="stack-sm">
         <p className="small muted">Connect Google so the assistant can find appointment emails in Gmail and keep your appointments on Google Calendar. Google receives what the assistant adds to your calendar.</p>
+        <fieldset className="stack-xs">
+          <legend className="small">What the assistant may use</legend>
+          <label className="check small" htmlFor={`${uid}-gmail`}>
+            <input id={`${uid}-gmail`} name="google-gmail" type="checkbox" checked={want.gmail} onChange={(e) => setWant((w) => ({ ...w, gmail: e.target.checked }))} />
+            <span>{grants[0]!.label}</span>
+          </label>
+          <label className="check small" htmlFor={`${uid}-calendar`}>
+            <input id={`${uid}-calendar`} name="google-calendar" type="checkbox" checked={want.calendar} onChange={(e) => setWant((w) => ({ ...w, calendar: e.target.checked }))} />
+            <span>Google Calendar: read events for clashes, and add, update or remove your appointments (your main calendar)</span>
+          </label>
+        </fieldset>
+        {!want.gmail && !want.calendar && <p className="hint">Check Gmail, Google Calendar or both to connect.</p>}
         <div>
-          <ActionButton
-            run={run}
-            action={async () => {
-              const { authorizeUrl } = await backend.googleConnect(g.version);
-              const url = safeAuthorizeUrl(authorizeUrl, window.location.origin);
-              if (!url) throw new Error("The sign-in address was not one this app opens.");
-              window.location.assign(url);
-            }}
-          >
+          <ActionButton run={run} disabled={!want.gmail && !want.calendar} action={connect(want)}>
             <Icon name="google" size="sm" /> Connect Google
           </ActionButton>
         </div>
       </div>
     );
   }
+  const missing = !g.gmail || !g.calendar;
   return (
     <div className="stack-sm">
       <p className="small">
         <Icon name="user" size="sm" /> Connected as {g.email ?? "a Google account"}
       </p>
-      <ul className="grants" aria-label="Permissions granted">
-        {grants.map((x) => (
-          <li key={x.label} className={x.on ? "is-on" : "is-off"}>
-            <Icon name={x.on ? "check" : "close"} size="sm" />
-            <span>
-              {x.label}
-              <span className="sr-only">{x.on ? ": granted" : ": not granted"}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
-      <div>
-        <ActionButton
-          run={run}
-          variant="ghost"
-          action={async () => {
-            await backend.googleDisconnect(g.version);
-            await reload();
-          }}
-        >
+      {grantList}
+      <div className="btn-row">
+        {g.calendar && (
+          <ActionButton
+            run={run}
+            variant="ghost"
+            action={async () => {
+              const { events } = await backend.googleCalendarRefresh();
+              notify(`Read ${events} event${events === 1 ? "" : "s"} from Google Calendar for the clash checks.`);
+            }}
+          >
+            Read the calendar again
+          </ActionButton>
+        )}
+        {missing && (
+          <ActionButton run={run} variant="ghost" action={connect({ gmail: true, calendar: true })}>
+            Connect again with both
+          </ActionButton>
+        )}
+        <ActionButton run={run} variant="ghost" action={disconnect}>
           Disconnect
         </ActionButton>
       </div>

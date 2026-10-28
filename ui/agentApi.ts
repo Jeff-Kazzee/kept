@@ -1,14 +1,13 @@
 // The routes of the agent-first contract (ui/contract.ts): settings, the
 // time zone, the model provider and model (sprint 10), sign-in, activity
-// and undo. Every write
-// carries the app header and the case generation, like every other write
-// (api.ts). A route the server does not have yet answers 404, and the page
-// says the part is not available in this build.
+// and undo (sprint 8), and Google (sprint 11). Every write carries the app
+// header and the case generation, like every other write (api.ts). A route
+// the server does not have answers 404, and the page says the part is not
+// available in this build.
 import { ApiError, request } from "./api.ts";
 import type { ActivityLog, GoogleStatus, Provider, Settings } from "./contract.ts";
 
 export type AgentBackend = {
-  kind: "real" | "fake";
   // Null when this build has no settings route yet.
   settings(): Promise<Settings | null>;
   // `from` says the browser sent its own zone on first load. The route
@@ -29,11 +28,17 @@ export type AgentBackend = {
   // Null when this build has no Google route yet.
   google(): Promise<GoogleStatus | null>;
   // States the Google connection version it was shown at, as disconnect
-  // does (sprint 11 review round 3, finding 8).
-  googleConnect(expectedVersion: number): Promise<{ authorizeUrl: string }>;
-  // States the Google connection version it was shown at.
-  googleDisconnect(expectedVersion: number): Promise<unknown>;
+  // does (0012, G2). Both permissions and the primary calendar unless the
+  // page says otherwise. The page opens the address it answers.
+  googleConnect(expectedVersion: number, grants?: GoogleGrants): Promise<{ authorizeUrl: string }>;
+  // Answers the status, and whether Google confirmed it revoked the grant.
+  googleDisconnect(expectedVersion: number): Promise<GoogleStatus & { revoked: boolean }>;
+  // Reads Google Calendar again for the clash checks. Answers how many
+  // events it read.
+  googleCalendarRefresh(): Promise<{ events: number }>;
 };
+
+export type GoogleGrants = { gmail: boolean; calendar: boolean };
 
 const missing = (e: unknown) => e instanceof ApiError && (e.status === 404 || e.status === 405);
 
@@ -64,7 +69,6 @@ export async function retryBusy<T>(write: () => Promise<T>, wait = (ms: number) 
 export type SignOutAnswer = Settings & { notice: string | null };
 
 export const realBackend: AgentBackend = {
-  kind: "real",
   settings: async () => {
     const raw = await orNull(() => request<Settings>("GET", "/api/settings"));
     return raw ? { ...raw, modelNotice: raw.modelNotice ?? null } : null;
@@ -80,8 +84,9 @@ export const realBackend: AgentBackend = {
   activity: () => orNull(() => request<ActivityLog>("GET", "/api/activity")),
   undo: (id, expectedVersion) => request("POST", `/api/activity/${encodeURIComponent(id)}/undo`, { expectedVersion }),
   google: () => orNull(() => request<GoogleStatus>("GET", "/api/google")),
-  googleConnect: (expectedVersion) => request<{ authorizeUrl: string }>("POST", "/api/google/connect", { expectedVersion }),
-  googleDisconnect: (expectedVersion) => request("POST", "/api/google/disconnect", { expectedVersion }),
+  googleConnect: (expectedVersion, grants) => request<{ authorizeUrl: string }>("POST", "/api/google/connect", { expectedVersion, ...grants }),
+  googleDisconnect: (expectedVersion) => request<GoogleStatus & { revoked: boolean }>("POST", "/api/google/disconnect", { expectedVersion }),
+  googleCalendarRefresh: () => request<{ events: number }>("POST", "/api/google/calendar/refresh", {}),
 };
 
 // Where the sign-in page may send the browser: this app's own origin, or

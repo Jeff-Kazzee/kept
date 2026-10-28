@@ -2,12 +2,12 @@
 // server/main.ts with this file. `pnpm build` writes the production bundle
 // to dist/ui, which `pnpm start` serves through server/static.ts.
 //
-// The scripted chat and the fakes of the sprint 8 and 10 routes are
-// development tools. A development build has them. `APP_UI_FAKES=1 pnpm
-// build` makes a check build that has them too, for a browser check of the
-// production bundle before those routes exist. It is never the build that
-// ships: a plain `pnpm build` sets import.meta.env.APP_FAKES to false, and
-// the code behind it is dropped.
+// The scripted chat is a development tool, and no route is faked (0011,
+// U51). A development build has the scripted chat. `APP_UI_FAKES=1 pnpm
+// build` makes a check build that has it too, for a browser check of the
+// minified bundle. It is never the build that ships: a plain `pnpm build`
+// sets import.meta.env.APP_FAKES to false, and the code behind it is
+// dropped.
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 

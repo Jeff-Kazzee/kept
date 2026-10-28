@@ -66,7 +66,9 @@ describe("ui api", () => {
     await realBackend.chatgptSignOut(6);
     await realBackend.undo("act-1", 7);
     await realBackend.googleConnect(1);
+    await realBackend.googleConnect(1, { gmail: true, calendar: false });
     await realBackend.googleDisconnect(2);
+    await realBackend.googleCalendarRefresh();
     const writes = sent.filter((s) => s.path !== "/api/state");
     expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([
       "PUT /api/settings/timezone",
@@ -78,7 +80,9 @@ describe("ui api", () => {
       "POST /api/auth/chatgpt/signout",
       "POST /api/activity/act-1/undo",
       "POST /api/google/connect",
+      "POST /api/google/connect",
       "POST /api/google/disconnect",
+      "POST /api/google/calendar/refresh",
     ]);
     expect(writes.every((w) => w.generation === "5" && w.app === "1")).toBe(true);
     // Muse round 1, finding 7: every change to sign-in states its version.
@@ -92,7 +96,9 @@ describe("ui api", () => {
       { expectedVersion: 6 },
       { expectedVersion: 7 },
       { expectedVersion: 1 },
+      { expectedVersion: 1, gmail: true, calendar: false },
       { expectedVersion: 2 },
+      {},
     ]);
   });
 

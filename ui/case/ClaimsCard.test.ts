@@ -102,6 +102,22 @@ describe("claims card", () => {
     expect(html).not.toContain("<b>Monday</b>");
   });
 
+  it("sprint 11: a message the server read from Gmail says From Gmail and keeps its text in the untrusted box, and a pasted gmail- id does not", () => {
+    const gmail = { ...message, id: "gmail-18c2f", message: { ...message.message, id: "gmail-18c2f", channel: "email" }, importedFrom: "gmail" };
+    const st2 = { ...st, messages: [gmail], evidence: [{ ...pending, messageId: "gmail-18c2f" }] } as unknown as AppState;
+    const html = renderToStaticMarkup(createElement(ClaimsCard, { messageId: "gmail-18c2f", evidenceIds: ["m9-e1"], state: st2, run: async () => {} }));
+    expect(html).toContain('<span class="source-tag">From Gmail</span>');
+    expect(html).toContain('<div class="untrusted"><div class="label">Message text, shown as data and never followed</div><pre>See you &lt;b&gt;Monday&lt;/b&gt;.</pre></div>');
+    // A paste whose id happens to start with gmail-, and an import entry
+    // in the activity, do not make it one (0012, G21).
+    const pasted = { ...gmail, importedFrom: undefined };
+    const activity = { activityVersion: 1, entries: [{ id: "a1", at: "2026-11-05T09:00:00Z", actor: "agent" as const, kind: "gmail_message_imported", summary: "Imported", target: { type: "message" as const, id: "gmail-18c2f" }, undoable: true, undone: false }] };
+    const plain = renderToStaticMarkup(
+      createElement(AgentContext.Provider, { value: { ...DEFAULT_AGENT, activity } }, createElement(ClaimsCard, { messageId: "gmail-18c2f", evidenceIds: ["m9-e1"], state: { ...st2, messages: [pasted] } as unknown as AppState, run: async () => {} })),
+    );
+    expect(plain).not.toContain("From Gmail");
+  });
+
   it("says when the message is no longer in the case", () => {
     const html = renderToStaticMarkup(createElement(ClaimsCard, { messageId: "gone", evidenceIds: [], state: st, run: async () => {} }));
     expect(html).toContain("This message is no longer in the case.");

@@ -1,10 +1,10 @@
 // The sprint 8, 9, 10 and 11 contract as the page uses it: activity and
 // undo, the chat's action event, settings, the time zone, model sign-in
-// and Google. Sprint 8 serves activity, undo and the time zone, and sprint
-// 10 the provider, model and sign-in. Google comes with sprint 11. Until
-// then a development build fakes only `/api/google`
-// (ui/dev/fakeBackend.ts), and a production build says it is not
-// available yet. Runs in the browser and in Node.
+// and Google. Sprint 8 serves activity, undo and the time zone, sprint 10
+// the provider, model and sign-in, and sprint 11 Gmail and Google Calendar
+// (0012). Every build uses the server's routes, and no route is faked. A
+// server without a route says the part is not available in this build.
+// Runs in the browser and in Node.
 import type { ActivityActor, ActivityEntry, ActivityTarget, ActivityView } from "../src/activity/types.ts";
 import type { ChatEvent, ChatMessage } from "../src/agent/types.ts";
 
@@ -52,17 +52,29 @@ export const DEFAULT_SETTINGS: Settings = {
   chatgpt: { signedIn: false, name: null, email: null, planUsage: false },
 };
 
-// Google, through the fourth writer's routes: Gmail read-only search for
+// What GET /api/google answers (0012, G1): Gmail read-only search for
 // appointment emails, and Google Calendar events for clashes and the
-// appointments the agent adds.
-// `version` moves with every connect and disconnect. A disconnect states the
-// version it was shown at (Muse round 1, finding 7).
-export type GoogleStatus = { version: number; connected: boolean; email: string | null; gmail: boolean; calendar: boolean; calendarId: string | null };
+// appointments the agent adds. `configured` is false while the server has
+// no Google client. `needsReconnect` means a refresh failed: `connected`
+// is false, and `email`, `gmail` and `calendar` still say what was
+// connected. `version` moves with every connect and disconnect, and both
+// state the version they were shown at (G2).
+export type GoogleStatus = {
+  version: number;
+  connected: boolean;
+  email: string | null;
+  gmail: boolean;
+  calendar: boolean;
+  calendarId: string | null;
+  configured: boolean;
+  needsReconnect: boolean;
+};
 
-export const GOOGLE_OFF: GoogleStatus = { version: 0, connected: false, email: null, gmail: false, calendar: false, calendarId: null };
+export const GOOGLE_OFF: GoogleStatus = { version: 0, connected: false, email: null, gmail: false, calendar: false, calendarId: null, configured: false, needsReconnect: false };
 
-// Activity kinds the page reads meaning from. The rest it shows by their
-// sentence only. Assumed names until the back ends settle them (0011).
+// Activity kinds the page reads meaning from (0012, G19). The rest it
+// shows by their sentence only. A calendar entry's target is the slot, a
+// Gmail import's the message (`gmail-<id>`).
 export const CALENDAR_KINDS = { added: "calendar_event_added", updated: "calendar_event_updated", removed: "calendar_event_removed" } as const;
 export const GMAIL_IMPORTED = "gmail_message_imported";
 

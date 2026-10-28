@@ -16,7 +16,6 @@ import { fromPackage } from "../src/paths.ts";
 // The scripted chat's marker, read from its source rather than imported, so
 // the root typecheck does not compile the UI's files (sprint 8).
 const MOCK_MARKER = /export const MOCK_MARKER = "([^"]+)";/.exec(readFileSync(fromPackage("ui/chat/mockStream.ts"), "utf8"))![1]!;
-const FAKES_MARKER = /export const FAKES_MARKER = "([^"]+)";/.exec(readFileSync(fromPackage("ui/dev/fakeBackend.ts"), "utf8"))![1]!;
 
 const BUILD_LIMIT_MS = 60_000;
 const dirs: string[] = [];
@@ -87,14 +86,14 @@ describe("production bundle", () => {
     expect(text).toContain("gzip only-in-gz");
   });
 
-  it("has no scripted chat code and no route fakes, while a development build has both", async () => {
+  // No route is faked in any build since sprint 11 (0011, U51). Only the
+  // scripted chat stays a development tool.
+  it("has no scripted chat code, while a development build has it", async () => {
     const prod = await bundle("production");
     expect(prod).not.toContain(MOCK_MARKER);
-    expect(prod).not.toContain(FAKES_MARKER);
     expect(prod).not.toContain("Checking the change against your messages");
     expect(prod).not.toContain("sample.person@example.com");
     const dev = await bundle("development");
     expect(dev).toContain(MOCK_MARKER);
-    expect(dev).toContain(FAKES_MARKER);
   }, 2 * BUILD_LIMIT_MS + 10_000);
 });

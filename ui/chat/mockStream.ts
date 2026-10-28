@@ -5,17 +5,17 @@
 // agent-first back end will: it imports and reads a message, accepts its
 // facts, and for the demo sets the time zone. It changes the case only
 // through the existing routes (import, read, accept, explain, ask), and
-// records each action in the fake activity (../dev/fakeBackend.ts). Turn
-// it on in the browser with ?mockchat=1.
+// each step reaches the page through the server's activity. It does not
+// search Gmail or write to Google Calendar: those need the live agent and
+// the server's Google connection (0012). Turn it on in the browser with
+// ?mockchat=1.
 //
 // The chat is kept in this tab's sessionStorage, so a reload keeps it.
 // Closing the tab or Delete case clears it.
 import { WITHHELD_USER_TEXT } from "../../src/agent/types.ts";
 import { SCOPE_DECLINE, hasClinicalContent } from "../../src/domain/scope.ts";
 import type { AppState, FixtureScenario, MessageView } from "../api.ts";
-import { GMAIL_IMPORTED, type ActivityEntry, type ActivityLog } from "../contract.ts";
-import type { FakeBackend } from "../dev/fakeBackend.ts";
-import { DEMO_IDS } from "./demo.ts";
+import type { ActivityEntry, ActivityLog, GoogleStatus } from "../contract.ts";
 import type { Card, ChatErrorCode, ChatEvent, ChatLog, ChatMessage, ChatTransport, FactChip } from "./types.ts";
 
 // The parts of the page's API the mock uses.
@@ -29,10 +29,6 @@ export type MockApi = {
   nextQuestion(expectedVersion: number): Promise<unknown>;
 };
 
-// The fake activity and settings. Without them the mock still reads and
-// accepts facts, and records nothing.
-export type MockAgent = Pick<FakeBackend, "record" | "agentAddEvent" | "agentRemoveEvent" | "hasEvent" | "googleNow">;
-
 // `activity` reads sprint 8's real activity log, so each write the mock
 // makes through a route reaches the page as an action event with the
 // entry the server wrote for it (0009, design 3).
@@ -41,8 +37,10 @@ export type MockOptions = {
   now?: () => string;
   delayMs?: number;
   storage?: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null;
-  agent?: MockAgent | null;
   activity?: (() => Promise<ActivityLog | null>) | null;
+  // The server's Google status, so an email question says whether Google
+  // is connected.
+  google?: (() => Promise<GoogleStatus | null>) | null;
 };
 
 // Also the marker test/bundle.test.ts looks for: it must not be in the
@@ -66,7 +64,7 @@ export function intentOf(text: string): "message" | "gmail" | "status" | "confli
   return "help";
 }
 
-export function createMockTransport({ api, now = () => new Date().toISOString(), delayMs = 18, storage = null, agent = null, activity = null }: MockOptions): ChatTransport & { reset(): void } {
+export function createMockTransport({ api, now = () => new Date().toISOString(), delayMs = 18, storage = null, activity = null, google = null }: MockOptions): ChatTransport & { reset(): void } {
   type Saved = { log: ChatLog; generation: number | null; seq: number };
   let saved: Saved | null = null;
   try {
@@ -182,7 +180,7 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
       // accepts its facts through the routes. The server logs each step,
       // and each reaches the page as an action. Loading the demo calendar
       // already set the demo's zone on the server (0009, A14).
-      const takeIn = async (m: { id?: string; channel: string; from: string; received_at: string; text: string }, fixture: boolean, viaGmail = false): Promise<{ words: string } | null> => {
+      const takeIn = async (m: { id?: string; channel: string; from: string; received_at: string; text: string }): Promise<{ words: string } | null> => {
         const before = await api.state();
         const already = m.id !== undefined && before.messages.some((x) => x.id === m.id);
         const view = await tool("read_message", "Reading the message", async () => {
@@ -201,7 +199,6 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
         });
         if (!view) return null;
         if (already) return { words: `This message from ${view.message.from} is already in your case. Its facts are below.` };
-        if (viaGmail) act(agent?.record({ actor: "agent", kind: GMAIL_IMPORTED, summary: `Imported a message from ${view.message.from} found in Gmail.`, target: { type: "message", id: view.id }, undoable: false }));
         let accepted = 0;
         await tool("accept_facts", "Checking each fact against the message", async () => {
           const st = await api.state();
@@ -212,21 +209,6 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
           }
           card({ kind: "claims", messageId: view.id, evidenceIds: view.evidenceIds });
         });
-        // With Google Calendar connected, a confirmed appointment goes on
-        // it, and one that is no longer confirmed comes off.
-        if (agent?.googleNow().calendar) {
-          const st = await api.state();
-          // A confirmed time with a change proposed still holds, so it stays.
-          const holds = (state: string) => state === "confirmed" || state === "change_proposed";
-          const confirmed = st.case.slots.filter((x) => x.state === "confirmed" && !agent.hasEvent(x.key));
-          const stale = st.case.slots.filter((x) => !holds(x.state) && agent.hasEvent(x.key));
-          if (confirmed.length + stale.length > 0) {
-            await tool("update_calendar", "Updating your Google Calendar", async () => {
-              for (const x of confirmed) act(agent.agentAddEvent(x.key, `Added ${x.label} with ${view.message.from} to Google Calendar.`));
-              for (const x of stale) act(agent.agentRemoveEvent(x.key, `Removed ${x.label} from Google Calendar, because it is ${x.state === "canceled" ? "canceled" : "no longer confirmed"}.`));
-            });
-          }
-        }
         const n = view.evidenceIds.length;
         return {
           words:
@@ -242,7 +224,7 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
         case "message": {
           fixtures ??= (await api.fixtures()).flatMap((s) => s.messages);
           const match = fixtures.find((m) => m.text.trim() === text.trim());
-          const outcome = await takeIn(match ?? { channel: "sms", from: "Pasted message", received_at: now(), text }, match !== undefined);
+          const outcome = await takeIn(match ?? { channel: "sms", from: "Pasted message", received_at: now(), text });
           if (!outcome) {
             say("I could not add that message to your case. Nothing was saved.");
             break;
@@ -251,22 +233,20 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
           break;
         }
         case "gmail": {
-          const google = agent?.googleNow();
-          if (!google?.gmail) {
-            say("Gmail is not connected. Connect Google in Settings, and I can search your email for messages about appointments.");
-            break;
-          }
-          fixtures ??= (await api.fixtures()).flatMap((s) => s.messages);
-          const st = await api.state();
-          const have = new Set(st.messages.map((m) => m.id));
-          const next = fixtures.find((m) => DEMO_IDS.includes(m.id) && !have.has(m.id) && m.channel === "email") ?? fixtures.find((m) => DEMO_IDS.includes(m.id) && !have.has(m.id));
-          const found = await tool("search_gmail", "Searching Gmail for appointment messages", async () => next ?? null);
-          if (!found) {
-            say("I found no new appointment messages in Gmail.");
-            break;
-          }
-          const outcome = await takeIn(found, true, true);
-          say(outcome ? `I found this message in Gmail. ${outcome.words}` : "I could not add the message from Gmail. Nothing was saved.");
+          // The scripted chat never reads Gmail. It says where Google
+          // stands, from the server's status.
+          const g = await google?.().catch(() => null);
+          say(
+            !g || !g.configured
+              ? "This server has no Google client, so Gmail is not available. docs/google.md says how to set one up."
+              : g.connected && g.gmail
+                ? "Gmail is connected, but this is the scripted chat, so I do not search it. Turn off the scripted chat, and the assistant can search your email for messages about appointments."
+                : g.connected
+                  ? "Google is connected without Gmail. Connect it again in Settings with Gmail turned on, and the assistant can search your email for messages about appointments."
+                  : g.needsReconnect
+                    ? "Google needs you to sign in again. Reconnect it in Settings, and the assistant can search your email for messages about appointments."
+                    : "Gmail is not connected. Connect Google in Settings, and the assistant can search your email for messages about appointments.",
+          );
           break;
         }
         case "status": {
@@ -333,7 +313,7 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
         }
         case "help":
           say(
-            "I can read a message you paste from the office, keep your schedule up to date, search Gmail when Google is connected, and walk you through a change the office proposed. This is the scripted chat, so I only follow those paths.",
+            "I can read a message you paste from the office, keep your schedule up to date and walk you through a change the office proposed. This is the scripted chat, so I only follow those paths.",
           );
           break;
       }

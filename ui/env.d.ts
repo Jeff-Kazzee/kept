@@ -4,6 +4,6 @@
 declare module "*.css";
 
 interface ImportMeta {
-  // APP_FAKES: a check build with the development fakes (vite.config.ts).
+  // APP_FAKES: a check build with the scripted chat (vite.config.ts).
   readonly env: { readonly DEV: boolean; readonly APP_FAKES?: boolean };
 }

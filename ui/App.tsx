@@ -20,8 +20,7 @@ import { createMockTransport } from "./chat/mockStream.ts";
 import { realTransport } from "./chat/transport.ts";
 import type { ChatTransport } from "./chat/types.ts";
 import { useChat } from "./chat/useChat.ts";
-import { createFakeBackend, createHybridBackend, type FakeBackend } from "./dev/fakeBackend.ts";
-import { errorSentence, setCaseZone, signInErrorSentence } from "./format.ts";
+import { errorSentence, setCaseZone, signInReturn } from "./format.ts";
 import { SchedulePanel, TABS, waitingCount, type PanelTab } from "./schedule/SchedulePanel.tsx";
 import { slotElementId } from "./schedule/Agenda.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
@@ -29,21 +28,18 @@ import { LAPTOP, chipRef, findChip, useMedia, type ChipRef } from "./layout.ts";
 
 type Toast = { id: number; kind: "error" | "info"; text: string };
 
-// The scripted chat and the fakes of the sprint 8 and 10 routes are
-// development tools. They make real case writes, so only a development
-// build has them (or a check build made with APP_UI_FAKES=1, see
-// vite.config.ts). In `pnpm build` both flags are false, the branches
-// below are dropped, and the modules are left out of the bundle. A
-// production page ignores ?mockchat=1.
+// The scripted chat is a development tool. It makes real case writes, so
+// only a development build has it (or a check build made with
+// APP_UI_FAKES=1, see vite.config.ts). In `pnpm build` both flags are
+// false, the branch below is dropped, and the module is left out of the
+// bundle. A production page ignores ?mockchat=1. Every route is the
+// server's, in every build (0011, U51).
 const fakesBuilt = import.meta.env.DEV || import.meta.env.APP_FAKES === true;
 const scriptedChat = () => fakesBuilt && new URLSearchParams(window.location.search).get("mockchat") === "1";
 
 export function App() {
   const scripted = useMemo(scriptedChat, []);
-  // The fake covers only what sprint 8 does not serve yet: the provider,
-  // model, sign-in and Google (0011, U37).
-  const fake = useMemo(() => (fakesBuilt && scripted ? createFakeBackend({ storage: sessionStorage }) : null), [scripted]);
-  const backend: AgentBackend = useMemo(() => (fakesBuilt && fake ? createHybridBackend(realBackend, fake) : realBackend), [fake]);
+  const backend: AgentBackend = realBackend;
   const [state, setState] = useState<AppState | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [activity, setActivity] = useState<ActivityLog | null>(null);
@@ -52,7 +48,6 @@ export function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
   const sentZone = useRef(false);
-  const generation = useRef<number | null>(null);
 
   const toast = useCallback((kind: Toast["kind"], text: string) => {
     const id = ++toastId.current;
@@ -75,16 +70,8 @@ export function App() {
     try {
       const [next, sRead, aRead, gRead] = await Promise.all([api.state(), settle(() => backend.settings()), settle(() => backend.activity()), settle(() => backend.google())]);
       if (stale()) return;
-      let aNow = aRead;
-      // Delete case moves the generation. The fake activity goes with it.
-      if (generation.current !== null && generation.current !== next.generation && fake) {
-        fake.clearActivity();
-        aNow = await settle(() => backend.activity());
-        if (stale()) return;
-      }
-      generation.current = next.generation;
       const s = keep(sRead, last.current.settings);
-      const a = keep(aNow, last.current.activity);
+      const a = keep(aRead, last.current.activity);
       const g = keep(gRead, last.current.google);
       last.current = { settings: s, activity: a, google: g };
       // The zone is set before the render that uses it.
@@ -92,7 +79,7 @@ export function App() {
       setSettings(s);
       setActivity(a);
       setGoogle(g);
-      setDegraded(!sRead.ok || !aNow.ok || !gRead.ok);
+      setDegraded(!sRead.ok || !aRead.ok || !gRead.ok);
       setState(next);
       setLoadError(null);
       // On first load with no zone set, the page sends this device's zone.
@@ -112,26 +99,16 @@ export function App() {
     } catch (e) {
       if (!stale()) setLoadError(errorSentence(e));
     }
-  }, [backend, fake]);
+  }, [backend]);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
 
   useEffect(() => {
     void refresh();
-    // The ChatGPT sign-in comes back to /?signedIn=chatgpt.
-    const params = new URLSearchParams(window.location.search);
-    // Google comes back to /?connected=google. A failed ChatGPT sign-in
-    // comes back to /?signInError=<code> (0010).
-    const back = params.get("signedIn") === "chatgpt" ? "chatgpt" : params.get("connected") === "google" ? "google" : null;
-    const failed = params.get("signInError");
-    if (back || failed) {
-      if (failed) toast("error", signInErrorSentence(failed));
-      else toast("info", back === "chatgpt" ? "Signed in with ChatGPT. Settings shows it under Model provider." : "Connected Google. Settings lists what the assistant may use.");
-      params.delete("signedIn");
-      params.delete("connected");
-      params.delete("signInError");
-      const rest = params.toString();
-      window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+    const back = signInReturn(new URLSearchParams(window.location.search));
+    if (back) {
+      toast(back.kind, back.text);
+      window.history.replaceState(null, "", `${window.location.pathname}${back.rest ? `?${back.rest}` : ""}`);
     }
   }, [refresh, toast]);
 
@@ -211,7 +188,6 @@ export function App() {
       setToasts={setToasts}
       scripted={scripted}
       backend={backend}
-      fake={fake}
       settings={settings}
       activity={activity}
       google={google}
@@ -232,7 +208,6 @@ function Shell({
   setToasts,
   scripted,
   backend,
-  fake,
   settings,
   activity,
   google,
@@ -249,7 +224,6 @@ function Shell({
   setToasts: (f: (t: Toast[]) => Toast[]) => void;
   scripted: boolean;
   backend: AgentBackend;
-  fake: FakeBackend | null;
   settings: Settings | null;
   activity: ActivityLog | null;
   google: GoogleStatus | null;
@@ -259,8 +233,8 @@ function Shell({
   degraded: boolean;
 }) {
   const transport: ChatTransport = useMemo(
-    () => (fakesBuilt && scripted ? createMockTransport({ api, storage: sessionStorage, agent: fake, activity: () => backend.activity() }) : realTransport),
-    [scripted, backend, fake],
+    () => (fakesBuilt && scripted ? createMockTransport({ api, storage: sessionStorage, activity: () => backend.activity(), google: () => backend.google() }) : realTransport),
+    [scripted, backend],
   );
   const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh());
   const [sheetOpen, setSheetOpen] = useState(false);

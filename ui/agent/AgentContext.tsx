@@ -3,7 +3,7 @@
 // case, and every undo re-reads them.
 import { createContext, useContext } from "react";
 import type { AgentBackend } from "../agentApi.ts";
-import { CALENDAR_KINDS, DEFAULT_SETTINGS, GMAIL_IMPORTED, GOOGLE_OFF, type ActivityEntry, type ActivityLog, type GoogleStatus, type Settings } from "../contract.ts";
+import { CALENDAR_KINDS, DEFAULT_SETTINGS, GOOGLE_OFF, type ActivityEntry, type ActivityLog, type GoogleStatus, type Settings } from "../contract.ts";
 
 export type AgentState = {
   backend: AgentBackend;
@@ -39,7 +39,6 @@ const noop = async () => {};
 // from: no settings, activity or Google routes.
 export const DEFAULT_AGENT: AgentState = {
   backend: {
-    kind: "real",
     settings: async () => null,
     setTimezone: noop,
     setProvider: noop,
@@ -52,7 +51,8 @@ export const DEFAULT_AGENT: AgentState = {
     undo: noop,
     google: async () => null,
     googleConnect: async () => ({ authorizeUrl: "/" }),
-    googleDisconnect: noop,
+    googleDisconnect: async () => ({ ...GOOGLE_OFF, revoked: false }),
+    googleCalendarRefresh: async () => ({ events: 0 }),
   },
   settingsAvailable: false,
   settings: DEFAULT_SETTINGS,
@@ -102,6 +102,3 @@ export function onGoogleCalendar(log: ActivityLog | null, slotKey: string): bool
   const last = log?.entries.find((e) => CALENDAR.has(e.kind) && e.target?.type === "slot" && e.target.id === slotKey && !e.undone);
   return last !== undefined && last.kind !== CALENDAR_KINDS.removed;
 }
-
-// True when the assistant imported this message from Gmail.
-export const fromGmail = (log: ActivityLog | null, messageId: string) => log?.entries.some((e) => e.kind === GMAIL_IMPORTED && e.target?.type === "message" && e.target.id === messageId) ?? false;

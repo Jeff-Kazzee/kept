@@ -11,11 +11,9 @@ import { EventStore } from "../../src/store/event-log.ts";
 import { agentAccess, asFreshPage, fixtureMessage, intake } from "../../test/helpers.ts";
 import type { AppState } from "../api.ts";
 import { WITHHELD_USER_TEXT } from "../../src/agent/types.ts";
-import { createFakeBackend } from "../dev/fakeBackend.ts";
 import { createMockTransport, intentOf, type MockApi } from "./mockStream.ts";
 import type { ChatEvent } from "./types.ts";
-import type { ActivityLog } from "../contract.ts";
-import { createHybridBackend } from "../dev/fakeBackend.ts";
+import { GOOGLE_OFF, type ActivityLog, type GoogleStatus } from "../contract.ts";
 
 function setup() {
   const store = new EventStore(":memory:");
@@ -42,10 +40,11 @@ function setup() {
     explain: (id, expectedVersion) => post(`/api/conflicts/${id}/explain`, { expectedVersion }),
     nextQuestion: (expectedVersion) => post("/api/questions/next", { expectedVersion }),
   };
-  const agent = createFakeBackend({ now: () => "2026-11-05T09:00:00.000Z" });
-  // Sprint 8's real activity log, as the page reads it.
+  // Sprint 8's real activity log, as the page reads it, and a Google status
+  // a test sets, as GET /api/google would answer it.
   const activity = () => call("GET", "/api/activity") as Promise<ActivityLog>;
-  const mock = createMockTransport({ api, delayMs: 0, now: () => "2026-11-05T09:00:00.000Z", agent, activity });
+  const google: { now: GoogleStatus | null } = { now: GOOGLE_OFF };
+  const mock = createMockTransport({ api, delayMs: 0, now: () => "2026-11-05T09:00:00.000Z", activity, google: async () => google.now });
   const turn = async (text: string, version?: number) => {
     const events: ChatEvent[] = [];
     await mock.send(text, version ?? (await mock.load())!.chatVersion, (e) => events.push(e));
@@ -55,7 +54,7 @@ function setup() {
     const s = (await api.state()) as AppState;
     for (const e of s.evidence.filter((x) => x.status === "pending")) await call("POST", `/api/evidence/${e.id}/accept`, { expectedVersion: e.version });
   };
-  return { api, call, mock, turn, accept, writes, agent, activity };
+  return { api, call, mock, turn, accept, writes, google, activity };
 }
 
 describe("scripted chat", () => {
@@ -99,68 +98,25 @@ describe("scripted chat", () => {
     expect(deltas.join("")).toBe(stored.messages[1]!.text);
   });
 
-  it("the hybrid backend sends everything to the server but Google, and undoes each entry where it came from", async () => {
-    const { turn, call, agent, activity } = setup();
-    await turn(fixtureMessage("m1").text);
-    const calls: string[] = [];
-    const server = (name: string) => async () => {
-      calls.push(name);
-      return {};
+  it("asked about email, says where Google stands from the server's status, and searches or writes nothing", async () => {
+    const { turn, google, writes } = setup();
+    const said = async () => {
+      const events = await turn("Check my email for appointments");
+      expect(events.some((e) => e.event === "action" || e.event === "tool.started")).toBe(false);
+      return events.filter((e) => e.event === "text.delta").map((e) => (e.data as { text: string }).text).join("");
     };
-    const real = {
-      kind: "real" as const,
-      settings: async () => (await call("GET", "/api/settings")) as never,
-      setTimezone: (zone: string, v: number, from?: "browser" | "you") => call("PUT", "/api/settings/timezone", { timezone: zone, expectedVersion: v, ...(from === "browser" ? { source: "browser" } : {}) }),
-      setProvider: server("setProvider"),
-      setModel: server("setModel"),
-      saveMetaKey: server("saveMetaKey"),
-      removeMetaKey: server("removeMetaKey"),
-      chatgptStart: async () => ({ authorizeUrl: "https://auth.example.com/authorize" }),
-      chatgptSignOut: server("chatgptSignOut"),
-      activity,
-      undo: (id: string, v: number) => call("POST", `/api/activity/${id}/undo`, { expectedVersion: v }),
-      google: server("google") as never,
-      googleConnect: server("googleConnect") as never,
-      googleDisconnect: server("googleDisconnect"),
-    };
-    const hybrid = createHybridBackend(real, agent);
-    // Sprint 10's provider, model and sign-in routes are the server's.
-    await hybrid.saveMetaKey("synthetic-demo-key-0000", 0);
-    await hybrid.setModel("muse-wonder-1.0", 1);
-    await hybrid.removeMetaKey(2);
-    await hybrid.chatgptSignOut(3);
-    expect(calls).toEqual(["saveMetaKey", "setModel", "removeMetaKey", "chatgptSignOut"]);
-    // Google is the fake's until sprint 11.
-    expect(await hybrid.google()).toMatchObject({ connected: false, version: 0 });
-    expect(calls).not.toContain("google");
-    // An accepted fact is undone by the server.
-    const log = (await hybrid.activity())!;
-    const fact = log.entries.find((e) => e.kind === "claim_accepted")!;
-    await hybrid.undo(fact.id, log.activityVersion);
-    expect((await activity()).entries.find((e) => e.id === fact.id)!.undone).toBe(true);
-    // The first-load zone goes to the server with source "browser".
-    const s = (await hybrid.settings())!;
-    await hybrid.setTimezone("Europe/Berlin", s.settingsVersion, "browser");
-    expect((await hybrid.settings())!).toMatchObject({ timezone: "Europe/Berlin", timezoneSource: "browser" });
-  });
-
-  it("with Google connected, finds a message in Gmail and keeps a confirmed time on Google Calendar, with Undo", async () => {
-    const { turn, agent } = setup();
-    const off = await turn("Check my email for appointments");
-    expect(off.filter((e) => e.event === "text.delta").map((e) => (e.data as { text: string }).text).join("")).toContain("Gmail is not connected.");
-    await agent.googleConnect(0);
-    for (const id of ["m1", "m2"]) await turn(fixtureMessage(id).text);
-    const mail = await turn("Check my email for appointments");
-    const kinds = mail.filter((e) => e.event === "action").map((e) => (e.data as { entry: { kind: string } }).entry.kind);
-    // The server logs the import, and the fake adds where it came from.
-    expect(kinds).toContain("message_imported");
-    expect(kinds).toContain("gmail_message_imported");
-    const log = (await agent.activity())!;
-    const added = log.entries.filter((e) => e.kind === "calendar_event_added");
-    expect(added.length).toBeGreaterThan(0);
-    expect(added[0]!.target?.type).toBe("slot");
-    await agent.undo(added[0]!.id, log.activityVersion);
-    expect((await agent.activity())!.entries.find((e) => e.id === added[0]!.id)?.undone).toBe(true);
+    expect(await said()).toContain("This server has no Google client, so Gmail is not available. docs/google.md says how to set one up.");
+    google.now = null;
+    expect(await said()).toContain("This server has no Google client");
+    google.now = { ...GOOGLE_OFF, configured: true };
+    expect(await said()).toContain("Gmail is not connected. Connect Google in Settings");
+    google.now = { ...GOOGLE_OFF, configured: true, needsReconnect: true, email: "sample.person@example.com", gmail: true };
+    expect(await said()).toContain("Google needs you to sign in again.");
+    google.now = { ...GOOGLE_OFF, configured: true, connected: true, email: "sample.person@example.com", calendar: true };
+    expect(await said()).toContain("Google is connected without Gmail.");
+    google.now = { ...GOOGLE_OFF, configured: true, connected: true, email: "sample.person@example.com", gmail: true };
+    expect(await said()).toContain("Gmail is connected, but this is the scripted chat, so I do not search it.");
+    expect(writes).toEqual([]);
   });
 
   it("walks the change: explanation and question cards, then fact chips from the live case", async () => {

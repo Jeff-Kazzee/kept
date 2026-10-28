@@ -6,7 +6,7 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AgentContext, DEFAULT_AGENT, type AgentState } from "../agent/AgentContext.tsx";
-import { DEFAULT_SETTINGS, type Settings as SettingsView } from "../contract.ts";
+import { DEFAULT_SETTINGS, GOOGLE_OFF, type Settings as SettingsView } from "../contract.ts";
 import { GoogleSetting, PROVIDERS, SettingsPanel, TimeZoneSetting } from "./Settings.tsx";
 
 const run = async () => {};
@@ -79,13 +79,38 @@ describe("settings", () => {
     expect(withAgent({}, createElement(GoogleSetting, { run }))).toContain("Connecting Google is not available in this build yet.");
   });
 
-  it("Google shows Connect, then the account and each permission with Disconnect", () => {
-    const off = withAgent({ google: { version: 0, connected: false, email: null, gmail: false, calendar: false, calendarId: null } }, createElement(GoogleSetting, { run }));
+  it("Google with no client on the server says so and points to docs/google.md, with no Connect", () => {
+    const html = withAgent({ google: GOOGLE_OFF }, createElement(GoogleSetting, { run }));
+    expect(html).toContain("This server has no Google client yet, so Google cannot be connected. <code>docs/google.md</code> says how to set one up.");
+    expect(html).not.toContain("<button");
+  });
+
+  it("Google shows Connect with both permissions checked, then the account and each permission with Disconnect", () => {
+    const off = withAgent({ google: { ...GOOGLE_OFF, configured: true } }, createElement(GoogleSetting, { run }));
     expect(off).toContain(" Connect Google</button>");
-    const on = withAgent({ google: { version: 1, connected: true, email: "sample.person@example.com", gmail: true, calendar: false, calendarId: null } }, createElement(GoogleSetting, { run }));
+    expect(off.match(/<input[^>]*type="checkbox"[^>]*checked=""/g)).toHaveLength(2);
+    expect(off).toContain('name="google-gmail"');
+    expect(off).toContain('name="google-calendar"');
+    const on = withAgent({ google: { ...GOOGLE_OFF, configured: true, version: 1, connected: true, email: "sample.person@example.com", gmail: true, calendar: false } }, createElement(GoogleSetting, { run }));
     expect(on).toContain("Connected as sample.person@example.com");
     expect(on).toContain("Gmail, read-only: search for messages about appointments<span class=\"sr-only\">: granted</span>");
     expect(on).toContain("<span class=\"sr-only\">: not granted</span>");
     expect(on).toContain(">Disconnect</button>");
+    expect(on).toContain(">Connect again with both</button>");
+    // No calendar permission, so nothing to read again.
+    expect(on).not.toContain("Read the calendar again");
+    const both = withAgent({ google: { ...GOOGLE_OFF, configured: true, version: 2, connected: true, email: "sample.person@example.com", gmail: true, calendar: true, calendarId: "primary" } }, createElement(GoogleSetting, { run }));
+    expect(both).toContain(">Read the calendar again</button>");
+    expect(both).toContain("(calendar primary)");
+    expect(both).not.toContain("Connect again with both");
   });
-});
+
+  it("Google that needs a reconnect says so, keeps what was connected, and offers Reconnect and Disconnect", () => {
+    const html = withAgent({ google: { ...GOOGLE_OFF, configured: true, version: 3, connected: false, needsReconnect: true, email: "sample.person@example.com", gmail: true, calendar: true, calendarId: "primary" } }, createElement(GoogleSetting, { run }));
+    expect(html).toContain("Google needs you to sign in again. The assistant cannot read Gmail or Google Calendar until you reconnect.");
+    expect(html).toContain("Last connected as sample.person@example.com");
+    expect(html).toContain('aria-label="Permissions last granted"');
+    expect(html).toContain(" Reconnect Google</button>");
+    expect(html).toContain(">Disconnect</button>");
+    expect(html).not.toContain(" Connect Google</button>");
+  });});

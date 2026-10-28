@@ -8,7 +8,7 @@
 import { useId, useState, type FormEvent } from "react";
 import type { ClaimType } from "../../src/domain/claim.ts";
 import { slotLabel } from "../../src/slots/labels.ts";
-import { canUndo, entryFor, fromGmail, useAgent } from "../agent/AgentContext.tsx";
+import { canUndo, entryFor, useAgent } from "../agent/AgentContext.tsx";
 import { Receipt, UndoButton, claimsReceiptText } from "../agent/Receipts.tsx";
 import { api, type AppState, type EvidenceView, type MessageView } from "../api.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
@@ -53,7 +53,9 @@ export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }
   // Open by itself when something needs the user.
   const needsYou = pending > 0 || view.status === "manual_entry_needed" || suggested;
   const open = openChoice ?? needsYou;
-  const gmail = view.importedFrom === "gmail" || fromGmail(activity, view.id);
+  // The server marks a message read from Gmail (0012, G21). A pasted
+  // message is never marked, whatever its id.
+  const gmail = view.importedFrom === "gmail";
   const summary = decided.length > 0 ? claimsReceiptText(accepted, decided.length - accepted) : null;
   return (
     <section className="card claims" aria-label={`Facts from ${m.from}`}>
