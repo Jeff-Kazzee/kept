@@ -448,3 +448,32 @@ Branch `sprint/09-submission`.
   publication. Checkpoint refs never go to the public repo.
 - [ ] SP8.5 Fast-forward `prod`. Publish only with Jeff's approval. Submit
   before the deadline.
+
+## Sprint 10: model providers and sign-in
+
+Branch `sprint/10-providers`. See `docs/decisions/0010-providers.md`.
+
+- [x] SP10.1 Provider factory: every model call goes to the provider the
+  user chose, Meta by default, with no silent fallback.
+- [x] SP10.2 The user's Meta key in a mode 600 settings file beside the
+  event log, never sent back, logged or in the event log.
+- [x] SP10.3 Sign in with ChatGPT: dynamic registration, PKCE, state,
+  nonce, ID token checks, the plan-usage scope gate, refresh, sign-out with
+  revocation, and the loopback callback.
+- [x] SP10.4 The OpenAI Responses client for the ChatGPT path, with tool
+  calling and streaming mapped to the existing shapes.
+- [x] SP10.5 Model choice per provider: `GET /api/settings` models and
+  `PUT /api/settings/model`, one choice for every call, capability
+  problems named in settings.
+- [x] SP10.6 `pnpm eval:live --provider meta|chatgpt --model <id>`.
+- [x] SP10.7 Secret scan covers the settings file name and its token
+  fields.
+- [x] SP10.8 `docs/sign-in.md` for judges running the app locally.
+- [ ] SP10.9 Live sign-in with ChatGPT and a live eval on each provider
+  (coordinator and Jeff).
+- [ ] SP10.10 Settings UI for providers, models and sign-in (sprint 9):
+  "Continue with ChatGPT", "Using ChatGPT plan" with a "Manage usage"
+  link, the first-sign-in confirmation, and the `signedIn` and
+  `signInError` query codes.
+- [ ] Confirm or change the decisions in
+  `docs/decisions/0010-providers.md` (P1 to P24).

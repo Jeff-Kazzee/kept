@@ -143,8 +143,9 @@ checklist and Delete case, `docs/decisions/0006-mcp-app.md` for agent
 access in the app, `docs/decisions/0007-case-agent.md` for the case
 agent and the chat contract, `docs/decisions/0008-web-app.md` for the
 web app, `docs/decisions/0009-agent-first.md` for the agent that acts,
-the activity log and the case time zone, and
-`docs/decisions/0011-ui-polish.md` for the agent UI. `docs/diagrams.md` shows the slot states and the agent change
+the activity log and the case time zone,
+`docs/decisions/0010-providers.md` for the model providers and sign-in,
+and `docs/decisions/0011-ui-polish.md` for the agent UI. `docs/diagrams.md` shows the slot states and the agent change
 flow.
 
 ## Commands
@@ -158,7 +159,7 @@ pnpm typecheck
 pnpm dev         # http://127.0.0.1:5180 with recorded model responses
 pnpm build       # production bundle in dist/ui, precompressed, budget checked
 pnpm start       # serves the production build on http://127.0.0.1:5180
-pnpm scan:secrets  # the model API key in the repository, see "What the secret scan finds"
+pnpm scan:secrets  # tokens and keys in the repository, see "What the secret scan finds"
 ```
 
 With `pnpm dev`, add `?mockchat=1` to the page address for the scripted
@@ -177,8 +178,17 @@ Tailscale serve, list its host names in `APP_ALLOWED_HOSTS`
 (comma-separated). The app still binds 127.0.0.1. See
 `docs/decisions/0008-web-app.md`.
 
-Live model in the UI: set `APP_LIVE_MODEL=1` and provide `MODEL_API_KEY` in
-the environment.
+Live model in the UI: set `APP_LIVE_MODEL=1`. The assistant then runs on
+the provider and model chosen in the app's settings, and only on that one:
+your own Meta Model API key (the default, entered in the app or as
+`MODEL_API_KEY` through varlock), or Sign in with ChatGPT, which uses your
+ChatGPT plan. The provider in use receives the case data the assistant
+reads, with `store: false` on every request. Meta's models are Muse Spark
+1.3 (default) and Muse Wonder 1.0. ChatGPT's are the ones your account
+lists. See `docs/sign-in.md` for both options, and
+`docs/decisions/0010-providers.md` for the design. The ChatGPT sign-in
+finishes only in a browser on the computer that runs the app, or through
+an SSH tunnel to its port.
 
 Live evaluation (needs `MODEL_API_KEY`):
 
@@ -225,6 +235,11 @@ of the last two happens), latency, tokens and cost.
 `--record-chat` writes each live answer as a recording in
 `fixtures/recordings/chat/`. `pnpm recording:key <request.json>` prints
 the key a request is recorded under.
+
+`--provider meta|chatgpt` picks the provider (default `meta`, which needs
+`MODEL_API_KEY`). `chatgpt` uses the ChatGPT connection the app saved:
+sign in in the app first. `--model <id>` picks the model on that provider.
+The spend limit prices tokens at the Meta rates on both.
 
 A relative `--out` path resolves from the package root. `--recorded` replays
 the recorded responses instead, for a smoke test with no key.
@@ -330,10 +345,17 @@ In each of those it finds, on one line:
   backslash.
 - A bearer token: `Bearer ` and at least 24 token characters with an
   upper-case letter, a lower-case letter and a digit.
+- A provider secret in the shape the app's settings file stores it: an
+  `accessToken`, `refreshToken`, `access_token`, `refresh_token` or
+  `id_token` field with a token value, or a `"meta": { "key": ... }` field.
+- A file or folder named like the settings file (`app-secrets.json`) or a
+  local env file (`.env.local`, `.env.<name>.local`), in the tree or in
+  history.
 
 The key's own shape is not known to the scan, so it does not find a bare
-key written without its name or `Bearer`, a key in another encoding (base64,
-URL encoding, UTF-16, compression or encryption) or split across lines, or
-anything outside this repository: other clones, `.env.local`, the database
-file, logs and screenshots elsewhere. It prints where a hit is, never the
+key written without its name or `Bearer`, a provider key or token outside
+those field shapes, a key in another encoding (base64, URL encoding,
+UTF-16, compression or encryption) or split across lines, or anything
+outside this repository: other clones, `.env.local`, the database file,
+logs and screenshots elsewhere. It prints where a hit is, never the
 matched text, and exits 1 on any hit.
