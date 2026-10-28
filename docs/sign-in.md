@@ -14,16 +14,20 @@ not to store the response (`store: false`). The app never switches to the
 other provider by itself. If the chosen one cannot answer, the assistant
 says so and tells you how to fix it.
 
-Start the app with the live model:
+Start the app:
 
 ```sh
 pnpm install
 pnpm build
-APP_LIVE_MODEL=1 pnpm start   # http://127.0.0.1:5180
+pnpm start   # http://127.0.0.1:5180
 ```
 
-Without `APP_LIVE_MODEL=1` the app replays recorded answers and needs
-neither option.
+The assistant always runs on the live model you set up. There is no
+recorded mode. Until you add a key or sign in, the chat and every step
+that needs the model answer "The assistant needs a Meta Model API key or
+Sign in with ChatGPT. Add one in Settings." with a link to Settings, and
+nothing in your case changes. The schedule, Activity, Undo, Settings and
+Delete case work without a model.
 
 ## Option 1: a Meta key
 
@@ -40,7 +44,7 @@ it back. "Remove key" deletes it.
 environment:
 
 ```sh
-APP_LIVE_MODEL=1 pnpm exec varlock run -- pnpm start
+pnpm exec varlock run -- pnpm start
 ```
 
 `.env.local` is ignored by git and found by the secret scan if it is ever

@@ -213,7 +213,8 @@ Additions from review round 1 that 7B uses:
   with whitespace normalized, so a second paste finds the same message
   and shows its card again. E1 below sets the text and the source fields.
   In recorded mode a pasted fixture message keeps its fixture id, so its
-  extraction recording replays.
+  extraction recording replays. Replaced by J12 (2026-10-28, `0013-failure-testing.md`): the app has no recorded mode. Only the test doubles keep
+  fixture ids.
 
 ### History and storage
 
@@ -430,7 +431,7 @@ held, and no turn changed state without a user action.
   and fails closed, and 7B adds "Add this as an office message" under the
   decline, using the existing import route. Partial imports are handled
   by E1. Recorded mode answering `model_unavailable` until recordings
-  exist is fine.
+  exist is fine. Replaced by J12 (2026-10-28, `0013-failure-testing.md`): the app has no recorded mode.
 - C1 means the answer text appears after the checks, not word by word.
   Cards and tool steps show sooner.
 - R4 fails closed, so an answer with a vague time ("next week", "in

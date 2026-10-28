@@ -313,7 +313,8 @@ mountains, rivers, creeks, hot springs and wildlife, at a high-end polish.
 - U48. The server never switches the provider by itself. A provider that
   lost its key or its ChatGPT sign-in stays the provider, and Settings and
   the composer say it needs setup. With recorded responses the composer
-  names the chosen model with "(recorded)".
+  named the chosen model with "(recorded)". Replaced by J12 (2026-10-28, `0013-failure-testing.md`): the app has no recorded mode. The label is gone,
+  and a `provider_not_ready` answer shows with an Open Settings button.
 - U49. Errors: 422 `provider_not_ready` and `unknown_model`, 400
   `invalid_key`, 503 `settings_busy` and the other settings refusals show
   the server's own sentence. A write that meets `settings_busy` with

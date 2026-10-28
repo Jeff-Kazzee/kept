@@ -216,7 +216,8 @@ imports them (`ui/chat/types.ts` adds only how it reaches the chat).
   none is open: its explanation card (with Explain) and "Ask me the
   question about this", which uses the existing route. The chat usually
   asks it. Without that, the story could not finish when the chat cannot
-  answer, as in recorded mode before live chat recordings exist.
+  answer, as in recorded mode before live chat recordings exist. (J12
+  removed the recorded mode, 0013.)
 - B20. The page uses the real `/api/chat` (SP7B.8). Answer text arrives
   after the checks, so tool lines and a typing state show while it is
   held. The page takes ids from `turn.started` and `turn.done` and the
@@ -235,7 +236,8 @@ imports them (`ui/chat/types.ts` adds only how it reaches the chat).
   message and on each claim, with the whole message open (0007, E1).
 - B22. The import sheet recognizes a synthetic demo message by its exact
   text and imports it with the fixture's id, sender, channel and time, as
-  the chat does for a pasted fixture message in recorded mode. A demo
+  the chat did for a pasted fixture message in recorded mode (removed by
+  J12, 0013). A demo
   message already in the case shows its claims card instead of a second
   import.
 - B23. "Add this as an office message" shows under a scope decline always,

@@ -200,7 +200,8 @@ the additive details sprint 9 can rely on:
   when the case was deleted before its log entry committed. The server
   uses recorded model responses unless `APP_LIVE_MODEL=1` and
   `MODEL_API_KEY` are set, and in recorded mode a fixture message keeps
-  its fixture id, as in the app. Tools have no output schema now, because
+  its fixture id, as in the app. Replaced by J12 (2026-10-28, `0013-failure-testing.md`): the app has no recorded mode. The MCP server uses the
+  chosen provider too. Tools have no output schema now, because
   the shared results vary by tool code.
 - A16. The agent's limit is 8 tool calls a turn, up from 6, because a
   paste is now an import and an accept, and a question an ask and an

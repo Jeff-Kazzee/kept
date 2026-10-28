@@ -175,11 +175,27 @@ Node 24 and pnpm 10.33.2.
 pnpm install
 pnpm test        # offline, no key needed
 pnpm typecheck
-pnpm dev         # http://127.0.0.1:5180 with recorded model responses
+pnpm dev         # http://127.0.0.1:5180, the UI through Vite
 pnpm build       # production bundle in dist/ui, precompressed, budget checked
 pnpm start       # serves the production build on http://127.0.0.1:5180
 pnpm scan:secrets  # tokens and keys in the repository, see "What the secret scan finds"
+pnpm demo:check  # the demo path end to end on the live app (needs MODEL_API_KEY)
+pnpm demo:check --recorded  # the same path offline on test doubles, not a product run
 ```
+
+The app has no recorded mode. Every model step, the chat included, runs
+on the provider the person chose. Until a Meta key is added or ChatGPT is
+signed in, the chat and every step that needs the model answer one fixed
+sentence that links to Settings, and nothing in the case changes. The
+schedule, Activity, Undo, Settings and Delete case work without a model.
+"Try the demo" loads four made-up Lantern Hill Clinic messages and a
+made-up calendar, and the assistant reads them live. The recorded model
+clients are test doubles for the tests and the eval's `--recorded` flag,
+and no production code path imports them (`test/no-recorded.test.ts`).
+
+`pnpm demo:check` starts the app on a free port with a temporary
+database, runs the demo path through the HTTP routes as the page does,
+checks each step and the end state, and stops the app.
 
 With `pnpm dev`, add `?mockchat=1` to the page address for the scripted
 chat, which plays the demo through the existing routes with no model. Its
@@ -198,8 +214,8 @@ Tailscale serve, list its host names in `APP_ALLOWED_HOSTS`
 (comma-separated). The app still binds 127.0.0.1. See
 `docs/decisions/0008-web-app.md`.
 
-Live model in the UI: set `APP_LIVE_MODEL=1`. The assistant then runs on
-the provider and model chosen in the app's settings, and only on that one:
+The model: the assistant runs on the provider and model chosen in the
+app's settings, and only on that one:
 your own Meta Model API key (the default, entered in the app or as
 `MODEL_API_KEY` through varlock), or Sign in with ChatGPT, which uses your
 ChatGPT plan. The provider in use receives the case data the assistant
@@ -252,9 +268,17 @@ against expected, grounding failures, declines, injection outcomes,
 actions that cannot be undone, replies sent without you and slots whose
 state no office message or report of yours supports (it exits 1 if either
 of the last two happens), latency, tokens and cost.
-`--record-chat` writes each live answer as a recording in
-`fixtures/recordings/chat/`. `pnpm recording:key <request.json>` prints
-the key a request is recorded under.
+It also exits 1 when an answer the person saw has clinical content.
+A step can name the slot states it expects after the turn, for the
+meaning-flip probes.
+`--record-chat` writes each answer as a test double in
+`fixtures/recordings/chat/`, with only the agent's calls on the model.
+The app never reads these files. `pnpm recording:key <request.json>`
+prints the key a request is recorded under.
+
+`--all` runs the full fixture suite S1 to S19 in one command: extraction
+of every fixture message, the D2 and D3 calls and every chat script, one
+after another under the one `--max-usd` limit, in one report.
 
 `--provider meta|chatgpt` picks the provider (default `meta`, which needs
 `MODEL_API_KEY`). `chatgpt` uses the ChatGPT connection the app saved:
@@ -262,7 +286,7 @@ sign in in the app first. `--model <id>` picks the model on that provider.
 The spend limit prices tokens at the Meta rates on both.
 
 A relative `--out` path resolves from the package root. `--recorded` replays
-the recorded responses instead, for a smoke test with no key.
+the recorded test doubles instead, for a smoke test of the eval with no key.
 
 Stored case data stays on the host in `data/` (ignored by git). There are no
 analytics.

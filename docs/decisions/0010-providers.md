@@ -301,7 +301,9 @@ runs it. The spend guard still prices tokens at the Meta rates (P22).
 - **P19.** In recorded mode (no `APP_LIVE_MODEL=1`), model calls replay
   recordings whatever the settings say. The settings and sign-in routes
   still work. `APP_LIVE_MODEL=1` no longer needs `MODEL_API_KEY` at
-  start, since the key can be entered in the app.
+  start, since the key can be entered in the app. Replaced by J12 (2026-10-28, `0013-failure-testing.md`): the app has no recorded mode. Every call
+  goes to the chosen provider, and with none ready the chat and each model
+  route answer `provider_not_ready` with `NO_PROVIDER_TEXT`.
 - **P20.** The scan patterns: the settings file's name and its temporary
   name, `.env.local` and `.env.<name>.local`, the JSON fields
   `accessToken`, `refreshToken`, `access_token`, `refresh_token` and
