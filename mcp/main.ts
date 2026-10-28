@@ -1,6 +1,7 @@
 // stdio entry for the MCP server. The agent's client launches this process
-// and sets APPT_GRANT_TOKEN in its own config. The server opens the app's
-// event log (APP_DB, default data/app.sqlite in the package), so it reads
+// and sets APPT_GRANT_TOKEN_FILE or APPT_GRANT_TOKEN in its own config (see
+// token.ts). scripts/mcp-stdio.sh starts it with a token file. The server
+// opens the app's event log (APP_DB, default data/app.sqlite in the package), so it reads
 // the grants and records the app writes. It opens no network port and
 // makes no model calls. Diagnostics go to stderr. stdout carries only MCP
 // messages.
@@ -14,12 +15,15 @@ import { RecordsService } from "../src/records/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { createMcpServer, sweepRateWindows } from "./server.ts";
+import { TokenSourceError, takeGrantToken } from "./token.ts";
 
-const token = process.env.APPT_GRANT_TOKEN ?? "";
-// Keep the token out of the environment of anything this process starts.
-delete process.env.APPT_GRANT_TOKEN;
-if (token.length === 0) {
-  console.error("Set APPT_GRANT_TOKEN in this server's entry in your MCP client config. Create a grant with: pnpm grant create --name <name> --tier read");
+let token: string;
+try {
+  // Read once, and removed from the environment of anything this process
+  // starts.
+  token = takeGrantToken(process.env);
+} catch (err) {
+  console.error(err instanceof TokenSourceError ? err.message : "Could not read the grant token.");
   process.exit(2);
 }
 

@@ -2,14 +2,16 @@
 // creates, names and revokes them in the app. No MCP tool manages grants, so
 // an agent cannot widen its own access.
 //
-// A token is 32 random bytes in base64url. It is shown once at creation and
-// stored only as its SHA-256 hash. A revoked grant stays as a record with a
+// A token is `appt_` and then 32 random bytes in base64url (43 characters).
+// The fixed prefix lets the secret scan find a token with no false hits on
+// ordinary text. A token is shown once at creation and stored only as its
+// SHA-256 hash. A revoked grant stays as a record with a
 // revoked event. Each grant is one stream, `grant:<id>`, and every write
 // states its expected version.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { InvalidRequestError, NotFoundError } from "../intake/service.ts";
-import { ACCESS_LOG_STREAM, rateSummaryEvents } from "../records/events.ts";
+import { ACCESS_LOG_STREAM, projectAccessLog, rateSummaryEvents } from "../records/events.ts";
 import type { EventStore, StoredEvent } from "../store/event-log.ts";
 
 export const TIERS = ["read", "annotate", "propose"] as const;
@@ -20,6 +22,12 @@ export type Tier = z.infer<typeof Tier>;
 export function tierAllows(tier: Tier, needed: Tier): boolean {
   return TIERS.indexOf(tier) >= TIERS.indexOf(needed);
 }
+
+export const TOKEN_PREFIX = "appt_";
+// The shape of a token. The server still accepts only a token whose hash is
+// stored, whatever its shape.
+export const TOKEN_PATTERN = /^appt_[A-Za-z0-9_-]{43}$/;
+export const newGrantToken = () => `${TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
 
 export const GRANT_PREFIX = "grant:";
 export const grantStream = (id: string) => `${GRANT_PREFIX}${id}`;
@@ -99,7 +107,7 @@ export class GrantStore {
   constructor(store: EventStore, options: GrantStoreOptions = {}) {
     this.#store = store;
     this.#newId = options.newId ?? (() => `g-${randomBytes(6).toString("hex")}`);
-    this.#newToken = options.newToken ?? (() => randomBytes(32).toString("base64url"));
+    this.#newToken = options.newToken ?? newGrantToken;
   }
 
   #all(): Map<string, GrantRecord> {
@@ -113,6 +121,17 @@ export class GrantStore {
 
   list(): GrantView[] {
     return [...this.#all().values()].map(view);
+  }
+
+  // When each grant last made a call, from the case's access log. Every
+  // call counts, refused ones too. Delete case erases the access log, so a
+  // grant has no last use in a new case until it calls again.
+  lastUsed(): Map<string, string> {
+    const last = new Map<string, string>();
+    for (const e of projectAccessLog(this.#store.readStream(ACCESS_LOG_STREAM))) {
+      if (e.grant_id !== null && (last.get(e.grant_id) ?? "") < e.at) last.set(e.grant_id, e.at);
+    }
+    return last;
   }
 
   get(id: string): GrantView {
