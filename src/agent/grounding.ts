@@ -153,6 +153,13 @@ const STATUS_WORDS: Array<{ re: RegExp; noun: RegExp; statuses: Status[] }> = [
   { re: /\b(?:approved|sent)\b/, noun: /\b(?:repl(?:y|ies)|drafts?|answers?)\b/, statuses: ["reply:sent"] },
 ];
 
+// "I accepted ..." or "we rejected ..." when the turn accepted or rejected
+// a claim.
+function ownReview(clause: string, done: ReadonlySet<string> = new Set()): boolean {
+  const m = /\b(?:i|we)(?:'ve)?(?:\s+(?:have|just|also))*\s+(accepted|rejected)\b/.exec(clause);
+  return m !== null && done.has(m[1] === "accepted" ? "claim_accepted" : "claim_rejected");
+}
+
 // A colon splits a clause only before a space, so "10:30" stays whole.
 const clauses = (s: string) => s.split(/[,;]|:\s|\b(?:and|but|while|whereas|so|although|though)\b/).map((c) => c.trim()).filter(Boolean);
 
@@ -204,9 +211,20 @@ export function statesAgree(text: string, grounds: Grounds): boolean {
         }
       }
       // A status word code cannot map, said of a slot, fails closed. A
-      // status of claims or replies is checked below instead.
+      // status of claims or replies is checked below instead, and so is the
+      // agent's own report of a review it did in this turn ("I accepted the
+      // offer for Tuesday"), which the action-claim check holds to the
+      // activity log.
       const unmapped = c.match(UNMAPPED_STATUS);
-      if (unmapped && targets.length > 0 && !STATUS_WORDS.some((w) => w.noun.test(c)) && !CONDITIONAL.test(c.slice(0, unmapped.index))) return false;
+      if (
+        unmapped &&
+        targets.length > 0 &&
+        !STATUS_WORDS.some((w) => w.noun.test(c)) &&
+        !CONDITIONAL.test(c.slice(0, unmapped.index)) &&
+        !ownReview(c, grounds.done)
+      ) {
+        return false;
+      }
       for (const w of STATUS_WORDS) {
         const at = c.search(w.re);
         if (at === -1 || !w.noun.test(c)) continue;

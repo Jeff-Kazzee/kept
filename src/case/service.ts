@@ -151,7 +151,7 @@ export class CaseService {
 
   // What the page polls to learn that anything changed: the case generation
   // and the highest event number in the file. Every write by the app, the
-  // MCP server or another tab moves one of them, grants and agent calls
+  // MCP server or another tab moves one of them, settings and agent calls
   // included.
   liveVersion(): { generation: number; seq: number } {
     return { generation: this.#store.caseGeneration(), seq: this.#store.latestSeqExcept([]) };

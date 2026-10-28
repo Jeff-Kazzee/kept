@@ -254,7 +254,7 @@ export class CaseAgent {
     this.#append(input.expectedVersion, [{ type: "chat_user_message", data: { message_id: userId, turn_id: turnId, text, withheld: false } }]);
     emit({ event: "turn.started", data: { turnId, userMessageId: userId } });
     // Finding 11: what the case held when the turn started, apart from the
-    // chat, grants and the access log, to tell whether a tool wrote.
+    // chat, the settings and the two logs, to tell whether a tool wrote.
     const keep = [CHAT_STREAM, SETTINGS_STREAM, ACCESS_LOG_STREAM, ACTIVITY_STREAM];
     const seqAtStart = this.#store.latestSeqExcept(keep);
     const wrote = () => (report.wrote ||= this.#store.latestSeqExcept(keep) > seqAtStart);

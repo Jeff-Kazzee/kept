@@ -127,10 +127,10 @@ export const SCOPE_DECLINE =
   "This app only handles appointment times, places, confirmations and office requests. " +
   "It cannot answer health questions. Please ask the office directly.";
 
-// O-e: notes, tags and proposal text from the user or an agent get the
-// same check. Nothing is written when it fails.
+// O-e: notes and tags from the user or an agent get the same check.
+// Nothing is written when it fails.
 export const RECORD_SCOPE_DECLINE =
-  "Notes, tags and proposed changes hold administrative content only: times, places, confirmations and office requests. " +
+  "Notes and tags hold administrative content only: times, places, confirmations and office requests. " +
   "This text reads as clinical content, so nothing was written.";
 
 export class OutOfScopeError extends Error {

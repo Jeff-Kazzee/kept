@@ -16,10 +16,12 @@ export type ChecklistSource = {
   evidenceId: string;
   // Null for a manual entry made without a quote.
   quote: string | null;
-  // "office message", "reported by you" or "reported by you through <grant name>".
+  // "office message", "reported by you", "added by the assistant" or, from
+  // before sprint 8, "reported by you through <grant name>".
   sourceLabel: string;
   sourceType: SourceType;
-  // The grant's name when an agent reported it and the user confirmed it.
+  // The agent's name when an agent added it: "the assistant", "an external
+  // agent", or an old grant's name.
   agentName: string | null;
   // Set when the quote is an agent's own words. Show the quote as untrusted
   // text under this label.

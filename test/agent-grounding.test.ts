@@ -156,6 +156,12 @@ describe("finding 3: states agree with the slots", () => {
     for (const t of ["I sent the reply.", "I approved the draft.", "I confirmed Monday.", "I canceled Thursday.", "I booked Monday.", "I rescheduled it.", "I deleted the case."]) {
       expect(claimsAction(t, all), t).toBe(true);
     }
+    // The agent's own review of a slot's offer reads as an action, not a
+    // state, when the turn did it. Said of the slot itself, it fails closed.
+    const g = (done: string[]) => ({ ...grounds(), done: new Set(done) });
+    expect(statesAgree("I accepted the offer for Tuesday 11/10 2:00 PM.", g(["claim_accepted"]))).toBe(true);
+    expect(statesAgree("I accepted the offer for Tuesday 11/10 2:00 PM.", g([]))).toBe(false);
+    expect(statesAgree("Tuesday 11/10 2:00 PM is accepted.", g(["claim_accepted"]))).toBe(false);
   });
 });
 

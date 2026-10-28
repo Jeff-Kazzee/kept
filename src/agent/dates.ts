@@ -83,8 +83,8 @@ const PLACE_NUMBER = /\b(room|rm|suite|ste|building|bldg|unit|apt|apartment|floo
 
 export type Canonical = { text: string; unreadable: string[] };
 
-// `today` is the turn's date in America/Denver, YYYY-MM-DD, for relative
-// days. Without it, relative days stay unreadable.
+// `today` is the turn's date in the case's time zone, YYYY-MM-DD, for
+// relative days. Without it, relative days stay unreadable.
 export function canonicalDates(input: string, today: string | null): Canonical {
   let t = asciiDigits(normalizeForScope(input));
   t = t.replace(/[*_`~]+/g, "").replace(/^#+\s*/gm, "");
