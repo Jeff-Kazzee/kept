@@ -13,6 +13,21 @@ export const OPENAI_ISSUER = "https://auth.openai.com";
 export const DISCOVERY_URL = `${OPENAI_ISSUER}/.well-known/openid-configuration`;
 // Seconds of clock skew allowed on exp, iat and nbf.
 export const CLOCK_TOLERANCE_S = 5;
+// How long the signing keys are kept: the response's Cache-Control max-age,
+// within these bounds, or the default when it gives none.
+export const JWKS_MIN_TTL_MS = 60_000;
+export const JWKS_DEFAULT_TTL_MS = 60 * 60_000;
+export const JWKS_MAX_TTL_MS = 24 * 60 * 60_000;
+// An unfamiliar kid or a failed signature reloads the keys at most this
+// often.
+export const JWKS_RELOAD_GAP_MS = 60_000;
+
+function keysLifetime(cacheControl: string | null): number {
+  if (cacheControl && /(^|,)\s*(no-store|no-cache)\s*(,|$)/i.test(cacheControl)) return JWKS_MIN_TTL_MS;
+  const m = /(?:^|,)\s*max-age\s*=\s*(\d+)/i.exec(cacheControl ?? "");
+  if (!m) return JWKS_DEFAULT_TTL_MS;
+  return Math.min(JWKS_MAX_TTL_MS, Math.max(JWKS_MIN_TTL_MS, Number(m[1]) * 1000));
+}
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -60,6 +75,7 @@ export class OpenAiIdentity {
   #discovery: Promise<Discovery> | null = null;
   #keys: Map<string, { key: KeyObject; kty: string; alg: string | null }> | null = null;
   #keysFetchedAt = 0;
+  #keysExpireAt = 0;
 
   constructor(options: { fetch?: FetchLike; now?: () => number } = {}) {
     this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
@@ -115,9 +131,11 @@ export class OpenAiIdentity {
   async #loadKeys(): Promise<void> {
     const { jwks_uri } = await this.discovery();
     let body: { keys?: unknown };
+    let lifetime: number;
     try {
       const res = await this.#fetch(jwks_uri, { headers: { Accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(15_000) });
       if (res.status !== 200) throw new Error("status");
+      lifetime = keysLifetime(res.headers.get("cache-control"));
       body = (await res.json()) as { keys?: unknown };
     } catch {
       throw new IdentityError("unavailable", "jwks");
@@ -135,13 +153,18 @@ export class OpenAiIdentity {
     }
     this.#keys = keys;
     this.#keysFetchedAt = this.#now();
+    this.#keysExpireAt = this.#keysFetchedAt + lifetime;
+  }
+
+  get #mayReload(): boolean {
+    return this.#now() - this.#keysFetchedAt >= JWKS_RELOAD_GAP_MS;
   }
 
   async #key(kid: string) {
-    if (!this.#keys) await this.#loadKeys();
+    if (!this.#keys || this.#now() >= this.#keysExpireAt) await this.#loadKeys();
     let found = this.#keys!.get(kid);
     // An unfamiliar kid reloads the keys, at most once a minute.
-    if (!found && this.#now() - this.#keysFetchedAt > 60_000) {
+    if (!found && this.#mayReload) {
       await this.#loadKeys();
       found = this.#keys!.get(kid);
     }
@@ -162,13 +185,23 @@ export class OpenAiIdentity {
     if (!algorithm) throw new IdentityError("invalid", "algorithm");
     if (typeof header.kid !== "string") throw new IdentityError("invalid", "kid");
     const { issuer } = await this.discovery();
-    const key = await this.#key(header.kid);
-    if (!key) throw new IdentityError("invalid", "unknown_key");
-    if (key.kty !== algorithm.kty || (key.alg !== null && key.alg !== alg)) throw new IdentityError("invalid", "algorithm");
     const signed = Buffer.from(`${parts[0]}.${parts[1]}`);
     const signature = Buffer.from(parts[2]!, "base64url");
-    const ok = verify("sha256", signed, algorithm.dsaEncoding ? { key: key.key, dsaEncoding: algorithm.dsaEncoding } : key.key, signature);
-    if (!ok) throw new IdentityError("invalid", "signature");
+    const check = (key: { key: KeyObject; kty: string; alg: string | null } | undefined): void => {
+      if (!key) throw new IdentityError("invalid", "unknown_key");
+      if (key.kty !== algorithm.kty || (key.alg !== null && key.alg !== alg)) throw new IdentityError("invalid", "algorithm");
+      const ok = verify("sha256", signed, algorithm.dsaEncoding ? { key: key.key, dsaEncoding: algorithm.dsaEncoding } : key.key, signature);
+      if (!ok) throw new IdentityError("invalid", "signature");
+    };
+    try {
+      check(await this.#key(header.kid));
+    } catch (err) {
+      // A key replaced under the same kid: reload once, at most once a
+      // minute, and check again.
+      if (!(err instanceof IdentityError && err.reason === "signature" && this.#mayReload)) throw err;
+      await this.#loadKeys();
+      check(this.#keys!.get(header.kid));
+    }
 
     const now = Math.floor(this.#now() / 1000);
     if (payload.iss !== issuer) throw new IdentityError("invalid", "issuer");
