@@ -234,6 +234,67 @@ the additive details sprint 9 can rely on:
 - A22. Records name an agent by code: `{ kind: "agent", name }` with "the
   assistant" or "an external agent". Old records keep their grant name.
 
+## Review round 1
+
+Coordinator decisions, proposed:
+
+- D1. A `user_report` claim means the person's own words. In the chat the
+  channel `user_report` is kept only when the imported lines are what the
+  person typed: the words around them do not introduce a message, they are
+  not a block set off under a lead-in, they have no header line or sender
+  prefix, and they speak in the first person without addressing "you"
+  (`ownWords` in `src/agent/tools.ts`). Otherwise the channel is
+  `unknown`. Over MCP a `user_report` is imported with source
+  `reported_by_user_via_agent` and agent "an external agent", labeled
+  "reported through an external agent". Such a claim, and any agent's
+  answer, cannot by itself hold, cancel or move a slot (rule 1): the
+  projection keeps confirm, reminder, cancel and move claims of an agent
+  that the person never confirmed aside, lists them in the slot's
+  `unconfirmedEvidenceIds` and the case's `unconfirmedEvidenceIds`, and
+  the slot's state comes from an office message or the person's own report
+  when one agrees. An offer, request or decline it reports still counts.
+  A report an old grant made and the person confirmed still counts in full.
+- D2. A chat turn that imports text may only import it and accept or reject
+  that message's claims. Archive, unarchive, tags, notes, the time zone,
+  answers, starting or discarding a draft and undo are refused in that
+  turn with `waits_for_person` and the notice `PASTE_TURN_NOTICE`, and they
+  also need words of the person's own outside the imported lines. A
+  turn that already took one of those actions, or accepted a claim of
+  another message, refuses a later import with
+  `IMPORT_AFTER_ACTION_NOTICE`, so the order of the calls does not matter.
+  This applies to the chat only. An external agent over MCP acts for the
+  person who runs it.
+
+Findings:
+
+1. A fabricated `user_report` could confirm or cancel. Fixed by D1
+   (`test/review-sprint8.test.ts`, finding 1, and `test/slots.test.ts`).
+2. Message text could drive non-claim actions. Fixed by D2
+   (`test/review-sprint8.test.ts`, finding 2).
+3. Undo of a draft's start, or of the answer that opened it, threw away
+   the person's edit. Both are now refused while the draft is open and
+   edited.
+4. Undo of an import withdrew later facts entered by hand. It is now
+   refused while the message has one, naming its entry, and while a later
+   answer settled one of its facts, naming the question. The intake
+   service refuses too.
+5. After `set_timezone`, later tools in the turn read the old zone and
+   date. The tool context now takes the new zone and today, and the checks
+   on the answer and its chips read them.
+6. MCP results now pass the sanitizer once at the boundary, and the text
+   block is the same data as the structured result.
+7. Reading a message that was already in the case, unread, now goes
+   through `CaseActions.extract` with its own entry. Reading a message the
+   same call imported stays part of the import's entry (A8).
+8. A time the clock skips when daylight time starts (02:30 on 2026-03-08
+   in America/Denver) rolls forward to the first time that happens
+   (03:00), `resolveWallClock` says "gap", and `check_calendar` tells the
+   agent in `time_note`. A repeated hour is still the first of the two.
+
+The root typecheck no longer compiles the UI: `test/bundle.test.ts` reads
+the scripted chat's marker from `ui/chat/mockStream.ts` as text instead of
+importing it.
+
 ## Self-review
 
 1. Each check that guards a write runs in the write's transaction: the
@@ -262,10 +323,12 @@ the additive details sprint 9 can rely on:
 - The 7B UI still expects `grants` and `proposals` in `/api/state` and a
   `proposal` card. On this branch alone, `ui/agent-access.node.test.ts`,
   two tests in `ui/schedule/SchedulePanel.node.test.ts` and one in
-  `ui/chat/mockStream.node.test.ts` fail, and the UI typecheck fails in
-  `ui/chat/mockStream.ts` (through `test/bundle.test.ts`, also in the root
-  typecheck) and in the files that use grants, proposals and the old
-  `ChatMessage`. `pnpm build` passes.
+  `ui/chat/mockStream.node.test.ts` fail, and the two UI typechecks fail
+  in the files that use grants, proposals and the old `ChatMessage`. The
+  root typecheck and `pnpm build` pass.
+- New for the page: `SlotView.unconfirmedEvidenceIds` and
+  `CaseView.unconfirmedEvidenceIds` (D1), and the notices
+  `PASTE_TURN_NOTICE` and `IMPORT_AFTER_ACTION_NOTICE` (D2).
 - Sprint 10 adds its settings kinds to the `settings` stream and its parts
   through `settingsRoutes(store, actions, provider)`.
 
