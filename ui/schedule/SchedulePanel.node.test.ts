@@ -11,7 +11,7 @@ import { ReplyService } from "../../src/reply/service.ts";
 import { EventStore } from "../../src/store/event-log.ts";
 import { acceptMessages, agentAccess, intake } from "../../test/helpers.ts";
 import type { AppState } from "../api.ts";
-import { ScheduleTab, waitingCount } from "./SchedulePanel.tsx";
+import { ScheduleTab, TABS, waitingCount } from "./SchedulePanel.tsx";
 
 describe("waiting for you", () => {
   it("shows the open question and a draft opened by hand, with one draft card", async () => {
@@ -51,5 +51,11 @@ describe("waiting for you", () => {
     expect(html).toContain('aria-label="Explanation"');
     expect(html).toContain(" Explain with the model</button>");
     expect(html).toContain(">Ask me the question about this</button>");
+  });
+});
+
+describe("0015: the panel's tabs", () => {
+  it("are Schedule, Checklist and Activity, since Settings moved to the sidebar", () => {
+    expect(TABS.map((t) => t.label)).toEqual(["Schedule", "Checklist", "Activity"]);
   });
 });

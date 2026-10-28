@@ -316,7 +316,7 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
 
 .account { display: block; }
 .account-btn {
-  display: flex; align-items: center; gap: var(--s-1); width: 100%; min-height: 52px; padding: 6px var(--s-1);
+  display: flex; align-items: center; gap: var(--s-1); width: 100%; min-height: var(--touch); padding: var(--s-1);
   border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text); text-align: left; cursor: pointer;
   transition: background var(--fast) var(--ease);
 }

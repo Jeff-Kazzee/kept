@@ -12,7 +12,7 @@ import { realBackend, type AgentBackend } from "./agentApi.ts";
 import { AgentContext, type AgentState } from "./agent/AgentContext.tsx";
 import { keep, sendDeviceZone, settle } from "./agent/reads.ts";
 import { runUndo, serialUndo } from "./agent/undo.ts";
-import { ApiError, api, type AppState, type FixtureScenario } from "./api.ts";
+import { api, type AppState, type FixtureScenario } from "./api.ts";
 import type { Run } from "./components/ActionButton.tsx";
 import { LoadError } from "./components/LoadError.tsx";
 import { Icon } from "./components/Icon.tsx";
@@ -32,19 +32,13 @@ import { ConnectionsPage, SettingsPage, UsagePage } from "./pages/Settings.tsx";
 import { Avatar } from "./shell/AccountMenu.tsx";
 import { AgentAccessPage, PageFrame } from "./shell/Pages.tsx";
 import { Sidebar, type SideLayout } from "./shell/Sidebar.tsx";
-import { VIEW_TITLES, person, readFolded, saveFolded, viewIn, type View } from "./shell/shell.ts";
+import { VIEW_TITLES, person, readFolded, saveFolded, setupLink, viewIn, type ToastLink, type View } from "./shell/shell.ts";
 import { SignIn } from "./hosted/SignIn.tsx";
 import { hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
 
 // `link`: the toast opens Connections for the setup sentence (J12), or
 // Usage when the credit ran out (0014).
-type ToastLink = "connections" | "usage";
 type Toast = { id: number; kind: "error" | "info"; text: string; link?: ToastLink };
-
-// J12: the server refused a model step because no provider is ready, or
-// on the hosted site because the credit ran out.
-const setupLink = (e: unknown): ToastLink | undefined =>
-  e instanceof ApiError ? (e.body.error === "provider_not_ready" ? "connections" : e.body.error === "credits_exhausted" ? "usage" : undefined) : undefined;
 
 // The scripted chat is a development tool. It makes real case writes, so
 // only a development build has it (or a check build made with

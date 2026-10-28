@@ -2,6 +2,7 @@
 // registry of sidebar items, and who the account button names. Components
 // read the registry for the mode instead of branching on the mode
 // themselves.
+import { ApiError } from "../api.ts";
 import type { IconName } from "../components/Icon.tsx";
 import type { GoogleStatus } from "../contract.ts";
 import type { SignedInSession } from "../hosted/session.ts";
@@ -50,6 +51,13 @@ export const VIEW_TITLES: Record<View, string> = {
   settings: "Settings",
   usage: "Usage",
 };
+
+// Where a toast's button goes (S8): Connections for the setup sentence
+// when no provider is ready (J12), Usage when the credit ran out (0014).
+export type ToastLink = "connections" | "usage";
+
+export const setupLink = (e: unknown): ToastLink | undefined =>
+  e instanceof ApiError ? (e.body.error === "provider_not_ready" ? "connections" : e.body.error === "credits_exhausted" ? "usage" : undefined) : undefined;
 
 // Up to two letters: the first and last word of a name, else of the part
 // of an email before the @. Null when there is neither.
