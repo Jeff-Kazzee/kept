@@ -1,6 +1,8 @@
-// A small menu that opens from a button, above it. It closes on Escape
-// (focus goes back to the button), on a click outside and after a choice.
-// Opening it moves focus to its first item.
+// A small menu that opens from a button, above it. It closes on Escape, on
+// a click outside and after a choice. Opening it moves focus to its first
+// item. Escape and a choice give focus back to the button, before the
+// choice runs, so a choice that moves focus on purpose still can (Muse
+// round 1, finding 10).
 import { useEffect, useRef, useState } from "react";
 
 export function useMenu() {
@@ -29,6 +31,7 @@ export function useMenu() {
   }, [open]);
   const choose = (act: () => void) => {
     setOpen(false);
+    buttonRef.current?.focus();
     act();
   };
   return { open, setOpen, buttonRef, menuRef, choose };

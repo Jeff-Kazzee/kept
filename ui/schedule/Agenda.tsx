@@ -12,7 +12,12 @@ import { Icon } from "../components/Icon.tsx";
 import { StateBadge } from "../components/StateBadge.tsx";
 import { stampTime, wallParts } from "../format.ts";
 import { AgentQuote, UntrustedText } from "../case/Source.tsx";
+import { UntrustedInline } from "../components/Untrusted.tsx";
 import { onGoogleCalendar, useAgent } from "../agent/AgentContext.tsx";
+
+// Event titles come from the calendar file the user loaded: data, never
+// instructions (Muse round 1, finding 12).
+export const EVENT_LABEL = "Calendar event title, shown as data";
 
 export const slotElementId = (key: string) => `slot-${slotIdPart(key)}`;
 
@@ -110,7 +115,9 @@ function CalendarRow({ event }: { event: IcsEvent }) {
       <div className="slot-time tabular">{icsTimeText(event.start)}</div>
       <div className="slot-body">
         <div className="slot-line">
-          <span className="slot-title">{event.summary}</span>
+          <span className="slot-title">
+            <UntrustedInline label={EVENT_LABEL} text={event.summary} />
+          </span>
           <span className="badge badge-calendar">Your calendar</span>
         </div>
         <span className="small muted tabular">
@@ -133,7 +140,9 @@ function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; r
   const options = kase.reply.options.filter((o) => o.slotKey === s.key);
   const clashes = s.clashes ?? [];
   const onGoogle = onGoogleCalendar(activity, s.key);
-  const clashWords = clashes.map((c) => `Clashes with ${c.summary} (${icsTimeText(c.start)}${c.end ? ` to ${icsTimeText(c.end)}` : ""})`);
+  const clashTime = (c: (typeof clashes)[number]) => `${icsTimeText(c.start)}${c.end ? ` to ${icsTimeText(c.end)}` : ""}`;
+  // In an attribute the title is plain text and never markup.
+  const clashWords = clashes.map((c) => `Clashes with ${c.summary} (${clashTime(c)})`);
   return (
     <article
       id={slotElementId(s.key)}
@@ -150,7 +159,7 @@ function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; r
             <span className="marker marker-clash" title={clashWords.join(". ")}>
               <Icon name="alert" size="sm" />
               <span>Clash</span>
-              <span className="sr-only">: {clashWords.join(". ")}</span>
+              <span className="sr-only">: {clashes.length === 1 ? "one calendar event at the same time" : `${clashes.length} calendar events at the same time`}, see Details</span>
             </span>
           )}
           {onGoogle && (
@@ -177,9 +186,12 @@ function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; r
             <StateQuote id={s.stateEvidenceId} state={state} />
             {s.staleEvidenceIds.length > 0 && <p className="warn">A reminder for this time may be out of date: {s.staleEvidenceIds.join(", ")}</p>}
             {clashes.length > 0 ? (
-              clashWords.map((w) => (
-                <p key={w} className="clash">
-                  <Icon name="alert" size="sm" /> {w}
+              clashes.map((c, i) => (
+                <p key={i} className="clash">
+                  <Icon name="alert" size="sm" />
+                  <span>
+                    Clashes with <UntrustedInline label={EVENT_LABEL} text={c.summary} /> ({clashTime(c)})
+                  </span>
                 </p>
               ))
             ) : (

@@ -2,7 +2,7 @@
 // sentences. The zone is America/Denver until settings set another.
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api.ts";
-import { clockTime, errorSentence, getCaseZone, setCaseZone, shortTime, stampTime, wallNow, wallToIso, zoneShortName } from "./format.ts";
+import { clockTime, errorSentence, getCaseZone, setCaseZone, shortTime, stampTime, wallNow, wallSkipped, wallToIso, zoneShortName } from "./format.ts";
 
 describe("format", () => {
   it("times show in America/Denver across the 2026-11-01 change", () => {
@@ -39,6 +39,18 @@ describe("format", () => {
     expect(zoneShortName("America/Denver", Date.parse("2026-12-01T00:00:00Z"))).toBe("MST");
     // An explicit zone wins over the case zone.
     expect(stampTime("2026-11-01T08:30:00.000Z", "UTC")).toBe("2026-11-01 08:30 UTC");
+  });
+
+  it("Muse round 1, finding 13: refuses a time the clocks skip, and keeps the times on either side", () => {
+    expect(wallToIso("2026-03-08T02:30", "America/Denver")).toBeNull();
+    expect(wallToIso("2026-03-08T02:00", "America/Denver")).toBeNull();
+    expect(wallToIso("2026-03-08T01:59", "America/Denver")).toBe("2026-03-08T01:59:00-07:00");
+    expect(wallToIso("2026-03-08T03:00", "America/Denver")).toBe("2026-03-08T03:00:00-06:00");
+    expect(wallToIso("2026-03-29T02:30", "Europe/Berlin")).toBeNull();
+    expect(wallToIso("2026-03-29T03:30", "Europe/Berlin")).toBe("2026-03-29T03:30:00+02:00");
+    expect(wallSkipped("2026-03-08T02:30", "America/Denver")).toBe(true);
+    expect(wallSkipped("2026-03-08T03:30", "America/Denver")).toBe(false);
+    expect(wallSkipped("not a time", "America/Denver")).toBe(false);
   });
 
   it("an undo the server refused shows the server's reason as it is", () => {

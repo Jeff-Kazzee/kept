@@ -8,3 +8,15 @@ export function UntrustedBox({ label, text }: { label: string; text: string }) {
     </div>
   );
 }
+
+// The same for a short piece of data inside a line, such as an event title
+// from a calendar file. The label is in the title and read first by screen
+// readers. The dotted underline marks it as data.
+export function UntrustedInline({ label, text }: { label: string; text: string }) {
+  return (
+    <span className="untrusted-inline" title={label}>
+      <span className="sr-only">{label}: </span>
+      {text}
+    </span>
+  );
+}

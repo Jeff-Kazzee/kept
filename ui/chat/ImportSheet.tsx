@@ -9,7 +9,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { api, type FixtureScenario } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
-import { DEFAULT_EXTRACTION_EFFORT, getCaseZone, wallNow, wallToIso } from "../format.ts";
+import { DEFAULT_EXTRACTION_EFFORT, getCaseZone, wallNow, wallSkipped, wallToIso } from "../format.ts";
 import { MAX_MESSAGE } from "./Composer.tsx";
 
 const CHANNELS: Array<{ value: string; label: string }> = [
@@ -135,7 +135,22 @@ export function ImportSheet({
         </label>
         <label className="field" htmlFor={`${uid}-received`}>
           <span>{`Received (${getCaseZone()} time)`}</span>
-          <input id={`${uid}-received`} name="import-received" className="input" type="datetime-local" value={received} onChange={(e) => setReceived(e.target.value)} required />
+          <input
+            id={`${uid}-received`}
+            name="import-received"
+            className="input"
+            type="datetime-local"
+            value={received}
+            onChange={(e) => setReceived(e.target.value)}
+            required
+            aria-invalid={wallSkipped(received) || undefined}
+            aria-describedby={wallSkipped(received) ? `${uid}-skipped` : undefined}
+          />
+          {wallSkipped(received) && (
+            <span id={`${uid}-skipped`} className="warn" role="status">
+              That time does not exist in {getCaseZone()}, because the clocks move forward over it. Pick a time an hour later.
+            </span>
+          )}
         </label>
         <label className="field" htmlFor={`${uid}-text`}>
           <span>Message text</span>

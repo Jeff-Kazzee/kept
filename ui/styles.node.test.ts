@@ -18,4 +18,13 @@ describe("touch targets", () => {
     }
     expect(rule(".segmented label")).not.toMatch(/min-height: 40px/);
   });
+
+  it("Muse round 1, finding 9: Undo links, tabs, the model pill, info buttons and every summary give a 44 px hit area", () => {
+    for (const selector of [".link-btn", ".tabs button", ".model-pill", ".infotip-btn", ".new-pill", ".send-btn", ".rail-btn", ".fact-toggle", ".menu-item"]) {
+      expect(rule(selector), selector).toMatch(/(min-height|height): var\(--touch\)/);
+    }
+    // No summary or link brings its hit area back under the token.
+    expect(css).not.toMatch(/summary \{[^}]*min-height: (2|3)\dpx/);
+    expect(css).not.toMatch(/\.link-btn \{[^}]*min-height: 32px/);
+  });
 });

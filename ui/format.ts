@@ -129,6 +129,7 @@ function zoneOffset(zone: string, ms: number): number {
 // A wall time typed in the case zone ("2026-11-01T01:30") as an ISO time
 // with its offset ("2026-11-01T01:30:00-06:00"). An hour that happens twice
 // on a clock change is read as the first one (for Denver on 2026-11-01, MDT).
+// A time that never happens, in the hour the clocks skip, is refused (null).
 export function wallToIso(wall: string, zone = caseZone): string | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(wall);
   if (!m) return null;
@@ -139,7 +140,18 @@ export function wallToIso(wall: string, zone = caseZone): string | null {
   if (second !== offset && zoneOffset(zone, asUtc - second * 60_000) === second) offset = second;
   const sign = offset < 0 ? "-" : "+";
   const abs = Math.abs(offset);
-  return `${wall}:00${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+  const iso = `${wall}:00${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+  // A time the clocks skip, such as 02:30 when they move forward, has no
+  // instant. The round trip shows it, and the time is refused rather than
+  // moved silently (Muse round 1, finding 13).
+  const back = wallParts(Date.parse(iso), zone);
+  return `${back.date}T${back.time}` === wall ? iso : null;
+}
+
+// True when a well-formed wall time does not exist in the zone, because the
+// clocks move forward over it.
+export function wallSkipped(wall: string, zone = caseZone): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(wall) && wallToIso(wall, zone) === null;
 }
 
 // The current time on the case's clock, for a datetime-local field.
