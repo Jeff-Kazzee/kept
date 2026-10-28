@@ -4,6 +4,7 @@
 // so it is an activity entry like the agent's.
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { GoogleServices } from "../src/google/tools.ts";
 import { CaseActions, UndoBlockedError, YOU } from "../src/actions/service.ts";
 import { CaseService } from "../src/case/service.ts";
 import { Channel, DEFAULT_EXTRACTION_EFFORT, Effort } from "../src/domain/claim.ts";
@@ -60,13 +61,14 @@ const UndoBody = z.object({ expectedVersion: Version, version: Version }).strict
 // `settings`: the provider part of the settings (sprint 10, server/auth.ts).
 export type ApiOptions = { mode: "recorded" | "live"; settings?: ProviderSource };
 
-// The store and the records service, which the MCP server also uses.
-export type AgentAccess = { store: EventStore; records: RecordsService };
+// The store and the records service, which the MCP server also uses, and
+// the Google connection (0012), whose calendar entries undo at Google.
+export type AgentAccess = { store: EventStore; records: RecordsService; google?: GoogleServices };
 
 export function createApi(service: IntakeService, kase: CaseService, options: ApiOptions, reply: ReplyService, access: AgentAccess) {
   const scenarios = loadScenarios();
   const { records, store } = access;
-  const actions = new CaseActions(store, { intake: service, kase, reply, records });
+  const actions = new CaseActions(store, { intake: service, kase, reply, records, ...(access.google ? { google: access.google } : {}) });
   const demoCalendar = readFixtureText("calendar/dana.ics");
 
   const routes: Route[] = [
@@ -93,8 +95,9 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     // The activity log (0009, design 3) and undo. Undo states the activity
     // version the page saw and answers the new case view.
     ["GET", /^\/api\/activity$/, () => actions.activity()],
-    ["POST", /^\/api\/activity\/([^/]+)\/undo$/, (m, body) => {
-      actions.undo(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion);
+    // undoEntry reverses a Google Calendar entry at Google first (0012).
+    ["POST", /^\/api\/activity\/([^/]+)\/undo$/, async (m, body) => {
+      await actions.undoEntry(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion);
       return kase.view();
     }],
     ...settingsRoutes(store, actions, options.settings),

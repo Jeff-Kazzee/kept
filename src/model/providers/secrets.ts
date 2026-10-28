@@ -20,6 +20,10 @@
 //   can be claimed by another process. A write that needs the lease checks,
 //   in its own transaction, that the lease is still held.
 //
+// - Other parts of the app keep their own rows in the `rows` table, such as
+//   the Google connection (`google`, 0012). Each row is JSON text its owner
+//   checks. The same file, mode, link checks and transactions apply.
+//
 // Nothing here logs, and no error message holds a value from the file.
 import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from "node:fs";
@@ -149,7 +153,15 @@ CREATE TABLE IF NOT EXISTS lease (
   name TEXT PRIMARY KEY,
   holder TEXT NOT NULL,
   expires_at INTEGER NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS rows (
+  name TEXT PRIMARY KEY,
+  data TEXT NOT NULL
 ) STRICT;`;
+
+// The names of the rows other parts of the app keep here.
+export const SECRET_ROWS = ["google"] as const;
+export type SecretRow = (typeof SECRET_ROWS)[number];
 
 const isBusy = (err: unknown) => {
   const code = (err as { errcode?: unknown } | null)?.errcode;
@@ -267,6 +279,32 @@ export class SecretsStore {
         JSON.stringify(written),
       );
       return written;
+    });
+  }
+
+  // A named row's text, or null when it was never written.
+  readRow(name: SecretRow): string | null {
+    const db = this.#open();
+    try {
+      const row = db.prepare("SELECT data FROM rows WHERE name = ?").get(name) as { data: string } | undefined;
+      return row?.data ?? null;
+    } catch (err) {
+      if (isBusy(err)) throw new SecretsBusyError();
+      throw err;
+    }
+  }
+
+  // One BEGIN IMMEDIATE transaction: reads the row, applies `change` and
+  // writes the result. A change that returns null writes nothing. Returns
+  // the row's text after the transaction.
+  updateRow(name: SecretRow, change: (current: string | null) => string | null): string | null {
+    return this.#transaction((db) => {
+      const row = db.prepare("SELECT data FROM rows WHERE name = ?").get(name) as { data: string } | undefined;
+      const current = row?.data ?? null;
+      const next = change(current);
+      if (next === null) return current;
+      db.prepare("INSERT INTO rows (name, data) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET data = excluded.data").run(name, next);
+      return next;
     });
   }
 

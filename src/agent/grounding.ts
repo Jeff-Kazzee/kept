@@ -260,9 +260,10 @@ const VERBS: Array<{ past: string; base: string; kinds: string[] }> = [
   { past: "unarchived|restored", base: "unarchive|restore", kinds: ["appointment_unarchived", "undo"] },
   { past: "discarded", base: "discard", kinds: ["draft_discarded"] },
   { past: "undid|undone|reversed", base: "undo|reverse", kinds: ["undo"] },
-  { past: "imported", base: "import", kinds: ["message_imported"] },
+  // A message from Gmail is an import too (0012).
+  { past: "imported", base: "import", kinds: ["message_imported", "gmail_message_imported"] },
   { past: "tagged", base: "tag", kinds: ["tags_set"] },
-  { past: "removed", base: "remove", kinds: ["appointment_archived", "draft_discarded", "undo"] },
+  { past: "removed", base: "remove", kinds: ["appointment_archived", "draft_discarded", "undo", "calendar_event_removed"] },
   { past: "changed|updated", base: "change|update", kinds: [ANY_ACTION] },
   { past: "approved|sent|submitted|confirmed|canceled|cancelled|declined|booked|rescheduled|moved|deleted", base: "approve|send|submit|confirm|cancel|decline|book|reschedule|move|delete", kinds: [] },
 ];

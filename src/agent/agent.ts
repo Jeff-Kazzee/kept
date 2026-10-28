@@ -263,7 +263,7 @@ export class CaseAgent {
     const actions: ActivityEntry[] = [];
     // The paste rule, read from the person's message now, and what the turn
     // imports (0009, D2').
-    const turn: ChatTurnState = { paste: mayContainPaste(text), imported: [] };
+    const turn: ChatTurnState = { paste: mayContainPaste(text), imported: [], gmailImported: [] };
     const ctx: ToolContext = {
       ...this.#services,
       store: this.#store,

@@ -1,5 +1,5 @@
 // Google Calendar (0012, item 5). Lists events in a window for clash
-// checks, in the case time zone. Keeps one event per appointment slot in the
+// checks, in the case's time zone. Keeps one event per appointment slot in the
 // chosen calendar: tentative while requested or while a change is
 // proposed, confirmed when confirmed, deleted when canceled, declined or
 // only offered.
@@ -44,7 +44,8 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { IcsEvent, IcsTime } from "../domain/ics.ts";
-import { ASSUMED_SLOT_MINUTES, CASE_TIME_ZONE, wallClockToUtc } from "../slots/clash.ts";
+import { localDateTime, wallClockToUtc } from "../domain/zone.ts";
+import { ASSUMED_SLOT_MINUTES } from "../slots/clash.ts";
 import { slotLabel } from "../slots/labels.ts";
 import type { SlotView } from "../slots/types.ts";
 import type { GoogleConnection } from "./connection.ts";
@@ -155,19 +156,7 @@ function addDays(date: string, days: number): string {
 }
 
 // An instant as a wall-clock date and time in a time zone.
-export function wallClock(ms: number, timeZone: string): { date: string; time: string } {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).formatToParts(new Date(ms));
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
-  return { date: `${get("year")}-${get("month")}-${get("day")}`, time: `${get("hour")}:${get("minute")}` };
-}
+export const wallClock = (ms: number, timeZone: string): { date: string; time: string } => localDateTime(ms, timeZone);
 
 function icsTime(t: GoogleTime | undefined): IcsTime | null {
   if (!t) return null;
@@ -200,7 +189,7 @@ const SUMMARY: Record<EventFields["status"], (s: SlotView) => string> = {
 // The event the slot should have, or null when it should have none. Every
 // word is written by code, except the place, which comes from the office's
 // message and is shown in the calendar as given.
-export function desiredEvent(slot: SlotView | null, timeZone: string = CASE_TIME_ZONE): EventFields | null {
+export function desiredEvent(slot: SlotView | null, timeZone: string): EventFields | null {
   const status = slot ? STATUS[slot.state] : undefined;
   if (!slot || !status) return null;
   const timed = slot.time !== null;
@@ -268,9 +257,10 @@ export class GoogleCalendar {
   readonly #conn: GoogleConnection;
   readonly #timeZone: () => string;
 
-  constructor(connection: GoogleConnection, options: { timeZone?: () => string } = {}) {
+  // `timeZone` is the case's time zone (0009, J5), read at each call.
+  constructor(connection: GoogleConnection, options: { timeZone: () => string }) {
     this.#conn = connection;
-    this.#timeZone = options.timeZone ?? (() => CASE_TIME_ZONE);
+    this.#timeZone = options.timeZone;
   }
 
   get timeZone(): string {
@@ -508,7 +498,7 @@ function ownSlot(sub: string, e: RawEvent): string | null {
 }
 
 // A calendar time as a wall-clock fact in the case time zone.
-export function caseWallClock(t: IcsTime, timeZone: string = CASE_TIME_ZONE): { date: string; time: string | null } {
+export function caseWallClock(t: IcsTime, timeZone: string): { date: string; time: string | null } {
   if (t.time === null) return { date: t.date, time: null };
   return wallClock(Date.parse(`${t.date}T${t.time}:00Z`), timeZone);
 }

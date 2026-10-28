@@ -41,7 +41,12 @@ import type { ToolModelClient } from "../src/model/responses.ts";
 import { APP_HEADER, requestSourceProblem } from "./guard.ts";
 import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
 import { API_SECURITY_HEADERS, createStaticHandler } from "./static.ts";
+import { GoogleCalendar } from "../src/google/calendar.ts";
 import { GoogleConnection, clientFromEnv } from "../src/google/connection.ts";
+import { GoogleCalendarEvents } from "../src/google/events.ts";
+import { Gmail } from "../src/google/gmail.ts";
+import type { GoogleServices } from "../src/google/tools.ts";
+import { localDate } from "../src/domain/zone.ts";
 import { GOOGLE_CALLBACK_PATH, createGoogleRoutes } from "./google.ts";
 
 const HOST = "127.0.0.1";
@@ -97,15 +102,22 @@ const auth = createAuth({
     return { timezone: tz.timezone, timezoneSource: tz.timezoneSource, version: tz.settingsVersion };
   },
 });
+// The Google connection (0012). Its tokens are the `google` row of the
+// secrets database, outside the event log. The calendar works in the case's
+// time zone, and the events it last read join the case's clash checks.
+const googleConnection = new GoogleConnection({ client: clientFromEnv(), store: secrets });
+const googleCalendar = new GoogleCalendar(googleConnection, { timeZone: () => kase.timeZone() });
+const googleEvents = new GoogleCalendarEvents(googleCalendar);
+const google: GoogleServices = { connection: googleConnection, gmail: new Gmail(googleConnection), calendar: googleCalendar, events: googleEvents };
 const intake = new IntakeService(store, client);
-const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
+const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name, externalCalendar: () => googleEvents.snapshot() });
 const reply = new ReplyService(store, kase, client);
 const records = new RecordsService(store, intake, kase);
-const api = createApi(intake, kase, { mode: live ? "live" : "recorded", settings: auth.source }, reply, { store, records });
+const api = createApi(intake, kase, { mode: live ? "live" : "recorded", settings: auth.source }, reply, { store, records, google });
 // The case agent (0007). In recorded mode a pasted fixture message keeps
 // its fixture id, so its extraction recording replays.
 const chat = createChat(
-  new CaseAgent(store, { intake, kase, reply, records }, chatClient, {
+  new CaseAgent(store, { intake, kase, reply, records, google }, chatClient, {
     messageIdFor: live ? defaultMessageId : fixtureMessageIds(defaultMessageId),
     // Codes only: no key, headers or message text.
     onCallError: (e) =>
@@ -114,14 +126,14 @@ const chat = createChat(
 );
 
 const allowed = appHosts(PORT, extraHosts);
-// The Google connection (0012). Its token file sits beside the event log,
-// outside it, with mode 600.
-const google = createGoogleRoutes({
-  connection: new GoogleConnection({ client: clientFromEnv(), file: path.join(path.dirname(dbPath), "google-secrets.json") }),
+const googleRoutes = createGoogleRoutes({
+  connection: googleConnection,
   generation: () => kase.generation(),
   port: PORT,
   extraHosts,
   onCallbackError: (code) => console.error(`Google connect failed: ${code}.`),
+  events: googleEvents,
+  caseDates: () => ({ dates: kase.view().slots.map((s) => s.date), today: localDate(new Date().toISOString(), kase.timeZone()) }),
 });
 const appOrigins = allowed.origins;
 
@@ -188,7 +200,7 @@ server.on("request", async (req, res) => {
   }
   if (url.pathname === GOOGLE_CALLBACK_PATH) {
     if (req.method !== "GET") return send(res, 405, { error: "method_not_allowed" });
-    const { location, setCookie } = await google.callback(url, req.headers.cookie);
+    const { location, setCookie } = await googleRoutes.callback(url, req.headers.cookie);
     res.writeHead(303, { ...API_SECURITY_HEADERS, Location: location, "Set-Cookie": setCookie, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
     return res.end();
   }
@@ -252,9 +264,9 @@ server.on("request", async (req, res) => {
     }
     return;
   }
-  if (google.handles(url.pathname)) {
+  if (googleRoutes.handles(url.pathname)) {
     const secure = (headerOf("origin") ?? "").startsWith("https://") || headerOf("x-forwarded-proto") === "https";
-    const g = await google.api({ method: req.method ?? "GET", path: url.pathname, body, generation, host: headerOf("host"), secure });
+    const g = await googleRoutes.api({ method: req.method ?? "GET", path: url.pathname, body, generation, host: headerOf("host"), secure });
     if (g.setCookie) res.setHeader("Set-Cookie", g.setCookie);
     return send(res, g.status, g.body);
   }
@@ -266,7 +278,16 @@ server.listen(PORT, HOST, () => {
   console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? `live, ${client.label}` : "recorded responses"})`);
   if (live) console.log("The model provider is chosen in the app's settings. ChatGPT sign-in finishes only in a browser on this computer, or through an SSH tunnel to this port.");
   if (extraHosts.length > 0) console.log(`Also answers to: ${extraHosts.join(", ")}`);
-  if (clientFromEnv()) console.log(`Google redirect URIs for the OAuth client: ${google.redirectUris().join(" ")}`);
+  if (clientFromEnv()) {
+    console.log(`Google redirect URIs for the OAuth client: ${googleRoutes.redirectUris().join(" ")}`);
+    // A connection from an earlier run: read its calendar for the clash
+    // checks. Codes only on failure.
+    if (googleConnection.status().calendar) {
+      googleEvents.refresh(kase.view().slots.map((s) => s.date), localDate(new Date().toISOString(), kase.timeZone())).catch((err) =>
+        console.error(`Google Calendar read failed: ${err instanceof Error && "code" in err ? String((err as { code: unknown }).code) : "error"}.`),
+      );
+    }
+  }
   // Last, so a script that waits for this line has read the others.
   console.log(serveBuild ? "Serving the production build from dist/ui." : "Serving the UI through Vite for development.");
 });

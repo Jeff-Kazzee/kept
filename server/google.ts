@@ -5,8 +5,13 @@
 // version and the case generation for each write.
 //
 //   GET  /api/google              status, never a token
-//   POST /api/google/connect      { expectedVersion, gmail, calendar, calendarId? } -> { authorizeUrl }
+//   POST /api/google/connect      { expectedVersion?, gmail?, calendar?, calendarId? } -> { authorizeUrl }
+//                                 Both permissions and the primary calendar
+//                                 unless the body says otherwise, as the page
+//                                 sends {} (sprint 9).
 //   POST /api/google/disconnect   { expectedVersion } -> status and { revoked }
+//   POST /api/google/calendar/refresh  {} -> { events }  reads Google Calendar
+//                                 again for the case's clash checks
 //   GET  /auth/google/callback    Google sends the browser here. Redirects to
 //                                 /?connected=google, or /?google_error=<code>.
 //
@@ -16,6 +21,7 @@
 import { z } from "zod";
 import { CalendarId, DEFAULT_CALENDAR_ID, type GoogleConnection } from "../src/google/connection.ts";
 import { GoogleError } from "../src/google/http.ts";
+import type { GoogleCalendarEvents } from "../src/google/events.ts";
 import { FLOW_TTL_MS, OAuthError } from "../src/google/oauth.ts";
 
 export const GOOGLE_CALLBACK_PATH = "/auth/google/callback";
@@ -41,10 +47,11 @@ export type GoogleRouteResponse = { status: number; body: unknown; setCookie?: s
 
 const Version = z.number().int().nonnegative();
 const ConnectBody = z
-  .object({ expectedVersion: Version, gmail: z.boolean(), calendar: z.boolean(), calendarId: CalendarId.optional() })
+  .object({ expectedVersion: Version.optional(), gmail: z.boolean().default(true), calendar: z.boolean().default(true), calendarId: CalendarId.optional() })
   .strict()
   .refine((b) => b.gmail || b.calendar, "Turn on Gmail, Calendar or both.");
 const DisconnectBody = z.object({ expectedVersion: Version }).strict();
+const RefreshBody = z.object({}).strict();
 
 // The redirect URIs to register in the Google OAuth client: the app's own
 // loopback addresses, and the HTTPS address of each APP_ALLOWED_HOSTS name.
@@ -92,10 +99,23 @@ export type GoogleRoutesOptions = {
   extraHosts: readonly string[];
   // Codes only, never a token or a query string.
   onCallbackError?: (code: string) => void;
+  // The Google Calendar events of the case's clash checks, and the dates
+  // their window starts from: the case's appointments and today.
+  events?: GoogleCalendarEvents;
+  caseDates?: () => { dates: string[]; today: string };
 };
 
 export function createGoogleRoutes(options: GoogleRoutesOptions) {
   const { connection, port, extraHosts } = options;
+
+  // Reads the window of the case's clash checks again. Nothing to do
+  // without the events or the calendar permission.
+  const refreshEvents = async (): Promise<number> => {
+    if (!options.events || !options.caseDates || !connection.status().calendar) return 0;
+    const { dates, today } = options.caseDates();
+    await options.events.refresh(dates, today);
+    return options.events.snapshot()?.events.length ?? 0;
+  };
 
   const fail = (err: unknown): GoogleRouteResponse => {
     if (err instanceof GoogleError) {
@@ -123,7 +143,9 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
           };
         }
         const { authorizeUrl, cookie } = connection.startConnect({
-          expectedVersion: body.expectedVersion,
+          // The page sends no version for a connect. The flow still keeps the
+          // version it starts at, and the callback refuses it when that moved.
+          expectedVersion: body.expectedVersion ?? connection.status().version,
           features: { gmail: body.gmail, calendar: body.calendar },
           calendarId: body.calendarId ?? DEFAULT_CALENDAR_ID,
           redirectUri,
@@ -136,7 +158,15 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
       run: async (req) => {
         const { expectedVersion } = DisconnectBody.parse(req.body);
         const { revoked } = await connection.disconnect(expectedVersion);
+        options.events?.clear();
         return { status: 200, body: { ...connection.status(), revoked } };
+      },
+    },
+    "/api/google/calendar/refresh": {
+      method: "POST",
+      run: async (req) => {
+        RefreshBody.parse(req.body ?? {});
+        return { status: 200, body: { events: await refreshEvents() } };
       },
     },
   };
@@ -177,6 +207,9 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
       const cookie = (secure: boolean) => cookieOf(cookieHeader, flowCookieName(port, secure));
       try {
         await connection.finishConnect({ state: q.get("state"), code: q.get("code"), error: q.get("error"), cookie });
+        // The clash checks read the new calendar. A failure here leaves them
+        // as they were, and the connect still stands.
+        await refreshEvents().catch(() => {});
         return { location: "/?connected=google", setCookie: clear };
       } catch (err) {
         const code = err instanceof OAuthError ? err.code : err instanceof GoogleError ? err.code : "server_error";

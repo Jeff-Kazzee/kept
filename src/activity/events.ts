@@ -4,6 +4,7 @@
 // entry holds a code-written summary, the actor, the target and how to undo
 // it. Undo writes a reversing event on the target's own stream, an
 // `activity_undone` event that marks the entry, and an entry of its own.
+import type { CalendarUndo } from "../google/calendar.ts";
 import type { TimezoneValue } from "../settings/events.ts";
 import type { StoredEvent } from "../store/event-log.ts";
 import type { ActivityActor, ActivityEntry, ActivityTarget } from "./types.ts";
@@ -27,7 +28,10 @@ export type UndoSpec =
   | { kind: "record_unarchive"; slot_key: string; version: number }
   | { kind: "draft_start"; draft_id: string }
   | { kind: "draft_discard"; draft_id: string }
-  | { kind: "timezone"; previous: TimezoneValue | null };
+  | { kind: "timezone"; previous: TimezoneValue | null }
+  // A Google Calendar write (0012). Undo reverses it at Google first, so it
+  // runs outside the store transaction (CaseActions.undoEntry).
+  | { kind: "google_calendar"; undo: CalendarUndo };
 
 export type ActivityEvent =
   | {

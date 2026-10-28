@@ -6,8 +6,11 @@
 // unless APP_LIVE_MODEL=1 is set, as for the app. Live calls go to the
 // provider and model chosen in the app's settings (0010), read from the
 // settings database beside APP_DB: the user's Meta key, the server's
-// MODEL_API_KEY, or the ChatGPT connection the app saved. Keys and tokens
-// stay in the client objects and are never logged. Diagnostics go to
+// MODEL_API_KEY, or the ChatGPT connection the app saved. The Google tools
+// (0012) use the Google connection the app saved in the same database,
+// with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET from the environment.
+// Without them they answer google_not_configured. Keys and tokens stay in
+// the client objects and are never logged. Diagnostics go to
 // stderr. stdout carries only MCP messages.
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { CaseService } from "../src/case/service.ts";
@@ -26,13 +29,18 @@ import { fixtureMessageIds } from "../src/agent/recorded.ts";
 import { defaultMessageId } from "../src/agent/tools.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { createMcpServer } from "./server.ts";
+import { GoogleCalendar } from "../src/google/calendar.ts";
+import { GoogleConnection, clientFromEnv } from "../src/google/connection.ts";
+import { GoogleCalendarEvents } from "../src/google/events.ts";
+import { Gmail } from "../src/google/gmail.ts";
+import type { GoogleServices } from "../src/google/tools.ts";
 
 const live = process.env.APP_LIVE_MODEL === "1";
+const secrets = new SecretsStore(appSecretsPath());
 let client: ModelClient;
 if (live) {
   // The same provider factory as the app. The ChatGPT redirect port only
   // matters for a sign-in, which happens in the app, not here.
-  const secrets = new SecretsStore(appSecretsPath());
   const auth = new ChatGptAuth({ store: secrets, port: Number(process.env.APP_PORT ?? 5180) });
   client = createProviderClient({ store: secrets, auth, serverMetaKey: process.env.MODEL_API_KEY || null });
 } else {
@@ -49,12 +57,19 @@ try {
 } catch (err) {
   console.error(`Could not finish clearing a deleted case from the database file: ${err instanceof Error ? err.message : String(err)}`);
 }
+const googleConnection = new GoogleConnection({ client: clientFromEnv(), store: secrets });
+const googleCalendar = new GoogleCalendar(googleConnection, { timeZone: () => kase.timeZone() });
+const googleEvents = new GoogleCalendarEvents(googleCalendar);
+const google: GoogleServices = { connection: googleConnection, gmail: new Gmail(googleConnection), calendar: googleCalendar, events: googleEvents };
+// The secret is in the connection object now. Nothing this process starts
+// inherits it.
+delete process.env.GOOGLE_CLIENT_SECRET;
 const intake = new IntakeService(store, client);
-const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
+const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name, externalCalendar: () => googleEvents.snapshot() });
 const reply = new ReplyService(store, kase, client);
 const records = new RecordsService(store, intake, kase);
 // In recorded mode a fixture message keeps its fixture id, as in the app.
-const deps = { store, services: { intake, kase, reply, records }, limiter: new RateLimiter(), messageIdFor: live ? undefined : fixtureMessageIds(defaultMessageId) };
+const deps = { store, services: { intake, kase, reply, records, google }, limiter: new RateLimiter(), messageIdFor: live ? undefined : fixtureMessageIds(defaultMessageId) };
 
 const handle = serveStdio(() => createMcpServer(deps), {
   onerror: (err) => console.error(`MCP server error: ${err.message}`),

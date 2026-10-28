@@ -259,7 +259,16 @@ describe("S18: tool lists", () => {
       expect(t.inputSchema.type, t.name).toBe("object");
       expect(t.annotations?.destructiveHint, t.name).toBe(false);
     }
-    expect(tools.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name)).toEqual(["get_schedule", "get_appointment", "list_open_questions", "get_checklist", "check_calendar", "get_activity"]);
+    expect(tools.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name)).toEqual([
+      "get_schedule",
+      "get_appointment",
+      "list_open_questions",
+      "get_checklist",
+      "check_calendar",
+      "get_activity",
+      "gmail_search",
+      "calendar_list",
+    ]);
   });
 });
 

@@ -541,6 +541,10 @@ describe("review round 2, B3: every public write of the case services runs as on
     await act("undoRecordEvent", () => a.undoRecordEvent(you, THU, 1, 4));
     const latest = a.activity();
     await act("undo", () => a.undo(you, latest.entries.find((e) => e.kind === "tags_set")!.id, latest.activityVersion));
+    // Sprint 11: a Google Calendar entry, and undo of any entry.
+    await act("recordGoogle", () => a.recordGoogle(bot, { kind: "calendar_event_added", summary: "Added Thursday 11/12 10:30 AM to Google Calendar as confirmed.", slotKey: THU, undo: null }));
+    const later = a.activity();
+    await act("undoEntry", () => a.undoEntry(you, later.entries.find((e) => e.kind === "timezone_set")!.id, later.activityVersion));
     app.kase.deleteCase(app.kase.caseVersion(), "DELETE");
 
     // Every public method is a read or a write this test exercised, so a

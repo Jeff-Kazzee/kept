@@ -25,8 +25,11 @@ import { TEMPLATES, type TemplateId } from "../reply/templates.ts";
 import { restoreTimezone, setTimezone } from "../settings/settings.ts";
 import { ASSISTANT_NAME, EXTERNAL_AGENT_NAME, slotKey, slotLabel } from "../slots/labels.ts";
 import { StaleEditError, type EventStore, type StoredEvent } from "../store/event-log.ts";
+import type { CalendarUndo } from "../google/calendar.ts";
+import { undoGoogleActivity, type GoogleActivityKind, type GoogleServices } from "../google/tools.ts";
 
-export type ActionServices = { intake: IntakeService; kase: CaseService; reply: ReplyService; records: RecordsService };
+// `google` is the built-in Google connection (0012), when the app has one.
+export type ActionServices = { intake: IntakeService; kase: CaseService; reply: ReplyService; records: RecordsService; google?: GoogleServices };
 
 // Who acts, and where to report each activity entry once it commits. The
 // chat stream sends them as `action` events.
@@ -108,6 +111,7 @@ export class CaseActions {
   readonly #kase: CaseService;
   readonly #reply: ReplyService;
   readonly #records: RecordsService;
+  readonly #google: GoogleServices | null;
 
   constructor(store: EventStore, services: ActionServices) {
     this.#store = store;
@@ -115,6 +119,7 @@ export class CaseActions {
     this.#kase = services.kase;
     this.#reply = services.reply;
     this.#records = services.records;
+    this.#google = services.google ?? null;
   }
 
   // The activity log, newest first, with times in the case's zone.
@@ -194,16 +199,39 @@ export class CaseActions {
   // Messages and extraction.
 
   importMessage(by: By, message: Message, source?: ImportSource): MessageView {
+    const gmail = source?.importedFrom === "gmail";
     return this.#act(
       by,
       () => this.#intake.importMessage(message, source),
       (m) => ({
-        kind: "message_imported",
-        summary: `Added message ${m.id} (${m.message.channel.replaceAll("_", " ")}).`,
+        // A message read from Gmail has the kind sprint 9's activity list
+        // shows for it (0012, G19). Its undo is the same.
+        kind: gmail ? "gmail_message_imported" : "message_imported",
+        summary: gmail ? `Added message ${m.id} from Gmail (email).` : `Added message ${m.id} (${m.message.channel.replaceAll("_", " ")}).`,
         target: { type: "message", id: m.id },
         undo: { kind: "message_import", message_id: m.id },
       }),
     );
+  }
+
+  // A Google Calendar write that already happened at Google (0012). The
+  // entry carries its undo record.
+  recordGoogle(by: By, d: { kind: GoogleActivityKind; summary: string; slotKey: string; undo: CalendarUndo | null }): ActivityEntry {
+    let logged: ActivityEntry | null = null;
+    this.#store.inCase(() =>
+      this.#store.transaction(() => {
+        logged = this.#log(by, {
+          kind: d.kind,
+          summary: d.summary,
+          target: { type: "slot", id: d.slotKey },
+          undo: d.undo ? { kind: "google_calendar", undo: d.undo } : null,
+          whyNot: "This Google Calendar change has no undo.",
+          slotKeys: [d.slotKey],
+        });
+      }),
+    );
+    by.onEntry?.(logged!);
+    return logged!;
   }
 
   extract(by: By, messageId: string, options: { effort: Effort; expectedVersion: number }): ReturnType<IntakeService["extract"]> {
@@ -509,6 +537,46 @@ export class CaseActions {
     return { previous: previous?.timezone ?? null, timezone: value.timezone };
   }
 
+  // Undo of any entry. A Google Calendar entry is reversed at Google first,
+  // outside the store transaction, and then marked undone with its own
+  // entry. Every other entry goes to `undo`.
+  async undoEntry(by: By, entryId: string, expectedVersion: number): Promise<ActivityEntry> {
+    const record = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === entryId);
+    if (record?.undo?.kind !== "google_calendar") return this.undo(by, entryId, expectedVersion);
+    const spec = record.undo;
+    this.#store.inCase(() => {
+      this.#store.assertVersion(ACTIVITY_STREAM, expectedVersion, describeActivity);
+      if (record.undoneAt !== null) throw new UndoBlockedError("This was already undone.");
+      const later = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.filter(
+        (r) => r.seq > record.seq && r.undoneAt === null && r.reverses === undefined && r.undo?.kind === "google_calendar" && r.slot_keys.some((k) => record.slot_keys.includes(k)),
+      );
+      if (later.length > 0) throw new UndoBlockedError(`A later Google Calendar change for ${listLabels(record.slot_keys)} (${later.at(-1)!.id}) depends on this. Undo that first.`);
+    });
+    if (!this.#google) throw new UndoBlockedError("Google is not set up in this app, so the calendar change cannot be undone here.");
+    const done = await undoGoogleActivity({ google: this.#google }, spec.undo);
+    if (!done.ok) throw new UndoBlockedError(done.message);
+    let undone: ActivityEntry | null = null;
+    this.#store.inCase(() =>
+      this.#store.transaction(() => {
+        const now = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === entryId);
+        if (!now || now.undoneAt !== null) throw new UndoBlockedError("This was already undone.");
+        const entry = this.#log(by, {
+          kind: "undo",
+          summary: `Undid: ${record.summary} ${done.message}`,
+          target: record.target,
+          undo: null,
+          whyNot: NOT_UNDOABLE.undo,
+          slotKeys: record.slot_keys,
+          reverses: record.id,
+        });
+        this.#store.appendSystem(ACTIVITY_STREAM, [{ type: "activity_undone", data: { id: record.id, by: by.actor, undo_id: entry.id } }]);
+        undone = entry;
+      }),
+    );
+    by.onEntry?.(undone!);
+    return undone!;
+  }
+
   // Undo (design 3). `expectedVersion` is the activity version the caller
   // saw. Refused with UndoBlockedError and a plain sentence when the entry
   // cannot be undone, was undone already, or a later action depends on it.
@@ -628,6 +696,8 @@ export class CaseActions {
       case "record_event":
       case "record_unarchive":
         return null;
+      case "google_calendar":
+        return "A Google Calendar change is undone through undoEntry.";
     }
   }
 
@@ -667,6 +737,8 @@ export class CaseActions {
       case "timezone":
         restoreTimezone(this.#store, spec.previous);
         return;
+      case "google_calendar":
+        throw new UndoBlockedError("A Google Calendar change is undone through undoEntry.");
     }
   }
 }

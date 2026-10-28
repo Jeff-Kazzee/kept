@@ -1,6 +1,9 @@
-// The app's one Google connection (0012). It keeps the refresh token in a
-// server-side file with mode 600 (secrets.ts) and the access token in
-// memory only. It refreshes the access token a minute before it expires. A
+// The app's one Google connection (0012). It keeps the refresh token in
+// the `google` row of the app's secrets database (sprint 10's
+// app-secrets.sqlite, mode 600, outside the event log) and the access token
+// in memory only. Every write reads the row, checks it and writes it in one
+// BEGIN IMMEDIATE transaction, so the app and the MCP server, which share
+// the file, never lose each other's change. It refreshes the access token a minute before it expires. A
 // refresh that Google refuses with invalid_grant marks the connection as
 // needing a reconnect. Nothing here logs, and no token leaves this module
 // except in the Authorization header of a call to Google.
@@ -21,7 +24,6 @@ import {
   type Features,
   type OAuthClient,
 } from "./oauth.ts";
-import { SecretFile } from "./secrets.ts";
 
 // "primary", or a calendar id such as an email address or
 // abc123@group.calendar.google.com.
@@ -49,10 +51,10 @@ const Stored = z
   .strict();
 type Stored = z.infer<typeof Stored>;
 
-// A token file that is not valid JSON or not of this shape, such as one
+// A stored row that is not valid JSON or not of this shape, such as one
 // written by an earlier build (review round 2, finding 10). The app reads
 // it as no connection that needs a reconnect: status, connect and
-// disconnect still work, and a connect or a disconnect writes a new file in
+// disconnect still work, and a connect or a disconnect writes a new row in
 // its place. The version and the refresh token are kept when they can be
 // read, so a page's expected version still matches and a disconnect can
 // still revoke the grant.
@@ -87,16 +89,38 @@ export type Feature = keyof Features;
 
 const REFRESH_EARLY_MS = 60_000;
 
+// The row store: SecretsStore (src/model/providers/secrets.ts) in the app.
+export interface GoogleRowStore {
+  readRow(name: "google"): string | null;
+  updateRow(name: "google", change: (current: string | null) => string | null): string | null;
+}
+
+type State = { stored: Stored; damaged: Damaged | null };
+
+function parseState(text: string | null): State {
+  if (text === null) return { stored: { version: 0, connection: null }, damaged: null };
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return { stored: { version: 0, connection: null }, damaged: { version: 0, refreshToken: null } };
+  }
+  const parsed = Stored.safeParse(json);
+  if (parsed.success) return { stored: parsed.data, damaged: null };
+  const damaged = damagedOf(json);
+  return { stored: { version: damaged.version, connection: null }, damaged };
+}
+
 export type ConnectionOptions = {
   client: OAuthClient | null;
-  file: string;
+  store: GoogleRowStore;
   fetch?: FetchLike;
   now?: () => number;
 };
 
 export class GoogleConnection {
   readonly #client: OAuthClient | null;
-  readonly #file: SecretFile<Stored>;
+  readonly #store: GoogleRowStore;
   readonly #fetch: FetchLike;
   readonly #now: () => number;
   readonly #flows: PendingFlows;
@@ -107,7 +131,7 @@ export class GoogleConnection {
 
   constructor(options: ConnectionOptions) {
     this.#client = options.client;
-    this.#file = new SecretFile(options.file, Stored);
+    this.#store = options.store;
     // Looked up at call time, so a test's replacement of fetch applies.
     this.#fetch = options.fetch ?? ((url, init) => fetch(url, init));
     this.#now = options.now ?? Date.now;
@@ -118,23 +142,24 @@ export class GoogleConnection {
     return this.#client !== null;
   }
 
-  // The stored state. A damaged file reads as no connection at its own
+  // The stored state. A damaged row reads as no connection at its own
   // version, with `damaged` set.
-  #state(): { stored: Stored; damaged: Damaged | null } {
-    const r = this.#file.readChecked();
-    if ("invalid" in r) {
-      const damaged = damagedOf(r.json);
-      return { stored: { version: damaged.version, connection: null }, damaged };
-    }
-    return { stored: r.value ?? { version: 0, connection: null }, damaged: null };
+  #state(): State {
+    return parseState(this.#store.readRow("google"));
   }
 
   #read(): Stored {
     return this.#state().stored;
   }
 
-  #write(next: Stored) {
-    this.#file.write({ version: next.version, connection: next.connection });
+  // One transaction: reads the row, applies `change` and writes its result.
+  // A change that returns null writes nothing. A change that throws writes
+  // nothing either.
+  #mutate(change: (state: State) => Stored | null): void {
+    this.#store.updateRow("google", (current) => {
+      const next = change(parseState(current));
+      return next === null ? null : JSON.stringify(Stored.parse({ version: next.version, connection: next.connection }));
+    });
   }
 
   status(): GoogleStatus {
@@ -217,50 +242,62 @@ export class GoogleConnection {
     if (!granted.gmail && !granted.calendar) return drop("no_permission_granted");
     if (!answer.refresh_token) return drop("no_refresh_token");
 
-    const before = this.#read();
-    // A connect or a disconnect finished while Google answered. The new
-    // grant is revoked, unless the connection now stored is the same
-    // account, whose grant the revoke would end too.
-    if (before.version !== flow.version) {
-      if (before.connection?.sub === account.sub) throw new OAuthError("stale_flow");
+    const refreshToken = answer.refresh_token;
+    // The version check and the write are one transaction. A connect or a
+    // disconnect that finished while Google answered makes the flow stale.
+    let stale: Stored | null = null;
+    let replaced: Connection | null = null;
+    this.#mutate(({ stored }) => {
+      if (stored.version !== flow.version) {
+        stale = stored;
+        return null;
+      }
+      replaced = stored.connection;
+      return {
+        version: stored.version + 1,
+        connection: {
+          sub: account.sub,
+          email: account.email,
+          scopes: (answer.scope ?? "").split(/\s+/).filter(Boolean).slice(0, 20),
+          calendarId: flow.calendarId,
+          refreshToken,
+          needsReconnect: false,
+          connectedAt: new Date(this.#now()).toISOString(),
+        },
+      };
+    });
+    if (stale !== null) {
+      // The new grant is revoked, unless the connection now stored is the
+      // same account, whose grant the revoke would end too.
+      if ((stale as Stored).connection?.sub === account.sub) throw new OAuthError("stale_flow");
       return drop("stale_flow");
     }
     // A different account's grant is revoked. The same account's old token
     // is not, because revoking it would revoke the new grant too.
-    if (before.connection && before.connection.sub !== account.sub) await revokeToken(this.#fetch, before.connection.refreshToken);
-    this.#write({
-      ...before,
-      version: before.version + 1,
-      connection: {
-        sub: account.sub,
-        email: account.email,
-        scopes: (answer.scope ?? "").split(/\s+/).filter(Boolean).slice(0, 20),
-        calendarId: flow.calendarId,
-        refreshToken: answer.refresh_token,
-        needsReconnect: false,
-        connectedAt: new Date(this.#now()).toISOString(),
-      },
-    });
+    const old = replaced as Connection | null;
+    if (old && old.sub !== account.sub) await revokeToken(this.#fetch, old.refreshToken);
     this.#access = { token: answer.access_token, expiresAt: this.#now() + answer.expires_in * 1000, identity: identityOf(account.sub, answer.refresh_token) };
   }
 
   // POST /api/google/disconnect. Revokes the grant at Google and deletes the
   // token here, even when Google could not be reached.
   async disconnect(expectedVersion: number): Promise<{ revoked: boolean }> {
-    this.#checkVersion(expectedVersion);
-    const { stored: before, damaged } = this.#state();
+    // The version check and the delete are one transaction. A damaged row
+    // is replaced too, and its token revoked when it could be read.
+    let token: string | null = null;
+    let had = false;
+    this.#mutate(({ stored, damaged }) => {
+      if (stored.version !== expectedVersion) throw new GoogleError("google_stale");
+      had = damaged !== null || stored.connection !== null;
+      if (!had) return null;
+      token = damaged ? damaged.refreshToken : stored.connection!.refreshToken;
+      return { version: stored.version + 1, connection: null };
+    });
     this.#access = null;
     // A Google sign-in still open in a browser cannot connect again.
     this.#flows.clear();
-    if (damaged) {
-      // A new file replaces the damaged one, and the grant is revoked when
-      // its token could be read.
-      this.#write({ version: before.version + 1, connection: null });
-      return { revoked: damaged.refreshToken !== null && (await revokeToken(this.#fetch, damaged.refreshToken)) };
-    }
-    if (!before.connection) return { revoked: false };
-    this.#write({ ...before, version: before.version + 1, connection: null });
-    return { revoked: await revokeToken(this.#fetch, before.connection.refreshToken) };
+    if (!had || token === null) return { revoked: false };
+    return { revoked: await revokeToken(this.#fetch, token) };
   }
 
   #connection(feature: Feature): Connection {
@@ -277,10 +314,11 @@ export class GoogleConnection {
   // Marks the connection as needing a reconnect, only if it is still the
   // one whose refresh failed.
   #markReconnect(identity: string) {
-    const s = this.#read();
-    if (!s.connection || identityOf(s.connection.sub, s.connection.refreshToken) !== identity) return;
     if (this.#access?.identity === identity) this.#access = null;
-    if (!s.connection.needsReconnect) this.#write({ ...s, version: s.version + 1, connection: { ...s.connection, needsReconnect: true } });
+    this.#mutate(({ stored: s }) => {
+      if (!s.connection || identityOf(s.connection.sub, s.connection.refreshToken) !== identity || s.connection.needsReconnect) return null;
+      return { version: s.version + 1, connection: { ...s.connection, needsReconnect: true } };
+    });
   }
 
   async #token(c: Connection, force = false): Promise<string> {
@@ -297,20 +335,22 @@ export class GoogleConnection {
         // Commit only if the stored connection is still the one this
         // refresh started for (review round 1, finding 1). Otherwise the
         // answer is used for this one call and dropped.
-        const s = this.#read();
-        if (!s.connection || identityOf(s.connection.sub, s.connection.refreshToken) !== identity) return answer.access_token;
-        const rotated = answer.refresh_token ?? s.connection.refreshToken;
-        if (answer.refresh_token || answer.scope) {
-          this.#write({
-            ...s,
+        // The identity check and the write are one transaction.
+        let current = false;
+        const rotated = answer.refresh_token ?? c.refreshToken;
+        this.#mutate(({ stored: s }) => {
+          current = s.connection !== null && identityOf(s.connection.sub, s.connection.refreshToken) === identity;
+          if (!current || (!answer.refresh_token && !answer.scope)) return null;
+          return {
+            version: s.version,
             connection: {
-              ...s.connection,
+              ...s.connection!,
               refreshToken: rotated,
               ...(answer.scope ? { scopes: answer.scope.split(/\s+/).filter(Boolean).slice(0, 20) } : {}),
             },
-          });
-        }
-        this.#access = { token: answer.access_token, expiresAt: this.#now() + answer.expires_in * 1000, identity: identityOf(c.sub, rotated) };
+          };
+        });
+        if (current) this.#access = { token: answer.access_token, expiresAt: this.#now() + answer.expires_in * 1000, identity: identityOf(c.sub, rotated) };
         return answer.access_token;
       } catch (err) {
         if (err instanceof GoogleError && err.code === "google_reconnect_needed") this.#markReconnect(identity);

@@ -6,7 +6,7 @@
 // same write and records no claim (W30). Every write states an expected
 // version.
 import type { EvidenceClaim, Effort } from "../domain/claim.ts";
-import { IcsParseError, parseIcs } from "../domain/ics.ts";
+import { IcsParseError, parseIcs, type IcsEvent } from "../domain/ics.ts";
 import { explainConflict } from "../conflicts/explain.ts";
 import { proposeQuestion } from "../conflicts/question.ts";
 import type { CallAttempt } from "../conflicts/call.ts";
@@ -77,7 +77,16 @@ const summary = (a: AttemptData): AttemptSummary => ({
 });
 
 // `userName` comes from the case profile and signs replies.
-export type CaseOptions = { now?: () => string; effort?: Effort; model?: string; userName?: string | null };
+// `externalCalendar` gives calendar events from outside the case, such as
+// the person's Google Calendar (0012). They join the loaded .ics events for
+// the clash checks.
+export type CaseOptions = {
+  now?: () => string;
+  effort?: Effort;
+  model?: string;
+  userName?: string | null;
+  externalCalendar?: () => { name: string; events: IcsEvent[] } | null;
+};
 
 export class CaseService {
   readonly #store: EventStore;
@@ -87,6 +96,7 @@ export class CaseService {
   readonly #effort: Effort | undefined;
   readonly #model: string;
   readonly #userName: string | null;
+  readonly #externalCalendar: () => { name: string; events: IcsEvent[] } | null;
 
   // `client` serves the explanation and question calls. Extraction keeps
   // its own client inside `intake`.
@@ -98,6 +108,7 @@ export class CaseService {
     this.#effort = options.effort;
     this.#model = options.model ?? MODEL;
     this.#userName = options.userName ?? null;
+    this.#externalCalendar = options.externalCalendar ?? (() => null);
   }
 
   #describeQueue = (_streamId: string, events: StoredEvent[]) => {
@@ -194,7 +205,12 @@ export class CaseService {
     const evidence = this.#intake.evidence();
     const queue = projectQuestions(this.#store.readStream(QUESTIONS_STREAM));
     const calendar = latestCalendar(this.#store.readStream(CALENDAR_STREAM));
-    const events = calendar ? parseIcs(calendar.text) : null;
+    const external = this.#externalCalendar();
+    const loaded = calendar ? parseIcs(calendar.text) : null;
+    // The loaded file's events and the outside calendar's, for the clash
+    // checks. Null when there are neither.
+    const events = loaded || external ? [...(loaded ?? []), ...(external?.events ?? [])] : null;
+    const name = [calendar?.name, external?.name].filter(Boolean).join(" and ");
     const timeZone = this.timeZone();
     const projection = projectSlots({ evidence, settled: queue.settled, calendar: events, timeZone });
     const archived = this.archivedKeys();
@@ -232,7 +248,7 @@ export class CaseService {
       question: current ? questionView(current) : null,
       waiting: conflicts.filter(isWaiting).length,
       questionsVersion: queue.version,
-      calendar: calendar && events ? { name: calendar.name, events, timeZone, assumedSlotMinutes: ASSUMED_SLOT_MINUTES } : null,
+      calendar: events ? { name, events, timeZone, assumedSlotMinutes: ASSUMED_SLOT_MINUTES } : null,
       calendarVersion: calendar?.version ?? 0,
       reply: replyView(replies, replyContext),
       // An agent's report of an office request waits like its other reports.

@@ -47,12 +47,16 @@ import {
   type Card,
 } from "./types.ts";
 import type { FunctionTool } from "../model/responses.ts";
+import { GOOGLE_TOOLS, GOOGLE_WRITE_TOOLS, type GoogleServices } from "../google/tools.ts";
 
 export type ToolServices = {
   intake: IntakeService;
   kase: CaseService;
   reply: ReplyService;
   records: RecordsService;
+  // The built-in Google connection (0012), when the app has one. Without it
+  // the Google tools answer google_not_configured.
+  google?: GoogleServices;
 };
 
 export type ToolContext = ToolServices & {
@@ -84,8 +88,10 @@ export type ToolContext = ToolServices & {
 };
 
 // `paste` is code's reading of the person's message at the start of the
-// turn (mayContainPaste). `imported` holds the lines this turn imported.
-export type ChatTurnState = { paste: boolean; imported: ImportedLines[] };
+// turn (mayContainPaste). `imported` holds the lines this turn imported,
+// and `gmailImported` the Gmail messages it imported (0012), which count as
+// imports too.
+export type ChatTurnState = { paste: boolean; imported: ImportedLines[]; gmailImported?: string[] };
 
 // 0009, D2': the person's message may contain a paste when it has a line
 // break, is longer than 280 characters, or starts a line with a sender-like
@@ -440,7 +446,7 @@ function decideClaims(decision: "accept" | "reject") {
       const r = await guarded(async () => {
         // D2': in a paste turn, only the claims of messages this turn imported.
         const from = ctx.intake.evidence().find((e) => e.id === ref.evidence_id)?.messageId ?? null;
-        const importedIds = ctx.turn?.imported.map((x) => x.message_id) ?? [];
+        const importedIds = [...(ctx.turn?.imported.map((x) => x.message_id) ?? []), ...(ctx.turn?.gmailImported ?? [])];
         if (ctx.turn?.paste && (from === null || !importedIds.includes(from))) return failure("waits_for_person", PASTE_TURN_NOTICE);
         const { value, entries } = await acting(ctx, (by) =>
           decision === "accept" ? ctx.actions.acceptClaim(by, ref.evidence_id, ref.expected_version) : ctx.actions.rejectClaim(by, ref.evidence_id, ref.expected_version),
@@ -547,6 +553,9 @@ const PASTE_TURN_REFUSED: ReadonlySet<string> = new Set([
   "discard_draft",
   "start_reply",
   "undo",
+  // The Google Calendar writes (0012). gmail_import is an import and is
+  // allowed.
+  ...GOOGLE_WRITE_TOOLS,
 ]);
 
 const pasteRefusal = (): ToolResult => failure("waits_for_person", PASTE_TURN_NOTICE, { cards: [{ kind: "notice", text: PASTE_TURN_NOTICE }] });
@@ -1163,7 +1172,8 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
     readOnly: false,
     run: (ctx, input) =>
       guarded(async () => {
-        const { value } = await acting(ctx, (b) => ctx.actions.undo(b, input.activity_id, input.expected_version));
+        // undoEntry also reverses a Google Calendar entry at Google (0012).
+        const { value } = await acting(ctx, (b) => ctx.actions.undoEntry(b, input.activity_id, input.expected_version));
         const view = ctx.kase.view();
         return result(
           { undone: input.activity_id, activity: activityOut(value, ctx.actions) },
@@ -1322,7 +1332,8 @@ async function importMessage(ctx: ToolContext, input: { text: string; channel: s
   );
 }
 
-export const AGENT_TOOLS: ToolSpec<unknown>[] = TOOL_SPECS.map(gated);
+// The Google tools (0012) join the shared set, with the same paste rule.
+export const AGENT_TOOLS: ToolSpec<unknown>[] = [...TOOL_SPECS, ...GOOGLE_TOOLS].map(gated);
 
 export const AGENT_TOOL_NAMES = AGENT_TOOLS.map((t) => t.name);
 

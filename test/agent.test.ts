@@ -112,12 +112,18 @@ describe("G2: the tools", () => {
       "discard_draft",
       "undo",
       "set_timezone",
+      // Sprint 11: the Google tools.
+      "gmail_search",
+      "gmail_import",
+      "calendar_list",
+      "calendar_sync_slot",
+      "calendar_remove_slot",
     ]);
     for (const forbidden of ["approve", "send", "delete", "grant", "propose", "edit", "manual", "confirm", "pair"]) {
       expect(AGENT_TOOL_NAMES.filter((n) => n.includes(forbidden)), forbidden).toEqual([]);
     }
     for (const t of AGENT_TOOLS) expect(t.label).toMatch(/^[A-Z][a-z ]+$/);
-    expect(AGENT_TOOLS.filter((t) => t.readOnly).map((t) => t.name)).toEqual(["get_schedule", "get_appointment", "list_open_questions", "get_checklist", "check_calendar", "get_activity"]);
+    expect(AGENT_TOOLS.filter((t) => t.readOnly).map((t) => t.name)).toEqual(["get_schedule", "get_appointment", "list_open_questions", "get_checklist", "check_calendar", "get_activity", "gmail_search", "calendar_list"]);
   });
 
   it("every tool runs without changing what only the person may change, and returns message text only in labeled fields", async () => {

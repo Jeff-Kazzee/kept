@@ -3,7 +3,7 @@
 // Google: the callback is refused at the state check, before any call.
 import { spawn, type ChildProcess } from "node:child_process";
 import { request } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -56,11 +56,10 @@ async function start() {
   children.push(child);
   let out = "";
   child.stderr!.on("data", (d: Buffer) => (out += d.toString()));
-  const code = await new Promise<string>((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     child.stdout!.on("data", (d: Buffer) => {
       out += d.toString();
-      const m = /Pairing code for this run: ([A-Z0-9]{4}-[A-Z0-9]{4})\./.exec(out);
-      if (m) resolve(m[1]!);
+      if (/Serving the (production build|UI through Vite)/.test(out)) resolve();
     });
     child.on("exit", (c) => reject(new Error(`server exited ${c}`)));
     setTimeout(() => reject(new Error("server did not start")), 15_000);
@@ -72,9 +71,7 @@ async function start() {
     "X-Appointments-App": "1",
     ...extra,
   });
-  const paired = await call(port, "POST", "/api/pair", page(), { code });
-  const cookie = (paired.headers["set-cookie"] as string[])[0]!.split(";")[0]!;
-  return { port, page, cookie, output: () => out };
+  return { port, page, output: () => out, dir };
 }
 
 describe("Google routes in the server", () => {
@@ -82,20 +79,29 @@ describe("Google routes in the server", () => {
     const app = await start();
     expect(app.output()).toContain(`Google redirect URIs for the OAuth client: http://127.0.0.1:${app.port}/auth/google/callback http://localhost:${app.port}/auth/google/callback`);
 
-    // The /api checks apply: a session, and a write from the app's page.
-    expect((await call(app.port, "GET", "/api/google", app.page())).status).toBe(401);
-    const status = await call(app.port, "GET", "/api/google", app.page({ Cookie: app.cookie }));
+    // No pairing (0009, J3). The host allowlist, the same-origin guard and
+    // the app header apply.
+    const status = await call(app.port, "GET", "/api/google", app.page());
     expect(status).toMatchObject({ status: 200, body: { connected: false, email: null, gmail: false, calendar: false, calendarId: null, configured: true, version: 0 } });
-    const foreign = await call(app.port, "POST", "/api/google/connect", { ...app.page({ Cookie: app.cookie }), Origin: "https://evil.example" }, { expectedVersion: 0, gmail: true, calendar: true });
+    expect((await call(app.port, "GET", "/api/google", { ...app.page(), Host: "evil.example" })).status).toBe(403);
+    const foreign = await call(app.port, "POST", "/api/google/connect", { ...app.page(), Origin: "https://evil.example" }, {});
     expect(foreign.status).toBe(403);
-    const noGeneration = await call(app.port, "POST", "/api/google/connect", { ...app.page({ Cookie: app.cookie }), "X-Case-Generation": "" }, { expectedVersion: 0, gmail: true, calendar: true });
+    const { "X-Appointments-App": _h, ...noHeader } = app.page();
+    expect((await call(app.port, "POST", "/api/google/connect", noHeader, {})).status).toBe(403);
+    const noGeneration = await call(app.port, "POST", "/api/google/connect", { ...app.page(), "X-Case-Generation": "" }, {});
     expect(noGeneration.body).toMatchObject({ error: "generation_required" });
+    // Disconnect needs the version the page read.
+    expect((await call(app.port, "POST", "/api/google/disconnect", app.page(), {})).status).toBe(400);
+    expect(await call(app.port, "POST", "/api/google/disconnect", app.page(), { expectedVersion: 5 })).toMatchObject({ status: 409, body: { error: "google_stale" } });
+    expect(await call(app.port, "POST", "/api/google/disconnect", app.page(), { expectedVersion: 0 })).toMatchObject({ status: 200, body: { connected: false, revoked: false } });
 
-    const connect = await call(app.port, "POST", "/api/google/connect", app.page({ Cookie: app.cookie }), { expectedVersion: 0, gmail: true, calendar: true });
+    // The page sends {}: both permissions and the primary calendar.
+    const connect = await call(app.port, "POST", "/api/google/connect", app.page(), {});
     expect(connect.status).toBe(200);
     const url = new URL(connect.body.authorizeUrl);
     expect(url.searchParams.get("redirect_uri")).toBe(`http://127.0.0.1:${app.port}/auth/google/callback`);
     expect(url.searchParams.get("client_id")).toBe("made-up.apps.googleusercontent.com");
+    expect(url.searchParams.get("scope")).toBe("openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.events");
     expect(connect.body.authorizeUrl).not.toContain(SECRET);
     expect(String(connect.headers["set-cookie"])).toMatch(new RegExp(`^appt_google_flow_${app.port}=[A-Za-z0-9_-]+; Path=/auth/google; HttpOnly; SameSite=Lax`));
 
@@ -112,5 +118,7 @@ describe("Google routes in the server", () => {
     expect(app.output()).toContain("Google connect failed: invalid_state.");
     expect(app.output()).not.toContain(SECRET);
     expect(app.output()).not.toContain("made-up&");
+    // No Google file of its own: the state lives in the secrets database.
+    expect(existsSync(path.join(app.dir, "google-secrets.json"))).toBe(false);
   });
 });
