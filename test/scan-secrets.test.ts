@@ -6,7 +6,7 @@
 // made at test time in temporary repositories.
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -214,6 +214,96 @@ describe("SP6.5 secret scan", () => {
     expect(run.stdout).toMatch(new RegExp(`a file or folder name in tree ${BLOB}: <redacted>\\.txt\\n`));
     expectSilent(run, inPath, inRef);
   });
+
+  it("B4: a newline in a path, and a SHA-256 repository", () => {
+    const r = repo();
+    const token = newGrantToken();
+    r.write("odd\nfolder/notes.md", `x ${token}\n`);
+    r.commit("Odd name");
+    let run = scan(r.dir);
+    expect(run.status).toBe(1);
+    // The path is read from NUL-delimited output and printed escaped, on one line.
+    expect(run.stdout).toContain('Possible grant token at "odd\\nfolder/notes.md":1\n');
+    expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} "odd\\\\nfolder/notes\\.md":1\\n`));
+
+    const dir = mkdtempSync(path.join(tmpdir(), "scan-256-"));
+    dirs.push(dir);
+    const git = (...args: string[]) => spawnSync("git", ["-C", dir, "-c", "user.name=T", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
+    expect(git("init", "-q", "--object-format=sha256").status).toBe(0);
+    mkdirSync(path.join(dir, "fixtures"));
+    writeFileSync(path.join(dir, "fixtures/a.json"), `"${token}"\n`);
+    git("add", "-A");
+    git("commit", "-q", "-m", "a");
+    rmSync(path.join(dir, "fixtures/a.json"));
+    git("add", "-A");
+    git("commit", "-q", "-m", "b");
+    run = scan(dir);
+    expect(run.status).toBe(1);
+    expect(run.stdout).toMatch(/Possible grant token at blob [0-9a-f]{12} fixtures\/a\.json:1\n/);
+    expect(git("rev-parse", "--show-object-format").stdout.trim()).toBe("sha256");
+  });
+
+  it("B4: fails loudly when it cannot read the repository, instead of passing", () => {
+    const notRepo = mkdtempSync(path.join(tmpdir(), "scan-none-"));
+    dirs.push(notRepo);
+    expect(scan(notRepo)).toMatchObject({ status: 2, stdout: "", stderr: expect.stringContaining("Secret scan could not run") });
+    // A missing object.
+    const r = repo();
+    r.write("a.txt", "a\n");
+    r.commit("a");
+    const blob = r.git("rev-parse", "HEAD:a.txt").trim();
+    rmSync(path.join(r.dir, ".git/objects", blob.slice(0, 2), blob.slice(2)), { force: true });
+    expect(scan(r.dir)).toMatchObject({ status: 2, stderr: expect.stringContaining("Secret scan could not run") });
+  });
+
+  it("B5: a FIFO in place of a tracked file is skipped with a note, and a symbolic link is scanned as its link text", () => {
+    const r = repo();
+    const outside = mkdtempSync(path.join(tmpdir(), "scan-outside-"));
+    dirs.push(outside);
+    const target = newGrantToken();
+    writeFileSync(path.join(outside, "secret.txt"), `${target}\n`);
+    r.write("pipe", "was a file\n");
+    symlinkSync(path.join(outside, "secret.txt"), path.join(r.dir, "plain-link"));
+    const linkToken = newGrantToken();
+    symlinkSync(`/tmp/${linkToken}`, path.join(r.dir, "token-link"));
+    r.commit("Files and links");
+    rmSync(path.join(r.dir, "pipe"));
+    expect(spawnSync("mkfifo", [path.join(r.dir, "pipe")]).status).toBe(0);
+    const started = Date.now();
+    const run = scan(r.dir);
+    expect(Date.now() - started).toBeLessThan(30_000);
+    expect(run.stdout).toContain("Skipped pipe: not a regular file or a symbolic link.\n");
+    // The link's target is not followed. The link text with a token is found,
+    // in the tree and in the blob git stores for the link.
+    expect(run.stdout).not.toContain("plain-link");
+    expect(run.stdout).toContain("Possible grant token at token-link:1\n");
+    expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} token-link:1\\n`));
+    expect(run.status).toBe(1);
+    expectSilent(run, target, linkToken);
+  });
+
+  it("B5: a token on a segment boundary of a long line is found, on disk and in a blob", () => {
+    const r = repo();
+    const MB = 1 << 20;
+    const tokens: string[] = [];
+    for (const [i, at] of [MB - 20, 2 * MB - 20, 2 * MB - 250, 3 * MB + 5].entries()) {
+      const token = newGrantToken();
+      tokens.push(token);
+      const line = Buffer.alloc(4 * MB, ".");
+      line.write(` ${token} `, at);
+      r.write(`big${i}.txt`, Buffer.concat([Buffer.from("first line\n"), line, Buffer.from("\nlast\n")]));
+    }
+    r.commit("Big files");
+    const run = scan(r.dir);
+    expect(run.status).toBe(1);
+    for (let i = 0; i < tokens.length; i++) {
+      expect(run.stdout).toContain(`Possible grant token at big${i}.txt:2\n`);
+      expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} big${i}\\.txt:2\\n`));
+    }
+    expectSilent(run, ...tokens);
+    // Only line 2 of each, once.
+    expect(run.stdout.match(/Possible grant token/g)).toHaveLength(8);
+  }, 60_000);
 
   it("passes on this repository", () => {
     const run = scan(PACKAGE_ROOT);
