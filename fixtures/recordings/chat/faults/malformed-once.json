@@ -1,0 +1,86 @@
+{
+  "source": "hand-written",
+  "note": "One call with arguments that are not JSON, then a valid call and an answer. The first gets invalid_arguments and the turn goes on.",
+  "replies": [
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f6",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f5",
+          "call_id": "call_f5",
+          "name": "get_schedule",
+          "arguments": "{not json",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f8",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f7",
+          "call_id": "call_f7",
+          "name": "get_schedule",
+          "arguments": "{}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f10",
+          "summary": []
+        },
+        {
+          "type": "message",
+          "id": "msg_f9",
+          "role": "assistant",
+          "status": "completed",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Monday 11/16 1:00 PM is offered.",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    }
+  ]
+}

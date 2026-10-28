@@ -1,0 +1,29 @@
+{
+  "source": "hand-written",
+  "note": "A function call item with no call_id cannot be answered, so the turn stops with a notice.",
+  "replies": [
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f29",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_noid",
+          "name": "get_schedule",
+          "arguments": "{}"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    }
+  ]
+}

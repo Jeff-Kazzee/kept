@@ -1,0 +1,56 @@
+{
+  "source": "hand-written",
+  "note": "Two calls with invalid arguments in a row. G8 allows one retry, so the turn stops with a notice.",
+  "replies": [
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f12",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f11",
+          "call_id": "call_f11",
+          "name": "check_calendar",
+          "arguments": "{\"date\": \"next Friday\", \"time\": null}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_f14",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_f13",
+          "call_id": "call_f13",
+          "name": "check_calendar",
+          "arguments": "{\"date\": \"2026-13-01\", \"time\": \"9am\"}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    }
+  ]
+}
