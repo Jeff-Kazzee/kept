@@ -30,7 +30,7 @@ import { RecordedChatClient, fixtureMessageIds } from "../src/agent/recorded.ts"
 import type { ToolModelClient } from "../src/model/responses.ts";
 import { APP_HEADER, Pairing, Sessions, createGate, requestSourceProblem } from "./guard.ts";
 import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
-import { createStaticHandler } from "./static.ts";
+import { API_SECURITY_HEADERS, createStaticHandler } from "./static.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.APP_PORT ?? 5180);
@@ -122,7 +122,7 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 function send(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+  res.writeHead(status, { ...API_SECURITY_HEADERS, "Content-Type": "application/json", "Cache-Control": "no-store" });
   res.end(JSON.stringify(body));
 }
 
@@ -155,6 +155,9 @@ server.on("request", async (req, res) => {
   if (!hostAllowed(allowed, req.headers.host)) return send(res, 403, { error: "forbidden_host" });
   const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
   if (!url.pathname.startsWith("/api/")) return ui(req, res);
+  // Set before any route runs, so a route that writes its own response,
+  // such as the chat's event stream, carries them too.
+  for (const [name, value] of Object.entries(API_SECURITY_HEADERS)) res.setHeader(name, value);
   const headerOf = (name: string) => {
     const v = req.headers[name];
     return typeof v === "string" ? v : undefined;

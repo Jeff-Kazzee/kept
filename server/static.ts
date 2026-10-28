@@ -6,7 +6,7 @@
 // Content-Security-Policy: scripts and styles only from this origin, no
 // inline scripts, and requests only to this origin.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
@@ -34,6 +34,13 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
 };
 
+// Every /api response: JSON or an event stream, never a page. Nothing in it
+// may be sniffed as another type or run as a page.
+export const API_SECURITY_HEADERS: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+};
+
 export const IMMUTABLE = "public, max-age=31536000, immutable";
 
 const TYPES: Record<string, string> = {
@@ -51,11 +58,21 @@ const TYPES: Record<string, string> = {
 
 type Entry = { type: string; etag: string; cache: string; raw: Buffer; br?: Buffer; gzip?: Buffer };
 
-function walk(dir: string, prefix = ""): string[] {
+export class BuildError extends Error {}
+
+// Every regular file under `dir`, as "/assets/x.js". A symlink stops the
+// start, because it could point outside the build. Each file's real path
+// must stay inside the build root's real path.
+function walk(dir: string, realRoot: string, prefix = ""): string[] {
   return readdirSync(dir).flatMap((name) => {
     const full = path.join(dir, name);
     const rel = `${prefix}/${name}`;
-    return statSync(full).isDirectory() ? walk(full, rel) : [rel];
+    const info = lstatSync(full);
+    if (info.isSymbolicLink()) throw new BuildError(`The build has a symlink at ${rel}. The app serves only regular files from dist/ui. Run pnpm build again.`);
+    if (!realpathSync(full).startsWith(realRoot + path.sep)) throw new BuildError(`The build file ${rel} is outside the build folder.`);
+    if (info.isDirectory()) return walk(full, realRoot, rel);
+    if (!info.isFile()) throw new BuildError(`The build has ${rel}, which is not a regular file.`);
+    return [rel];
   });
 }
 
@@ -63,14 +80,15 @@ function walk(dir: string, prefix = ""): string[] {
 // `pnpm start` without `pnpm build` stops with a clear message.
 export function loadBuild(root: string): Map<string, Entry> {
   if (!existsSync(path.join(root, "index.html"))) {
-    throw new Error(`No production build in ${root}. Run pnpm build first.`);
+    throw new BuildError(`No production build in ${root}. Run pnpm build first.`);
   }
+  const realRoot = realpathSync(root);
   const files = new Map<string, Entry>();
-  const all = walk(root);
+  const all = walk(realRoot, realRoot);
   for (const rel of all) {
     if (rel.endsWith(".br") || rel.endsWith(".gz")) continue;
-    const raw = readFileSync(path.join(root, rel));
-    const read = (suffix: string) => (all.includes(rel + suffix) ? readFileSync(path.join(root, rel + suffix)) : undefined);
+    const raw = readFileSync(path.join(realRoot, rel));
+    const read = (suffix: string) => (all.includes(rel + suffix) ? readFileSync(path.join(realRoot, rel + suffix)) : undefined);
     files.set(rel, {
       type: TYPES[path.extname(rel)] ?? "application/octet-stream",
       etag: `"${createHash("sha256").update(raw).digest("base64url").slice(0, 27)}"`,

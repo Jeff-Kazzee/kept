@@ -2,13 +2,13 @@
 // files, cache headers that fit hashed and unhashed files, and a strict
 // Content-Security-Policy. Run against a small build made in a temporary
 // folder, so the test needs no `pnpm build`.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, request, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { JS_BUDGET_BYTES, firstLoadScripts, precompress } from "../scripts/precompress.ts";
-import { CONTENT_SECURITY_POLICY, IMMUTABLE, createStaticHandler, loadBuild, pickEncoding } from "../server/static.ts";
+import { BuildError, CONTENT_SECURITY_POLICY, IMMUTABLE, createStaticHandler, loadBuild, pickEncoding } from "../server/static.ts";
 
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -121,5 +121,28 @@ describe("production build serving", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "static-empty-"));
     dirs.push(dir);
     expect(() => loadBuild(dir)).toThrow(/Run pnpm build first/);
+  });
+
+  it("review 1, finding 3: refuses a build with a symlink, so no file outside the build is read or served", () => {
+    const outside = mkdtempSync(path.join(tmpdir(), "static-outside-"));
+    dirs.push(outside);
+    writeFileSync(path.join(outside, "secret.txt"), "outside the build");
+    // A file symlink, a precompressed copy that is a symlink, and a folder symlink.
+    for (const plant of [
+      (dir: string) => symlinkSync(path.join(outside, "secret.txt"), path.join(dir, "assets/leak.js")),
+      (dir: string) => symlinkSync(path.join(outside, "secret.txt"), path.join(dir, "assets/index-abc123.js.br")),
+      (dir: string) => symlinkSync(outside, path.join(dir, "assets/more")),
+    ]) {
+      const dir = build();
+      plant(dir);
+      expect(() => loadBuild(dir)).toThrow(BuildError);
+      expect(() => createStaticHandler(dir)).toThrow(/symlink/);
+    }
+    // The build folder itself may be reached through a symlink.
+    const real = build();
+    const link = path.join(mkdtempSync(path.join(tmpdir(), "static-link-")), "ui");
+    dirs.push(path.dirname(link));
+    symlinkSync(real, link);
+    expect([...loadBuild(link).keys()]).toContain("/index.html");
   });
 });

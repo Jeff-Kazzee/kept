@@ -40,14 +40,14 @@ describe("allowed hosts", () => {
   });
 });
 
-type Res = { status: number; body: any; setCookie: string[] };
+type Res = { status: number; body: any; setCookie: string[]; headers: Record<string, string | string[] | undefined> };
 
 function call(port: number, method: string, p: string, headers: Record<string, string>, body?: unknown): Promise<Res> {
   return new Promise((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port, path: p, method, headers }, (res) => {
       let text = "";
       res.on("data", (d: Buffer) => (text += d.toString()));
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body: text.startsWith("{") ? JSON.parse(text) : text, setCookie: res.headers["set-cookie"] ?? [] }));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body: text.startsWith("{") ? JSON.parse(text) : text, setCookie: res.headers["set-cookie"] ?? [], headers: res.headers }));
     });
     req.on("error", reject);
     req.end(body === undefined ? undefined : JSON.stringify(body));
@@ -109,8 +109,38 @@ describe("the server with APP_ALLOWED_HOSTS", () => {
 
   it("stops at start when APP_ALLOWED_HOSTS has an entry that is not a host name", async () => {
     const app = start({ APP_ALLOWED_HOSTS: "*" });
-    const code = await new Promise<number | null>((resolve) => app.child.on("exit", resolve));
+    // The exit, or a failure after 15 seconds, never an endless wait.
+    const code = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("the server did not stop")), 15_000);
+      app.child.on("exit", (c) => {
+        clearTimeout(timer);
+        resolve(c);
+      });
+    });
     expect(code).toBe(2);
     await app.ready.catch((e: Error) => expect(e.message).toContain("APP_ALLOWED_HOSTS has an entry that is not a host name"));
+  }, 30_000);
+
+  it("review 1, finding 4: every /api response says nosniff and has a CSP that allows nothing, the chat route included", async () => {
+    const app = start({});
+    const { code } = await app.ready;
+    const host = `127.0.0.1:${app.port}`;
+    const page = { Host: host, Origin: `http://${host}`, "Content-Type": "application/json", "X-Appointments-App": "1", "X-Case-Generation": "0" };
+    const cookie = (await call(app.port, "POST", "/api/pair", page, { code })).setCookie[0]!.split(";")[0]!;
+    const responses = [
+      await call(app.port, "GET", "/api/state", { Host: host, Cookie: cookie }),
+      await call(app.port, "GET", "/api/state", { Host: host }),
+      await call(app.port, "GET", "/api/state", { Host: "evil.example" }),
+      await call(app.port, "POST", "/api/messages", { ...page, Cookie: cookie }, { channel: "sms", from: "Clinic", received_at: "2026-11-05T09:00:00-07:00", text: "See you Monday." }),
+      // The chat route. Before 7A merges it answers 404 JSON. After, its
+      // event stream must carry the same headers.
+      await call(app.port, "GET", "/api/chat", { Host: host, Cookie: cookie }),
+      await call(app.port, "POST", "/api/chat", { ...page, Cookie: cookie, Accept: "text/event-stream" }, { text: "What is confirmed?", expectedVersion: 0 }),
+    ];
+    expect(responses.map((r) => r.status).slice(0, 4)).toEqual([200, 401, 403, 200]);
+    for (const r of responses) {
+      expect(r.headers["x-content-type-options"]).toBe("nosniff");
+      expect(r.headers["content-security-policy"]).toBe("default-src 'none'; frame-ancestors 'none'");
+    }
   }, 30_000);
 });
