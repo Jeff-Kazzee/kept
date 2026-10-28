@@ -138,16 +138,108 @@ Code: `ui/contract.ts` (the contract types), `ui/agentApi.ts` (its routes),
   they cannot make the shell taller than the window. The thread has a
   visually hidden "Conversation" heading, so card headings follow in order.
 
+## Second pass: the outdoors look (Jeff, 2026-10-28)
+
+Jeff asked for one look in two modes, dark by default, drawn from forests,
+mountains, rivers, creeks, hot springs and wildlife, at a high-end polish.
+
+- U21. Tokens from the outdoors (`styles.css`). Dark, the default: forest
+  night ground (#0f1714), evergreen and slate surfaces, granite hairlines,
+  birch (#e8ece4) and lichen (#a7b5a6) text. Light: mist and birch-bark
+  ground (#f3f2ec), warm stone surfaces, deep moss and moss-gray text.
+  River teal is the accent and hot spring turquoise the second color. Every
+  text and pill pair was checked at WCAG AA (4.5 or more) in both modes
+  with a contrast script before use, and Lighthouse checks the rendered
+  pages.
+- U22. State pills, each with its words: offered creek blue, requested
+  sunrise amber, confirmed moss green, change proposed hot spring
+  turquoise with an ochre edge, canceled clay, declined granite.
+- U23. Dark is the default. `index.html` starts with `data-theme="dark"`,
+  and Settings offers Dark, Light and System. A light choice can show dark
+  for a moment on load, because no inline script may run. One theme-color
+  meta tag follows the theme in use, so the phone's bar matches either
+  mode.
+- U24. Identity: a mountain ridge over a river line, inline SVG, in the
+  header, the empty state, the error screen and the favicon. A web
+  manifest names it as the app icon (SVG, so no image download). The empty
+  chat has a wide, very low-contrast ridge and contour drawing with a small
+  heron line drawing. The empty Activity tab has a fox. A barely visible
+  topographic pattern sits behind the chat in pure CSS (two repeating
+  radial gradients), faded out at the bottom and off under
+  `prefers-contrast: more` and forced colors. No data URLs, so the CSP
+  stays strict.
+- U25. Fine print leaves the panels. "Built by code from the accepted
+  facts" and the clash assumption sit behind an info button beside
+  Appointments, and in Settings, About this app. The checklist and
+  Activity notes moved behind info buttons too.
+- U26. A claims card is one receipt by default ("Accepted 3 facts · Undo")
+  with the facts folded away. Open, each fact is one line ("Thu 11/12
+  10:30 AM confirmed · Lantern Hill Clinic · Undo"), and a tap on the line
+  shows the status, the quote and the source. The card opens by itself
+  when a fact waits for the user. Folded content stays in the page with
+  `hidden`, so it is searchable by assistive tech when shown.
+- U27. The scripted tag reads "Scripted", with "demo reply, not a model"
+  for screen readers and on hover. It shows only in the scripted chat, as
+  before. A real chat shows "Model output".
+- U28. The model indicator reads "Meta · Muse Spark 1.3" on wide screens
+  and "Meta · Spark 1.3" on phones, without "(scripted)".
+- U29. The agenda is a compact calendar: a right-aligned time column with
+  tabular numbers, a 3 px colored rail per state (the change-proposed rail
+  turns ochre at its foot), the place and the state pill, and small
+  markers for a clash and a Google Calendar event. The clash sentence is
+  in the marker's title and screen-reader text and under Details, with the
+  quote, notes, Archive and replies. "Show archived" shows only when
+  something is archived.
+- U30. Typography: headings at -0.015em (display at -0.025em) with
+  balanced wrapping, `text-wrap: pretty` on paragraphs, tabular numbers on
+  every time, body at 1.6 and assistant text at 1.65. Provider names and
+  agenda times do not wrap.
+- U31. Spacing on an 8 px grid (`--s-1` to `--s-8`, with 4 px only for
+  tight inner gaps), 16 px card padding everywhere, and the chat column
+  and panel tops aligned under one 56 px header.
+- U32. Depth per theme. Light: soft layered shadows. Dark: an inset
+  highlight, a hairline ring and a faint teal glow instead of black
+  shadows. The composer sits on a translucent ground with a 16 px blur
+  where supported. Hairlines are alpha borders at 9 to 22 percent.
+- U33. Motion: 150 to 220 ms ease-out on messages, receipts (staggered 40
+  ms apart), menus, details, sheets and tabs. Each tab opens at its top
+  with a short fade. A skeleton with a soft shimmer shows while the case
+  loads. The send button morphs into a filled stop square while a turn
+  runs. Stop aborts the page's stream, says "You stopped this answer. The
+  app may still save what it finished.", puts the text back in the
+  composer and reads the chat again. All motion is off under reduced
+  motion.
+- U34. Details: one icon set at a 1.75 stroke, hover, active and focus
+  states on every control, a "New messages" pill when content arrives
+  while the thread is scrolled up (smooth scroll, instant under reduced
+  motion), a copy button on the reply text (draft and approved), and
+  designed loading, error (with Try again) and offline states. The
+  offline banner listens to the browser's online and offline events.
+- U35. Phone: safe-area insets on the header, thread and composer,
+  `interactive-widget=resizes-content` so the composer stays above the
+  keyboard, a 44 px drag handle on the bottom sheet (a tap or a downward
+  drag closes it), 44 px targets for Undo, the model pill, info buttons
+  and fold toggles, and no tab icons, so the tab labels fit.
+- U36. The explanation in "Waiting for you" keeps its sources folded, so
+  the panel stays an agenda first.
+
 ## Measured on the production build
 
 Measured 2026-10-28 on the server with a temporary database, in Chrome
 through DevTools.
 
 - JavaScript on first load: 93.4 KB gzipped in one file (budget 150 KB).
-  CSS: 7.0 KB gzipped. The check build with the fakes: 98.7 KB.
+  CSS: 7.0 KB gzipped. The check build with the fakes: 98.7 KB. After the
+  second pass: 96.2 KB, CSS 8.7 KB, check build 101.6 KB.
 - Lighthouse, production build on this base: accessibility 100, best
   practices 96 (the three 404s of U2), on desktop and mobile.
 - Lighthouse, check build where the new routes answer: accessibility 100,
   best practices 100. A snapshot of the filled demo case found one heading
   order issue, fixed by U20.
 - Phone trace, 390 px, Slow 4G and 4x CPU slowdown: LCP 1,945 ms, CLS 0.00.
+  After the second pass, with the whole demo case on the page: LCP 2,216
+  ms, CLS 0.00.
+- Second pass, Lighthouse snapshots of the filled demo case with every
+  fold open, dark and light: accessibility 100, best practices 100.
+  Production build on this base: accessibility 100, best practices 96
+  (U2), desktop and mobile.
