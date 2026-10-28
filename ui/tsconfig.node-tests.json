@@ -1,8 +1,13 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["AgentPanels.test.ts"],
+  "include": [
+    "**/*.node.test.ts",
+    "env.d.ts"
+  ],
   "exclude": []
 }

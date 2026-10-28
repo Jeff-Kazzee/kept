@@ -3,10 +3,19 @@
   "compilerOptions": {
     "module": "esnext",
     "moduleResolution": "bundler",
-    "lib": ["es2024", "dom", "dom.iterable"],
+    "lib": [
+      "es2024",
+      "dom",
+      "dom.iterable"
+    ],
     "jsx": "react-jsx",
     "types": []
   },
-  "include": [".", "../src/domain"],
-  "exclude": ["AgentPanels.test.ts"]
+  "include": [
+    ".",
+    "../src/domain"
+  ],
+  "exclude": [
+    "**/*.node.test.ts"
+  ]
 }

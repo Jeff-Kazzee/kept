@@ -143,19 +143,25 @@ let lastGeneration: number | null = null;
 export const NOT_PAIRED = "not_paired";
 export const isNotPaired = (e: unknown) => e instanceof ApiError && e.body.error === NOT_PAIRED;
 
+// The headers of a write: JSON, the app's own header and the case
+// generation this page last read. The server refuses a write without the
+// generation, so a write before the page has read the case reads it first.
+// The chat route (chat/transport.ts) sends the same headers.
+export async function writeHeaders(): Promise<Record<string, string>> {
+  if (lastGeneration === null) await api.state();
+  return {
+    "Content-Type": "application/json",
+    // Every write says it comes from the app's page. The browser adds
+    // Sec-Fetch-Site and Origin, which the server checks too.
+    "X-Appointments-App": "1",
+    ...(lastGeneration !== null ? { "X-Case-Generation": String(lastGeneration) } : {}),
+  };
+}
+
 async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
-  // The server refuses a write without the generation. A write before the
-  // page has read the case reads it first.
-  if (method === "POST" && lastGeneration === null) await api.state();
   const res = await fetch(path, {
     method,
-    headers: {
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      // Every write says it comes from the app's page. The browser adds
-      // Sec-Fetch-Site and Origin, which the server checks too.
-      ...(method === "POST" ? { "X-Appointments-App": "1" } : {}),
-      ...(method === "POST" && lastGeneration !== null ? { "X-Case-Generation": String(lastGeneration) } : {}),
-    },
+    headers: method === "POST" ? await writeHeaders() : {},
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const json = await res.json();
