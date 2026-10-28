@@ -1,10 +1,12 @@
 // Provider settings and sign-in routes (0010). Kept free of sockets, like
-// api.ts, so tests call them directly. The server runs its host, source and
-// session checks before these, as for every /api route. They are app
+// api.ts, so tests call them directly. The server runs its host allowlist,
+// same-origin and app header checks before these, as for every /api route.
+// They are app
 // settings, not case data: they need no case generation header, and Delete
 // case does not touch them.
 //
-// GET    /api/settings              the settings view. Never a key or a token.
+// GET /api/settings and PUT /api/settings/timezone are served by
+// server/settings.ts, with this module's part through `source`.
 // Every write but the sign-in start carries the settingsVersion the page
 // read, and a stale one gets 409 stale_edit with nothing written.
 //
@@ -38,7 +40,8 @@ export { CALLBACK_PATH };
 
 export type TimezoneSettings = { timezone: string; timezoneSource: "you" | "agent" | "browser" | "default"; version: number };
 
-// Until the time zone setting lands (sprint 8), the case zone.
+// With no time zone source, as in tests of these routes alone, the default
+// zone at version 0. The app passes sprint 8's (server/main.ts).
 export const DEFAULT_TIMEZONE: () => TimezoneSettings = () => ({ timezone: DEFAULT_TIME_ZONE, timezoneSource: "default", version: 0 });
 
 export type SettingsView = {
@@ -107,10 +110,8 @@ export function createAuth(options: {
   const serverMetaKey = options.serverMetaKey || null;
   const timezone = options.timezone ?? DEFAULT_TIMEZONE;
 
-  // One version for the whole settings view: each part only grows, so the
-  // sum grows on any change.
-  const viewOf = (settings: StoredSettings): SettingsView => {
-    const tz = timezone();
+  // The provider part of the view, without a version.
+  const providerPart = (settings: StoredSettings) => {
     const ctx = { settings, serverMetaKey };
     const key = metaKey(ctx);
     const provider = activeProvider(ctx);
@@ -122,16 +123,21 @@ export function createAuth(options: {
         ? modelProblemText(problem, models.find((m) => m.id === model)?.label ?? model)
         : null;
     return {
-      settingsVersion: settings.version + tz.version,
-      timezone: tz.timezone,
-      timezoneSource: tz.timezoneSource,
-      provider: activeProvider(ctx),
+      provider,
       meta: { keySet: key !== null, source: key?.source ?? null },
       chatgpt: ChatGptAuth.view(settings),
       model,
       models,
       modelNotice,
     };
+  };
+
+  // The whole view, as GET /api/settings gives it (server/settings.ts):
+  // one version for both stores, the sum of the time zone part's and this
+  // one's (0010 P32). Each part only grows, so the sum grows on any change.
+  const viewOf = (settings: StoredSettings): SettingsView => {
+    const tz = timezone();
+    return { settingsVersion: settings.version + tz.version, timezone: tz.timezone, timezoneSource: tz.timezoneSource, ...providerPart(settings) };
   };
 
   const invalid = (err: z.ZodError): ApiResponse => ({
@@ -178,7 +184,6 @@ export function createAuth(options: {
   };
 
   const routes: Record<string, Partial<Record<string, (body: unknown) => Promise<ApiResponse> | ApiResponse>>> = {
-    "/api/settings": { GET: () => ok(viewOf(store.read())) },
     "/api/settings/provider": {
       PUT: (body) => {
         const parsed = ProviderBody.safeParse(body);
@@ -251,6 +256,9 @@ export function createAuth(options: {
   return {
     paths: Object.keys(routes),
     view: () => viewOf(store.read()),
+    // For server/settings.ts, which serves GET /api/settings and the time
+    // zone write.
+    source: { version: () => store.read().version, view: () => providerPart(store.read()) },
 
     // The answer for a settings or sign-in route, or null for any other path.
     async handle(req: AuthRequest): Promise<ApiResponse | null> {

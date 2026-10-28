@@ -1,6 +1,16 @@
-// 0010: the settings and sign-in routes (server/auth.ts), with no sockets,
-// against offline fakes. No route answer holds a key or a token.
+// 0010: the settings and sign-in routes, with no sockets, against offline
+// fakes, wired as the app wires them: server/auth.ts for the provider,
+// model and sign-in routes, and sprint 8's server/settings.ts for GET
+// /api/settings and the time zone, with one settingsVersion for both (P32).
+// No route answer holds a key or a token.
 import { afterEach, describe, expect, it } from "vitest";
+import { createApi } from "../server/api.ts";
+import { CaseService } from "../src/case/service.ts";
+import { RecordedModelClient } from "../src/model/recorded.ts";
+import { ReplyService } from "../src/reply/service.ts";
+import { timezoneSettings } from "../src/settings/events.ts";
+import { EventStore } from "../src/store/event-log.ts";
+import { agentAccess, asFreshPage, intake } from "./helpers.ts";
 import { ChatGptAuth } from "../src/model/providers/chatgpt-auth.ts";
 import { createAuth, KEY_FORMAT_TEXT, SIGNED_OUT_UNCONFIRMED_TEXT, VERSION_REQUIRED } from "../server/auth.ts";
 import { FakeOpenAi, ISSUED_CLIENT, PORT, REVOKE_URL, fakeSecret, tempStore } from "./provider-fakes.ts";
@@ -15,8 +25,23 @@ function setup(serverMetaKey: string | null = null) {
   cleanups.push(t.cleanup);
   const fake = new FakeOpenAi();
   const auth = new ChatGptAuth({ store: t.store, port: PORT, fetch: fake.fetch, now: () => fake.now });
-  const routes = createAuth({ store: t.store, auth, serverMetaKey });
-  const call = async (method: string, path: string, body?: unknown) => (await routes.handle({ method, path, body }))!;
+  const events = new EventStore(":memory:", () => "2026-11-06T17:00:00.000Z");
+  const routes = createAuth({
+    store: t.store,
+    auth,
+    serverMetaKey,
+    timezone: () => {
+      const tz = timezoneSettings(events);
+      return { timezone: tz.timezone, timezoneSource: tz.timezoneSource, version: tz.settingsVersion };
+    },
+  });
+  const client = RecordedModelClient.fromDirectory();
+  const svc = intake(events);
+  const kase = new CaseService(events, svc, client);
+  const api = asFreshPage(createApi(svc, kase, { mode: "recorded", settings: routes.source }, new ReplyService(events, kase, client), agentAccess(events, svc, kase)), kase);
+  // As server/main.ts dispatches: the auth routes first, then the API.
+  const call = async (method: string, path: string, body?: unknown) => (await routes.handle({ method, path, body })) ?? (await api({ method, path, body }));
+  cleanups.push(() => events.close());
   return { ...t, fake, auth, routes, call };
 }
 
@@ -36,7 +61,7 @@ describe("0010 settings and sign-in routes", () => {
       status: 200,
       body: {
         settingsVersion: 0,
-        timezone: "America/Denver",
+        timezone: "UTC",
         timezoneSource: "default",
         provider: "meta",
         meta: { keySet: true, source: "server" },
@@ -194,9 +219,35 @@ describe("0010 settings and sign-in routes", () => {
     expect(done.body).toMatchObject({ chatgpt: { signedIn: false } });
   });
 
+  it("P32: one settingsVersion covers the time zone and the provider settings, and every write checks it", async () => {
+    const s = setup("server-meta-key-0123");
+    const v0 = ((await s.call("GET", "/api/settings")).body as { settingsVersion: number }).settingsVersion;
+    expect(v0).toBe(0);
+    // A provider write moves the one version.
+    const model = await s.call("PUT", "/api/settings/model", { model: "muse-wonder-1.0", expectedVersion: 0 });
+    expect(model.body).toMatchObject({ settingsVersion: 1, model: "muse-wonder-1.0", timezone: "UTC" });
+    // The time zone write takes the same version, and moves it again.
+    const tz = await s.call("PUT", "/api/settings/timezone", { timezone: "Asia/Tokyo", expectedVersion: 1 });
+    expect(tz).toMatchObject({ status: 200, body: { settingsVersion: 2, timezone: "Asia/Tokyo", timezoneSource: "you", model: "muse-wonder-1.0", models: expect.any(Array) } });
+    // A page that saw version 1 is stale for both kinds of write, and the
+    // 409 reports the whole version and view.
+    const staleTz = await s.call("PUT", "/api/settings/timezone", { timezone: "Europe/London", expectedVersion: 1 });
+    expect(staleTz).toMatchObject({ status: 409, body: { error: "stale_edit", currentVersion: 2, current: { settingsVersion: 2, timezone: "Asia/Tokyo", model: "muse-wonder-1.0" } } });
+    const staleModel = await s.call("PUT", "/api/settings/model", { model: "muse-spark-1.3", expectedVersion: 1 });
+    expect(staleModel).toMatchObject({ status: 409, body: { error: "stale_edit", currentVersion: 2 } });
+    // A version from before the provider part, or a made-up one, is stale.
+    for (const v of [0, 3, 99]) expect((await s.call("PUT", "/api/settings/timezone", { timezone: "Europe/London", expectedVersion: v })).status).toBe(409);
+    // At the current version both go through.
+    expect((await s.call("POST", "/api/auth/meta-key", { key: fakeSecret("metakey"), expectedVersion: 2 })).body).toMatchObject({ settingsVersion: 3 });
+    expect((await s.call("PUT", "/api/settings/timezone", { timezone: "Europe/London", expectedVersion: 3 })).body).toMatchObject({ settingsVersion: 4, timezone: "Europe/London" });
+    expect((await s.call("GET", "/api/settings")).body).toMatchObject({ settingsVersion: 4, timezone: "Europe/London", meta: { keySet: true, source: "you" }, model: "muse-wonder-1.0" });
+  });
+
   it("unknown methods get 405 and other paths are left to the API", async () => {
     const s = setup();
     expect(await s.call("POST", "/api/settings", {})).toEqual({ status: 405, body: { error: "method_not_allowed" } });
     expect(await s.routes.handle({ method: "GET", path: "/api/state", body: undefined })).toBeNull();
+    // GET /api/settings is the API's one answer, not a second one here.
+    expect(await s.routes.handle({ method: "GET", path: "/api/settings", body: undefined })).toBeNull();
   });
 });

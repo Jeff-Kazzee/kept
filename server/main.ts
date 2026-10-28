@@ -29,6 +29,7 @@ import { appDbPath, fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { createApi } from "./api.ts";
 import { CALLBACK_PATH, createAuth } from "./auth.ts";
+import { timezoneSettings } from "../src/settings/events.ts";
 import { CHAT_PATH, createChat, sseFrame } from "./chat.ts";
 import { CaseAgent } from "../src/agent/agent.ts";
 import { defaultMessageId } from "../src/agent/tools.ts";
@@ -57,7 +58,6 @@ try {
 const secrets = new SecretsStore(appSecretsPath());
 const chatgptAuth = new ChatGptAuth({ store: secrets, port: PORT });
 const serverMetaKey = process.env.MODEL_API_KEY || null;
-const auth = createAuth({ store: secrets, auth: chatgptAuth, serverMetaKey });
 
 let client: ModelClient;
 let chatClient: ToolModelClient;
@@ -80,11 +80,23 @@ try {
 } catch (err) {
   console.error(`Could not finish clearing a deleted case from the database file: ${err instanceof Error ? err.message : String(err)}`);
 }
+// The settings routes: the time zone part from the settings stream
+// (sprint 8), the provider part from the secrets database (0010), one
+// settingsVersion for both.
+const auth = createAuth({
+  store: secrets,
+  auth: chatgptAuth,
+  serverMetaKey,
+  timezone: () => {
+    const tz = timezoneSettings(store);
+    return { timezone: tz.timezone, timezoneSource: tz.timezoneSource, version: tz.settingsVersion };
+  },
+});
 const intake = new IntakeService(store, client);
 const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
 const reply = new ReplyService(store, kase, client);
 const records = new RecordsService(store, intake, kase);
-const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, reply, { store, records });
+const api = createApi(intake, kase, { mode: live ? "live" : "recorded", settings: auth.source }, reply, { store, records });
 // The case agent (0007). In recorded mode a pasted fixture message keeps
 // its fixture id, so its extraction recording replays.
 const chat = createChat(

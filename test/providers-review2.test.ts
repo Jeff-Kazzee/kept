@@ -11,6 +11,12 @@ import { capabilityProblem } from "../src/model/providers/models.ts";
 import { OPENAI_ISSUER, OpenAiIdentity } from "../src/model/providers/oidc.ts";
 import { SecretsBusyError, SecretsStore, type StoredSettings, type Transaction } from "../src/model/providers/secrets.ts";
 import { SETTINGS_BUSY, createAuth } from "../server/auth.ts";
+import { createApi } from "../server/api.ts";
+import { CaseService } from "../src/case/service.ts";
+import { RecordedModelClient } from "../src/model/recorded.ts";
+import { ReplyService } from "../src/reply/service.ts";
+import { EventStore } from "../src/store/event-log.ts";
+import { agentAccess, intake } from "./helpers.ts";
 import { FakeOpenAi, ISSUED_CLIENT, JWKS_URL, PORT, RESPONSES, jwt, signIn, tempStore } from "./provider-fakes.ts";
 
 const cleanups: Array<() => void> = [];
@@ -103,7 +109,6 @@ describe("review round 2, finding 10: a busy settings database is a retryable 50
   it("every settings and sign-in route answers 503 settings_busy and writes nothing", async () => {
     const s = setup();
     const calls: Array<[string, string, unknown]> = [
-      ["GET", "/api/settings", undefined],
       ["PUT", "/api/settings/provider", { provider: "meta", expectedVersion: 0 }],
       ["PUT", "/api/settings/model", { model: "muse-wonder-1.0", expectedVersion: 0 }],
       ["POST", "/api/auth/meta-key", { key: "key-12345678", expectedVersion: 0 }],
@@ -118,6 +123,17 @@ describe("review round 2, finding 10: a busy settings database is a retryable 50
     expect(SETTINGS_BUSY.body).toMatchObject({ retryable: true, message: "The app's settings are busy in another window or process. Try again in a moment. Nothing was changed." });
     s.store.busy = false;
     expect(s.store.read().version).toBe(0);
+  });
+
+  it("GET /api/settings, served by the API, answers the same 503", async () => {
+    const s = setup();
+    const events = new EventStore(":memory:");
+    cleanups.push(() => events.close());
+    const client = RecordedModelClient.fromDirectory();
+    const svc = intake(events);
+    const kase = new CaseService(events, svc, client);
+    const api = createApi(svc, kase, { mode: "recorded", settings: s.routes.source }, new ReplyService(events, kase, client), agentAccess(events, svc, kase));
+    expect(await api({ method: "GET", path: "/api/settings", body: undefined })).toEqual(SETTINGS_BUSY);
   });
 
   it("the callback redirects with settings_busy when the sign-in cannot be saved", async () => {

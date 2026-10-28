@@ -14,7 +14,9 @@ import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { timezoneSettings } from "../src/settings/events.ts";
 import { CaseDeletedError, CompactionError, StaleEditError, StoreBusyError, type EventStore } from "../src/store/event-log.ts";
-import { settingsRoutes, type ProviderSettings, type Route } from "./settings.ts";
+import { settingsRoutes, type ProviderSource, type Route } from "./settings.ts";
+import { SecretsBusyError, SecretsFileError } from "../src/model/providers/secrets.ts";
+import { SETTINGS_BUSY_TEXT, SETTINGS_UNREADABLE_TEXT } from "./auth.ts";
 
 // `generation` is the case generation the page last read. Every request
 // that changes state must carry it, and a write from a page opened before a
@@ -55,7 +57,8 @@ const ApproveBody = z
 
 const UndoBody = z.object({ expectedVersion: Version, version: Version }).strict();
 
-export type ApiOptions = { mode: "recorded" | "live"; provider?: () => ProviderSettings };
+// `settings`: the provider part of the settings (sprint 10, server/auth.ts).
+export type ApiOptions = { mode: "recorded" | "live"; settings?: ProviderSource };
 
 // The store and the records service, which the MCP server also uses.
 export type AgentAccess = { store: EventStore; records: RecordsService };
@@ -94,7 +97,7 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       actions.undo(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion);
       return kase.view();
     }],
-    ...settingsRoutes(store, actions, options.provider),
+    ...settingsRoutes(store, actions, options.settings),
     // G-d: a cheap read the page polls to learn that the app, the MCP server
     // or another tab wrote something.
     ["GET", /^\/api\/case\/version$/, () => kase.liveVersion()],
@@ -217,6 +220,10 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
 
 function toErrorResponse(err: unknown): ApiResponse {
   if (err instanceof UndoBlockedError) return { status: 409, body: { error: "undo_blocked", message: err.message } };
+  // The provider settings database (0010): busy in another process, or not
+  // readable. Nothing was written.
+  if (err instanceof SecretsBusyError) return { status: 503, body: { error: "settings_busy", retryable: true, message: SETTINGS_BUSY_TEXT } };
+  if (err instanceof SecretsFileError) return { status: 503, body: { error: "settings_unreadable", message: SETTINGS_UNREADABLE_TEXT } };
   if (err instanceof StaleEditError) {
     return { status: 409, body: { error: "stale_edit", message: err.message, currentVersion: err.currentVersion, current: err.current } };
   }
