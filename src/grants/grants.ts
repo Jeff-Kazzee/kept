@@ -146,16 +146,19 @@ export class GrantStore {
     if (!parsedName.success) throw new InvalidRequestError(`Invalid grant name: ${parsedName.error.issues[0]!.message}`);
     const parsedTier = Tier.safeParse(tier);
     if (!parsedTier.success) throw new InvalidRequestError(`Invalid tier. Use one of: ${TIERS.join(", ")}.`);
-    const taken = this.list().some((g) => g.status === "active" && g.name.toLowerCase() === parsedName.data.toLowerCase());
-    if (taken) throw new InvalidRequestError(`An active grant is already named ${parsedName.data}.`);
-
     const id = this.#newId();
     const token = this.#newToken();
     const event: GrantEvent = {
       type: "grant_created",
       data: { name: parsedName.data, tier: parsedTier.data, token_sha256: hashToken(token) },
     };
-    this.#store.append(grantStream(id), 0, [event], this.#describe);
+    // The name check and the write are one transaction, so two creates at
+    // once cannot both take a name.
+    this.#store.transaction(() => {
+      const taken = this.list().some((g) => g.status === "active" && g.name.toLowerCase() === parsedName.data.toLowerCase());
+      if (taken) throw new InvalidRequestError(`An active grant is already named ${parsedName.data}.`);
+      this.#store.append(grantStream(id), 0, [event], this.#describe);
+    });
     return { grant: this.get(id), token };
   }
 

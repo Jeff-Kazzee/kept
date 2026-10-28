@@ -57,6 +57,22 @@ describe("grant store", () => {
     expect(grants.findByToken(`appt_${old}`)).toBeNull();
   });
 
+  it("checks the name inside the write's transaction, so a name taken by another process meanwhile is refused", () => {
+    const store = new EventStore();
+    let other: (() => void) | null = () => new GrantStore(store).create("Agent", "read");
+    const grants = new GrantStore(store, {
+      // Runs after the input checks and before the transaction, as another
+      // process's create would.
+      newId: () => {
+        other?.();
+        other = null;
+        return "g-second";
+      },
+    });
+    expect(() => grants.create("agent", "propose")).toThrow(/already named/);
+    expect(grants.list().map((g) => g.name)).toEqual(["Agent"]);
+  });
+
   it("G-a: last used is the latest access log entry of each grant, refused calls included", () => {
     const store = new EventStore();
     const grants = new GrantStore(store);
