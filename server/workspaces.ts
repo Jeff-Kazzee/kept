@@ -13,12 +13,17 @@ import type { Workspace } from "./workspace.ts";
 // workspace's memory.
 export const IDLE_MS = 30 * 60_000;
 export const MAX_OPEN = 64;
+// Review round 1, finding 5: a full cache never closes a workspace used in
+// the last 10 minutes, or one with a Google connect still open. It grows
+// past MAX_OPEN instead.
+export const RECENT_MS = 10 * 60_000;
 
 export class WorkspaceBusyError extends Error {
   override name = "WorkspaceBusyError";
 }
 
-type Entry = { ws: Workspace; lastUsed: number; inFlight: number };
+// `deleting`: Delete account claimed it, and no request may use it.
+type Entry = { ws: Workspace; lastUsed: number; inFlight: number; deleting: boolean };
 type Build = (accountId: string, files: { dbPath: string; secretsPath: string }) => Workspace;
 
 export class Workspaces {
@@ -55,7 +60,7 @@ export class Workspaces {
       const st = lstatSync(dir);
       if (st.isSymbolicLink() || !st.isDirectory()) throw new Error("the workspace folder is not a folder");
       this.#evict();
-      e = { ws: this.#build(accountId, { dbPath: path.join(dir, "app.sqlite"), secretsPath: path.join(dir, "app-secrets.sqlite") }), lastUsed: this.#now(), inFlight: 0 };
+      e = { ws: this.#build(accountId, { dbPath: path.join(dir, "app.sqlite"), secretsPath: path.join(dir, "app-secrets.sqlite") }), lastUsed: this.#now(), inFlight: 0, deleting: false };
       this.#open.set(accountId, e);
     }
     e.lastUsed = this.#now();
@@ -65,6 +70,7 @@ export class Workspaces {
   // Runs `fn` with the account's workspace, which stays open while it runs.
   async use<T>(accountId: string, fn: (ws: Workspace) => Promise<T> | T): Promise<T> {
     const e = this.#entry(accountId);
+    if (e.deleting) throw new WorkspaceBusyError("This account is being deleted.");
     e.inFlight++;
     try {
       return await fn(e.ws);
@@ -74,11 +80,17 @@ export class Workspaces {
     }
   }
 
-  // The least recently used idle workspace goes when the cache is full.
+  // A workspace that may close: no request running, no Google connect
+  // waiting, and not used in the last `withinMs`.
+  #closable(e: Entry, withinMs: number): boolean {
+    return e.inFlight === 0 && !e.deleting && e.lastUsed <= this.#now() - withinMs && !e.ws.pendingGoogleFlow();
+  }
+
+  // The least recently used closable workspace goes when the cache is full.
   #evict(): void {
     while (this.#open.size >= this.#max) {
       let oldest: [string, Entry] | null = null;
-      for (const kv of this.#open) if (kv[1].inFlight === 0 && (!oldest || kv[1].lastUsed < oldest[1].lastUsed)) oldest = kv;
+      for (const kv of this.#open) if (this.#closable(kv[1], RECENT_MS) && (!oldest || kv[1].lastUsed < oldest[1].lastUsed)) oldest = kv;
       if (!oldest) return;
       this.#close(oldest[0]);
     }
@@ -97,10 +109,9 @@ export class Workspaces {
 
   // Closes every workspace idle for longer than the idle time.
   sweep(): number {
-    const cutoff = this.#now() - this.#idleMs;
     let closed = 0;
     for (const [id, e] of [...this.#open]) {
-      if (e.inFlight === 0 && e.lastUsed <= cutoff) {
+      if (this.#closable(e, this.#idleMs)) {
         this.#close(id);
         closed++;
       }
@@ -116,13 +127,24 @@ export class Workspaces {
     return this.#open.size;
   }
 
-  // Delete account: closes the workspace and removes its folder. Refused
-  // while a request of the account still runs.
-  remove(accountId: string): void {
-    const e = this.#open.get(accountId);
-    if (e && e.inFlight > 0) throw new WorkspaceBusyError("A request of this account is still running.");
-    this.#close(accountId);
-    rmSync(this.dir(accountId), { recursive: true, force: true });
+  // Delete account, step one (review round 1, finding 3): refused while a
+  // request of the account still runs, before anything changes. Once
+  // claimed, no request may use the workspace. `remove` closes it and
+  // removes its folder. `release` ends the claim, done or not.
+  claim(accountId: string): { ws: Workspace; remove(): void; release(): void } {
+    const e = this.#entry(accountId);
+    if (e.inFlight > 0 || e.deleting) throw new WorkspaceBusyError("A request of this account is still running.");
+    e.deleting = true;
+    return {
+      ws: e.ws,
+      remove: () => {
+        this.#close(accountId);
+        rmSync(this.dir(accountId), { recursive: true, force: true });
+      },
+      release: () => {
+        e.deleting = false;
+      },
+    };
   }
 
   closeAll(): void {

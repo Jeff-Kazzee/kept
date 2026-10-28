@@ -150,6 +150,13 @@ export class GoogleConnection {
     return this.#client !== null;
   }
 
+  // A connect started in this process and not finished or expired. Its
+  // state lives only in memory (oauth.ts), so the workspace cache keeps
+  // this connection open while it is true.
+  hasPendingFlow(): boolean {
+    return this.#flows.size > 0;
+  }
+
   // The stored state. A damaged row reads as no connection at its own
   // version, with `damaged` set.
   #state(): State {

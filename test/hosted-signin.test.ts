@@ -52,7 +52,10 @@ describe("Sign in with Google", () => {
     h = await startHosted();
     const b = h.browser();
     const r = await b.call("POST", "/api/session/judge", { code: h.judgeCode().code }, { "X-Forwarded-Proto": "https" });
-    expect(String(r.headers["set-cookie"])).toMatch(/^__Host-appt_session=[^;]+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=2592000; Secure$/);
+    const set = r.headers["set-cookie"] as string[];
+    expect(set.find((c) => c.startsWith("__Host-"))).toMatch(/^__Host-appt_session=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=2592000; Secure$/);
+    // The loopback form is cleared (review round 1, finding 6).
+    expect(set).toContain(`appt_session_${h.port}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
   });
 
   it("refuses a callback with no flow, a wrong cookie, a bad signature, a wrong nonce or an unverified email", async () => {

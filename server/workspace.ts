@@ -183,6 +183,10 @@ export function createWorkspace(o: WorkspaceOptions) {
         log(`Google Calendar read failed: ${err instanceof Error && "code" in err ? String((err as { code: unknown }).code) : "error"}.`),
       );
     },
+    // A Google connect is waiting for its callback (workspaces.ts).
+    pendingGoogleFlow(): boolean {
+      return googleConnection.hasPendingFlow();
+    },
     close(): void {
       store.close();
       secrets.close();

@@ -57,6 +57,8 @@ export type HostedOptions = {
   googleFetch?: FetchLike;
   metaUrl?: string;
   now?: () => number;
+  // The workspace cache's size (workspaces.ts, MAX_OPEN).
+  maxWorkspaces?: number;
   log?: (line: string) => void;
 };
 
@@ -87,7 +89,8 @@ const routeOf = (path: string): string => {
   return "other";
 };
 
-// The plans sprint 14 sells through Stripe. Shown as coming soon.
+// The plans, shown as coming soon. Billing waits until after the
+// hackathon (J18), so there is no payment code.
 export const PLANS = [
   { id: "credit-20", usd: 20, label: "$20 of usage" },
   { id: "credit-100", usd: 100, label: "$100 of usage" },
@@ -182,6 +185,7 @@ export function createHostedApp(o: HostedOptions) {
   // nothing saved (agent.ts, admit).
   const admit = (accountId: string) => () => {
     if (serverKey === null) throw new UsageRefusedError("server_key_off");
+    if (config.dailyCapMicros === null) throw new UsageRefusedError("server_key_off");
     if (store.dayCost() >= config.dailyCapMicros) throw new UsageRefusedError("daily_cap");
     if (store.balance(accountId) <= 0) throw new UsageRefusedError("credits_exhausted");
   };
@@ -189,6 +193,7 @@ export function createHostedApp(o: HostedOptions) {
   const workspaces = new Workspaces({
     root: o.workspacesDir ?? workspacesRoot(),
     now,
+    ...(o.maxWorkspaces ? { max: o.maxWorkspaces } : {}),
     build: (accountId, files) =>
       createWorkspace({
         ...files,
@@ -259,9 +264,23 @@ export function createHostedApp(o: HostedOptions) {
     return { token, session: store.session(token) };
   };
 
-  const startSession = (res: ServerResponse, secure: boolean, account: Account) => {
+  // Review round 1, finding 6: sign-in and sign-out never trust the
+  // request's claim of HTTPS to pick a cookie. They end the session of
+  // either cookie form the browser sent, and clear both forms.
+  const endBoth = (req: IncomingMessage) => {
+    for (const secureForm of [true, false]) {
+      const t = cookieOf(req.headers.cookie, sessionCookieName(port, secureForm));
+      if (t) store.endSession(t);
+    }
+  };
+  const clearBoth = () => [sessionCookie(port, true, "", 0), sessionCookie(port, false, "", 0)];
+  // The new session's cookie, and the other form cleared.
+  const sessionCookies = (secure: boolean, token: string) => [sessionCookie(port, !secure, "", 0), sessionCookie(port, secure, token, Math.floor(SESSION_TTL_MS / 1000))];
+
+  const startSession = (req: IncomingMessage, res: ServerResponse, secure: boolean, account: Account) => {
+    endBoth(req);
     const { token } = store.createSession(account.id);
-    res.setHeader("Set-Cookie", sessionCookie(port, secure, token, Math.floor(SESSION_TTL_MS / 1000)));
+    res.setHeader("Set-Cookie", sessionCookies(secure, token));
   };
 
   const judgeFailure = (err: JudgeCodeError) => ({ status: err.code === "not_found" ? 404 : 409, body: { error: `judge_${err.code}`, message: err.message } });
@@ -269,8 +288,8 @@ export function createHostedApp(o: HostedOptions) {
   // The account routes. Null for any other path.
   async function accountRoute(req: IncomingMessage, res: ServerResponse, path: string, body: unknown, secure: boolean): Promise<boolean> {
     const method = req.method ?? "GET";
-    const address = clientAddress(req.headers, req.socket.remoteAddress);
-    const { token, session } = sessionOf(req, secure);
+    const address = clientAddress(req.headers, req.socket.remoteAddress, config.trustedProxy);
+    const { session } = sessionOf(req, secure);
     const only = (m: string) => {
       if (method === m) return true;
       send(res, 405, { error: "method_not_allowed" });
@@ -311,8 +330,7 @@ export function createHostedApp(o: HostedOptions) {
         if (!limit.ok) return send(res, 429, { error: "rate_limited", message: RATE_LIMITED_TEXT, retryAfterSeconds: limit.retryAfterSeconds }), true;
         try {
           const account = store.redeemJudgeCode(b.code.trim());
-          if (token) store.endSession(token);
-          startSession(res, secure, account);
+          startSession(req, res, secure, account);
           send(res, 200, accountView(account, now() + SESSION_TTL_MS));
         } catch (err) {
           if (err instanceof JudgeCodeError) {
@@ -324,8 +342,8 @@ export function createHostedApp(o: HostedOptions) {
       }
       case "/api/session/signout":
         if (!only("POST") || parsed(EmptyBody, body) === null) return true;
-        store.endSession(token);
-        res.setHeader("Set-Cookie", sessionCookie(port, secure, "", 0));
+        endBoth(req);
+        res.setHeader("Set-Cookie", clearBoth());
         send(res, 200, { mode: "hosted", signedIn: false, googleSignIn: signIn.configured });
         return true;
       case "/api/usage":
@@ -361,19 +379,25 @@ export function createHostedApp(o: HostedOptions) {
           return true;
         }
         const id = session.account.id;
-        // The Google grant is revoked first, when there is one.
+        // Review round 1, finding 3: the claim refuses a busy account
+        // before anything changes, and keeps every other request out while
+        // the removal runs. Only then is the Google grant revoked.
+        let claim;
         try {
-          await workspaces.use(id, async (ws) => {
-            const g = ws.googleConnection.status();
-            if (g.connected || g.needsReconnect) await ws.googleConnection.disconnect(g.version).catch(() => {});
-          });
-          workspaces.remove(id);
+          claim = workspaces.claim(id);
         } catch (err) {
           if (err instanceof WorkspaceBusyError) return send(res, 409, { error: "account_busy", message: DELETE_ACCOUNT_BUSY_TEXT }), true;
           throw err;
         }
+        try {
+          const g = claim.ws.googleConnection.status();
+          if (g.connected || g.needsReconnect) await claim.ws.googleConnection.disconnect(g.version).catch(() => {});
+          claim.remove();
+        } finally {
+          claim.release();
+        }
         store.deleteAccount(id);
-        res.setHeader("Set-Cookie", sessionCookie(port, secure, "", 0));
+        res.setHeader("Set-Cookie", clearBoth());
         send(res, 200, { deleted: true });
         return true;
       }
@@ -423,10 +447,9 @@ export function createHostedApp(o: HostedOptions) {
         try {
           const who = await signIn.finish({ state: q.get("state"), code: q.get("code"), error: q.get("error"), cookie: cookieOf(req.headers.cookie, signinCookieName(port, secure)) });
           const account = store.googleAccount(who);
-          const old = cookieOf(req.headers.cookie, sessionCookieName(port, secure));
-          if (old) store.endSession(old);
+          endBoth(req);
           const { token } = store.createSession(account.id);
-          return redirect("/?signedIn=google", [...clear, sessionCookie(port, secure, token, Math.floor(SESSION_TTL_MS / 1000))]);
+          return redirect("/?signedIn=google", [...clear, ...sessionCookies(secure, token)]);
         } catch (err) {
           const code = err instanceof OAuthError ? err.code : "server_error";
           log(`Sign in with Google failed: ${code}.`);
@@ -463,6 +486,8 @@ export function createHostedApp(o: HostedOptions) {
         return;
       }
       if (err instanceof AccountsBusyError) return send(res, 503, { error: "accounts_busy", retryable: true, message: ACCOUNT_BUSY_TEXT });
+      // The account is being deleted.
+      if (err instanceof WorkspaceBusyError) return send(res, 409, { error: "account_busy", message: DELETE_ACCOUNT_BUSY_TEXT });
       if (err instanceof AccountsFileError) log(err.message);
       send(res, 500, { error: "server_error", message: "The server could not complete the request." });
     }
@@ -473,8 +498,11 @@ export function createHostedApp(o: HostedOptions) {
     store,
     workspaces,
     startLines(): string[] {
+      const cap = (v: number | null) => (v === null ? "not set" : formatUsd(v));
       const lines = [
-        `Usage credits at ${config.markupHundredths / 100} times model cost. Daily model cost cap ${formatUsd(config.dailyCapMicros)}. Judge codes total cap ${formatUsd(config.judgeTotalCapMicros)}.`,
+        `Usage credits at ${config.markupHundredths / 100} times model cost. Daily model cost cap ${cap(config.dailyCapMicros)}. Judge codes total cap ${cap(config.judgeTotalCapMicros)}.`,
+        // J19: no cap has a default.
+        ...config.missing.map((name) => `${name} is not set, so the server key is off. Set it to turn the server key on.`),
         serverKey ? "The server key is on, reached only through usage credits." : "The server key is off or not set, so every assistant step is refused with a plain message.",
       ];
       if (extraHosts.length > 0) lines.push(`Also answers to: ${extraHosts.join(", ")}`);

@@ -107,6 +107,12 @@ export class PendingFlows {
     this.#flows.clear();
   }
 
+  // Flows started and not finished or expired.
+  get size(): number {
+    this.#sweep();
+    return this.#flows.size;
+  }
+
   #sweep() {
     const now = this.#now();
     for (const [k, f] of this.#flows) if (f.expiresAt <= now) this.#flows.delete(k);
