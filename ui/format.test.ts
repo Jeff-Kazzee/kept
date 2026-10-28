@@ -1,7 +1,7 @@
 // Times in America/Denver with the zone, and errors as plain sentences.
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api.ts";
-import { denverShort, denverTime, errorSentence } from "./format.ts";
+import { denverShort, denverTime, denverWallNow, denverWallToIso, errorSentence } from "./format.ts";
 
 describe("format", () => {
   it("times show in America/Denver across the 2026-11-01 change", () => {
@@ -9,6 +9,16 @@ describe("format", () => {
     expect(denverTime("2026-11-01T08:30:00.000Z")).toBe("2026-11-01 01:30 MST");
     expect(denverShort("2026-11-01T07:30:00.000Z")).toBe("Sun, Nov 1, 1:30 AM MDT");
     expect(denverShort("2026-11-01T08:30:00.000Z")).toBe("Sun, Nov 1, 1:30 AM MST");
+  });
+
+  it("reads a received time typed for America/Denver with its offset, across the change", () => {
+    expect(denverWallToIso("2026-10-31T09:12")).toBe("2026-10-31T09:12:00-06:00");
+    expect(denverWallToIso("2026-11-04T11:40")).toBe("2026-11-04T11:40:00-07:00");
+    // 01:30 on 2026-11-01 happens twice. The first one, MDT, is used.
+    expect(denverWallToIso("2026-11-01T01:30")).toBe("2026-11-01T01:30:00-06:00");
+    expect(denverWallToIso("2026-11-01T03:00")).toBe("2026-11-01T03:00:00-07:00");
+    expect(denverWallToIso("not a time")).toBeNull();
+    expect(denverWallNow(Date.parse("2026-11-01T08:30:00Z"))).toBe("2026-11-01T01:30");
   });
 
   it("every error reads as a sentence that says nothing was saved, never a raw body", () => {

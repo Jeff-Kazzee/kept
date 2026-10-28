@@ -56,10 +56,23 @@ describe("chat state", () => {
     expect(s.pending!.error).toEqual({ code: "stream_cut", message: STREAM_CUT });
   });
 
-  it("a decline is not lost: its text does not go back to the composer", () => {
+  it("a decline keeps the person's words in memory for the import sheet, and is not lost", () => {
     let s = chatReducer(streamed(), ev({ event: "turn.error", data: { turnId: "t1", code: "out_of_scope", message: "This app only handles appointment times." } }));
-    s = chatReducer(s, { type: "settled", log: null });
+    // turn.done follows, so the turn is still streaming.
+    expect(s.pending!.status).toBe("streaming");
+    expect(s.declinedText).toEqual({ u1: "What is confirmed?" });
+    s = chatReducer(s, ev({ event: "turn.done", data: { turnId: "t1", assistantMessageId: "a1", chatVersion: 4 } }));
+    // Not lost before the stored chat is read, even though it has an error.
     expect(turnLost(s.pending)).toBe(false);
+    s = chatReducer(s, { type: "settled", log: { chatVersion: 4, messages: [{ ...user, text: "Not saved: this message asked about health, which this app does not handle." }, { ...assistant, declined: true }] } });
+    expect(s.pending).toBeNull();
+    expect(s.declinedText.u1).toBe("What is confirmed?");
+  });
+
+  it("a server_error with no turn.done ends the turn, and it is lost", () => {
+    const s = chatReducer(streamed(), ev({ event: "turn.error", data: { turnId: "t1", code: "server_error", message: "The app could not finish that answer." } }));
+    expect(s.pending!.status).toBe("ended");
+    expect(turnLost(chatReducer(s, { type: "settled", log: { chatVersion: 3, messages: [] } }).pending)).toBe(true);
   });
 
   it("marks the chat unavailable when the route is missing", () => {

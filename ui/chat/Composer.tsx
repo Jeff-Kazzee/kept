@@ -14,6 +14,7 @@ export function Composer({
   busy,
   inputRef,
   onLoadCalendar,
+  onAddOfficeMessage,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -22,6 +23,7 @@ export function Composer({
   busy: boolean;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   onLoadCalendar: (file: File) => Promise<void>;
+  onAddOfficeMessage: () => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   // Grow with the text, up to the CSS max height.
@@ -58,6 +60,9 @@ export function Composer({
       <button type="button" className="btn btn-ghost btn-icon" onClick={() => fileRef.current?.click()} aria-label="Load a calendar file (.ics)" title="Load a calendar file (.ics)">
         <Icon name="calendarPlus" />
       </button>
+      <button type="button" className="btn btn-ghost btn-icon" onClick={onAddOfficeMessage} aria-label="Add an office message" title="Add an office message">
+        <Icon name="messagePlus" />
+      </button>
       <label htmlFor="chat-input" className="sr-only">
         Message
       </label>
@@ -69,7 +74,7 @@ export function Composer({
         value={value}
         maxLength={MAX_MESSAGE}
         disabled={disabled}
-        placeholder={disabled ? "The chat is not available" : "Paste a message or ask about your schedule"}
+        placeholder={disabled ? "The chat is not available" : "Ask or paste a message"}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {

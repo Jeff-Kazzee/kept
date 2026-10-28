@@ -16,7 +16,9 @@ const state = {
   case: { slots: [], conflicts: [], question: null, staleEvidenceIds: [], reply: { draft: null, sent: [], options: [], withheld: [], suggestion: null, version: 0 } },
 } as unknown as AppState;
 
-const render = (chat: ChatState, extra: Partial<ChatViewProps> = {}) =>
+const render = (partial: Omit<ChatState, "declinedText"> & Partial<Pick<ChatState, "declinedText">>, extra: Partial<ChatViewProps> = {}) => {
+  const chat: ChatState = { declinedText: {}, ...partial };
+  return (
   renderToStaticMarkup(
     createElement(ChatView, {
       state,
@@ -31,7 +33,8 @@ const render = (chat: ChatState, extra: Partial<ChatViewProps> = {}) =>
       fixtures: [],
       ...extra,
     }),
-  ).replaceAll("&#x27;", "'");
+  ).replaceAll("&#x27;", "'"));
+};
 
 const at = "2026-11-01T08:30:00.000Z";
 
@@ -67,6 +70,7 @@ describe("chat view", () => {
     expect(html).toContain("Monday is &lt;b&gt;confirmed&lt;/b&gt;.");
     expect(html).not.toContain("<img");
     expect(html).toContain("Outside this app's scope");
+    expect(html).toContain(" Add this as an office message</button>");
     expect(html).toContain('aria-label="Monday 11/16 1:00 PM: Confirmed · office message. Show in schedule."');
     expect(html).toContain("See the Checklist tab.");
     // The 2026-11-01 08:30 UTC instant is 01:30 MST, after the change.
@@ -84,7 +88,7 @@ describe("chat view", () => {
       status: "ready",
       chatVersion: 1,
       messages: [],
-      pending: { turnId: "t1", userMessageId: "u1", userText: "What is confirmed?", createdAt: at, text: "", tools: [{ callId: "c1", label: "Reading your schedule", ok: null }], cards: [], chips: [], status: "streaming", error: null },
+      pending: { turnId: "t1", userMessageId: "u1", userText: "What is confirmed?", createdAt: at, text: "", tools: [{ callId: "c1", label: "Reading your schedule", ok: null }], cards: [], chips: [], status: "streaming", error: null, unsaved: false },
     });
     expect(streaming).toContain("Reading your schedule");
     expect(streaming).toContain('aria-label="The assistant is typing"');
@@ -92,11 +96,41 @@ describe("chat view", () => {
       status: "ready",
       chatVersion: 1,
       messages: [],
-      pending: { turnId: "t1", userMessageId: "u1", userText: "What is confirmed?", createdAt: at, text: "", tools: [], cards: [], chips: [], status: "ended", error: { code: "busy", message: "" } },
+      pending: { turnId: "t1", userMessageId: "u1", userText: "What is confirmed?", createdAt: at, text: "", tools: [], cards: [], chips: [], status: "ended", error: { code: "busy", message: "" }, unsaved: true },
     });
     expect(failed).toContain('role="alert"');
     expect(failed).toContain("The app is busy. Nothing was saved. Try again in a moment.");
     expect(turnErrorText({ code: "model_unavailable", message: "The model did not answer." })).toBe("The model did not answer. Nothing was saved.");
+    expect(turnErrorText({ code: "server_error", message: "" })).toBe("The app could not finish that answer. Nothing was saved.");
     expect(turnErrorText({ code: "ungrounded", message: "Check your schedule for the current state." })).toBe("Check your schedule for the current state.");
+  });
+
+  it("a pending decline shows its streamed text once, with the way to add it as an office message", () => {
+    const html = render({
+      status: "ready",
+      chatVersion: 1,
+      messages: [],
+      pending: { turnId: "t1", userMessageId: "u1", userText: "Please bring your lab results.", createdAt: at, text: "This app only handles appointment times.", tools: [], cards: [], chips: [], status: "streaming", error: { code: "out_of_scope", message: "This app only handles appointment times." }, unsaved: false },
+    });
+    expect(html.split('<div class="sr-only" aria-live')[0]!.split("This app only handles appointment times.").length - 1).toBe(1);
+    expect(html).toContain(" Add this as an office message</button>");
+  });
+
+  it("an ungrounded turn shows its fixed sentence once, as a notice", () => {
+    const text = "I could not check that answer against your case, so I left it out.";
+    const html = render({
+      status: "ready",
+      chatVersion: 1,
+      messages: [],
+      pending: { turnId: "t1", userMessageId: "u1", userText: "Is Monday on?", createdAt: at, text, tools: [], cards: [], chips: [], status: "ended", error: { code: "ungrounded", message: text }, unsaved: false },
+    });
+    const thread = html.split('<div class="sr-only" aria-live')[0]!;
+    expect(thread.split(text).length - 1).toBe(1);
+    expect(html).not.toContain('role="alert"');
+  });
+
+  it("the composer offers Add an office message at any time", () => {
+    const html = render({ status: "ready", chatVersion: 0, messages: [], pending: null });
+    expect(html).toContain('aria-label="Add an office message"');
   });
 });

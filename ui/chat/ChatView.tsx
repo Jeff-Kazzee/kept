@@ -13,7 +13,8 @@ import { ProposalCard } from "../case/ProposalCard.tsx";
 import { ReplyCard } from "../case/ReplyCard.tsx";
 import { Composer } from "./Composer.tsx";
 import { DEMO_IDS, nextDemoMessage } from "./demo.ts";
-import type { ChatState, PendingTurn } from "./state.ts";
+import { ImportSheet, type ImportRequest } from "./ImportSheet.tsx";
+import { turnLost, type ChatState, type PendingTurn } from "./state.ts";
 import type { Card, ChatMessage, FactChip } from "./types.ts";
 
 export type ChatViewProps = {
@@ -37,8 +38,14 @@ export function ChatView(props: ChatViewProps) {
   const pinned = useRef(true);
   const unavailable = chat.status === "unavailable";
 
+  // Office messages added through the import sheet, each shown as a claims
+  // card after the chat message that was last when it was added.
+  const [imports, setImports] = useState<Array<{ messageId: string; after: number }>>([]);
+  const [importing, setImporting] = useState<ImportRequest | null>(null);
+  const openImport = (text: string) => setImporting({ text });
+
   // A turn the server did not store gives its text back to the composer.
-  const lostTurn = chat.pending?.status === "ended" && chat.pending.error !== null && chat.pending.error.code !== "out_of_scope" ? chat.pending : null;
+  const lostTurn = turnLost(chat.pending) ? chat.pending : null;
   const restored = useRef<PendingTurn | null>(null);
   useEffect(() => {
     if (lostTurn && restored.current !== lostTurn) {
@@ -104,10 +111,27 @@ export function ChatView(props: ChatViewProps) {
               }}
             />
           )}
-          {chat.messages.map((m) => (
-            <MessageItem key={m.id} message={m} state={state} run={run} scripted={scripted} onShowSlot={onShowSlot} />
+          {imports.filter((x) => x.after === 0).map((x) => (
+            <ImportedItem key={x.messageId} messageId={x.messageId} state={state} run={run} />
           ))}
-          {chat.pending && <PendingItem turn={chat.pending} state={state} run={run} scripted={scripted} onShowSlot={onShowSlot} />}
+          {chat.messages.map((m, i) => (
+            <div key={m.id} className="msg-group">
+              <MessageItem
+                message={m}
+                state={state}
+                run={run}
+                scripted={scripted}
+                onShowSlot={onShowSlot}
+                onImport={m.declined ? () => openImport(declinedOriginal(chat, i)) : undefined}
+              />
+              {imports
+                .filter((x) => x.after === i + 1)
+                .map((x) => (
+                  <ImportedItem key={x.messageId} messageId={x.messageId} state={state} run={run} />
+                ))}
+            </div>
+          ))}
+          {chat.pending && <PendingItem turn={chat.pending} state={state} run={run} scripted={scripted} onShowSlot={onShowSlot} onImport={() => openImport(chat.pending?.userText ?? "")} />}
         </div>
       </div>
       <div className="composer-wrap">
@@ -129,12 +153,26 @@ export function ChatView(props: ChatViewProps) {
             busy={streaming}
             inputRef={inputRef}
             onLoadCalendar={onLoadCalendar}
+            onAddOfficeMessage={() => {
+              openImport(draft);
+            }}
           />
           <p className="composer-hint">Enter sends. Shift+Enter adds a line. Pasted messages keep their lines.</p>
         </div>
       </div>
+      <ImportSheet
+        request={importing}
+        run={run}
+        onClose={() => setImporting(null)}
+        onImported={(messageId) => {
+          setImports((all) => [...all, { messageId, after: chat.messages.length }]);
+          if (importing && importing.text === draft) setDraft("");
+          setImporting(null);
+          pinned.current = true;
+        }}
+      />
       <div className="sr-only" aria-live="polite">
-        {chat.pending?.status === "streaming" ? (chat.pending.tools.findLast((t) => t.ok === null)?.label ?? "The assistant is answering.") : chat.pending?.error ? chat.pending.error.message : ""}
+        {chat.pending?.status === "streaming" ? (chat.pending.tools.findLast((t) => t.ok === null)?.label ?? "The assistant is checking its answer.") : chat.pending?.error ? chat.pending.error.message : ""}
       </div>
     </section>
   );
@@ -192,15 +230,45 @@ function UserBubble({ text, at }: { text: string; at: string }) {
   );
 }
 
-function Declined({ text }: { text: string }) {
+function Declined({ text, onImport }: { text: string; onImport?: () => void }) {
   return (
     <div className="declined" role="note">
       <Icon name="shield" />
       <div className="stack-sm">
         <strong className="small">Outside this app's scope</strong>
         <p>{text}</p>
+        {onImport && (
+          <>
+            <p className="small muted">If you pasted a message from the office, add it as an office message instead. The app then reads only its appointment facts.</p>
+            <div>
+              <button type="button" className="btn" onClick={onImport}>
+                <Icon name="message" size="sm" /> Add this as an office message
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
+  );
+}
+
+// The words of the user message just before a declined answer, as this
+// page kept them. Empty after a reload, because the server stores a fixed
+// sentence in their place.
+function declinedOriginal(chat: ChatState, index: number): string {
+  const before = chat.messages[index - 1];
+  return before && before.role === "user" ? (chat.declinedText[before.id] ?? "") : "";
+}
+
+function ImportedItem({ messageId, state, run }: { messageId: string; state: AppState; run: Run }) {
+  return (
+    <article className="msg msg-assistant" aria-label="Office message you added">
+      <div className="msg-meta">
+        <Icon name="message" size="sm" />
+        <span>You added an office message</span>
+      </div>
+      <ClaimsCard messageId={messageId} evidenceIds={[]} state={state} run={run} />
+    </article>
   );
 }
 
@@ -224,12 +292,26 @@ function Extras({ cards, chips, state, run, onShowSlot }: { cards: Card[]; chips
   );
 }
 
-function MessageItem({ message: m, state, run, scripted, onShowSlot }: { message: ChatMessage; state: AppState; run: Run; scripted: boolean; onShowSlot: (k: string) => void }) {
+function MessageItem({
+  message: m,
+  state,
+  run,
+  scripted,
+  onShowSlot,
+  onImport,
+}: {
+  message: ChatMessage;
+  state: AppState;
+  run: Run;
+  scripted: boolean;
+  onShowSlot: (k: string) => void;
+  onImport?: () => void;
+}) {
   if (m.role === "user") return <UserBubble text={m.text} at={m.createdAt} />;
   return (
     <article className="msg msg-assistant" aria-label="Assistant">
       {m.declined ? (
-        <Declined text={m.text} />
+        <Declined text={m.text} onImport={onImport} />
       ) : (
         <>
           <AssistantHead scripted={scripted} at={m.createdAt} />
@@ -241,14 +323,36 @@ function MessageItem({ message: m, state, run, scripted, onShowSlot }: { message
   );
 }
 
-function PendingItem({ turn, state, run, scripted, onShowSlot }: { turn: PendingTurn; state: AppState; run: Run; scripted: boolean; onShowSlot: (k: string) => void }) {
+function PendingItem({
+  turn,
+  state,
+  run,
+  scripted,
+  onShowSlot,
+  onImport,
+}: {
+  turn: PendingTurn;
+  state: AppState;
+  run: Run;
+  scripted: boolean;
+  onShowSlot: (k: string) => void;
+  onImport: () => void;
+}) {
   const err = turn.error;
+  // ungrounded and model_unavailable: the streamed text is a fixed
+  // sentence written by code. It is shown once, as a notice.
+  const fixed = err !== null && (err.code === "ungrounded" || err.code === "model_unavailable");
   return (
     <>
       <UserBubble text={turn.userText} at={turn.createdAt} />
       <article className="msg msg-assistant" aria-label="Assistant" aria-busy={turn.status === "streaming"}>
         {err?.code === "out_of_scope" ? (
-          <Declined text={err.message} />
+          <Declined text={turn.text.trim() || err.message} onImport={onImport} />
+        ) : fixed ? (
+          <div className="notice" role="note">
+            <Icon name="info" />
+            <p>{turn.text.trim() || turnErrorText(err)}</p>
+          </div>
         ) : (
           <>
             <AssistantHead scripted={scripted} />
@@ -275,9 +379,9 @@ function PendingItem({ turn, state, run, scripted, onShowSlot }: { turn: Pending
           </>
         )}
         <Extras cards={turn.cards} chips={turn.chips} state={state} run={run} onShowSlot={onShowSlot} />
-        {err && err.code !== "out_of_scope" && (
-          <div className={err.code === "ungrounded" ? "notice" : "turn-error"} role={err.code === "ungrounded" ? "note" : "alert"}>
-            <Icon name={err.code === "ungrounded" ? "info" : "alert"} />
+        {err && err.code !== "out_of_scope" && !fixed && (
+          <div className="turn-error" role="alert">
+            <Icon name="alert" />
             <p>{turnErrorText(err)}</p>
           </div>
         )}
@@ -300,6 +404,8 @@ export function turnErrorText(err: { code: string; message: string }): string {
       return "The model did not answer. Nothing was saved. Try again in a moment.";
     case "stale_edit":
       return "The chat changed in another tab. It is reloaded. Nothing was saved.";
+    case "server_error":
+      return "The app could not finish that answer. Nothing was saved.";
     default:
       return "The assistant could not answer. Nothing was saved.";
   }

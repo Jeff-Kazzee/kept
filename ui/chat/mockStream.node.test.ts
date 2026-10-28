@@ -10,7 +10,7 @@ import { ReplyService } from "../../src/reply/service.ts";
 import { EventStore } from "../../src/store/event-log.ts";
 import { agentAccess, asFreshPage, fixtureMessage, intake } from "../../test/helpers.ts";
 import type { AppState } from "../api.ts";
-import { createMockTransport, intentOf, type MockApi } from "./mockStream.ts";
+import { WITHHELD_USER_TEXT, createMockTransport, intentOf, type MockApi } from "./mockStream.ts";
 import type { ChatEvent } from "./types.ts";
 
 function setup() {
@@ -68,11 +68,19 @@ describe("scripted chat", () => {
     const card = events.find((e) => e.event === "card");
     expect(card?.data).toMatchObject({ card: { kind: "claims", messageId: "m1", evidenceIds: ["m1-e1", "m1-e2"] } });
     expect(events.at(-1)).toMatchObject({ event: "turn.done", data: { chatVersion: 1 } });
+    // 0007, C4: tools and their cards first, the held text at the end in
+    // pieces, carrying exactly the stored text.
+    const names = events.map((e) => e.event);
+    expect(names.slice(0, 4)).toEqual(["turn.started", "tool.started", "card", "tool.finished"]);
+    expect(names.lastIndexOf("card")).toBeLessThan(names.indexOf("text.delta"));
+    const deltas = events.filter((e) => e.event === "text.delta").map((e) => (e.data as { text: string }).text);
+    expect(deltas.every((d) => d.length <= 81)).toBe(true);
     expect(writes).toEqual(["/api/messages", "/api/messages/m1/extract"]);
     const log = (await mock.load())!;
     expect(log.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
     expect(log.messages[1]!.cards).toEqual([{ kind: "claims", messageId: "m1", evidenceIds: ["m1-e1", "m1-e2"] }]);
     expect(log.messages[1]!.text).toContain("found 2 facts");
+    expect(deltas.join("")).toBe(log.messages[1]!.text);
   });
 
   it("walks the change: explanation and question cards, then fact chips from the live case", async () => {
@@ -92,17 +100,26 @@ describe("scripted chat", () => {
   it("declines a health question with the fixed text and runs no script", async () => {
     const { mock, turn, writes } = setup();
     const events = await turn("What dose of my medication should I take?");
-    expect(events.map((e) => e.event)).toEqual(["turn.started", "turn.error"]);
-    expect(events[1]!.data).toMatchObject({ code: "out_of_scope", message: SCOPE_DECLINE });
+    const names = events.map((e) => e.event);
+    expect(names[0]).toBe("turn.started");
+    expect(names.slice(-2)).toEqual(["turn.error", "turn.done"]);
+    expect(names.slice(1, -2).every((n) => n === "text.delta")).toBe(true);
+    expect(events.at(-2)!.data).toMatchObject({ code: "out_of_scope", message: SCOPE_DECLINE });
     expect(writes).toEqual([]);
-    expect((await mock.load())!.messages[1]).toMatchObject({ declined: true, text: SCOPE_DECLINE });
+    // The person's words are not kept. A fixed sentence is stored in their place.
+    const stored = (await mock.load())!.messages;
+    expect(stored[0]).toMatchObject({ role: "user", text: WITHHELD_USER_TEXT });
+    expect(stored[1]).toMatchObject({ declined: true, text: SCOPE_DECLINE });
+    expect(JSON.stringify(stored)).not.toContain("medication");
   });
 
   it("refuses a stale chat version and stores nothing", async () => {
     const { mock, turn } = setup();
     await turn("hello");
     const events = await turn("hello again", 0);
-    expect(events.at(-1)).toMatchObject({ event: "turn.error", data: { code: "stale_edit" } });
+    // Refused before it starts: only turn.error.
+    expect(events.map((e) => e.event)).toEqual(["turn.error"]);
+    expect(events[0]).toMatchObject({ data: { code: "stale_edit" } });
     expect((await mock.load())!.chatVersion).toBe(1);
   });
 

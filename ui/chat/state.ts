@@ -1,5 +1,7 @@
 // The chat as the page holds it: the stored messages, and the turn being
-// streamed. The streamed turn is shown as it arrives. When it ends, the page
+// streamed. The answer's text is held by the server until it passes the
+// checks, so text.delta events can come in a burst at the end, after the
+// tool and card events (0007, C1 and C4). The streamed turn is shown as it arrives. When it ends, the page
 // reads the stored chat again, and the stored messages replace it. A turn
 // the server did not store stays on screen with its error, so the user sees
 // what happened and that nothing was saved.
@@ -18,6 +20,9 @@ export type PendingTurn = {
   chips: FactChip[];
   status: "streaming" | "ended";
   error: { code: string; message: string } | null;
+  // True once the page read the stored chat after the turn and found the
+  // turn was not stored.
+  unsaved: boolean;
 };
 
 export type ChatState = {
@@ -25,6 +30,10 @@ export type ChatState = {
   chatVersion: number;
   messages: ChatMessage[];
   pending: PendingTurn | null;
+  // The words of a message the chat declined, by user message id. The
+  // server stores a fixed sentence in their place (0007, C2), so this page
+  // keeps them, in memory only, for "Add this as an office message".
+  declinedText: Record<string, string>;
 };
 
 export type ChatAction =
@@ -35,7 +44,11 @@ export type ChatAction =
   | { type: "settled"; log: ChatLog | null }
   | { type: "dismiss" };
 
-export const initialChat: ChatState = { status: "loading", chatVersion: 0, messages: [], pending: null };
+export const initialChat: ChatState = { status: "loading", chatVersion: 0, messages: [], pending: null, declinedText: {} };
+
+// Codes whose turn still stores an answer: the text.delta events carry a
+// fixed sentence written by code, and turn.done follows.
+export const FIXED_TEXT_CODES = new Set(["out_of_scope", "ungrounded", "model_unavailable"]);
 
 // A stream that ends with no turn.done and no turn.error.
 export const STREAM_CUT = "The answer stopped before it finished. Nothing was saved.";
@@ -49,7 +62,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "start":
       return {
         ...state,
-        pending: { turnId: null, userMessageId: null, userText: action.text, createdAt: action.at, text: "", tools: [], cards: [], chips: [], status: "streaming", error: null },
+        pending: { turnId: null, userMessageId: null, userText: action.text, createdAt: action.at, text: "", tools: [], cards: [], chips: [], status: "streaming", error: null, unsaved: false },
       };
     case "event": {
       const p = state.pending;
@@ -72,8 +85,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           return { ...state, pending: { ...p, chips: [...p.chips, ...e.data.chips] } };
         case "turn.done":
           return { ...state, chatVersion: Math.max(state.chatVersion, e.data.chatVersion), pending: { ...p, status: "ended" } };
-        case "turn.error":
-          return { ...state, pending: { ...p, status: "ended", error: { code: e.data.code, message: e.data.message } } };
+        case "turn.error": {
+          const declinedText = e.data.code === "out_of_scope" && p.userMessageId !== null ? { ...state.declinedText, [p.userMessageId]: p.userText } : state.declinedText;
+          // A code whose turn.done follows leaves the turn streaming until then.
+          const status = FIXED_TEXT_CODES.has(e.data.code) ? p.status : "ended";
+          return { ...state, declinedText, pending: { ...p, status, error: { code: e.data.code, message: e.data.message } } };
+        }
       }
       return state;
     }
@@ -85,7 +102,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (!p) return next;
       const stored = p.userMessageId !== null && next.messages.some((m) => m.id === p.userMessageId);
       if (stored) return { ...next, pending: null };
-      return { ...next, pending: { ...p, status: "ended", error: p.error ?? { code: "stream_cut", message: STREAM_CUT } } };
+      return { ...next, pending: { ...p, status: "ended", unsaved: true, error: p.error ?? { code: "stream_cut", message: STREAM_CUT } } };
     }
     case "dismiss":
       return { ...state, pending: null };
@@ -93,5 +110,5 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 }
 
 // True when the turn was not stored and the user's text should go back into
-// the composer.
-export const turnLost = (p: PendingTurn | null) => p !== null && p.status === "ended" && p.error !== null && p.error.code !== "out_of_scope";
+// the composer. A decline is not lost: the import sheet takes its words.
+export const turnLost = (p: PendingTurn | null) => p !== null && p.unsaved && p.error !== null && p.error.code !== "out_of_scope";

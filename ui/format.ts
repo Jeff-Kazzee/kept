@@ -42,7 +42,7 @@ export function denverShort(iso: string): string {
 // The claim types the domain defines (src/domain/claim.ts), kept here so
 // the page does not load the validation library. A test checks they match.
 export const CLAIM_TYPES = ["offer", "confirm", "cancel", "move", "reminder", "office_request"] as const;
-export const DEFAULT_EXTRACTION_EFFORT = "minimal";
+export const DEFAULT_EXTRACTION_EFFORT = "minimal" as const;
 
 const CLAIM_WORDS: Record<EvidenceClaimType, string> = {
   offer: "Offer",
@@ -88,4 +88,35 @@ export function errorSentence(e: unknown): string {
   }
   if (e instanceof TypeError) return "The page could not reach the app. Nothing was saved. Check that the app is running.";
   return `Something went wrong. ${NOTHING_SAVED}`;
+}
+
+const OFFSET = new Intl.DateTimeFormat("en-US", { timeZone: TIME_ZONE, timeZoneName: "longOffset" });
+const WALL = new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+
+// The offset of America/Denver at an instant, in minutes: -360 or -420.
+function denverOffset(ms: number): number {
+  const name = OFFSET.formatToParts(new Date(ms)).find((p) => p.type === "timeZoneName")?.value ?? "GMT";
+  const m = /GMT([+-])(\d{2}):(\d{2})/.exec(name);
+  return m ? (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3])) : 0;
+}
+
+// A wall time typed for America/Denver ("2026-11-01T01:30") as an ISO time
+// with its offset ("2026-11-01T01:30:00-06:00"). An hour that happens twice
+// on the 2026-11-01 change is read as the first one (MDT).
+export function denverWallToIso(wall: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(wall);
+  if (!m) return null;
+  const asUtc = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+  let offset = denverOffset(asUtc - 6 * 3600_000);
+  const second = denverOffset(asUtc - offset * 60_000);
+  if (second !== offset && denverOffset(asUtc - second * 60_000) === second) offset = second;
+  const sign = offset < 0 ? "-" : "+";
+  const abs = Math.abs(offset);
+  return `${wall}:00${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+}
+
+// The current time on the case's clock, for a datetime-local field.
+export function denverWallNow(now = Date.now()): string {
+  const p = Object.fromEntries(WALL.formatToParts(new Date(now)).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
 }
