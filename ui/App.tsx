@@ -20,6 +20,7 @@ import {
 } from "./api.ts";
 import { GrantPanel, PairingForm, ProposalCard, RecordNotes, UntrustedText, useLiveRefresh } from "./AgentPanels.tsx";
 import { ReplyPanel, shortTime } from "./ReplyPanel.tsx";
+import { UntrustedBox } from "./Untrusted.tsx";
 
 type Run = (action: () => Promise<unknown>) => Promise<void>;
 
@@ -480,12 +481,21 @@ export function ChecklistPanel({ items }: { items: ChecklistItem[] }) {
       <ul>
         {items.map((item) => (
           <li key={item.text}>
-            <strong>{item.text}</strong>
-            {item.sources.map((s) => (
-              <div key={s.evidenceId} className="quote">
-                {s.quote ? `“${s.quote}”` : "No quote."} · {s.sourceLabel} · <code>{s.evidenceId}</code>
-              </div>
-            ))}
+            {item.untrustedLabel ? <UntrustedBox label={item.untrustedLabel} text={item.text} /> : <strong>{item.text}</strong>}
+            {item.sources.map((s) =>
+              s.untrustedLabel && s.quote ? (
+                <div key={s.evidenceId}>
+                  <UntrustedBox label={s.untrustedLabel} text={s.quote} />
+                  <div className="quote">
+                    {s.sourceLabel} · <code>{s.evidenceId}</code>
+                  </div>
+                </div>
+              ) : (
+                <div key={s.evidenceId} className="quote">
+                  {s.quote ? `“${s.quote}”` : "No quote."} · {s.sourceLabel} · <code>{s.evidenceId}</code>
+                </div>
+              ),
+            )}
           </li>
         ))}
       </ul>

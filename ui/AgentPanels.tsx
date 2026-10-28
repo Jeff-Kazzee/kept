@@ -3,7 +3,9 @@
 // named and revoked only here or with `pnpm grant`. No MCP tool manages
 // them, and no MCP tool confirms a proposal.
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { untrustedLabel } from "../src/domain/untrusted.ts";
 import { describeChange } from "../src/records/types.ts";
+import { UntrustedBox } from "./Untrusted.tsx";
 import { api, pairing, versionChanged, type GrantInfo, type LiveVersion, type ProposalView, type RecordView, type Tier } from "./api.ts";
 
 type Run = (action: () => Promise<unknown>) => Promise<void>;
@@ -41,12 +43,7 @@ export function denverTime(iso: string): string {
 // Text an agent or an imported message wrote, shown as data in a labeled
 // box. Never rendered as markup.
 export function UntrustedText({ label, text }: { label: string; text: string }) {
-  return (
-    <div className="untrusted">
-      <div className="label">{label}. Untrusted text, shown as data.</div>
-      <pre>{text}</pre>
-    </div>
-  );
+  return <UntrustedBox label={untrustedLabel(label)} text={text} />;
 }
 
 // Sprint 6 review, finding 1: creating a grant and confirming an agent's

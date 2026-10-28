@@ -2,6 +2,7 @@
 // fills each field from the projected slot, the evidence and the case
 // profile, and renders the template. Model output never supplies a value.
 // Pure functions over the case projection.
+import { agentWordsLabel, untrustedLabel } from "../domain/untrusted.ts";
 import type { EvidenceView, MessageView } from "../intake/events.ts";
 import { dateLabel, timeLabel } from "../slots/labels.ts";
 import type { SlotView } from "../slots/types.ts";
@@ -70,6 +71,27 @@ function officeName(slot: SlotView, ctx: ReplyContext): { value: string; source:
   return null;
 }
 
+// An evidence item as a field source. The quote of an agent's confirmed
+// report is the agent's own words, so it carries the agent's name and the
+// untrusted label instead of being shown as a quote.
+function evidenceSource(e: EvidenceView): FieldSource {
+  const c = e.claim;
+  if (c.source_type === "reported_by_user_via_agent") {
+    return { kind: "evidence", evidenceId: e.id, text: c.quote ?? `Evidence ${e.id}`, agentName: c.agent_name ?? null, untrustedLabel: agentWordsLabel(c.agent_name) };
+  }
+  return { kind: "evidence", evidenceId: e.id, text: c.quote ? `Quote: “${c.quote}”` : `Evidence ${e.id}` };
+}
+
+// A value that only agents' words support, such as a place an agent
+// reported, is labeled as untrusted. A value an office message or the user
+// also states is not.
+function agentOnly(f: FieldView): FieldView {
+  const agents = f.sources.filter((s) => s.untrustedLabel);
+  if (f.value === null || agents.length === 0 || agents.length !== f.sources.length) return f;
+  const names = [...new Set(agents.map((s) => s.agentName ?? "an agent"))].join(" and ");
+  return { ...f, untrustedLabel: untrustedLabel(`Reported only by ${names}`) };
+}
+
 function field(name: FieldName, value: string | null, display: string | null, sources: FieldSource[]): FieldView {
   return { name, label: FIELD_LABELS[name], value, display: value === null ? null : display, sources: value === null ? [] : sources };
 }
@@ -79,13 +101,15 @@ export function slotFields(template: TemplateId, slot: SlotView, ctx: ReplyConte
   const office = officeName(slot, ctx);
   const placeSources: FieldSource[] = ctx.evidence
     .filter((e) => e.status === "accepted" && slot.location !== null && e.claim.slot.date === slot.date && e.claim.slot.location === slot.location)
-    .map((e) => ({ kind: "evidence", evidenceId: e.id, text: e.claim.quote ? `Quote: “${e.claim.quote}”` : `Evidence ${e.id}` }));
+    .map(evidenceSource);
   const alternatives = template === "keep_original" ? proposedAlternatives(slot, ctx.slots) : [];
   const all: Record<FieldName, FieldView> = {
     office_name: field("office_name", office?.value ?? null, office?.value ?? null, office ? [office.source] : []),
     date: field("date", slot.date, dateLabel(slot.date), [slotSource]),
     time: field("time", slot.time, slot.time === null ? null : timeLabel(slot.time), [slotSource]),
-    location: field("location", slot.location === null ? null : oneLine(slot.location), slot.location === null ? null : oneLine(slot.location), placeSources),
+    location: agentOnly(
+      field("location", slot.location === null ? null : oneLine(slot.location), slot.location === null ? null : oneLine(slot.location), placeSources),
+    ),
     declined_slots: field(
       "declined_slots",
       alternatives.length === 0 ? null : alternatives.map((t) => t.key).join(","),

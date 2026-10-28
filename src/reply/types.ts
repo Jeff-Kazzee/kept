@@ -5,7 +5,17 @@ import type { FieldName, TemplateId } from "./templates.ts";
 
 // Where a field value came from. `slot` is the projected slot, `evidence`
 // one accepted evidence item, `case` the case profile.
-export type FieldSource = { kind: "slot" | "evidence" | "case"; evidenceId: string | null; text: string };
+// `agentName` and `untrustedLabel` are set when the source is an agent's
+// confirmed report, whose words are the agent's own: show `text` as
+// untrusted text under that label. Drafts stored before sprint 6 have
+// neither.
+export type FieldSource = {
+  kind: "slot" | "evidence" | "case";
+  evidenceId: string | null;
+  text: string;
+  agentName?: string | null;
+  untrustedLabel?: string | null;
+};
 
 export type FieldView = {
   name: FieldName;
@@ -16,6 +26,9 @@ export type FieldView = {
   // The words the reply text uses for the value.
   display: string | null;
   sources: FieldSource[];
+  // Set when the value comes only from agents' words, such as a place an
+  // agent reported. The readback shows the label beside the value.
+  untrustedLabel?: string | null;
 };
 
 export type ReplyOption = { template: TemplateId; title: string; slotKey: string; slotLabel: string };

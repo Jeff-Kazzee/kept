@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { EDITED_LABEL, SIMULATED_SEND_LABEL } from "../src/reply/templates.ts";
 import type { DraftView, ReplyView, SuggestionView } from "../src/reply/types.ts";
 import { api } from "./api.ts";
+import { UntrustedBox } from "./Untrusted.tsx";
 
 type Run = (action: () => Promise<unknown>) => Promise<void>;
 
@@ -151,15 +152,25 @@ function DraftCard({ draft, version, run }: { draft: DraftView; version: number;
                 />
               </td>
               <td>{f.label}</td>
-              <td>{f.display ?? <em>Not in any accepted evidence. Left out of the reply.</em>}</td>
+              <td>
+                {f.display ?? <em>Not in any accepted evidence. Left out of the reply.</em>}
+                {f.untrustedLabel && <div className="warn">{f.untrustedLabel}</div>}
+              </td>
               <td>
                 {f.sources.length === 0
                   ? "none"
-                  : f.sources.map((s, i) => (
-                      <div key={i}>
-                        {s.evidenceId && <code>{s.evidenceId}</code>} {s.text}
-                      </div>
-                    ))}
+                  : f.sources.map((s, i) =>
+                      s.untrustedLabel ? (
+                        <div key={i}>
+                          {s.evidenceId && <code>{s.evidenceId}</code>}
+                          <UntrustedBox label={s.untrustedLabel} text={s.text} />
+                        </div>
+                      ) : (
+                        <div key={i}>
+                          {s.evidenceId && <code>{s.evidenceId}</code>} {s.text}
+                        </div>
+                      ),
+                    )}
               </td>
             </tr>
           ))}

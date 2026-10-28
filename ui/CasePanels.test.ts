@@ -17,14 +17,22 @@ describe("sprint 5 panels", () => {
     const html = renderToStaticMarkup(
       createElement(ChecklistPanel, {
         items: [
-          { text: "Bring new insurance card", sources: [{ evidenceId: "m2-e2", quote: "Please bring your new insurance card", sourceLabel: "office message" }] },
-          { text: "Bring the parking pass", sources: [{ evidenceId: "p-1-1", quote: null, sourceLabel: "reported by you through Laptop assistant" }] },
+          {
+            text: "Bring new insurance card",
+            untrustedLabel: null,
+            sources: [{ evidenceId: "m2-e2", quote: "Please bring your new insurance card", sourceLabel: "office message", sourceType: "office_message", agentName: null, untrustedLabel: null }],
+          },
+          {
+            text: "Bring the parking pass",
+            untrustedLabel: null,
+            sources: [{ evidenceId: "p-1-1", quote: null, sourceLabel: "reported by you", sourceType: "reported_by_user", agentName: null, untrustedLabel: null }],
+          },
         ],
       }),
     );
     expect(html).toContain("<strong>Bring new insurance card</strong>");
     expect(html).toContain("“Please bring your new insurance card” · office message · <code>m2-e2</code>");
-    expect(html).toContain("No quote. · reported by you through Laptop assistant");
+    expect(html).toContain("No quote. · reported by you");
     expect(html).not.toMatch(/model output/i);
     expect(renderToStaticMarkup(createElement(ChecklistPanel, { items: [] }))).toContain("Nothing yet.");
   });

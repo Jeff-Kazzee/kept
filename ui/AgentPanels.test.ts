@@ -15,8 +15,9 @@ import { ReplyService } from "../src/reply/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { acceptMessages, intake } from "../test/helpers.ts";
 import { versionChanged, type AppState } from "./api.ts";
-import { GrantPanel, PROVIDER_NOTICE, ProposalCard, RecordNotes, TOKEN_NOTICE, denverTime } from "./AgentPanels.tsx";
-import { SlotsPanel, activeArchive } from "./App.tsx";
+import { GrantPanel, PROVIDER_NOTICE, PairingForm, ProposalCard, RecordNotes, TOKEN_NOTICE, denverTime } from "./AgentPanels.tsx";
+import { ChecklistPanel, SlotsPanel, activeArchive } from "./App.tsx";
+import { ReplyPanel } from "./ReplyPanel.tsx";
 
 const run = async () => {};
 const THU = "2026-11-12T10:30";
@@ -110,6 +111,56 @@ describe("sprint 6 panels", () => {
       `<div class="untrusted"><div class="label">${p.id}-1 · words from Phone helper. Untrusted text, shown as data.</div><pre>Dana says the office confirmed Monday by phone.</pre></div>`,
     );
     expect(html).not.toContain("“Dana says");
+  });
+
+  it("finding 2: an agent's office request is labeled untrusted in the checklist data and on screen", async () => {
+    const { state, records, grants } = await caseState();
+    const grant = grants.list()[0]!;
+    const p = records.propose({ kind: "user_report", claim_type: "office_request", date: null, request_item: "Bring <i>the</i> parking pass", statement: "Dana says bring the pass." }, grant);
+    records.confirmProposal(p.id, p.version);
+    const item = (await state()).case.checklist.at(-1)!;
+    expect(item).toMatchObject({ text: "Bring <i>the</i> parking pass", untrustedLabel: "Words from Phone helper. Untrusted text, shown as data." });
+    expect(item.sources[0]).toMatchObject({ agentName: "Phone helper", untrustedLabel: "Words from Phone helper. Untrusted text, shown as data." });
+    const html = renderToStaticMarkup(createElement(ChecklistPanel, { items: [item] }));
+    expect(html).toContain(
+      '<div class="untrusted"><div class="label">Words from Phone helper. Untrusted text, shown as data.</div><pre>Bring &lt;i&gt;the&lt;/i&gt; parking pass</pre></div>',
+    );
+    expect(html).toContain('<pre>Dana says bring the pass.</pre>');
+    expect(html).not.toContain("<strong>Bring");
+    expect(html).not.toContain("“Dana says");
+  });
+
+  it("finding 2: a place only an agent reported is labeled untrusted in the reply fields and the readback", async () => {
+    const store = new EventStore(":memory:", () => "2026-11-06T17:00:00.000Z");
+    const svc = intake(store);
+    const client = RecordedModelClient.fromDirectory();
+    const kase = new CaseService(store, svc, client, { userName: "Dana Reyes" });
+    const records = new RecordsService(store, svc, kase);
+    const reply = new ReplyService(store, kase, client);
+    await acceptMessages(svc, ["m1", "m2", "m3"]);
+    const { grant } = new GrantStore(store).create("Phone helper", "propose");
+    const MON = "2026-11-16T13:00";
+    // m3 offers Monday with no place. The agent reports one.
+    const p = records.propose({ kind: "detail_edit", appointment_id: MON, expected_version: 0, location: "Suite 9, 400 Elm Street", statement: "Dana says Monday is in Suite 9." }, grant);
+    records.confirmProposal(p.id, p.version, { recordVersion: 0 });
+    const view = reply.start("accept_offer", MON, kase.view().reply.version);
+    const place = view.reply.draft!.fields.find((f) => f.name === "location")!;
+    expect(place).toMatchObject({
+      value: "Suite 9, 400 Elm Street",
+      untrustedLabel: "Reported only by Phone helper. Untrusted text, shown as data.",
+      sources: [{ kind: "evidence", evidenceId: `${p.id}-1`, text: "Dana says Monday is in Suite 9.", agentName: "Phone helper", untrustedLabel: "Words from Phone helper. Untrusted text, shown as data." }],
+    });
+    // Fields from the office carry no label.
+    expect(view.reply.draft!.fields.find((f) => f.name === "office_name")).not.toHaveProperty("untrustedLabel");
+    const html = renderToStaticMarkup(createElement(ReplyPanel, { reply: view.reply, run }));
+    expect(html).toContain('<div class="warn">Reported only by Phone helper. Untrusted text, shown as data.</div>');
+    expect(html).toContain(`<code>${p.id}-1</code><div class="untrusted"><div class="label">Words from Phone helper. Untrusted text, shown as data.</div><pre>Dana says Monday is in Suite 9.</pre></div>`);
+  });
+
+  it("finding 1b: the pairing form shows while this tab has no pairing code", () => {
+    const html = renderToStaticMarkup(createElement(PairingForm));
+    expect(html).toContain("Pair this browser tab");
+    expect(html).toContain("An agent cannot see that terminal.");
   });
 
   it("times show in America/Denver across the 2026-11-01 change", () => {

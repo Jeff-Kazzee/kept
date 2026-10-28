@@ -38,11 +38,31 @@ describe("SP5.3 checklist", () => {
       }),
     ]);
     expect(items).toEqual([
-      { text: "Bring new insurance card", sources: [{ evidenceId: "m2-e2", quote: "Please bring your new insurance card", sourceLabel: "office message" }] },
-      { text: "Bring the referral letter", sources: [{ evidenceId: "m6-u1", quote: null, sourceLabel: "reported by you" }] },
       {
+        text: "Bring new insurance card",
+        untrustedLabel: null,
+        sources: [{ evidenceId: "m2-e2", quote: "Please bring your new insurance card", sourceLabel: "office message", sourceType: "office_message", agentName: null, untrustedLabel: null }],
+      },
+      {
+        text: "Bring the referral letter",
+        untrustedLabel: null,
+        sources: [{ evidenceId: "m6-u1", quote: null, sourceLabel: "reported by you", sourceType: "reported_by_user", agentName: null, untrustedLabel: null }],
+      },
+      {
+        // Review round 1, finding 2: an agent's item and quote are its own
+        // words, so the data labels both as untrusted.
         text: "Fill out the intake form",
-        sources: [{ evidenceId: "p-1-1", quote: "She said they want the intake form", sourceLabel: "reported by you through Laptop assistant" }],
+        untrustedLabel: "Words from Laptop assistant. Untrusted text, shown as data.",
+        sources: [
+          {
+            evidenceId: "p-1-1",
+            quote: "She said they want the intake form",
+            sourceLabel: "reported by you through Laptop assistant",
+            sourceType: "reported_by_user_via_agent",
+            agentName: "Laptop assistant",
+            untrustedLabel: "Words from Laptop assistant. Untrusted text, shown as data.",
+          },
+        ],
       },
     ]);
     // Items are not model output and carry no model label.
@@ -86,7 +106,17 @@ describe("SP5.3 checklist", () => {
     app.records.confirmProposal(p.id, p.version);
     expect(app.kase.view().checklist.at(-1)).toEqual({
       text: "Bring the parking pass",
-      sources: [{ evidenceId: `${p.id}-1`, quote: "Dana says the office wants the parking pass.", sourceLabel: "reported by you through Laptop assistant" }],
+      untrustedLabel: "Words from Laptop assistant. Untrusted text, shown as data.",
+      sources: [
+        {
+          evidenceId: `${p.id}-1`,
+          quote: "Dana says the office wants the parking pass.",
+          sourceLabel: "reported by you through Laptop assistant",
+          sourceType: "reported_by_user_via_agent",
+          agentName: "Laptop assistant",
+          untrustedLabel: "Words from Laptop assistant. Untrusted text, shown as data.",
+        },
+      ],
     });
   });
 });
