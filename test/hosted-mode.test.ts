@@ -72,7 +72,7 @@ describe("app modes", () => {
   }, 30_000);
 
   it("a bad mode setting stops the app at start", async () => {
-    for (const env of [{ APP_MODE: "cloud" }, { APP_MODE: "hosted", APP_MARKUP: "0.5" }]) {
+    for (const env of [{ APP_MODE: "cloud" }, { APP_MODE: "hosted", APP_MARKUP: "0.5" }] as Array<Record<string, string>>) {
       const s = start(env);
       expect((await s.ready).code).toBe(2);
     }
