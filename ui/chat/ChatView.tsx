@@ -24,7 +24,7 @@ export type ChatViewProps = {
   streaming: boolean;
   scripted: boolean;
   send: (text: string) => Promise<void>;
-  onShowSlot: (slotKey: string) => void;
+  onShowSlot: (slotKey: string, from?: HTMLElement) => void;
   onLoadCalendar: (file: File) => Promise<void>;
   onLoadDemo: () => Promise<FixtureScenario["messages"][number] | null>;
   fixtures: FixtureScenario["messages"];
@@ -272,17 +272,27 @@ function ImportedItem({ messageId, state, run }: { messageId: string; state: App
   );
 }
 
-function Extras({ cards, chips, state, run, onShowSlot }: { cards: Card[]; chips: FactChip[]; state: AppState; run: Run; onShowSlot: (k: string) => void }): ReactNode {
+function Extras({ cards, chips, state, run, onShowSlot }: { cards: Card[]; chips: FactChip[]; state: AppState; run: Run; onShowSlot: (k: string, from?: HTMLElement) => void }): ReactNode {
   return (
     <>
       {chips.length > 0 && (
         <div className="chips" aria-label="Facts from your schedule">
-          {chips.map((c) => (
-            <button key={c.slotKey} type="button" className="chip fact-chip" onClick={() => onShowSlot(c.slotKey)} aria-label={`${c.label}: ${c.stateLabel}. Show in schedule.`}>
-              <span>{c.label}</span>
-              <small>{c.stateLabel}</small>
-            </button>
-          ))}
+          {chips.map((c) => {
+            const live = liveChip(c, state);
+            return live.gone ? (
+              <button key={c.slotKey} type="button" className="chip fact-chip" disabled aria-label={`${c.label}: no longer on your schedule. At the time: ${c.stateLabel}.`}>
+                <span>{c.label}</span>
+                <small>No longer on your schedule</small>
+                <small className="muted">At the time: {c.stateLabel}</small>
+              </button>
+            ) : (
+              <button key={c.slotKey} type="button" className="chip fact-chip" onClick={(e) => onShowSlot(c.slotKey, e.currentTarget)} aria-label={`${live.label}: ${live.stateLabel}. Show in schedule.`}>
+                <span>{live.label}</span>
+                <small>{live.stateLabel}</small>
+                {live.stateLabel !== c.stateLabel && <small className="muted">At the time: {c.stateLabel}</small>}
+              </button>
+            );
+          })}
         </div>
       )}
       {cards.map((c, i) => (
@@ -304,7 +314,7 @@ function MessageItem({
   state: AppState;
   run: Run;
   scripted: boolean;
-  onShowSlot: (k: string) => void;
+  onShowSlot: (k: string, from?: HTMLElement) => void;
   onImport?: () => void;
 }) {
   if (m.role === "user") return <UserBubble text={m.text} at={m.createdAt} />;
@@ -335,7 +345,7 @@ function PendingItem({
   state: AppState;
   run: Run;
   scripted: boolean;
-  onShowSlot: (k: string) => void;
+  onShowSlot: (k: string, from?: HTMLElement) => void;
   onImport: () => void;
 }) {
   const err = turn.error;
@@ -388,6 +398,16 @@ function PendingItem({
       </article>
     </>
   );
+}
+
+// A fact chip as the case stands now. The chip only names the slot. Its
+// label and state come from the live case view, so a chip made when a slot
+// was confirmed does not still say so after the slot changed. A slot that
+// is gone or archived is no longer on the schedule.
+export function liveChip(chip: FactChip, state: Pick<AppState, "case" | "records">): { gone: true } | { gone: false; label: string; stateLabel: string } {
+  const slot = state.case.slots.find((x) => x.key === chip.slotKey);
+  const archived = state.records.some((r) => r.id === chip.slotKey && r.archived);
+  return !slot || archived ? { gone: true } : { gone: false, label: slot.label, stateLabel: slot.stateLabel };
 }
 
 // The words for a turn that ended with an error. The server's message is a

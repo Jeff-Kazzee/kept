@@ -71,7 +71,9 @@ describe("chat view", () => {
     expect(html).not.toContain("<img");
     expect(html).toContain("Outside this app's scope");
     expect(html).toContain(" Add this as an office message</button>");
-    expect(html).toContain('aria-label="Monday 11/16 1:00 PM: Confirmed · office message. Show in schedule."');
+    // The slot is not in this case view, so the chip says it is gone.
+    expect(html).toContain("No longer on your schedule");
+    expect(html).toContain("At the time: Confirmed · office message");
     expect(html).toContain("See the Checklist tab.");
     // The 2026-11-01 08:30 UTC instant is 01:30 MST, after the change.
     expect(html).toContain("Sun, Nov 1, 1:30 AM MST");
@@ -132,5 +134,31 @@ describe("chat view", () => {
   it("the composer offers Add an office message at any time", () => {
     const html = render({ status: "ready", chatVersion: 0, messages: [], pending: null });
     expect(html).toContain('aria-label="Add an office message"');
+  });
+
+  it("review 1, finding 2: a fact chip shows the slot as it is now, and a gone or archived slot as no longer on the schedule", () => {
+    const slot = (key: string, label: string, stateLabel: string) => ({ key, label, stateLabel });
+    const live = {
+      ...state,
+      case: { ...state.case, slots: [slot("2026-11-12T10:30", "Thursday 11/12 10:30 AM", "Canceled · office message"), slot("2026-11-10T14:00", "Tuesday 11/10 2:00 PM", "Offered · office message")] },
+      records: [{ id: "2026-11-10T14:00", archived: true }],
+    } as unknown as AppState;
+    const chip = (slotKey: string, stateLabel: string) => ({ slotKey, label: "old label", stateLabel, evidenceIds: [] });
+    const html = render(
+      {
+        status: "ready",
+        chatVersion: 1,
+        pending: null,
+        messages: [{ id: "a1", role: "assistant", text: "Here.", createdAt: at, cards: [], chips: [chip("2026-11-12T10:30", "Confirmed · office message"), chip("2026-11-10T14:00", "Offered · office message"), chip("2026-11-20T09:00", "Offered · office message")] }],
+      },
+      { state: live },
+    );
+    // Live label and state, with the old state as a muted line.
+    expect(html).toContain('aria-label="Thursday 11/12 10:30 AM: Canceled · office message. Show in schedule."');
+    expect(html).toContain('<small class="muted">At the time: Confirmed · office message</small>');
+    expect(html).not.toContain(">Confirmed · office message</small><small");
+    // Archived and missing slots: disabled, said plainly.
+    expect(html.match(/<button type="button" class="chip fact-chip" disabled=""/g)).toHaveLength(2);
+    expect(html.split("No longer on your schedule").length - 1).toBe(2);
   });
 });

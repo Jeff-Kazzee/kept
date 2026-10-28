@@ -36,7 +36,9 @@ function Sources({ ids, state, open = false }: { ids: string[]; state: AppState;
   );
 }
 
-export function QuestionCard({ conflictId, state, run }: { conflictId: string; state: AppState; run: Run }) {
+// `showDraft` false leaves out the reply draft the answer opened, for a
+// place that already shows the draft (the Schedule tab).
+export function QuestionCard({ conflictId, state, run, showDraft = true }: { conflictId: string; state: AppState; run: Run; showDraft?: boolean }) {
   const kase = state.case;
   const conflict = kase.conflicts.find((c) => c.id === conflictId);
   const q = kase.question?.conflictId === conflictId ? kase.question : null;
@@ -53,7 +55,7 @@ export function QuestionCard({ conflictId, state, run }: { conflictId: string; s
     return (
       <div className="card">
         <p className="small muted">This question no longer applies. The case changed since it was asked.</p>
-        {draftId && <ReplyCard draftId={draftId} state={state} run={run} />}
+        {showDraft && draftId && <ReplyCard draftId={draftId} state={state} run={run} />}
       </div>
     );
   }
@@ -101,7 +103,7 @@ export function QuestionCard({ conflictId, state, run }: { conflictId: string; s
           <Sources ids={conflict.evidenceIds} state={state} />
         </>
       )}
-      {draftId && <ReplyCard draftId={draftId} state={state} run={run} />}
+      {showDraft && draftId && <ReplyCard draftId={draftId} state={state} run={run} />}
     </section>
   );
 }

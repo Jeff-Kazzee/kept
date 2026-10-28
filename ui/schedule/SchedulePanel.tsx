@@ -106,7 +106,7 @@ export function SchedulePanel({
   );
 }
 
-function ScheduleTab({ state, run, highlight }: { state: AppState; run: Run; highlight: string | null }) {
+export function ScheduleTab({ state, run, highlight }: { state: AppState; run: Run; highlight: string | null }) {
   const kase = state.case;
   const pending = state.evidence.filter((e) => e.status === "pending");
   const proposals = state.proposals.filter((p) => p.status === "pending");
@@ -124,7 +124,7 @@ function ScheduleTab({ state, run, highlight }: { state: AppState; run: Run; hig
           {proposals.map((p) => (
             <ProposalCard key={p.id} proposal={p} records={state.records} run={run} />
           ))}
-          {kase.question && !reply.draft && <QuestionCard conflictId={kase.question.conflictId} state={state} run={run} />}
+          {kase.question && <QuestionCard conflictId={kase.question.conflictId} state={state} run={run} showDraft={false} />}
           {replyWaiting && <ReplyPanel reply={{ ...reply, sent: [] }} run={run} />}
         </section>
       )}

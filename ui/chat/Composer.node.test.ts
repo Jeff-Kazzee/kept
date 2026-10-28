@@ -1,0 +1,44 @@
+// Review 1, finding 5: the message box grows with a pasted message without
+// any style written from script, which the production CSP may refuse.
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { createElement, createRef } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import { Composer, MAX_ROWS, composerRows } from "./Composer.tsx";
+
+const render = (value: string) =>
+  renderToStaticMarkup(
+    createElement(Composer, {
+      value,
+      onChange: () => {},
+      onSend: () => {},
+      disabled: false,
+      busy: false,
+      inputRef: createRef<HTMLTextAreaElement>(),
+      onLoadCalendar: async () => {},
+      onAddOfficeMessage: () => {},
+    }),
+  );
+
+describe("composer", () => {
+  it("sets its rows from the lines of the text, up to a limit", () => {
+    expect(composerRows("")).toBe(1);
+    expect(composerRows("one line")).toBe(1);
+    expect(composerRows("a\nb\nc")).toBe(3);
+    expect(composerRows(Array.from({ length: 30 }, () => "x").join("\n"))).toBe(MAX_ROWS);
+    expect(render("Hi Dana,\n\nThis confirms Monday.\n\nFront Desk")).toContain('rows="5"');
+    // No inline style in the markup.
+    expect(render("a\nb")).not.toContain("style=");
+  });
+
+  it("writes no style from script anywhere in the page's code", () => {
+    const ui = fileURLToPath(new URL("..", import.meta.url));
+    const files = (readdirSync(ui, { recursive: true }) as string[]).filter((f) => /\.tsx?$/.test(f) && !/\.test\.ts$/.test(f));
+    expect(files.length).toBeGreaterThan(20);
+    for (const f of files) {
+      const src = readFileSync(`${ui}/${f}`, "utf8");
+      expect(src, f).not.toMatch(/\.style\.|style=\{|setAttribute\("style"/);
+    }
+  });
+});

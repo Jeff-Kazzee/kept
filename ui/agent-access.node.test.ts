@@ -102,6 +102,9 @@ describe("sprint 6 panels", () => {
     expect(hidden).not.toContain("Thursday 11/12 10:30 AM");
     expect(hidden).toContain("Every appointment is archived.");
     const shown = renderToStaticMarkup(createElement(Agenda, { state: s, run, initialShowArchived: true }));
+    // Review 1, finding 7: an appointment can take focus when a fact chip
+    // opens the schedule at it.
+    expect(shown).toMatch(/<article id="slot-20261112-1030" tabindex="-1"/i);
     expect(shown).toContain("Thursday 11/12 10:30 AM");
     expect(shown).toContain('<span class="badge">Archived</span>');
     expect(shown).toContain(" Undo archive</button>");

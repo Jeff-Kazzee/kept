@@ -1,10 +1,17 @@
 // The message box. Enter sends and Shift+Enter adds a line. A pasted
 // message keeps its lines. The calendar button loads a .ics file through
 // the existing calendar route.
-import { useLayoutEffect, useRef, type RefObject } from "react";
+import { useRef, type RefObject } from "react";
 import { Icon } from "../components/Icon.tsx";
 
 export const MAX_MESSAGE = 20000;
+export const MAX_ROWS = 8;
+
+// The number of rows for the box: one per line of text, at most MAX_ROWS.
+// The box grows by this attribute and by CSS (field-sizing: content where
+// the browser has it), never by a style written from script, which the
+// production Content-Security-Policy may refuse. Past MAX_ROWS it scrolls.
+export const composerRows = (value: string) => Math.min(MAX_ROWS, Math.max(1, value.split("\n").length));
 
 export function Composer({
   value,
@@ -26,13 +33,6 @@ export function Composer({
   onAddOfficeMessage: () => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  // Grow with the text, up to the CSS max height.
-  useLayoutEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [value, inputRef]);
 
   return (
     <form
@@ -70,7 +70,7 @@ export function Composer({
         ref={inputRef}
         id="chat-input"
         name="message"
-        rows={1}
+        rows={composerRows(value)}
         value={value}
         maxLength={MAX_MESSAGE}
         disabled={disabled}

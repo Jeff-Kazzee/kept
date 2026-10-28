@@ -20,7 +20,11 @@ import { useLiveRefresh } from "./useLiveRefresh.ts";
 
 type Toast = { id: number; kind: "error" | "info"; text: string };
 
-const scriptedChat = () => new URLSearchParams(window.location.search).get("mockchat") === "1";
+// The scripted chat is a development tool. It makes real case writes, so
+// only a development build has it: Vite sets import.meta.env.DEV to false
+// in `pnpm build`, the branch below is dropped, and the mock module is left
+// out of the bundle. A production page ignores ?mockchat=1.
+const scriptedChat = () => import.meta.env.DEV && new URLSearchParams(window.location.search).get("mockchat") === "1";
 
 export function App() {
   const [state, setState] = useState<AppState | null>(null);
@@ -107,7 +111,7 @@ function Shell({
   onNotPaired: () => void;
 }) {
   const scripted = useMemo(scriptedChat, []);
-  const transport: ChatTransport = useMemo(() => (scripted ? createMockTransport({ api, storage: sessionStorage }) : realTransport), [scripted]);
+  const transport: ChatTransport = useMemo(() => (import.meta.env.DEV && scripted ? createMockTransport({ api, storage: sessionStorage }) : realTransport), [scripted]);
   const { chat, send, streaming } = useChat(transport, `${state.live.generation}:${state.live.seq}`, onNotPaired, () => void refresh());
   const [view, setView] = useState<"chat" | "schedule">("chat");
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -115,6 +119,21 @@ function Shell({
   const [highlight, setHighlight] = useState<string | null>(null);
   const [fixtures, setFixtures] = useState<FixtureScenario["messages"]>([]);
   const sheetToggle = useRef<HTMLButtonElement>(null);
+  // The fact chip that opened the schedule. Focus goes back to it when the
+  // schedule closes (the tablet sheet) or the phone goes back to Chat.
+  const returnFocus = useRef<HTMLElement | null>(null);
+
+  const giveBackFocus = (fallback: HTMLElement | null) => {
+    const target = returnFocus.current?.isConnected ? returnFocus.current : fallback;
+    returnFocus.current = null;
+    requestAnimationFrame(() => target?.focus());
+  };
+  const closeSheet = () => {
+    setSheetOpen(false);
+    giveBackFocus(sheetToggle.current);
+  };
+  const closeSheetRef = useRef(closeSheet);
+  closeSheetRef.current = closeSheet;
 
   useEffect(() => {
     void api.fixtures().then(
@@ -127,21 +146,28 @@ function Shell({
   useEffect(() => {
     if (!sheetOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setSheetOpen(false);
-        sheetToggle.current?.focus();
-      }
+      if (e.key === "Escape") closeSheetRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [sheetOpen]);
 
-  const showSlot = (slotKey: string) => {
+  // Opens the schedule at one appointment, outlines it and moves focus to
+  // it, so a keyboard or screen reader user lands there, not behind the
+  // sheet or on a hidden chat.
+  const showSlot = (slotKey: string, from?: HTMLElement) => {
+    returnFocus.current = from ?? null;
     setTab("schedule");
     setView("schedule");
     setSheetOpen(true);
     setHighlight(slotKey);
-    requestAnimationFrame(() => document.getElementById(slotElementId(slotKey))?.scrollIntoView({ block: "center" }));
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = document.getElementById(slotElementId(slotKey));
+        el?.scrollIntoView({ block: "center" });
+        el?.focus({ preventScroll: true });
+      }),
+    );
   };
 
   const loadCalendar = async (file: File) => {
@@ -192,7 +218,7 @@ function Shell({
           className="btn btn-ghost sheet-toggle"
           aria-expanded={sheetOpen}
           aria-controls="schedule-panel"
-          onClick={() => setSheetOpen((o) => !o)}
+          onClick={() => (sheetOpen ? closeSheet() : setSheetOpen(true))}
         >
           <Icon name="panel" /> Schedule
           {waiting > 0 && <span className="count">{waiting}</span>}
@@ -211,7 +237,7 @@ function Shell({
           onLoadDemo={loadDemo}
           fixtures={fixtures}
         />
-        <button type="button" className="scrim" aria-label="Close the schedule" tabIndex={-1} onClick={() => setSheetOpen(false)} />
+        <button type="button" className="scrim" aria-label="Close the schedule" tabIndex={-1} onClick={closeSheet} />
         <aside id="schedule-panel" className="panel" aria-label="Schedule">
           <SchedulePanel
             state={state}
@@ -219,15 +245,20 @@ function Shell({
             tab={tab}
             onTab={setTab}
             highlight={highlight}
-            onClose={() => {
-              setSheetOpen(false);
-              sheetToggle.current?.focus();
-            }}
+            onClose={closeSheet}
           />
         </aside>
       </main>
       <div className="tabbar" role="tablist" aria-label="Views">
-        <button type="button" role="tab" aria-selected={view === "chat"} onClick={() => setView("chat")}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "chat"}
+          onClick={(e) => {
+            setView("chat");
+            if (returnFocus.current) giveBackFocus(e.currentTarget);
+          }}
+        >
           <Icon name="chat" /> Chat
         </button>
         <button type="button" role="tab" aria-selected={view === "schedule"} onClick={() => setView("schedule")}>

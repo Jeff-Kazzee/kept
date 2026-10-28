@@ -119,7 +119,7 @@ function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; r
   const archiveVersion = activeArchive(record);
   const options = kase.reply.options.filter((o) => o.slotKey === s.key);
   return (
-    <article id={slotElementId(s.key)} className={["slot", record?.archived ? "archived" : "", highlight ? "highlight" : ""].filter(Boolean).join(" ")} aria-label={`${s.label}: ${s.stateLabel}`}>
+    <article id={slotElementId(s.key)} tabIndex={-1} className={["slot", record?.archived ? "archived" : "", highlight ? "highlight" : ""].filter(Boolean).join(" ")} aria-label={`${s.label}: ${s.stateLabel}`}>
       <div className="slot-time">{s.time ? timeLabel(s.time) : "No time"}</div>
       <div className="slot-body">
         <div className="slot-line">

@@ -23,7 +23,10 @@ export type MockApi = {
 
 export type MockOptions = { api: MockApi; now?: () => string; delayMs?: number; storage?: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null };
 
-const STORE_KEY = "appointments-mock-chat";
+// Also the marker test/bundle.test.ts looks for: it must not be in the
+// production bundle.
+export const MOCK_MARKER = "appointments-mock-chat";
+const STORE_KEY = MOCK_MARKER;
 
 // The sentence the chat stores in place of a message it declined (0007,
 // C2). After 7A merges this comes from src/agent/types.ts.

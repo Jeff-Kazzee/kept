@@ -164,8 +164,8 @@ async function request<T>(method: "GET" | "POST", path: string, body?: unknown):
     headers: method === "POST" ? await writeHeaders() : {},
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const json = await res.json();
-  if (!res.ok) throw new ApiError(res.status, json);
+  const json: unknown = await res.json();
+  if (!res.ok) throw new ApiError(res.status, json as ApiError["body"]);
   return json as T;
 }
 
@@ -178,8 +178,8 @@ export const api = {
       headers: { "Content-Type": "application/json", "X-Appointments-App": "1" },
       body: JSON.stringify({ code }),
     });
-    const json = await res.json();
-    if (!res.ok) throw new ApiError(res.status, json);
+    const json: unknown = await res.json();
+    if (!res.ok) throw new ApiError(res.status, json as ApiError["body"]);
     return json as { paired: true };
   },
   state: async () => {
