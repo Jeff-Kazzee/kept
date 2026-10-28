@@ -314,9 +314,9 @@ describe("the secret scan", () => {
     const r = repo();
     r.write("README.md", "Nothing here.\n");
     r.commit("First");
-    const token = newGrantToken();
+    const { key: token, text } = assignment();
     r.git("checkout", "-q", "-b", "side");
-    r.write("leak.txt", `${token}\n`);
+    r.write("leak.txt", `${text}\n`);
     r.commit("Leak");
     r.git("update-ref", "refs/entire/checkpoints/AB/01TEST", "HEAD");
     r.git("update-ref", "refs/t3/checkpoints/1", "HEAD");
@@ -402,8 +402,8 @@ describe("the secret scan", () => {
     const r = repo();
     r.write("README.md", "Nothing here.\n");
     r.commit("First");
-    const token = newGrantToken();
-    r.write("staged.txt", `${token}\n`);
+    const { key: token, text } = assignment();
+    r.write("staged.txt", `${text}\n`);
     r.git("add", "staged.txt");
     r.write("staged.txt", "clean now\n");
     const run = scan(r.dir);
