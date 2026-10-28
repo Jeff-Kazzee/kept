@@ -293,6 +293,79 @@ and slot checks 6/15, for two reasons. Tests:
   subject with its own verb sits between them ("I see the office confirmed
   Monday and canceled Thursday").
 
+## The last round: live runs on aec3cff and Muse round 2
+
+The live run on aec3cff confirmed L1 and L3 above: meaning-flips 15/15
+slots and 6/6 text, step 1 accepted no claim, and m4's claims came back
+with sender_kind person. Tests: `test/review-sprint12-round2.test.ts`.
+
+- N1 (live L1). `conflict_explained` was counted as an action that cannot
+  be undone. An explanation is model text beside a conflict. It changes no
+  slot, claim, draft or record the person relies on. It stays an activity
+  entry, as every agent action is logged (0009, design 3), with its
+  existing reason "An explanation changes nothing in your schedule, so
+  there is nothing to undo." The chat eval no longer counts it, or a
+  template suggestion, as an action that cannot be undone. It lists them
+  under `nothingToUndo` (`NOTHING_TO_UNDO_KINDS` in
+  `src/actions/service.ts`). (proposed)
+- N2 (live L2). Live `pnpm demo:check` ended step 8 (m4) as `ungrounded`.
+  `demo:check` does not see the refused answers, since the page never
+  gets them, so the app now writes each refused answer and its problems
+  to stderr when `APP_LOG_REJECTED=1`, which only `demo:check` sets for
+  its temporary app, and `demo:check` prints them under their step.
+  The likely cause, from the m4 answers in the chat run: the tools label
+  a claim with a date and no time "Thursday 11/12, no time", the model
+  repeated it ("Thursday 11/12, no time is canceled"), and the check read
+  "no" as a negation of "canceled". The answer check now reads that label
+  as the date alone. A wrong state is still caught ("Thursday 11/12, no
+  time is confirmed" fails). The other refused text, "Accepted all 8
+  pending items for Tuesday 11/10 2:00 PM, ...", was a false refusal:
+  "pending" described the claims waiting for review, not Tuesday's slot.
+  A state word right before items, claims, facts, evidence or review is
+  no longer read as a slot state. "Tuesday 11/10 2:00 PM is pending" still
+  fails. (proposed)
+- N3 (live L3). The short notes passed 3/3 each. The six non-valid
+  results are S9.1 and S9.2 (no fit, as expected) and S7.1, "Please
+  confirm my visit." on a slot with no time, where the model picked
+  `ask_still_stands` and code blocked it with `missing_field`. That is the
+  expected safe outcome. Our prompt did not say a template needs a time,
+  so the template call's instructions now say a slot whose time is null
+  fits no template. (proposed)
+- N4 (Muse 1 and 2). The negation check reads the clauses that hold the
+  quote and a following sentence or line that starts with it, this or
+  that. A clause ends at a comma, a semicolon, a colon or a contrast word.
+  A negation anywhere before the state word in the clause counts,
+  including no, none, without and yet to be, and so do "no longer" and
+  "anymore" after it. Idioms such as "cannot wait" and "no need to reply"
+  are not negations. When unsure it refuses. A table test holds each case
+  in both directions. (proposed)
+- N5 (Muse 3). A pasted message that a person at the office signed now
+  gets sender_kind person, so rules 4 and 5 order its claims by the time
+  it was pasted. That is right when someone pastes what they just got.
+  The risk: an old message pasted after a newer one is ordered after it,
+  so a stale confirmation can win over a newer cancel. Every accept is
+  logged with Undo, the claims card names the message, and the agent's
+  instructions now say to name the message it imported and the
+  appointments its claims changed, so a wrong order shows. (proposed,
+  pending Jeff)
+- N6 (Muse 4). The action check holds "and have confirmed" to the
+  activity log, excuses a verb after another subject only when that
+  subject governs it (not inside a relative clause such as "the note that
+  you sent"), and reads "confirmed that ..." or "confirmed the time is
+  ..." as checking, not as an action. (proposed)
+- N7 (Muse 5 to 7). Clinical chunks keep joining while they start a whole
+  clinical word, up to six chunks, with commas allowed between them, never
+  across a sentence end, and never when every chunk is an ordinary
+  standalone word ("the rapist"). The scope list adds "résultats du
+  laboratoire", "Blutuntersuchung", "Untersuchungsergebnisse" and
+  "Befund". (proposed)
+- N8 (Muse 8). The MCP gate refuses `explain_conflict` and
+  `ask_next_question` with no provider ready even when the answer is
+  already stored and would need no model call. That is safe and stays.
+- N9 (Muse 9). `demo:check` sends SIGKILL after 10 s only while the app's
+  identity still matches, and stops waiting after 15 s, failing the check,
+  so an app it cannot stop never holds it open. (proposed)
+
 ## Questions for Jeff
 
 - Answered by the coordinator: the scripted chat behind `?mockchat=1`
