@@ -5,7 +5,7 @@ Status: proposed, pending Jeff (2026-10-28)
 This records how sprint 7B builds the web app: the chat beside the
 schedule, the cards, the design system, the production build and the host
 setting for a private proxy. W1 to W8 and P1 to P3 came with the sprint,
-and W9 with a coordinator note. B1 to B22 are choices the writer made
+and W9 with a coordinator note. B1 to B23 are choices the writer made
 while building it. The chat route and the case agent are sprint 7A
 (0007). Both work to the chat contract below.
 
@@ -238,6 +238,14 @@ imports them (`ui/chat/types.ts` adds only how it reaches the chat).
   the chat does for a pasted fixture message in recorded mode. A demo
   message already in the case shows its claims card instead of a second
   import.
+- B23. "Add this as an office message" shows under a scope decline always,
+  and under an unavailable or failed answer only when the person's text
+  reads as a pasted message (a line break, or 60 characters or more), not
+  under a question. While a turn streams, a card event makes the page read
+  the case again, so a card about a message the turn just imported renders
+  live, and until then it says "Loading the message…" rather than that the
+  message is gone. The explanation stays beside the open question in
+  "Waiting for you".
 - Review round 2 (low): build files are opened once with `O_NOFOLLOW` and
   checked with fstat on that handle. Chips are keyed by slot and position
   and carry their message id and slot key, so focus finds the live chip

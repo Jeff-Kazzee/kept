@@ -123,7 +123,7 @@ export function ChatView(props: ChatViewProps) {
                 run={run}
                 scripted={scripted}
                 onShowSlot={onShowSlot}
-                onImport={offersImport(m) ? () => openImport(m.declined ? declinedOriginal(chat, i) : userTextBefore(chat, i)) : undefined}
+                onImport={offersImport(m, userTextBefore(chat, i)) ? () => openImport(m.declined ? declinedOriginal(chat, i) : userTextBefore(chat, i)) : undefined}
               />
               {imports
                 .filter((x) => x.after === i + 1)
@@ -284,6 +284,7 @@ export const PENDING_MESSAGE = "pending";
 // position too, because one answer can name a slot twice (B2).
 function Extras({
   messageId,
+  fresh = false,
   cards,
   chips,
   state,
@@ -291,6 +292,7 @@ function Extras({
   onShowSlot,
 }: {
   messageId: string;
+  fresh?: boolean;
   cards: Card[];
   chips: FactChip[];
   state: AppState;
@@ -320,7 +322,7 @@ function Extras({
         </div>
       )}
       {cards.map((c, i) => (
-        <CardView key={i} card={c} state={state} run={run} />
+        <CardView key={i} card={c} state={state} run={run} fresh={fresh} />
       ))}
     </>
   );
@@ -381,7 +383,7 @@ function PendingItem({
   const codeText = fixed ? turn.text.trim() || turnErrorText(err) : isCodeSentence(turn.text) ? turn.text.trim() : null;
   // The chat could not answer. A pasted office message can still go in
   // through the import sheet.
-  const offerImport = err !== null && err.code !== "ungrounded" && err.code !== "stale_edit";
+  const offerImport = err !== null && err.code !== "ungrounded" && err.code !== "stale_edit" && looksPasted(turn.userText);
   return (
     <>
       <UserBubble text={turn.userText} at={turn.createdAt} />
@@ -415,7 +417,7 @@ function PendingItem({
             )}
           </>
         )}
-        <Extras messageId={PENDING_MESSAGE} cards={turn.cards} chips={turn.chips} state={state} run={run} onShowSlot={onShowSlot} />
+        <Extras messageId={PENDING_MESSAGE} fresh cards={turn.cards} chips={turn.chips} state={state} run={run} onShowSlot={onShowSlot} />
         {err && err.code !== "out_of_scope" && !fixed && (
           <div className="turn-error" role="alert">
             <Icon name="alert" />
@@ -435,9 +437,14 @@ function PendingItem({
 const CODE_SENTENCES = new Set([UNGROUNDED_TEXT, MODEL_UNAVAILABLE_TEXT, TOOL_LIMIT_TEXT, MALFORMED_TEXT, TOKEN_LIMIT_TEXT, PARTIAL_TEXT]);
 export const isCodeSentence = (text: string) => CODE_SENTENCES.has(text.trim());
 
+// Text that reads as a pasted message, not a question: more than one line,
+// or a long one.
+export const looksPasted = (text: string) => text.includes("\n") || text.trim().length >= 60;
+
 // Answers after which a pasted office message can go in through the import
-// sheet: the scope decline and the model being unavailable.
-export const offersImport = (m: ChatMessage) => m.declined === true || m.text.trim() === MODEL_UNAVAILABLE_TEXT;
+// sheet: the scope decline always (W9), and a failed or unavailable answer
+// when the person's text reads as a pasted message.
+export const offersImport = (m: ChatMessage, userText: string) => m.declined === true || (m.text.trim() === MODEL_UNAVAILABLE_TEXT && looksPasted(userText));
 
 function ImportOffer({ onImport }: { onImport?: () => void }) {
   if (!onImport) return null;
@@ -501,10 +508,10 @@ export function turnErrorText(err: { code: string; message: string }): string {
   }
 }
 
-export function CardView({ card, state, run }: { card: Card; state: AppState; run: Run }) {
+export function CardView({ card, state, run, fresh = false }: { card: Card; state: AppState; run: Run; fresh?: boolean }) {
   switch (card.kind) {
     case "claims":
-      return <ClaimsCard messageId={card.messageId} evidenceIds={card.evidenceIds} state={state} run={run} />;
+      return <ClaimsCard messageId={card.messageId} evidenceIds={card.evidenceIds} state={state} run={run} fresh={fresh} />;
     case "question":
       return <QuestionCard conflictId={card.conflictId} state={state} run={run} />;
     case "explanation":

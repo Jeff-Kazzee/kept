@@ -137,6 +137,9 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
           {proposals.map((p) => (
             <ProposalCard key={p.id} proposal={p} records={state.records} run={run} />
           ))}
+          {kase.question && kase.conflicts.find((c) => c.id === kase.question!.conflictId)?.explanation && (
+            <ExplanationCard conflictId={kase.question.conflictId} state={state} run={run} />
+          )}
           {kase.question && <QuestionCard conflictId={kase.question.conflictId} state={state} run={run} showDraft={false} />}
           {conflict && (
             <>

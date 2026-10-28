@@ -97,6 +97,10 @@ describe("claims card", () => {
   it("says when the message is no longer in the case", () => {
     const html = renderToStaticMarkup(createElement(ClaimsCard, { messageId: "gone", evidenceIds: [], state: st, run: async () => {} }));
     expect(html).toContain("This message is no longer in the case.");
+    // In the turn being streamed, a missing message is still loading.
+    const fresh = renderToStaticMarkup(createElement(ClaimsCard, { messageId: "gone", evidenceIds: [], state: st, run: async () => {}, fresh: true }));
+    expect(fresh).toContain("Loading the message…");
+    expect(fresh).not.toContain("no longer in the case");
   });
 
   it("keeps its claim types and default effort the same as the domain's", () => {

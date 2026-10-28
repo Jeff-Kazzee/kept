@@ -182,18 +182,21 @@ describe("chat view", () => {
       chatVersion: 6,
       pending: null,
       messages: [
-        { id: "cm1", role: "user", text: "Lantern Hill Clinic: see you Monday.", createdAt: at, cards: [], chips: [] },
+        { id: "cm1", role: "user", text: "Lantern Hill Clinic: we can see you Monday 11/16 at 1:00 PM.\nReply MON.", createdAt: at, cards: [], chips: [] },
         { id: "cm2", role: "assistant", text: MODEL_UNAVAILABLE_TEXT, createdAt: at, cards: [], chips: [] },
-        { id: "cm3", role: "user", text: "Import this", createdAt: at, cards: [], chips: [] },
-        { id: "cm5", role: "assistant", text: PARTIAL_TEXT, createdAt: at, cards: [{ kind: "notice", text: QUESTION_WITHHELD_NOTICE }], chips: [] },
+        { id: "cm3", role: "user", text: "What is confirmed?", createdAt: at, cards: [], chips: [] },
+        { id: "cm4", role: "assistant", text: MODEL_UNAVAILABLE_TEXT, createdAt: at, cards: [], chips: [] },
+        { id: "cm5", role: "user", text: "Import this", createdAt: at, cards: [], chips: [] },
+        { id: "cm6", role: "assistant", text: PARTIAL_TEXT, createdAt: at, cards: [{ kind: "notice", text: QUESTION_WITHHELD_NOTICE }], chips: [] },
       ],
     });
-    expect(html.split("Written by code").length - 1).toBe(3);
+    expect(html.split("Written by code").length - 1).toBe(4);
     expect(html).not.toContain(">Model output<");
     expect(html).toContain(MODEL_UNAVAILABLE_TEXT);
     expect(html).toContain(PARTIAL_TEXT);
     expect(html).toContain(QUESTION_WITHHELD_NOTICE);
-    // Only the unavailable answer offers the import sheet.
+    // Only the unavailable answer to a pasted message offers the import
+    // sheet, not the one to a question.
     expect(html.split(" Add this as an office message</button>").length - 1).toBe(1);
   });
 
@@ -205,7 +208,7 @@ describe("chat view", () => {
       pending: {
         turnId: "t1",
         userMessageId: "cm1",
-        userText: "Lantern Hill Clinic: see you Monday.",
+        userText: "Lantern Hill Clinic: see you Monday 11/16 at 1:00 PM at Elm Street.",
         createdAt: at,
         text: MODEL_UNAVAILABLE_TEXT,
         tools: [{ callId: "c1", label: "Reading your schedule", ok: true }],

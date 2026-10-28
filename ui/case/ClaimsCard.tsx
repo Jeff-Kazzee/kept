@@ -18,12 +18,14 @@ export function claimSlotWords(c: EvidenceView["claim"]): string {
   return c.slot.location ? `${when} at ${c.slot.location}` : when;
 }
 
-export function ClaimsCard({ messageId, evidenceIds, state, run }: { messageId: string; evidenceIds: string[]; state: AppState; run: Run }) {
+// `fresh` is true for a card of the turn being streamed: a missing message
+// was just imported and the case view is still loading it.
+export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }: { messageId: string; evidenceIds: string[]; state: AppState; run: Run; fresh?: boolean }) {
   const view = state.messages.find((m) => m.id === messageId);
   if (!view) {
     return (
-      <div className="card">
-        <p className="muted">This message is no longer in the case.</p>
+      <div className="card" aria-busy={fresh || undefined}>
+        <p className="muted">{fresh ? "Loading the message…" : "This message is no longer in the case."}</p>
       </div>
     );
   }
