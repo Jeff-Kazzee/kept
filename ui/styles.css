@@ -701,7 +701,7 @@ figure.source { margin: 0; }
 .empty { display: grid; justify-items: center; gap: var(--space-2); padding: var(--space-7) var(--space-4); text-align: center; color: var(--text-2); font-size: var(--text-sm); }
 .empty .icon { width: 28px; height: 28px; }
 
-.loading { display: grid; place-content: center; justify-items: center; gap: var(--space-3); height: 100vh; height: 100dvh; color: var(--text-2); }
+.loading { display: grid; place-content: center; justify-items: center; gap: var(--space-3); padding: var(--space-5); text-align: center; height: 100vh; height: 100dvh; color: var(--text-2); }
 
 /* The import sheet: a modal dialog, a bottom sheet on a phone. */
 .sheet {
