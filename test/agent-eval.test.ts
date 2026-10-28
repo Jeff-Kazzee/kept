@@ -179,15 +179,17 @@ describe("G11: pnpm eval:live --chat", () => {
     view = app.reply.approve(view.reply.draft!.id, view.reply.draft!.fields.map((f) => f.name), view.reply.version);
     expect(personOnlyState(app)).not.toBe(before);
     expect(unsupportedSlots(app)).toEqual([]);
-    // A state that rests on an agent's evidence is flagged.
+    // A state that rests on an agent's evidence is flagged. (A hold or a
+    // cancel an agent reports is kept aside by the projection, 0009 D1, so
+    // an offer shows the check.)
     app.store.append("evidence:x-1", 0, [
       {
         type: "answer_recorded",
         data: {
           claim: {
-            claim_type: "confirm",
-            slot: { date: "2026-11-13", time: "09:15", location: null },
-            quote: "Friday stands",
+            claim_type: "offer",
+            slot: { date: "2026-11-20", time: "09:00", location: null },
+            quote: "Friday 11/20 is offered",
             source_type: "reported_by_user_via_agent",
             sender_kind: "person",
             evidence_time: "2026-11-06T17:00:00.000Z",
@@ -203,6 +205,6 @@ describe("G11: pnpm eval:live --chat", () => {
         },
       },
     ]);
-    expect(unsupportedSlots(app)).toEqual(["2026-11-13T09:15"]);
+    expect(unsupportedSlots(app)).toEqual(["2026-11-20T09:00"]);
   });
 });

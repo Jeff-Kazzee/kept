@@ -22,7 +22,7 @@ import { StaleEditError, type EventStore, type StoredEvent, type StreamWrite } f
 import { ACCESS_LOG_STREAM, RECORD_PREFIX, projectRecords } from "../records/events.ts";
 import { SETTINGS_STREAM, caseTimeZone } from "../settings/events.ts";
 import { zonedIso } from "../domain/zone.ts";
-import { ASSISTANT_NAME } from "../slots/labels.ts";
+import { ASSISTANT_NAME, slotLabel } from "../slots/labels.ts";
 import { buildDraft, type ReplyContext } from "../reply/draft.ts";
 import { REPLY_STREAM, draftEvents, projectReplies, type ReplyLog } from "../reply/events.ts";
 import { replyView } from "../reply/view.ts";
@@ -228,6 +228,7 @@ export class CaseService {
       slots: projection.slots,
       conflicts,
       staleEvidenceIds: projection.staleEvidenceIds,
+      unconfirmedEvidenceIds: projection.unconfirmedEvidenceIds,
       question: current ? questionView(current) : null,
       waiting: conflicts.filter(isWaiting).length,
       questionsVersion: queue.version,
@@ -468,11 +469,20 @@ export class CaseService {
       // means, start a reply or leave things open set no state.
       if (agent !== null) {
         const made = new Set(writes.map((w) => w.streamId.slice("evidence:".length)));
-        const held = this.view().slots.find((s) => made.has(s.stateEvidenceId));
-        if (held) {
-          throw new AgentAnswerRefused(
-            `Only an office message or your own report can set ${held.label} to ${STATE_WORDS[held.state]}. ${agent === ASSISTANT_NAME ? "The assistant" : "An agent"} cannot answer with that choice. Answer it yourself in the app.`,
-          );
+        const after = this.view();
+        const who = agent === ASSISTANT_NAME ? "The assistant" : "An agent";
+        const refuse = (label: string, state: string) =>
+          new AgentAnswerRefused(`Only an office message or your own report can set ${label} to ${state}. ${who} cannot answer with that choice. Answer it yourself in the app.`);
+        const held = after.slots.find((s) => made.has(s.stateEvidenceId));
+        if (held) throw refuse(held.label, STATE_WORDS[held.state]!);
+        // An item that would hold, cancel or move a slot is kept aside by
+        // the projection, so it is refused here by what it says.
+        const aside = writes.flatMap((w) => w.events).map((e) => (e.data as { claim: EvidenceClaim }).claim);
+        const asideIds = writes.map((w) => w.streamId.slice("evidence:".length));
+        const kept = asideIds.findIndex((id) => after.unconfirmedEvidenceIds.includes(id));
+        if (kept >= 0) {
+          const c = aside[kept]!;
+          throw refuse(slotLabel(c.slot.date!, c.slot.time), c.claim_type === "cancel" ? "canceled" : c.claim_type === "move" ? "moved" : "confirmed");
         }
       }
     });

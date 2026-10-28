@@ -81,9 +81,27 @@ describe("SP2.2 source label beside each state", () => {
     expect(stateLabel("change_proposed", "office message")).toBe("Confirmed · office message, change proposed");
   });
 
-  it("labels a slot confirmed through an agent with the grant name", () => {
-    const p = project(ev("a", "confirm", THU.date, THU.time, T1, { source_type: "reported_by_user_via_agent", agent_name: "OpenCode" }));
+  it("labels a slot confirmed through an old grant's report, which the person confirmed, with the grant name", () => {
+    const p = project(ev("a", "confirm", THU.date, THU.time, T1, { source_type: "reported_by_user_via_agent", agent_name: "OpenCode", origin: "agent" }));
     expect(p.slots[0]!.stateLabel).toBe("Confirmed · reported by you through OpenCode");
+  });
+
+  it("0009 D1, rule 1: an agent's own report cannot hold, cancel or move a slot, and waits as unconfirmed until a message or the person agrees", () => {
+    const agent = { source_type: "reported_by_user_via_agent" as const, agent_name: "an external agent", origin: "model" as const };
+    // A cancel an external agent reported, with nothing else on the slot.
+    let p = project(ev("a", "confirm", THU.date, THU.time, T1), ev("x", "cancel", THU.date, THU.time, T2, agent));
+    expect(p.slots.map((s) => [s.key, s.stateLabel, s.unconfirmedEvidenceIds])).toEqual([[`${THU.date}T${THU.time}`, "Confirmed · office message", ["x"]]]);
+    expect(p.unconfirmedEvidenceIds).toEqual(["x"]);
+    // A confirmation for a slot no message names is not a slot at all.
+    p = project(ev("y", "confirm", MON.date, MON.time, T2, agent));
+    expect(p.slots).toEqual([]);
+    expect(p.unconfirmedEvidenceIds).toEqual(["y"]);
+    // When the office's message agrees, its claim sets the state.
+    p = project(ev("y", "confirm", MON.date, MON.time, T2, agent), ev("z", "confirm", MON.date, MON.time, T3));
+    expect(p.slots.map((s) => [s.stateLabel, s.stateEvidenceId, s.unconfirmedEvidenceIds])).toEqual([["Confirmed · office message", "z", ["y"]]]);
+    // An offer it reported still shows as offered, with its label.
+    p = project(ev("o", "offer", MON.date, MON.time, T2, agent));
+    expect(p.slots.map((s) => s.stateLabel)).toEqual(["Offered · reported through an external agent"]);
   });
 
   it("formats slot labels in plain words", () => {

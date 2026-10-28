@@ -39,8 +39,10 @@ export const ASSISTANT_NAME = "the assistant";
 export const EXTERNAL_AGENT_NAME = "an external agent";
 const AGENT_NAMES: readonly string[] = [ASSISTANT_NAME, EXTERNAL_AGENT_NAME];
 
-// "added by the assistant" for evidence an agent wrote. A name from before
-// sprint 8 is a grant's name on a report the user confirmed.
+// "added by the assistant" for evidence the assistant wrote, "reported
+// through an external agent" for what an agent over MCP reported (0009,
+// D1). A name from before sprint 8 is a grant's name on a report the user
+// confirmed.
 export function sourceLabel(source: SourceType, agentName: string | null = null): string {
   switch (source) {
     case "office_message":
@@ -48,6 +50,7 @@ export function sourceLabel(source: SourceType, agentName: string | null = null)
     case "reported_by_user":
       return "reported by you";
     case "reported_by_user_via_agent":
+      if (agentName === EXTERNAL_AGENT_NAME) return `reported through ${agentName}`;
       return agentName !== null && AGENT_NAMES.includes(agentName) ? `added by ${agentName}` : `reported by you through ${agentName ?? "an agent"}`;
   }
 }

@@ -46,6 +46,23 @@ export type ManualClaimInput = z.infer<typeof ManualClaimInput>;
 
 const asEvent = (e: MessageEvent | EvidenceEvent) => ({ type: e.type, data: e.data });
 
+// How a message came in, beyond its channel. `suggested` and `note` mark
+// source fields an agent suggested (0007, E1). `agentName` is set for the
+// report of something the person told an external agent: its claims are
+// then reported through that agent, not by the person (0009, D1).
+export type ImportSource = { suggested: Array<"channel" | "from" | "received_at">; note: string; agentName?: string };
+
+// An extracted claim carries its message's source: its source type, the
+// note on suggested fields and the reporting agent.
+function messageClaim(claim: EvidenceClaim, m: MessageView): EvidenceClaim {
+  return {
+    ...claim,
+    source_type: m.sourceType,
+    ...(m.sourceNote ? { source_note: m.sourceNote } : {}),
+    ...(m.agentName ? { agent_name: m.agentName } : {}),
+  };
+}
+
 export class IntakeService {
   readonly #store: EventStore;
   readonly #client: ModelClient;
@@ -108,19 +125,20 @@ export class IntakeService {
   // recorded, so no model call can follow.
   // `source` marks the fields the case agent suggested (0007, E1). Its
   // note is copied onto every claim extracted from the message.
-  importMessage(input: Message, source?: { suggested: Array<"channel" | "from" | "received_at">; note: string }): MessageView {
+  importMessage(input: Message, source?: ImportSource): MessageView {
     return this.#store.inCase(() => this.#importMessage(input, source));
   }
 
-  #importMessage(input: Message, source?: { suggested: Array<"channel" | "from" | "received_at">; note: string }): MessageView {
+  #importMessage(input: Message, source?: ImportSource): MessageView {
     const message = Message.parse(input);
     if (message.channel === "user_report" && hasClinicalContent(message.text)) throw new OutOfScopeError();
     const event: MessageEvent = {
       type: "message_imported",
       data: {
         message,
-        source_type: sourceTypeForChannel(message.channel),
+        source_type: source?.agentName ? "reported_by_user_via_agent" : sourceTypeForChannel(message.channel),
         ...(source && source.suggested.length > 0 ? { source_suggested: source.suggested, source_note: source.note } : {}),
+        ...(source?.agentName ? { agent_name: source.agentName } : {}),
       },
     };
     // A message added again after an undo withdrew it starts anew on its
@@ -151,6 +169,7 @@ export class IntakeService {
     this.#store.transaction(() => {
       const m = this.message(messageId);
       const ids = [...m.evidenceIds, ...m.manualEvidenceIds];
+      if (m.manualEvidenceIds.length > 0) throw new InvalidRequestError(`A fact was entered by hand for message ${messageId}. Reject that fact instead.`);
       const decided = ids.map((id) => this.evidenceItem(id)).filter((e) => e.status !== "pending");
       if (decided.length > 0) {
         throw new InvalidRequestError(`${decided.length === 1 ? "A fact" : `${decided.length} facts`} from message ${messageId} ${decided.length === 1 ? "was" : "were"} reviewed. Undo those reviews first.`);
@@ -210,7 +229,7 @@ export class IntakeService {
     const evidenceWrites: StreamWrite[] = result.passed.map((claim, i) => {
       const event: EvidenceEvent = {
         type: "claim_extracted",
-        data: { message_id: messageId, claim: before.sourceNote ? { ...claim, source_note: before.sourceNote } : claim, effort, attempt: finalAttempt },
+        data: { message_id: messageId, claim: messageClaim(claim, before), effort, attempt: finalAttempt },
       };
       return { streamId: evidenceStream(this.#newId(`${prefix}-e${i + 1}`)), expectedVersion: 0, events: [asEvent(event)] };
     });

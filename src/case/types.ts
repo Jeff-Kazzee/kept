@@ -63,6 +63,9 @@ export type CaseView = {
   slots: SlotView[];
   conflicts: ConflictView[];
   staleEvidenceIds: string[];
+  // Agent reports that change nothing until an office message or the
+  // person's own report agrees (0009, D1).
+  unconfirmedEvidenceIds: string[];
   // The one open question, or null.
   question: QuestionView | null;
   // Conflicts that wait to be asked about.

@@ -327,9 +327,13 @@ export function projectSlots(input: ProjectionInput): Projection {
     else if (e.claim.slot.location !== null) placeAnswers.set(slotKey(e.claim.slot.date, e.claim.slot.time), e);
   }
 
-  // Step 1: place claims on slots.
+  // Step 1: place claims on slots. A report from an agent that the person
+  // never confirmed is kept aside when it would hold, cancel or move a slot
+  // (0009, D1, rule 1). It shows on the slot as unconfirmed until an office
+  // message or the person's own report agrees.
   const timed = new Map<string, SlotDraft>();
   const dateOnly: Array<{ ev: EvidenceView; date: string }> = [];
+  const unconfirmed: Array<{ ev: EvidenceView; date: string | null; time: string | null }> = [];
   for (const e of accepted) {
     const type = e.claim.claim_type;
     if (STATUS_OF[type] === undefined && type !== "move") continue;
@@ -342,6 +346,10 @@ export function projectSlots(input: ProjectionInput): Projection {
         conflicts.push(ambiguousConflict(e, candidates.map((d) => ({ date: d, time }))));
         continue;
       }
+    }
+    if (unconfirmedAgentReport(e)) {
+      unconfirmed.push({ ev: e, date, time });
+      continue;
     }
     if (date === null) continue;
     if (time === null) dateOnly.push({ ev: e, date });
@@ -428,12 +436,28 @@ export function projectSlots(input: ProjectionInput): Projection {
         evidenceIds: [...f.items].sort(byArrival).map((e) => e.id),
         proposalEvidenceIds: state === "change_proposed" ? proposals.get(f.key)!.evidence.map((e) => e.id) : [],
         staleEvidenceIds: f.stale.map((e) => e.id),
+        unconfirmedEvidenceIds: unconfirmed.filter((u) => u.date === f.date && (u.time === null || u.time === f.time)).map((u) => u.ev.id),
         clashes: input.calendar && f.time !== null && !closed ? findClashes(f.date, f.time, input.calendar, input.timeZone ?? DEFAULT_TIME_ZONE) : null,
       };
     });
 
   conflicts.sort((a, b) => CONFLICT_PRIORITY.indexOf(a.kind) - CONFLICT_PRIORITY.indexOf(b.kind) || a.id.localeCompare(b.id));
-  return { slots, conflicts, staleEvidenceIds: folded.flatMap((f) => f.stale.map((e) => e.id)) };
+  return {
+    slots,
+    conflicts,
+    staleEvidenceIds: folded.flatMap((f) => f.stale.map((e) => e.id)),
+    unconfirmedEvidenceIds: unconfirmed.map((u) => u.ev.id),
+  };
+}
+
+// Claim types that hold, cancel or move a slot.
+const HOLDS_OR_RELEASES: ReadonlySet<string> = new Set(["confirm", "reminder", "cancel", "move"]);
+
+// A claim an agent reported that the person did not confirm: the report of
+// an external agent over MCP, or an agent's answer. A report an old grant
+// made and the person confirmed (origin "agent") still counts.
+export function unconfirmedAgentReport(e: EvidenceView): boolean {
+  return e.claim.source_type === "reported_by_user_via_agent" && e.origin !== "agent" && HOLDS_OR_RELEASES.has(e.claim.claim_type);
 }
 
 function addTo(map: Map<string, SlotDraft>, date: string, time: string | null, ev: EvidenceView) {

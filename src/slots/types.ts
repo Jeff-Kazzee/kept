@@ -40,6 +40,10 @@ export type SlotView = {
   proposalEvidenceIds: string[];
   // Automated reminders for this slot marked possibly stale (rule 6).
   staleEvidenceIds: string[];
+  // Reports an agent made for this slot that would hold, cancel or move it
+  // and that no office message or report of the person agrees with yet
+  // (0009, D1). They change nothing until one does.
+  unconfirmedEvidenceIds: string[];
   // Null when no calendar is loaded or the slot has no time.
   clashes: ClashView[] | null;
 };
@@ -107,4 +111,6 @@ export type Projection = {
   slots: SlotView[];
   conflicts: Conflict[];
   staleEvidenceIds: string[];
+  // Every such agent report, on a slot or not.
+  unconfirmedEvidenceIds: string[];
 };

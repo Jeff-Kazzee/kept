@@ -28,6 +28,9 @@ export type MessageEvent =
         // shows for them. Absent for messages imported any other way.
         source_suggested?: Array<"channel" | "from" | "received_at">;
         source_note?: string;
+        // For source reported_by_user_via_agent: the agent that reported
+        // it, set by code (0009, D1).
+        agent_name?: string;
       };
     }
   | {
@@ -100,6 +103,9 @@ export type MessageView = {
   // them. Empty and null for messages imported any other way.
   sourceSuggested: Array<"channel" | "from" | "received_at">;
   sourceNote: string | null;
+  // The agent that reported the message, for source
+  // reported_by_user_via_agent. Null otherwise.
+  agentName: string | null;
   status: "imported" | ExtractionOutcome;
   attempts: Array<Extract<MessageEvent, { type: "extraction_attempted" }>["data"]>;
   rejections: Array<Extract<MessageEvent, { type: "claim_rejected" }>["data"]>;
@@ -144,6 +150,7 @@ export function projectMessages(events: StoredEvent[]): Map<string, MessageView>
         sourceType: event.data.source_type,
         sourceSuggested: event.data.source_suggested ?? [],
         sourceNote: event.data.source_note ?? null,
+        agentName: event.data.agent_name ?? null,
         status: "imported",
         attempts: [],
         rejections: [],
