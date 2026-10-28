@@ -153,6 +153,16 @@ in this repo is synthetic.
 - Setup, testing-mode limits and the agent's own connectors:
   `docs/google.md`. Design: `docs/decisions/0012-google.md`.
 
+## The hosted site
+
+`APP_MODE=hosted` runs the public site: accounts that sign in with Google
+or a judge code, one private workspace each, and Meta usage on the
+server's key, paid from usage credit at 3 times the model's token cost.
+Judges get capped codes from `pnpm admin judges create`. Local mode, the
+default, is unchanged. How to run it, the caps, the off switch and how
+credits are priced: `docs/hosted.md`. Design:
+`docs/decisions/0014-accounts-and-credits.md`.
+
 See `docs/decisions/0001-stack.md` for the stack and dependency checks,
 `docs/decisions/0002-slot-states.md` for the slot rules,
 `docs/decisions/0003-reply-templates.md` for the reply rules, and
@@ -179,6 +189,7 @@ pnpm dev         # http://127.0.0.1:5180, the UI through Vite
 pnpm build       # production bundle in dist/ui, precompressed, budget checked
 pnpm start       # serves the production build on http://127.0.0.1:5180
 pnpm scan:secrets  # tokens and keys in the repository, see "What the secret scan finds"
+pnpm admin judges list  # hosted mode's judge codes, see docs/hosted.md
 pnpm demo:check  # the demo path end to end on the live app (needs MODEL_API_KEY)
 pnpm demo:check --recorded  # the same path offline on test doubles, not a product run
 ```
@@ -405,8 +416,13 @@ In each of those it finds, on one line:
   file up to 8 MB is also read as JSON for those fields, and every file up
   to 8 MB that is a SQLite database has its settings rows read, so a
   renamed copy of the settings database or an export of it is found.
+- A judge access code of the hosted site: `judge_` and 43 base64url
+  characters.
+- A SQLite file of any name that is the hosted site's accounts database,
+  one with a `judge_codes` or `sessions` table.
 - A file or folder named like the settings database (`app-secrets.sqlite`
-  and its `-wal`, `-shm` and `-journal` files) or a
+  and its `-wal`, `-shm` and `-journal` files), the hosted accounts
+  database (`accounts.sqlite` and the same three), or a
   local env file (`.env.local`, `.env.<name>.local`), in the tree or in
   history.
 

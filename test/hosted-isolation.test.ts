@@ -125,7 +125,11 @@ describe("isolation across accounts", () => {
     const set = (await a.call("GET", "/api/settings")).body;
     expect(set.hosted).toMatchObject({ chatgptAvailable: false });
     expect(set.meta).toEqual({ keySet: true, source: "server" });
-    expect(set.models.every((m: { turnCost: string }) => /^about \$\d+\.\d+ a turn$/.test(m.turnCost))).toBe(true);
+    // 18,000 input and 1,800 output tokens at 3 times the price, to the cent.
+    expect(set.models.map((m: { id: string; turnCost: string }) => [m.id, m.turnCost])).toEqual([
+      ["muse-spark-1.3", "about $0.09 a turn"],
+      ["muse-wonder-1.0", "about $0.32 a turn"],
+    ]);
     expect((await a.call("POST", "/api/auth/meta-key", { key: "user-meta-key-0123456789", expectedVersion: set.settingsVersion })).body.error).toBe("not_offered");
     expect((await a.call("POST", "/api/auth/chatgpt/start", {})).body.error).toBe("chatgpt_unavailable");
     expect((await a.call("PUT", "/api/settings/provider", { provider: "chatgpt", expectedVersion: set.settingsVersion })).body.error).toBe("chatgpt_unavailable");

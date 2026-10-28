@@ -159,9 +159,12 @@ export function usageLines(charges: ChargeRow[]): UsageLine[] {
   return lines.map(({ turn: _turn, ...line }) => line);
 }
 
-const turnCostWords = (model: string, markup: number) => {
+// A rough figure, to the nearest cent.
+export const turnCostWords = (model: string, markup: number) => {
   const micros = turnCostMicros(model, markup);
-  return micros === null ? null : `about ${formatUsd(micros)} a turn`;
+  if (micros === null) return null;
+  const cents = Math.round(micros / 10_000);
+  return cents < 1 ? "less than $0.01 a turn" : `about ${formatUsd(cents * 10_000)} a turn`;
 };
 
 export function createHostedApp(o: HostedOptions) {
