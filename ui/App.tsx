@@ -542,9 +542,7 @@ function Shell({
           waiting={waiting}
           drawerOpen={drawerOpen}
           inert={inert.sidebar}
-          folded={laptop ? folded : null}
           closeRef={drawerClose}
-          onFold={fold}
           onClose={closeDrawer}
           onOpen={openView}
           onSignOut={() => void signOut()}
@@ -563,6 +561,21 @@ function Shell({
             <Icon name="menu" />
             <Avatar who={who} />
           </button>
+          {/* Z11: the sidebar's fold toggle, where the phone's menu
+              button sits, so the app name fits the sidebar's head. */}
+          {laptop && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon side-fold"
+              aria-expanded={!folded}
+              aria-controls="sidebar"
+              aria-label={folded ? "Open the sidebar" : "Fold the sidebar"}
+              title={folded ? "Open the sidebar" : "Fold the sidebar"}
+              onClick={fold}
+            >
+              <Icon name="sidebar" />
+            </button>
+          )}
           <h1 ref={title} id="view-title" className="view-title" tabIndex={-1}>
             {VIEW_TITLES[view]}
           </h1>

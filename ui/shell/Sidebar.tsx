@@ -1,7 +1,8 @@
 // The left sidebar (0015): the mark and the app name, the registry's nav
 // items for the mode, and the account button at the bottom. It is 248 px
-// on a laptop and folds to a 64 px rail, is the rail on a tablet, and a
-// modal drawer on a phone. A div, not an aside, because the drawer is a
+// on a laptop and folds to a 64 px rail (the toggle sits at the left of
+// the work area's top bar, Z11), is the rail on a tablet, and a modal
+// drawer on a phone. A div, not an aside, because the drawer is a
 // dialog (SP12.7).
 import type { RefObject } from "react";
 import { Mark } from "../components/Art.tsx";
@@ -21,9 +22,7 @@ export function Sidebar({
   waiting,
   drawerOpen,
   inert,
-  folded,
   closeRef,
-  onFold,
   onClose,
   onOpen,
   onSignOut,
@@ -37,10 +36,7 @@ export function Sidebar({
   waiting: number;
   drawerOpen: boolean;
   inert: boolean;
-  // On a laptop: folded to the rail. Null where the sidebar cannot fold.
-  folded: boolean | null;
   closeRef: RefObject<HTMLButtonElement | null>;
-  onFold: () => void;
   onClose: () => void;
   onOpen: (view: View) => void;
   onSignOut: () => void;
@@ -50,25 +46,10 @@ export function Sidebar({
   return (
     <div id="sidebar" className="sidebar" role={modal ? "dialog" : undefined} aria-modal={modal || undefined} aria-label={modal ? "Menu" : undefined} inert={inert}>
       <div className="side-head">
-        {!(compact && folded !== null) && (
-          <span className="brand-mark" aria-hidden="true">
-            <Mark size={20} />
-          </span>
-        )}
+        <span className="brand-mark" aria-hidden="true">
+          <Mark size={20} />
+        </span>
         <span className="side-name side-label">Appointment assistant</span>
-        {folded !== null && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon side-fold"
-            aria-expanded={!folded}
-            aria-controls="sidebar-nav"
-            aria-label={folded ? "Open the sidebar" : "Fold the sidebar"}
-            title={folded ? "Open the sidebar" : "Fold the sidebar"}
-            onClick={onFold}
-          >
-            <Icon name="sidebar" />
-          </button>
-        )}
         {layout === "drawer" && (
           <button ref={closeRef} type="button" className="btn btn-ghost btn-icon side-close" aria-label="Close the menu" onClick={onClose}>
             <Icon name="close" />

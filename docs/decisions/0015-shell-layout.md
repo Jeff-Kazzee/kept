@@ -142,7 +142,9 @@ holds: under 150 KB of JavaScript gzipped on first load.
 - Z7. The theme switch in the account menu and the one in Settings are the
   same control, and stay in step through one window event.
 - Z8. Opening a view, a page or the case through "Back to your case",
-  puts focus on the top bar's heading, which names the view.
+  puts focus on the top bar's heading, which names the view. The heading
+  draws no focus ring, because only code focuses it (review C1). Every
+  Tab stop keeps its ring.
 - Z10. Focus is tried again each frame, up to about half a second
   (`focusSoon` in `ui/layout.ts`), because a sheet or the drawer that just
   opened refuses focus for a frame or two while it slides in. The schedule
@@ -150,3 +152,31 @@ holds: under 150 KB of JavaScript gzipped on first load.
   drawer's close button without focus in the browser check.
 - Z9. `ui/schedule/Settings.tsx` moved to `ui/pages/Settings.tsx`, because
   it is no longer part of the schedule panel.
+
+## Review round 1 (Muse Wonder and the coordinator)
+
+- R1. The toasts are inert while the phone drawer or the schedule sheet is
+  modal, so Tab stays inside the modal. `shellModes` in `shell.ts` says
+  which parts are modal and inert, and the shell uses it for every part.
+- R2 and R3. The openers (the model pill, the setup notice, Open Usage and
+  each toast link) and the account menu are rendered, opened and clicked
+  in tests, with recorders in place of the shell's `openView`.
+  `ui/test-dom.ts` is a small DOM for these tests, so react-dom renders
+  into it with no new dependency (W6). `openersFor(openView)` builds the
+  openers the shell gives every part.
+- R4. The laptop schedule rail's Schedule button names the waiting count,
+  as the sidebar's Case item does.
+- C2. The product names no docs path. When the server has no Google
+  client, Connections says "Google is not set up on this server yet, so
+  it cannot be connected here." The server's Google messages, the Google
+  sign-in errors and the scripted chat say the same in plain words, and
+  "Connect it in the app's settings" became "Connect it in Connections".
+  Agent access no longer names `docs/connect-agent.md`. A test reads every
+  page source for a docs path.
+- Z11 (C3). The sidebar's fold toggle sits at the left of the work area's
+  top bar, where the phone's menu button sits, so "Appointment assistant"
+  fits the 248 px head on one line at the items' size (14 px). The rail
+  shows the mark in its head.
+- C4. The suggestion row above the composer still scrolls sideways (0011,
+  U19). A chip cut at the edge fades out over 48 px, and space after the
+  last chip lets it scroll clear of the fade.

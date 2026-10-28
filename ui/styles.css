@@ -301,7 +301,10 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
   height: calc(var(--topbar-h) + env(safe-area-inset-top)); padding: env(safe-area-inset-top) var(--s-1) 0 var(--s-2);
   border-bottom: 1px solid var(--hairline);
 }
-.side-name { flex: 1; min-width: 0; font-size: var(--text-sm); font-weight: 650; line-height: 1.2; letter-spacing: var(--tracking-tight); text-wrap: balance; }
+/* One line at 248 px (review C3): the name is at the sidebar items' size,
+   with room to spare for wider system fonts. */
+.side-name { flex: 1; min-width: 0; font-size: var(--text-sm); font-weight: 650; letter-spacing: var(--tracking-tight); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-fold { margin-left: calc(-1 * var(--s-2)); }
 .side-nav { display: grid; align-content: start; gap: 2px; flex: 1; min-height: 0; overflow-y: auto; padding: var(--s-2) var(--s-1); }
 .side-item {
   position: relative; display: flex; align-items: center; gap: var(--s-2); min-height: var(--touch); padding: 0 var(--s-1) 0 12px;
@@ -640,7 +643,10 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
 .composer-hint { font-size: var(--text-xs); color: var(--text-2); text-align: center; }
 
 /* Suggestions above the composer stay on one line and scroll sideways. */
-.composer-inner > .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; mask-image: linear-gradient(to right, black calc(100% - 32px), transparent); }
+/* Review C4: a chip cut at the edge fades out over 48 px, so the row reads
+   as one that scrolls, and the space after the last chip lets it scroll
+   fully clear of the fade. */
+.composer-inner > .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 0 48px 2px 0; mask-image: linear-gradient(to right, black calc(100% - 48px), transparent); }
 .composer-inner > .chips .chip { flex: none; }
 
 .new-pill {
