@@ -25,7 +25,10 @@ import { TEMPLATES, type TemplateId } from "../reply/templates.ts";
 import { restoreTimezone, setTimezone } from "../settings/settings.ts";
 import { ASSISTANT_NAME, EXTERNAL_AGENT_NAME, slotKey, slotLabel } from "../slots/labels.ts";
 import { StaleEditError, type EventStore, type StoredEvent } from "../store/event-log.ts";
-import type { CalendarUndo } from "../google/calendar.ts";
+import { randomUUID } from "node:crypto";
+import type { CalendarUndo, SyncOutcome, WritePlan } from "../google/calendar.ts";
+import { GoogleError, type GoogleErrorCode } from "../google/http.ts";
+import { GOOGLE_INTENTS_STREAM, GoogleBusyError, OWNER, RUNNING, openIntents, reconcilable, type GoogleIntent } from "../google/intents.ts";
 import { undoGoogleActivity, type GoogleActivityKind, type GoogleServices } from "../google/tools.ts";
 
 // `google` is the built-in Google connection (0012), when the app has one.
@@ -42,6 +45,9 @@ export const YOU: By = { actor: "you" };
 export class UndoBlockedError extends Error {
   override name = "UndoBlockedError";
 }
+
+// A Google answer that may or may not have come after a write.
+const ambiguous = (code: GoogleErrorCode | string) => code === "google_unavailable" || code === "google_invalid_response";
 
 // An action only the person may take, attempted by an agent.
 export class PersonOnlyError extends InvalidRequestError {
@@ -214,24 +220,152 @@ export class CaseActions {
     );
   }
 
-  // A Google Calendar write that already happened at Google (0012). The
-  // entry carries its undo record.
-  recordGoogle(by: By, d: { kind: GoogleActivityKind; summary: string; slotKey: string; undo: CalendarUndo | null }): ActivityEntry {
-    let logged: ActivityEntry | null = null;
+  // Google Calendar writes (0012, review round 3, findings 1 to 3). The
+  // write at Google is a network call, so it cannot share a transaction
+  // with its entry. An intent is recorded first, in the store, then the
+  // write runs, then one transaction writes the entry and closes the
+  // intent. An intent left open, because that last transaction failed or
+  // Google's answer was lost, is reconciled by reconcileGoogle.
+
+  #openIntents(): Array<GoogleIntent & { openedAt: string }> {
+    return openIntents(this.#store.readStream(GOOGLE_INTENTS_STREAM));
+  }
+
+  // Inside a transaction. Refuses while another intent for the same
+  // appointment is open.
+  #openIntent(intent: GoogleIntent): void {
+    const busy = this.#openIntents().find((i) => i.slot_key === intent.slot_key);
+    if (busy) throw new GoogleBusyError(`A Google Calendar change for ${keyLabel(intent.slot_key)} is still in progress. Try again in a moment.`);
+    this.#store.appendSystem(GOOGLE_INTENTS_STREAM, [{ type: "google_intent_opened", data: intent }]);
+  }
+
+  #closeIntent(intentId: string, outcome: "logged" | "abandoned", entryId: string | null): void {
+    this.#store.appendSystem(GOOGLE_INTENTS_STREAM, [{ type: "google_intent_closed", data: { intent_id: intentId, outcome, entry_id: entryId } }]);
+  }
+
+  #googleEntry(by: By, d: { kind: GoogleActivityKind; summary: string; slotKey: string; undo: CalendarUndo | null; whyNot?: string }): ActivityEntry {
+    return this.#log(by, {
+      kind: d.kind,
+      summary: d.summary,
+      target: { type: "slot", id: d.slotKey },
+      undo: d.undo ? { kind: "google_calendar", undo: d.undo } : null,
+      whyNot: d.whyNot ?? "This Google Calendar change has no undo.",
+      slotKeys: [d.slotKey],
+    });
+  }
+
+  // One calendar write: the intent, the write at Google through `execute`,
+  // then the entry and the closed intent in one transaction. `entryFor`
+  // gives the kind and summary of what happened, or null when nothing was
+  // written. `expected` is what the plan expects, kept with the intent.
+  async googleWrite(
+    by: By,
+    plan: WritePlan,
+    expected: { kind: GoogleActivityKind; summary: string },
+    execute: () => Promise<SyncOutcome>,
+    entryFor: (outcome: SyncOutcome) => { kind: GoogleActivityKind; summary: string } | null,
+  ): Promise<{ outcome: SyncOutcome; entry: ActivityEntry | null }> {
+    const intentId = `gi-${randomUUID()}`;
     this.#store.inCase(() =>
-      this.#store.transaction(() => {
-        logged = this.#log(by, {
-          kind: d.kind,
-          summary: d.summary,
-          target: { type: "slot", id: d.slotKey },
-          undo: d.undo ? { kind: "google_calendar", undo: d.undo } : null,
-          whyNot: "This Google Calendar change has no undo.",
-          slotKeys: [d.slotKey],
-        });
-      }),
+      this.#store.transaction(() =>
+        this.#openIntent({ intent_id: intentId, kind: "write", slot_key: plan.slotKey, actor: by.actor, owner: OWNER, plan, entry_kind: expected.kind, summary: expected.summary }),
+      ),
     );
-    by.onEntry?.(logged!);
-    return logged!;
+    RUNNING.add(intentId);
+    try {
+      let outcome: SyncOutcome;
+      try {
+        outcome = await execute();
+      } catch (err) {
+        // A refusal is certain to have written nothing. A lost answer may
+        // have written, so its intent stays open for reconcileGoogle.
+        if (!(err instanceof GoogleError) || !ambiguous(err.code)) this.#store.inCase(() => this.#store.transaction(() => this.#closeIntent(intentId, "abandoned", null)));
+        throw err;
+      }
+      let entry: ActivityEntry | null = null;
+      this.#store.inCase(() =>
+        this.#store.transaction(() => {
+          const d = entryFor(outcome);
+          entry = d ? this.#googleEntry(by, { ...d, slotKey: plan.slotKey, undo: outcome.undo }) : null;
+          this.#closeIntent(intentId, entry ? "logged" : "abandoned", entry ? (entry as ActivityEntry).id : null);
+        }),
+      );
+      if (entry) by.onEntry?.(entry);
+      return { outcome, entry };
+    } finally {
+      RUNNING.delete(intentId);
+    }
+  }
+
+  // Finishes the intents a failed store write left open, by reading Google
+  // (review round 3, findings 1 and 2). A write that reached Google gets
+  // its entry and undo, one that did not is dropped, and one that changed
+  // at Google since gets an entry with no undo. An undo that reached Google
+  // gets its undo entry. An intent Google cannot be asked about now stays
+  // open. Returns the entries written.
+  async reconcileGoogle(by: By): Promise<ActivityEntry[]> {
+    const google = this.#google;
+    if (!google) return [];
+    const written: ActivityEntry[] = [];
+    for (const intent of this.#openIntents()) {
+      // An intent still running here, or one another process may still be
+      // running, is left alone.
+      if (!reconcilable(intent, intent.openedAt)) continue;
+      const actor: By = { actor: intent.actor, onEntry: by.onEntry };
+      try {
+        if (intent.kind === "write") {
+          const seen = await google.calendar.inspect(intent.plan);
+          this.#store.inCase(() =>
+            this.#store.transaction(() => {
+              if (!this.#openIntents().some((i) => i.intent_id === intent.intent_id)) return;
+              if (seen.state === "not_applied") return this.#closeIntent(intent.intent_id, "abandoned", null);
+              const entry = this.#googleEntry(actor, {
+                kind: intent.entry_kind,
+                summary: intent.summary,
+                slotKey: intent.slot_key,
+                undo: seen.state === "applied" ? seen.undo : null,
+                whyNot: "This Google Calendar change was changed again in Google Calendar since, so it has no undo.",
+              });
+              this.#closeIntent(intent.intent_id, "logged", entry.id);
+              written.push(entry);
+            }),
+          );
+        } else {
+          const record = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === intent.entry_id);
+          const spec = record?.undo?.kind === "google_calendar" ? record.undo.undo : null;
+          const state = spec ? await google.calendar.undoState(spec) : "diverged";
+          this.#store.inCase(() =>
+            this.#store.transaction(() => {
+              if (!this.#openIntents().some((i) => i.intent_id === intent.intent_id)) return;
+              const now = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === intent.entry_id);
+              if (state !== "reversed" || !now || now.undoneAt !== null) return this.#closeIntent(intent.intent_id, "abandoned", null);
+              const entry = this.#undoneEntry(actor, now, "The Google Calendar change was reversed.");
+              this.#closeIntent(intent.intent_id, "logged", entry.id);
+              written.push(entry);
+            }),
+          );
+        }
+      } catch (err) {
+        if (!(err instanceof GoogleError)) throw err;
+      }
+    }
+    for (const e of written) by.onEntry?.(e);
+    return written;
+  }
+
+  // Inside a transaction: the undo entry for `record` and its mark.
+  #undoneEntry(by: By, record: ActivityRecord, note: string): ActivityEntry {
+    const entry = this.#log(by, {
+      kind: "undo",
+      summary: `Undid: ${record.summary} ${note}`,
+      target: record.target,
+      undo: null,
+      whyNot: NOT_UNDOABLE.undo,
+      slotKeys: record.slot_keys,
+      reverses: record.id,
+    });
+    this.#store.appendSystem(ACTIVITY_STREAM, [{ type: "activity_undone", data: { id: record.id, by: by.actor, undo_id: entry.id } }]);
+    return entry;
   }
 
   extract(by: By, messageId: string, options: { effort: Effort; expectedVersion: number }): ReturnType<IntakeService["extract"]> {
@@ -544,37 +678,73 @@ export class CaseActions {
     const record = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === entryId);
     if (record?.undo?.kind !== "google_calendar") return this.undo(by, entryId, expectedVersion);
     const spec = record.undo;
-    this.#store.inCase(() => {
-      this.#store.assertVersion(ACTIVITY_STREAM, expectedVersion, describeActivity);
-      if (record.undoneAt !== null) throw new UndoBlockedError("This was already undone.");
-      const later = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.filter(
-        (r) => r.seq > record.seq && r.undoneAt === null && r.reverses === undefined && r.undo?.kind === "google_calendar" && r.slot_keys.some((k) => record.slot_keys.includes(k)),
-      );
-      if (later.length > 0) throw new UndoBlockedError(`A later Google Calendar change for ${listLabels(record.slot_keys)} (${later.at(-1)!.id}) depends on this. Undo that first.`);
-    });
+    const slotKey = spec.undo.slotKey;
+    // A retried undo finishes its own open intent (review round 3,
+    // finding 1).
     if (!this.#google) throw new UndoBlockedError("Google is not set up in this app, so the calendar change cannot be undone here.");
-    const done = await undoGoogleActivity({ google: this.#google }, spec.undo);
-    if (!done.ok) throw new UndoBlockedError(done.message);
+    const open = this.#openIntents().find((i) => i.kind === "undo" && i.entry_id === entryId) ?? null;
+    if (open && !reconcilable(open, open.openedAt)) throw new GoogleBusyError(`A Google Calendar change for ${keyLabel(slotKey)} is still in progress. Try again in a moment.`);
+    const retry = open;
+    const intentId = retry?.intent_id ?? `gi-${randomUUID()}`;
+    this.#store.inCase(() =>
+      this.#store.transaction(() => {
+        this.#store.assertVersion(ACTIVITY_STREAM, expectedVersion, describeActivity);
+        const now = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === entryId)!;
+        if (now.undoneAt !== null) throw new UndoBlockedError("This was already undone.");
+        const blocker = this.#laterGoogle(now);
+        if (blocker) throw new UndoBlockedError(blocker);
+        if (!retry) this.#openIntent({ intent_id: intentId, kind: "undo", slot_key: slotKey, actor: by.actor, owner: OWNER, entry_id: entryId });
+      }),
+    );
+    RUNNING.add(intentId);
+    try {
+      return await this.#finishUndo(by, entryId, intentId, spec.undo);
+    } finally {
+      RUNNING.delete(intentId);
+    }
+  }
+
+  // The undo at Google, then its entry and the closed intent in one
+  // transaction.
+  async #finishUndo(by: By, entryId: string, intentId: string, undo: CalendarUndo): Promise<ActivityEntry> {
+    const done = await undoGoogleActivity({ google: this.#google! }, undo);
+    if (!done.ok) {
+      // A refusal reversed nothing. A lost answer may have, so its intent
+      // stays open for the retry or reconcileGoogle.
+      if (!ambiguous(done.code)) this.#store.inCase(() => this.#store.transaction(() => this.#closeIntent(intentId, "abandoned", null)));
+      throw new UndoBlockedError(done.message);
+    }
     let undone: ActivityEntry | null = null;
     this.#store.inCase(() =>
       this.#store.transaction(() => {
-        const now = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === entryId);
-        if (!now || now.undoneAt !== null) throw new UndoBlockedError("This was already undone.");
-        const entry = this.#log(by, {
-          kind: "undo",
-          summary: `Undid: ${record.summary} ${done.message}`,
-          target: record.target,
-          undo: null,
-          whyNot: NOT_UNDOABLE.undo,
-          slotKeys: record.slot_keys,
-          reverses: record.id,
-        });
-        this.#store.appendSystem(ACTIVITY_STREAM, [{ type: "activity_undone", data: { id: record.id, by: by.actor, undo_id: entry.id } }]);
-        undone = entry;
+        const now = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === entryId)!;
+        // Review round 3, finding 3: the checks again, inside the commit.
+        // Already undone, or a later Google entry for the appointment, aborts.
+        // The open intent kept every other Google write and undo for this
+        // appointment out while the call ran, so neither can happen. A moved
+        // activity version alone does not abort: Google has already reversed
+        // the change, the entries that moved it are about other things, and
+        // the undo is recorded as what happened.
+        const blocker = this.#laterGoogle(now);
+        if (now.undoneAt !== null || blocker) {
+          this.#closeIntent(intentId, "abandoned", null);
+          throw new UndoBlockedError(now.undoneAt !== null ? "This was already undone." : blocker!);
+        }
+        undone = this.#undoneEntry(by, now, done.message);
+        this.#closeIntent(intentId, "logged", (undone as ActivityEntry).id);
       }),
     );
     by.onEntry?.(undone!);
     return undone!;
+  }
+
+  // A later Google entry for the same appointment still in effect, as a
+  // sentence, or null.
+  #laterGoogle(record: ActivityRecord): string | null {
+    const later = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.filter(
+      (r) => r.seq > record.seq && r.undoneAt === null && r.reverses === undefined && r.undo?.kind === "google_calendar" && r.slot_keys.some((k) => record.slot_keys.includes(k)),
+    );
+    return later.length > 0 ? `A later Google Calendar change for ${listLabels(record.slot_keys)} (${later.at(-1)!.id}) depends on this. Undo that first.` : null;
   }
 
   // Undo (design 3). `expectedVersion` is the activity version the caller

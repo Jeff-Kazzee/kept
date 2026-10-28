@@ -19,6 +19,7 @@ import { ACTIVITY_STREAM, projectActivity } from "../src/activity/events.ts";
 import { setTimezone } from "../src/settings/settings.ts";
 import { mcpContext } from "../mcp/tools.ts";
 import { toolByName } from "../src/agent/tools.ts";
+import { claimsAction } from "../src/agent/grounding.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { RecordsService } from "../src/records/service.ts";
 import type { CalendarUndo } from "../src/google/calendar.ts";
@@ -26,7 +27,7 @@ import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient, type Recording } from "../src/model/recorded.ts";
 import { findClashes } from "../src/slots/clash.ts";
 import type { SlotView } from "../src/slots/types.ts";
-import { EventStore } from "../src/store/event-log.ts";
+import { EventStore, StoreBusyError, type NewEvent } from "../src/store/event-log.ts";
 import { FAKE_ACCOUNT, FAKE_CLIENT, FakeGoogle, gmailMessage } from "./google-fake.ts";
 
 const dirs: string[] = [];
@@ -101,8 +102,9 @@ describe("OAuth: authorization code flow with PKCE and state", () => {
     expect(statSync(s.file).mode & 0o777).toBe(0o600);
     const stored = row(s);
     expect(stored).toContain("fake-refresh");
-    // The access token stays in memory only.
-    expect(stored).not.toContain("fake-access");
+    // The last access token is in the row too, for another process that
+    // shares the file (review round 3, finding 7), and never in the status.
+    expect(stored).toContain("fake-access");
     // The exchange sent the verifier, the secret and the same redirect URI.
     const exchange = s.fake.calls.find((c) => c.url.pathname === "/token")!;
     const form = new URLSearchParams(exchange.body);
@@ -356,8 +358,7 @@ const CONFIRM = {
 
 // The case services, the Google services and the tool context of the
 // in-app agent, with the case time zone set to America/Denver.
-function caseContext(s: Setup, recordings: Recording[] = []) {
-  const store = new EventStore();
+function caseContext(s: Setup, recordings: Recording[] = [], store: EventStore = new EventStore()) {
   const client = RecordedModelClient.withOverrides(recordings, RecordedModelClient.fromDirectory());
   const intake = new IntakeService(store, client, { now: () => "2026-11-06T10:00:00.000Z" });
   let events: GoogleCalendarEvents | null = null;
@@ -895,7 +896,8 @@ describe("review round 1", () => {
     await connect(s);
     const c = await confirmedCase(s);
     const [a, b] = await Promise.all([c.run("calendar_sync_slot", { slot_key: "2026-11-12T10:30" }), c.run("calendar_sync_slot", { slot_key: "2026-11-12T10:30" })]);
-    expect([a.output.action, b.output.action].sort()).toEqual(["created", "unchanged"]);
+    // The first write's intent keeps the second out (review round 3).
+    expect([a.code, b.code].sort()).toEqual(["google_busy", "ok"]);
     const live = primary(s).filter((e) => e.status !== "cancelled");
     expect(live).toHaveLength(1);
     expect(live[0]!.id).toMatch(/^appt[0-9a-v]{52}$/);
@@ -1304,3 +1306,246 @@ describe("integration: Google Calendar events in the case's clash checks", () =>
     expect(c.kase.view().calendar!.name).toBe("dana.ics");
   });
 });
+
+// A store whose next activity writes fail, as when another process holds
+// the file or the process stops between the Google call and the entry.
+class FlakyStore extends EventStore {
+  failActivity = 0;
+  override appendSystem(streamId: string, events: NewEvent[]) {
+    if (streamId === ACTIVITY_STREAM && this.failActivity > 0) {
+      this.failActivity -= 1;
+      throw new StoreBusyError();
+    }
+    return super.appendSystem(streamId, events);
+  }
+}
+
+describe("review round 3", () => {
+  const SLOT = "2026-11-12T10:30";
+  const live = (s: Setup) => primary(s).filter((e) => e.status !== "cancelled");
+  const calendarWrites = (s: Setup) => s.fake.calls.filter((x) => x.url.pathname.startsWith("/calendar/") && x.method !== "GET");
+
+  // A confirmed case on a flaky store, with the app's event for the slot.
+  async function flakyCase() {
+    const s = setup();
+    await connect(s);
+    const store = new FlakyStore();
+    addClinicEmail(s);
+    const c = caseContext(s, [recording("gmail-18f0a1", [CONFIRM])], store);
+    await c.run("gmail_import", { message_id: "18f0a1" });
+    const e = c.intake.evidence()[0]!;
+    c.intake.accept(e.id, e.version);
+    return { s, c, store };
+  }
+
+  // An update entry, through the same path the tool uses.
+  async function updateEntry(c: ReturnType<typeof caseContext>) {
+    const slot = { ...c.kase.view().slots[0]!, state: "requested" as const };
+    const planned = await c.ctx.google.calendar.plan(SLOT, slot);
+    const added = { kind: "calendar_event_updated" as const, summary: "Updated the Google Calendar event for Thursday 11/12 10:30 AM to tentative." };
+    const { entry } = await c.ctx.actions.googleWrite(c.ctx.by, planned.write!.plan, added, () => c.ctx.google.calendar.execute(planned.write!), () => added);
+    return entry!;
+  }
+
+  it("finding 1: an undo whose entry could not be written is finished by the retry (update)", async () => {
+    const { s, c, store } = await flakyCase();
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    const entry = await updateEntry(c);
+    expect(live(s)[0]).toMatchObject({ status: "tentative" });
+    store.failActivity = 1;
+    await expect(c.ctx.actions.undoEntry({ actor: "you" }, entry.id, c.ctx.actions.activityVersion())).rejects.toBeInstanceOf(StoreBusyError);
+    // Google has the earlier fields back, and the entry is not undone yet.
+    expect(live(s)[0]).toMatchObject({ status: "confirmed", summary: "Appointment" });
+    expect(c.entries.find((e) => e.id === entry.id)!.undoneAt).toBeNull();
+    const sent = calendarWrites(s).length;
+    const undone = await c.ctx.actions.undoEntry({ actor: "you" }, entry.id, c.ctx.actions.activityVersion());
+    expect(undone).toMatchObject({ kind: "undo" });
+    expect(c.entries.find((e) => e.id === entry.id)!.undoneAt).not.toBeNull();
+    // The retry wrote nothing more at Google.
+    expect(calendarWrites(s)).toHaveLength(sent);
+  });
+
+  it("finding 1: an undo whose entry could not be written is finished by the retry (delete)", async () => {
+    const { s, c, store } = await flakyCase();
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    await c.run("calendar_remove_slot", { slot_key: SLOT });
+    const removed = c.entries.at(-1)!;
+    expect(removed.kind).toBe("calendar_event_removed");
+    store.failActivity = 1;
+    await expect(c.ctx.actions.undoEntry({ actor: "you" }, removed.id, c.ctx.actions.activityVersion())).rejects.toBeInstanceOf(StoreBusyError);
+    expect(live(s)).toHaveLength(1);
+    await c.ctx.actions.undoEntry({ actor: "you" }, removed.id, c.ctx.actions.activityVersion());
+    expect(c.entries.find((e) => e.id === removed.id)!.undoneAt).not.toBeNull();
+    expect(live(s)).toHaveLength(1);
+  });
+
+  it("finding 1: the next calendar call finishes an undo left open", async () => {
+    const { s, c, store } = await flakyCase();
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    const added = c.entries.at(-1)!;
+    store.failActivity = 1;
+    await expect(c.ctx.actions.undoEntry({ actor: "you" }, added.id, c.ctx.actions.activityVersion())).rejects.toBeInstanceOf(StoreBusyError);
+    expect(live(s)).toHaveLength(0);
+    await c.run("calendar_list", { from: "2026-11-01", to: "2026-11-02" });
+    await c.ctx.actions.reconcileGoogle(c.ctx.by);
+    expect(c.entries.find((e) => e.id === added.id)!.undoneAt).not.toBeNull();
+    expect(c.entries.at(-1)).toMatchObject({ kind: "undo", reverses: added.id });
+  });
+
+  it("finding 2: a write whose entry could not be written gets its entry and undo on the next call", async () => {
+    const { s, c, store } = await flakyCase();
+    store.failActivity = 1;
+    await expect(c.run("calendar_sync_slot", { slot_key: SLOT })).rejects.toBeInstanceOf(StoreBusyError);
+    expect(live(s)).toHaveLength(1);
+    expect(c.entries.map((e) => e.kind)).toEqual(["gmail_message_imported"]);
+    const again = await c.run("calendar_sync_slot", { slot_key: SLOT });
+    expect(again.output.action).toBe("unchanged");
+    const entry = c.entries.at(-1)!;
+    expect(entry).toMatchObject({ kind: "calendar_event_added", undo: { action: "created", eventId: live(s)[0]!.id } });
+    await c.ctx.actions.undoEntry({ actor: "you" }, entry.id, c.ctx.actions.activityVersion());
+    expect(live(s)).toHaveLength(0);
+  });
+
+  it("finding 2: a write whose answer was lost is logged when the next call finds it at Google", async () => {
+    const { s, c } = await flakyCase();
+    s.fake.insertCommitsThenFails = true;
+    expect((await c.run("calendar_sync_slot", { slot_key: SLOT })).code).toBe("google_unavailable");
+    expect(live(s)).toHaveLength(1);
+    expect((await c.run("calendar_sync_slot", { slot_key: SLOT })).output.action).toBe("unchanged");
+    expect(c.entries.at(-1)).toMatchObject({ kind: "calendar_event_added", undo: { action: "created" } });
+    // A refused write leaves nothing open.
+    s.fake.apiStatus = 403;
+    await c.run("calendar_remove_slot", { slot_key: SLOT });
+    expect((await c.run("calendar_remove_slot", { slot_key: SLOT })).output.action).toBe("deleted");
+  });
+
+  it("finding 3: the undo is recorded once when other entries land during the call, and a Google write for the same appointment waits", async () => {
+    const { s, c } = await flakyCase();
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    const added = c.entries.at(-1)!;
+    let during: { code: string } | null = null;
+    // While the undo's DELETE runs: an unrelated action, and a second Google
+    // write for the same appointment.
+    s.fake.beforeCalendarWrite = async () => {
+      c.ctx.actions.importMessage({ actor: "you" }, { id: "other-1", channel: "email", from: "x", received_at: "2026-10-31T15:00:00.000Z", text: "Hello" });
+      during = await c.run("calendar_remove_slot", { slot_key: SLOT });
+    };
+    const version = c.ctx.actions.activityVersion();
+    await c.ctx.actions.undoEntry({ actor: "you" }, added.id, version);
+    expect(during).toMatchObject({ code: "google_busy" });
+    expect(c.entries.filter((e) => e.reverses === added.id)).toHaveLength(1);
+    expect(live(s)).toHaveLength(0);
+  });
+
+  it("finding 5: calendar_list does not change the clash checks", async () => {
+    const s = setup();
+    await connect(s);
+    const c = await confirmedCase(s);
+    s.fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
+    await c.ctx.google.events!.refresh(["2026-11-12"], "2026-11-06");
+    expect(c.kase.view().slots[0]!.clashes!.map((x) => x.summary)).toEqual(["Work call"]);
+    await c.run("calendar_list", { from: "2026-11-20", to: "2026-11-20" });
+    expect(c.kase.view().slots[0]!.clashes!.map((x) => x.summary)).toEqual(["Work call"]);
+  });
+
+  it("finding 6: a refresh in flight during a disconnect, or for another account, stores nothing", async () => {
+    const s = setup();
+    await connect(s);
+    const c = await confirmedCase(s);
+    s.fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
+    const events = c.ctx.google.events!;
+    let release!: () => void;
+    s.fake.listGate = new Promise((r) => (release = r));
+    const pending = events.refresh(["2026-11-12"], "2026-11-06");
+    await new Promise((r) => setImmediate(r));
+    events.clear();
+    release();
+    s.fake.listGate = null;
+    await pending;
+    expect(events.snapshot()).toBeNull();
+    // A's events, then B connects: they are gone at once, and a failed first
+    // fetch for B does not bring them back.
+    await events.refresh(["2026-11-12"], "2026-11-06");
+    expect(events.snapshot()!.events).toHaveLength(1);
+    s.fake.account = { sub: "2000002", email: "b.demo@example.com" };
+    await connect(s);
+    expect(events.snapshot()).toBeNull();
+    s.fake.apiStatus = 503;
+    await expect(events.refresh(["2026-11-12"], "2026-11-06")).rejects.toMatchObject({ code: "google_unavailable" });
+    expect(events.snapshot()).toBeNull();
+    expect(c.kase.view().slots[0]!.clashes).toBeNull();
+  });
+
+  it("finding 6: starting a connect clears the clash events", async () => {
+    const s = setup();
+    await connect(s);
+    const c = await confirmedCase(s);
+    s.fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
+    await c.ctx.google.events!.refresh(["2026-11-12"], "2026-11-06");
+    const r = createGoogleRoutes({ connection: s.connection, generation: () => c.kase.generation(), port: 5192, extraHosts: [], events: c.ctx.google.events });
+    await r.api({ method: "POST", path: "/api/google/connect", body: { expectedVersion: 1 }, generation: c.kase.generation(), host: "127.0.0.1:5192", secure: false });
+    expect(c.ctx.google.events!.snapshot()).toBeNull();
+  });
+
+  it("finding 7: two processes refresh once under the lease, and the connection stays usable", async () => {
+    const s = setup();
+    s.fake.messages.set("a1", gmailMessage("a1", { from: "x@example.com", subject: "Hi", internalDate: String(s.fake.now), plain: "Text" }));
+    await connect(s);
+    // A second process: its own secrets store on the same file.
+    const other = new GoogleConnection({ client: FAKE_CLIENT, store: new SecretsStore(s.file), fetch: s.fake.fetch, now: () => s.fake.now });
+    s.fake.now += 3550_000;
+    s.fake.refreshRotates = { scope: `openid email ${GMAIL_SCOPE} ${CALENDAR_SCOPE}` };
+    s.fake.rotationRevokesOld = true;
+    let release!: () => void;
+    s.fake.refreshGate = new Promise((r) => (release = r));
+    const first = new Gmail(s.connection).get("a1");
+    await new Promise((r) => setTimeout(r, 20));
+    const second = new Gmail(other).get("a1");
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    s.fake.refreshGate = null;
+    await Promise.all([first, second]);
+    const refreshes = s.fake.calls.filter((c) => c.url.pathname === "/token" && new URLSearchParams(c.body).get("grant_type") === "refresh_token");
+    expect(refreshes).toHaveLength(1);
+    expect(s.connection.status()).toMatchObject({ connected: true, needsReconnect: false });
+    expect(other.status()).toMatchObject({ connected: true, needsReconnect: false });
+  });
+
+  it("finding 7: a refresh that succeeds clears a reconnect mark another process set for the same connection", async () => {
+    const s = setup();
+    s.fake.messages.set("a1", gmailMessage("a1", { from: "x@example.com", subject: "Hi", internalDate: String(s.fake.now), plain: "Text" }));
+    await connect(s);
+    s.fake.now += 3550_000;
+    let release!: () => void;
+    s.fake.refreshGate = new Promise((r) => (release = r));
+    const pending = new Gmail(s.connection).get("a1");
+    await new Promise((r) => setTimeout(r, 20));
+    // The other process marked the same connection while this refresh ran.
+    const stored = JSON.parse(row(s));
+    writeRow(s, JSON.stringify({ version: stored.version + 1, connection: { ...stored.connection, needsReconnect: true } }));
+    expect(s.connection.status().needsReconnect).toBe(true);
+    release();
+    s.fake.refreshGate = null;
+    await pending;
+    expect(s.connection.status()).toMatchObject({ connected: true, needsReconnect: false, version: stored.version + 2 });
+  });
+
+  it("finding 8: connect needs the version the page read", async () => {
+    const s = setup();
+    const r = createGoogleRoutes({ connection: s.connection, generation: () => 0, port: 5192, extraHosts: [] });
+    const req = (body: unknown) => r.api({ method: "POST", path: "/api/google/connect", body, generation: 0, host: "127.0.0.1:5192", secure: false });
+    expect(await req({})).toMatchObject({ status: 400, body: { error: "invalid_body" } });
+    expect(await req({ expectedVersion: 3 })).toMatchObject({ status: 409, body: { error: "google_stale" } });
+    expect(await req({ expectedVersion: 0 })).toMatchObject({ status: 200 });
+  });
+
+  it("finding 9: saying the assistant added to the calendar needs a calendar_event_added entry", () => {
+    expect(claimsAction("I added Thursday 11/12 10:30 AM to your Google Calendar.", new Set())).toBe(true);
+    expect(claimsAction("I put Thursday on your Google Calendar.", new Set())).toBe(true);
+    expect(claimsAction("I created the event on your Google Calendar.", new Set(["claim_accepted"]))).toBe(true);
+    expect(claimsAction("I added Thursday 11/12 10:30 AM to your Google Calendar.", new Set(["calendar_event_added"]))).toBe(false);
+    expect(claimsAction("I updated your Google Calendar event.", new Set(["calendar_event_updated"]))).toBe(false);
+    expect(claimsAction("I added the message.", new Set(["gmail_message_imported"]))).toBe(false);
+  });
+});
+

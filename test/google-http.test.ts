@@ -95,8 +95,12 @@ describe("Google routes in the server", () => {
     expect(await call(app.port, "POST", "/api/google/disconnect", app.page(), { expectedVersion: 5 })).toMatchObject({ status: 409, body: { error: "google_stale" } });
     expect(await call(app.port, "POST", "/api/google/disconnect", app.page(), { expectedVersion: 0 })).toMatchObject({ status: 200, body: { connected: false, revoked: false } });
 
-    // The page sends {}: both permissions and the primary calendar.
-    const connect = await call(app.port, "POST", "/api/google/connect", app.page(), {});
+    // Review round 3, finding 8: connect needs the version the page read,
+    // as disconnect does. Both permissions and the primary calendar unless
+    // the body says otherwise.
+    expect(await call(app.port, "POST", "/api/google/connect", app.page(), {})).toMatchObject({ status: 400, body: { error: "invalid_body" } });
+    expect(await call(app.port, "POST", "/api/google/connect", app.page(), { expectedVersion: 7 })).toMatchObject({ status: 409, body: { error: "google_stale" } });
+    const connect = await call(app.port, "POST", "/api/google/connect", app.page(), { expectedVersion: 0 });
     expect(connect.status).toBe(200);
     const url = new URL(connect.body.authorizeUrl);
     expect(url.searchParams.get("redirect_uri")).toBe(`http://127.0.0.1:${app.port}/auth/google/callback`);

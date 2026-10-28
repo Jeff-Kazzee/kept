@@ -263,6 +263,13 @@ const VERBS: Array<{ past: string; base: string; kinds: string[] }> = [
   // A message from Gmail is an import too (0012).
   { past: "imported", base: "import", kinds: ["message_imported", "gmail_message_imported"] },
   { past: "tagged", base: "tag", kinds: ["tags_set"] },
+  // Adding to a calendar, a message, a note or a tag, or starting a draft
+  // (review round 3, finding 9).
+  {
+    past: "added|created|put",
+    base: "add|create|put",
+    kinds: ["calendar_event_added", "message_imported", "gmail_message_imported", "note_added", "tags_set", "draft_started"],
+  },
   { past: "removed", base: "remove", kinds: ["appointment_archived", "draft_discarded", "undo", "calendar_event_removed"] },
   { past: "changed|updated", base: "change|update", kinds: [ANY_ACTION] },
   { past: "approved|sent|submitted|confirmed|canceled|cancelled|declined|booked|rescheduled|moved|deleted", base: "approve|send|submit|confirm|cancel|decline|book|reschedule|move|delete", kinds: [] },

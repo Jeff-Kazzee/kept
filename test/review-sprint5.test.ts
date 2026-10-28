@@ -542,7 +542,12 @@ describe("review round 2, B3: every public write of the case services runs as on
     const latest = a.activity();
     await act("undo", () => a.undo(you, latest.entries.find((e) => e.kind === "tags_set")!.id, latest.activityVersion));
     // Sprint 11: a Google Calendar entry, and undo of any entry.
-    await act("recordGoogle", () => a.recordGoogle(bot, { kind: "calendar_event_added", summary: "Added Thursday 11/12 10:30 AM to Google Calendar as confirmed.", slotKey: THU, undo: null }));
+    const plan = { account: "1|primary", calendarId: "primary", slotKey: THU, action: "created" as const, eventId: "appt1", before: null, want: null };
+    const added = { kind: "calendar_event_added" as const, summary: "Added Thursday 11/12 10:30 AM to Google Calendar as confirmed." };
+    await act("googleWrite", () =>
+      a.googleWrite(bot, plan, added, async () => ({ action: "created", slotKey: THU, status: "confirmed", eventId: "appt1", undo: null }), () => added),
+    );
+    await act("reconcileGoogle", () => a.reconcileGoogle(bot));
     const later = a.activity();
     await act("undoEntry", () => a.undoEntry(you, later.entries.find((e) => e.kind === "timezone_set")!.id, later.activityVersion));
     app.kase.deleteCase(app.kase.caseVersion(), "DELETE");

@@ -18,9 +18,10 @@ import { z } from "zod";
 import { sanitize, untrustedQuote, untrustedText } from "../../mcp/sanitize.ts";
 import type { ActivityEntry } from "../activity/types.ts";
 import type { CaseActions } from "../actions/service.ts";
+import { GoogleBusyError } from "./intents.ts";
 import type { Fact } from "../agent/grounding.ts";
 import type { ToolContext, ToolResult, ToolSpec } from "../agent/tools.ts";
-import type { Card } from "../agent/types.ts";
+import { PASTE_TURN_NOTICE, type Card } from "../agent/types.ts";
 import { DEFAULT_EXTRACTION_EFFORT } from "../domain/claim.ts";
 import { isValidDate, isValidTime } from "../domain/datetime.ts";
 import { OutOfScopeError } from "../domain/scope.ts";
@@ -152,16 +153,36 @@ async function calendarWrite(ctx: ToolContext, name: "calendar_sync_slot" | "cal
   // A slot that left the case may still have the app's event, which the
   // sync removes. Without one there is nothing to do.
   let outcome: SyncOutcome;
+  let entry: ActivityEntry | null = null;
   try {
-    outcome = name === "calendar_sync_slot" ? await google.calendar.sync(slotKey, slot, { restoreRemoved }) : await google.calendar.remove(slotKey);
+    // Review round 3, finding 2: an earlier write whose entry was not
+    // recorded gets it now, before anything else is written.
+    await ctx.actions.reconcileGoogle(ctx.by);
+    const planned = await google.calendar.plan(slotKey, name === "calendar_sync_slot" ? slot : null, { restoreRemoved });
+    if (planned.write) {
+      const write = planned.write;
+      const expected = KIND_OF_ACTION[write.plan.action]!;
+      const done = await ctx.actions.googleWrite(
+        ctx.by,
+        write.plan,
+        { kind: expected, summary: syncSummary({ action: write.plan.action, slotKey, status: write.plan.want?.status ?? null, eventId: write.plan.eventId, undo: null }, slot) },
+        () => google.calendar.execute(write),
+        (o) => {
+          const kind = KIND_OF_ACTION[o.action];
+          return kind ? { kind, summary: syncSummary(o, slot) } : null;
+        },
+      );
+      outcome = done.outcome;
+      entry = done.entry;
+    } else {
+      outcome = planned.outcome;
+    }
   } catch (err) {
     if (err instanceof GoogleError) return failure(err.code, err.message);
+    if (err instanceof GoogleBusyError) return failure("google_busy", err.message);
     throw err;
   }
   const summary = syncSummary(outcome, slot);
-  const kind = KIND_OF_ACTION[outcome.action] ?? null;
-  // The write already happened at Google. Its entry carries the undo.
-  const entry = kind ? ctx.actions.recordGoogle(ctx.by, { kind, summary, slotKey, undo: outcome.undo }) : null;
   return result(
     {
       slot_key: slotKey,
@@ -288,9 +309,12 @@ export const GOOGLE_TOOLS: ToolSpec<unknown>[] = [
             message = intake.message(id);
           }
         }
-        // D2': an import of this turn, so its claims may be reviewed in a
-        // paste turn too.
-        ctx.turn?.gmailImported?.push(id);
+        // D2': only a message this call imported counts as an import of
+        // the turn, so its claims may be reviewed in a paste turn (review
+        // round 3, finding 4). A message from an earlier turn is not read in
+        // a paste turn: reading it would be another write.
+        if (created) ctx.turn?.gmailImported?.push(id);
+        else if (ctx.turn?.paste && message.status === "imported") return failure("waits_for_person", PASTE_TURN_NOTICE);
         if (message.status === "imported") {
           // Reading a new message is part of adding it, as for a paste. A
           // message that was already in the case and never read is read now
@@ -359,9 +383,6 @@ export const GOOGLE_TOOLS: ToolSpec<unknown>[] = [
         if (err instanceof GoogleError) return failure(err.code, err.message);
         throw err;
       }
-      // What the case's clash checks read, when the window starts at or
-      // before the earliest appointment.
-      google.events?.store(events);
       const facts: Fact[] = [];
       const items = events.map((e) => {
         const start = caseWallClock(e.start, tz);

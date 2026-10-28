@@ -125,6 +125,22 @@ export type CalendarUndo = {
 
 export type SyncAction = "created" | "updated" | "deleted" | "unchanged" | "none";
 
+// A planned write as plain data, recorded as an intent before the write
+// (review round 3, findings 1 and 2).
+export type WritePlan = {
+  account: string;
+  calendarId: string;
+  slotKey: string;
+  action: "created" | "updated" | "deleted";
+  eventId: string;
+  before: EventFields | null;
+  want: EventFields | null;
+};
+
+// The plan and what `execute` needs from the read that made it.
+export type PlannedWrite = { plan: WritePlan; have: RawEvent | null; removed: RawEvent | null; restore: boolean };
+export type Planned = { write: PlannedWrite; outcome: null } | { write: null; outcome: SyncOutcome };
+
 export type SyncOutcome = {
   action: SyncAction;
   slotKey: string;
@@ -267,6 +283,12 @@ export class GoogleCalendar {
     return this.#timeZone();
   }
 
+  // The account and calendar the connection names now, or null when it has
+  // no calendar connection. Never throws.
+  accountKey(): string | null {
+    return this.#conn.accountKey();
+  }
+
   #events(calendarId: string) {
     return `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events`;
   }
@@ -396,30 +418,52 @@ export class GoogleCalendar {
     if (res.status !== 204 && res.status !== 200 && res.status !== 410) throw apiError(res.status, res.body);
   }
 
-  // Brings the slot's event in line with the slot. `slot` is null when the
-  // case has no such slot any more. An event of the app's that was removed
-  // in Google Calendar is put back only with `restoreRemoved`, which the
-  // agent sets when the person asked for it.
-  async sync(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean } = {}): Promise<SyncOutcome> {
+  // What a sync of the slot would write, read from Google without writing
+  // (review round 3, findings 1 and 2). `write` is null when nothing is to
+  // be written: the outcome is then "none" or "unchanged". Otherwise
+  // `write.plan` is plain data the case actions record as an intent before
+  // `execute` writes at Google. `slot` is null when the case has no such
+  // slot any more. An event of the app's that was removed in Google
+  // Calendar is put back only with `restoreRemoved`, which the agent sets
+  // when the person asked for it.
+  async plan(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean } = {}): Promise<Planned> {
     const { calendarId, sub, key } = this.#conn.calendar();
     const restore = options.restoreRemoved === true;
     const want = desiredEvent(slot, this.#timeZone());
     const found = await this.#locate(calendarId, sub, slotKey);
-    let have = found.live;
-    const base = { kind: "google_calendar" as const, account: key, calendarId, slotKey };
-    if (!have && !want) return { action: "none", slotKey, status: null, eventId: null, undo: null };
+    const have = found.live;
+    const base = { account: key, calendarId, slotKey };
+    if (!have && !want) return { write: null, outcome: { action: "none", slotKey, status: null, eventId: null, undo: null } };
     if (!have && want) {
-      let made: { event: RawEvent; existed: boolean };
-      if (found.removed) {
-        if (!restore) throw new GoogleError("google_changed", null, "removed");
-        made = { event: await this.#patch(calendarId, sub, slotKey, found.removed, found.removed.etag, want), existed: false };
-      } else {
-        made = await this.#insert(calendarId, sub, slotKey, want, restore);
-      }
+      if (found.removed && !restore) throw new GoogleError("google_changed", null, "removed");
+      return {
+        write: { plan: { ...base, action: "created", eventId: found.removed?.id ?? eventIdFor(sub, calendarId, slotKey), before: null, want }, have: null, removed: found.removed, restore },
+        outcome: null,
+      };
+    }
+    const before = fieldsOf(have!);
+    if (!want) return { write: { plan: { ...base, action: "deleted", eventId: have!.id, before, want: null }, have, removed: null, restore }, outcome: null };
+    if (sameFields(before, want)) return { write: null, outcome: { action: "unchanged", slotKey, status: want.status, eventId: have!.id, undo: null } };
+    return { write: { plan: { ...base, action: "updated", eventId: have!.id, before, want }, have, removed: null, restore }, outcome: null };
+  }
+
+  // Writes a planned change at Google and returns what happened, with its
+  // undo record.
+  async execute(write: PlannedWrite): Promise<SyncOutcome> {
+    const { calendarId, sub, key } = this.#conn.calendar();
+    const { plan } = write;
+    if (plan.account !== key || plan.calendarId !== calendarId) throw new GoogleError("google_stale");
+    const base = { kind: "google_calendar" as const, account: key, calendarId, slotKey: plan.slotKey };
+    let have = write.have;
+    if (plan.action === "created") {
+      const want = plan.want!;
+      const made = write.removed
+        ? { event: await this.#patch(calendarId, sub, plan.slotKey, write.removed, write.removed.etag, want), existed: false }
+        : await this.#insert(calendarId, sub, plan.slotKey, want, write.restore);
       if (!made.existed) {
         return {
           action: "created",
-          slotKey,
+          slotKey: plan.slotKey,
           status: want.status,
           eventId: made.event.id,
           undo: { ...base, action: "created", eventId: made.event.id, etagAfter: made.event.etag ?? null, before: null },
@@ -429,19 +473,48 @@ export class GoogleCalendar {
       have = made.event;
     }
     const before = fieldsOf(have!);
-    if (!want) {
+    if (!plan.want) {
       await this.#delete(calendarId, have!.id, have!.etag);
-      return { action: "deleted", slotKey, status: null, eventId: have!.id, undo: { ...base, action: "deleted", eventId: have!.id, etagAfter: null, before } };
+      return { action: "deleted", slotKey: plan.slotKey, status: null, eventId: have!.id, undo: { ...base, action: "deleted", eventId: have!.id, etagAfter: null, before } };
     }
-    if (sameFields(before, want)) return { action: "unchanged", slotKey, status: want.status, eventId: have!.id, undo: null };
-    const updated = await this.#patch(calendarId, sub, slotKey, have!, have!.etag, want);
+    if (sameFields(before, plan.want)) return { action: "unchanged", slotKey: plan.slotKey, status: plan.want.status, eventId: have!.id, undo: null };
+    const updated = await this.#patch(calendarId, sub, plan.slotKey, have!, have!.etag, plan.want);
     return {
       action: "updated",
-      slotKey,
-      status: want.status,
+      slotKey: plan.slotKey,
+      status: plan.want.status,
       eventId: updated.id,
       undo: { ...base, action: "updated", eventId: updated.id, etagAfter: updated.etag ?? null, before },
     };
+  }
+
+  // Whether a planned write reached Google, read without writing, for an
+  // intent whose result was not recorded. "applied" carries the undo record
+  // the write would have returned. "diverged" means the event is neither
+  // as planned nor as before, so it changed at Google since.
+  async inspect(plan: WritePlan): Promise<{ state: "applied"; undo: CalendarUndo } | { state: "not_applied" } | { state: "diverged" }> {
+    const { calendarId, sub, key } = this.#conn.calendar();
+    if (plan.account !== key || plan.calendarId !== calendarId) return { state: "diverged" };
+    const e = await this.#get(calendarId, plan.eventId);
+    if (e && ownSlot(sub, e) !== plan.slotKey) return { state: "diverged" };
+    const live = e !== null && e.status !== "cancelled";
+    const fields = live ? fieldsOf(e!) : null;
+    const base = { kind: "google_calendar" as const, account: key, calendarId, slotKey: plan.slotKey, eventId: plan.eventId };
+    if (plan.action === "deleted") {
+      if (!live) return { state: "applied", undo: { ...base, action: "deleted", etagAfter: null, before: plan.before } };
+      return sameFields(fields!, plan.before!) ? { state: "not_applied" } : { state: "diverged" };
+    }
+    if (live && sameFields(fields!, plan.want!)) {
+      return { state: "applied", undo: { ...base, action: plan.action, etagAfter: e!.etag ?? null, before: plan.before } };
+    }
+    if (plan.action === "created") return live ? { state: "diverged" } : { state: "not_applied" };
+    return live && sameFields(fields!, plan.before!) ? { state: "not_applied" } : { state: "diverged" };
+  }
+
+  // Plans and writes in one step, for callers that record nothing.
+  async sync(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean } = {}): Promise<SyncOutcome> {
+    const planned = await this.plan(slotKey, slot, options);
+    return planned.write ? this.execute(planned.write) : planned.outcome!;
   }
 
   // Deletes the slot's event, if the app made one.
@@ -449,19 +522,39 @@ export class GoogleCalendar {
     return this.sync(slotKey, null);
   }
 
+  // Whether an undo already happened at Google, read without writing, for
+  // an undo intent whose result was not recorded.
+  async undoState(u: CalendarUndo): Promise<"reversed" | "not_reversed" | "diverged"> {
+    const { calendarId, sub, key } = this.#conn.calendar();
+    if (u.account !== key || u.calendarId !== calendarId) return "diverged";
+    const current = await this.#get(calendarId, u.eventId);
+    if (current && ownSlot(sub, current) !== u.slotKey) return "diverged";
+    const live = current !== null && current.status !== "cancelled";
+    if (u.action === "created") return live ? (current!.etag === u.etagAfter ? "not_reversed" : "diverged") : "reversed";
+    if (u.action === "deleted") return live ? (u.before && sameFields(fieldsOf(current!), u.before) ? "reversed" : "diverged") : "not_reversed";
+    if (!live) return "diverged";
+    if (u.before && sameFields(fieldsOf(current!), u.before)) return "reversed";
+    return current!.etag === u.etagAfter ? "not_reversed" : "diverged";
+  }
+
   // Reverses one write. The event is the one the record names, fetched and
-  // checked by its properties (review round 2, coordinator decision).
-  // Refuses when the connection now points at another account or calendar,
-  // when the event is not the app's for that slot, or when it changed at
-  // Google since the write (google_changed).
+  // checked by its properties (review round 2, coordinator decision). An
+  // undo that already happened at Google, as when a retry follows an undo
+  // whose entry could not be written, is success (review round 3,
+  // finding 1). Refuses when the connection now points at another account
+  // or calendar, when the event is not the app's for that slot, or when it
+  // changed at Google since the write (google_changed).
   async undo(u: CalendarUndo): Promise<{ action: SyncAction; eventId: string | null }> {
     const { calendarId, sub, key } = this.#conn.calendar();
     if (u.account !== key || u.calendarId !== calendarId) throw new GoogleError("google_not_app_event");
     const current = await this.#get(calendarId, u.eventId);
     if (current && ownSlot(sub, current) !== u.slotKey) throw new GoogleError("google_not_app_event");
+    const live = current !== null && current.status !== "cancelled";
     if (u.action === "deleted") {
       if (!u.before) throw new GoogleError("google_invalid_response");
-      if (current && current.status !== "cancelled") throw new GoogleError("google_changed");
+      // Put back already, with the fields the delete removed.
+      if (live && sameFields(fieldsOf(current!), u.before)) return { action: "created", eventId: current!.id };
+      if (live) throw new GoogleError("google_changed");
       // The slot got a new event since the delete, so putting the old one
       // back would make two.
       if ((await this.#locate(calendarId, sub, u.slotKey)).live) throw new GoogleError("google_changed");
@@ -473,18 +566,20 @@ export class GoogleCalendar {
       if (existed) throw new GoogleError("google_changed");
       return { action: "created", eventId: event.id };
     }
-    if (!current || current.status === "cancelled") {
+    if (!live) {
       // Already gone at Google. Nothing to reverse for a create.
       if (u.action === "created") return { action: "none", eventId: null };
       throw new GoogleError("google_not_found");
     }
-    if (u.etagAfter === null || current.etag !== u.etagAfter) throw new GoogleError("google_changed");
+    // An update already reversed: the event has the earlier fields again.
+    if (u.action === "updated" && u.before && sameFields(fieldsOf(current!), u.before)) return { action: "updated", eventId: current!.id };
+    if (u.etagAfter === null || current!.etag !== u.etagAfter) throw new GoogleError("google_changed");
     if (u.action === "created") {
       await this.#delete(calendarId, u.eventId, u.etagAfter);
       return { action: "deleted", eventId: u.eventId };
     }
     if (!u.before) throw new GoogleError("google_invalid_response");
-    const restored = await this.#patch(calendarId, sub, u.slotKey, current, u.etagAfter, u.before);
+    const restored = await this.#patch(calendarId, sub, u.slotKey, current!, u.etagAfter, u.before);
     return { action: "updated", eventId: restored.id };
   }
 }

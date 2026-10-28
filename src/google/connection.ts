@@ -1,7 +1,7 @@
 // The app's one Google connection (0012). It keeps the refresh token in
 // the `google` row of the app's secrets database (sprint 10's
-// app-secrets.sqlite, mode 600, outside the event log) and the access token
-// in memory only. Every write reads the row, checks it and writes it in one
+// app-secrets.sqlite, mode 600, outside the event log), with the last
+// access token, which this process also keeps in memory. Every write reads the row, checks it and writes it in one
 // BEGIN IMMEDIATE transaction, so the app and the MCP server, which share
 // the file, never lose each other's change. It refreshes the access token a minute before it expires. A
 // refresh that Google refuses with invalid_grant marks the connection as
@@ -39,6 +39,11 @@ const Connection = z
     refreshToken: z.string().min(1).max(4096),
     needsReconnect: z.boolean(),
     connectedAt: z.string(),
+    // The last access token and when it expires (Unix ms), so another
+    // process sharing the file uses it instead of refreshing again (review
+    // round 3, finding 7).
+    accessToken: z.string().min(1).max(4096).optional(),
+    accessExpiresAt: z.number().int().optional(),
   })
   .strict();
 type Connection = z.infer<typeof Connection>;
@@ -93,6 +98,9 @@ const REFRESH_EARLY_MS = 60_000;
 export interface GoogleRowStore {
   readRow(name: "google"): string | null;
   updateRow(name: "google", change: (current: string | null) => string | null): string | null;
+  // A lease across processes (SecretsStore.withLease). Without it a refresh
+  // is serialized in this process only.
+  withLease?<T>(name: string, fn: () => Promise<T>, options?: { skip?: () => T | undefined }): Promise<T>;
 }
 
 type State = { stored: Stored; damaged: Damaged | null };
@@ -263,6 +271,8 @@ export class GoogleConnection {
           refreshToken,
           needsReconnect: false,
           connectedAt: new Date(this.#now()).toISOString(),
+          accessToken: answer.access_token,
+          accessExpiresAt: this.#now() + answer.expires_in * 1000,
         },
       };
     });
@@ -321,40 +331,79 @@ export class GoogleConnection {
     });
   }
 
+  // The stored access token of the connection `identity` names, when it is
+  // still good for a minute.
+  #storedAccess(identity: string): string | null {
+    const c = this.#read().connection;
+    if (!c || identityOf(c.sub, c.refreshToken) !== identity || !c.accessToken || !c.accessExpiresAt) return null;
+    if (c.accessExpiresAt - REFRESH_EARLY_MS <= this.#now()) return null;
+    this.#access = { token: c.accessToken, expiresAt: c.accessExpiresAt, identity };
+    return c.accessToken;
+  }
+
   async #token(c: Connection, force = false): Promise<string> {
     const identity = identityOf(c.sub, c.refreshToken);
     const cached = this.#access;
     if (!force && cached && cached.identity === identity && cached.expiresAt - REFRESH_EARLY_MS > this.#now()) return cached.token;
-    // One refresh at a time per connection. A refresh for a connection that
-    // was replaced meanwhile is not reused.
+    // One refresh at a time per connection in this process. A refresh for a
+    // connection that was replaced meanwhile is not reused.
     if (this.#refreshing?.identity === identity) return this.#refreshing.promise;
+    const rejected = force ? (cached?.token ?? null) : null;
+    // Review round 3, finding 7: across processes a refresh holds the
+    // google_refresh lease. A holder that waited reads the row first: when
+    // the other holder refreshed already, its access token (or its rotated
+    // refresh token) is used, so the same refresh token is never sent twice.
+    const run = async (): Promise<string> => {
+      const stored = this.#read().connection;
+      if (!stored || stored.sub !== c.sub) throw new GoogleError("google_stale");
+      const current = identityOf(stored.sub, stored.refreshToken);
+      if (stored.accessToken && stored.accessToken !== rejected && stored.accessExpiresAt && stored.accessExpiresAt - REFRESH_EARLY_MS > this.#now()) {
+        const fresh = this.#storedAccess(current);
+        if (fresh) return fresh;
+      }
+      let answer;
+      try {
+        answer = await refreshAccess(this.#fetch, this.#client!, stored.refreshToken);
+      } catch (err) {
+        if (err instanceof GoogleError && err.code === "google_reconnect_needed") this.#markReconnect(current);
+        throw err;
+      }
+      const rotated = answer.refresh_token ?? stored.refreshToken;
+      const expiresAt = this.#now() + answer.expires_in * 1000;
+      // The identity check and the write are one transaction. A refresh for
+      // a connection replaced meanwhile is used for this one call and
+      // dropped (review round 1, finding 1). One that succeeded for the
+      // same connection clears a reconnect mark set while it ran.
+      let kept = false;
+      this.#mutate(({ stored: s }) => {
+        kept = s.connection !== null && identityOf(s.connection.sub, s.connection.refreshToken) === current;
+        if (!kept) return null;
+        return {
+          version: s.connection!.needsReconnect ? s.version + 1 : s.version,
+          connection: {
+            ...s.connection!,
+            refreshToken: rotated,
+            needsReconnect: false,
+            accessToken: answer.access_token,
+            accessExpiresAt: expiresAt,
+            ...(answer.scope ? { scopes: answer.scope.split(/\s+/).filter(Boolean).slice(0, 20) } : {}),
+          },
+        };
+      });
+      if (kept) this.#access = { token: answer.access_token, expiresAt, identity: identityOf(c.sub, rotated) };
+      return answer.access_token;
+    };
     const entry: { identity: string; promise: Promise<string> } = { identity, promise: Promise.resolve("") };
     entry.promise = (async () => {
       try {
-        const answer = await refreshAccess(this.#fetch, this.#client!, c.refreshToken);
-        // Commit only if the stored connection is still the one this
-        // refresh started for (review round 1, finding 1). Otherwise the
-        // answer is used for this one call and dropped.
-        // The identity check and the write are one transaction.
-        let current = false;
-        const rotated = answer.refresh_token ?? c.refreshToken;
-        this.#mutate(({ stored: s }) => {
-          current = s.connection !== null && identityOf(s.connection.sub, s.connection.refreshToken) === identity;
-          if (!current || (!answer.refresh_token && !answer.scope)) return null;
-          return {
-            version: s.version,
-            connection: {
-              ...s.connection!,
-              refreshToken: rotated,
-              ...(answer.scope ? { scopes: answer.scope.split(/\s+/).filter(Boolean).slice(0, 20) } : {}),
-            },
-          };
+        if (!this.#store.withLease) return await run();
+        return await this.#store.withLease("google_refresh", run, {
+          skip: () => {
+            const c2 = this.#read().connection;
+            if (!c2 || c2.sub !== c.sub || c2.accessToken === rejected) return undefined;
+            return this.#storedAccess(identityOf(c2.sub, c2.refreshToken)) ?? undefined;
+          },
         });
-        if (current) this.#access = { token: answer.access_token, expiresAt: this.#now() + answer.expires_in * 1000, identity: identityOf(c.sub, rotated) };
-        return answer.access_token;
-      } catch (err) {
-        if (err instanceof GoogleError && err.code === "google_reconnect_needed") this.#markReconnect(identity);
-        throw err;
       } finally {
         if (this.#refreshing === entry) this.#refreshing = null;
       }
@@ -379,6 +428,17 @@ export class GoogleConnection {
       }
     }
     return res;
+  }
+
+  // `sub|calendarId` of a usable calendar connection, or null.
+  accountKey(): string | null {
+    try {
+      const c = this.#connection("calendar");
+      return `${c.sub}|${c.calendarId}`;
+    } catch (err) {
+      if (err instanceof GoogleError) return null;
+      throw err;
+    }
   }
 
   // The calendar the person chose, the account it belongs to, and the key

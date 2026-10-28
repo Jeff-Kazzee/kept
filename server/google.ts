@@ -5,10 +5,11 @@
 // version and the case generation for each write.
 //
 //   GET  /api/google              status, never a token
-//   POST /api/google/connect      { expectedVersion?, gmail?, calendar?, calendarId? } -> { authorizeUrl }
+//   POST /api/google/connect      { expectedVersion, gmail?, calendar?, calendarId? } -> { authorizeUrl }
 //                                 Both permissions and the primary calendar
-//                                 unless the body says otherwise, as the page
-//                                 sends {} (sprint 9).
+//                                 unless the body says otherwise. The version
+//                                 is the one GET /api/google answered (review
+//                                 round 3, finding 8).
 //   POST /api/google/disconnect   { expectedVersion } -> status and { revoked }
 //   POST /api/google/calendar/refresh  {} -> { events }  reads Google Calendar
 //                                 again for the case's clash checks
@@ -47,7 +48,7 @@ export type GoogleRouteResponse = { status: number; body: unknown; setCookie?: s
 
 const Version = z.number().int().nonnegative();
 const ConnectBody = z
-  .object({ expectedVersion: Version.optional(), gmail: z.boolean().default(true), calendar: z.boolean().default(true), calendarId: CalendarId.optional() })
+  .object({ expectedVersion: Version, gmail: z.boolean().default(true), calendar: z.boolean().default(true), calendarId: CalendarId.optional() })
   .strict()
   .refine((b) => b.gmail || b.calendar, "Turn on Gmail, Calendar or both.");
 const DisconnectBody = z.object({ expectedVersion: Version }).strict();
@@ -142,10 +143,12 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
             body: { error: "redirect_unavailable", message: "Google can return only to this app on 127.0.0.1, localhost or an HTTPS address in APP_ALLOWED_HOSTS. Open the app at one of those and try again." },
           };
         }
+        // Review round 3, finding 6: the clash checks drop the current
+        // events as a connect starts, so another account's events never
+        // stay.
+        options.events?.clear();
         const { authorizeUrl, cookie } = connection.startConnect({
-          // The page sends no version for a connect. The flow still keeps the
-          // version it starts at, and the callback refuses it when that moved.
-          expectedVersion: body.expectedVersion ?? connection.status().version,
+          expectedVersion: body.expectedVersion,
           features: { gmail: body.gmail, calendar: body.calendar },
           calendarId: body.calendarId ?? DEFAULT_CALENDAR_ID,
           redirectUri,

@@ -49,6 +49,12 @@ export class FakeGoogle {
   refreshGate: Promise<void> | null = null;
   // A refresh answer rotates the refresh token and names this scope.
   refreshRotates: { scope: string } | null = null;
+  // Runs before a calendar write is answered, once.
+  beforeCalendarWrite: (() => Promise<void>) | null = null;
+  // A list of events in a window waits for this before it answers.
+  listGate: Promise<void> | null = null;
+  // A rotation revokes the refresh token it replaced, as Google may.
+  rotationRevokesOld = false;
   // GET answers leave out the event's etag.
   omitEtags = false;
   // A patch answer leaves out the event's private properties.
@@ -127,6 +133,7 @@ export class FakeGoogle {
       if (!grant || grant.revoked || this.refreshFails === "invalid_grant") return json(400, { error: "invalid_grant" });
       const at = this.#next("fake-access");
       if (this.refreshRotates) {
+        if (this.rotationRevokesOld) grant.revoked = true;
         const rotated = this.#next("fake-refresh");
         this.grants.set(rotated, { scope: this.refreshRotates.scope, revoked: false });
         this.access.set(at, { scope: this.refreshRotates.scope, expiresAt: this.now + 3600_000, refresh: rotated });
@@ -268,6 +275,12 @@ export class FakeGoogle {
       return json(status, { error: { code: status, errors: [{ reason: status === 429 ? "rateLimitExceeded" : "backendError" }] } });
     }
     if (url.origin === "https://gmail.googleapis.com") return this.#authorized(headers, GMAIL_SCOPE) ?? this.#gmail(method, url);
+    if (this.listGate && url.searchParams.has("timeMin")) await this.listGate;
+    if (this.beforeCalendarWrite && url.pathname.startsWith("/calendar/") && method !== "GET") {
+      const hook = this.beforeCalendarWrite;
+      this.beforeCalendarWrite = null;
+      await hook();
+    }
     if (url.origin === "https://www.googleapis.com" && url.pathname.startsWith("/calendar/v3/")) {
       return this.#authorized(headers, CALENDAR_SCOPE) ?? this.#calendar(method, url, headers, body);
     }
