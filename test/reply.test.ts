@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { SlotState } from "../src/domain/claim.ts";
 import { buildDraft, replyOptions, type ReplyContext } from "../src/reply/draft.ts";
 import { TEMPLATES, TEMPLATE_IDS, renderReply } from "../src/reply/templates.ts";
+import { REPLY_INSTRUCTIONS, slotInNote } from "../src/reply/suggest.ts";
 import { projectSlots } from "../src/slots/project.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { acceptMessages, ev, intake } from "./helpers.ts";
@@ -152,5 +153,21 @@ describe("SP3.3 fields filled by code and withheld templates", () => {
     const office = result.content.fields.find((f) => f.name === "office_name")!.value!;
     expect(office.startsWith("Lantern Hill x")).toBe(true);
     expect(office).toHaveLength(120);
+  });
+});
+
+// SP12.4: short notes such as "MON" or "See you Thursday" got no fit. The
+// instructions now say how to read a note that names its slot only by a
+// weekday, a date or a time, and code checks the pick as before.
+describe("SP12.4: short notes", () => {
+  it("the template call's instructions say how to read a short note, and code's date check accepts the slot it names", () => {
+    expect(REPLY_INSTRUCTIONS).toContain("such as MON, See you Thursday or Confirmed, 10:30");
+    expect(REPLY_INSTRUCTIONS).toContain("accept_offer when the slot is offered, keep_original when it is the confirmed slot with a proposed change");
+    expect(slotInNote("MON", "2026-11-16", "13:00")).toBe(true);
+    expect(slotInNote("See you Thursday", "2026-11-12", "10:30")).toBe(true);
+    expect(slotInNote("Confirmed, 10:30", "2026-11-12", "10:30")).toBe(true);
+    // A wrong day or time is still refused.
+    expect(slotInNote("See you Thursday", "2026-11-16", "13:00")).toBe(false);
+    expect(slotInNote("Confirmed, 10:30", "2026-11-16", "13:00")).toBe(false);
   });
 });

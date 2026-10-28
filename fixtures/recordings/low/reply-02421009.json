@@ -1,0 +1,26 @@
+{
+  "message_id": "reply-02421009",
+  "effort": "low",
+  "note": "S1: m1 accepted. Note: Confirmed, 10:30. A hand-written pick, so the test runs the code checks on a short note.",
+  "attempts": [
+    {
+      "output": {
+        "template": "accept_offer",
+        "slot_id": "2026-11-12T10:30",
+        "fields": {
+          "date": "2026-11-12",
+          "time": "10:30",
+          "location": null
+        },
+        "no_fit_reason": null
+      },
+      "usage": {
+        "input": 610,
+        "cached_input": 0,
+        "output": 58,
+        "reasoning": 24
+      },
+      "latency_ms": 1300
+    }
+  ]
+}

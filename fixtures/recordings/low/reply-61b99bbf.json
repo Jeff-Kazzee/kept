@@ -1,0 +1,26 @@
+{
+  "message_id": "reply-61b99bbf",
+  "effort": "low",
+  "note": "S12: m3 accepted. Note: See you Thursday. A hand-written pick, so the test runs the code checks on a short note.",
+  "attempts": [
+    {
+      "output": {
+        "template": "keep_original",
+        "slot_id": "2026-11-12T10:30",
+        "fields": {
+          "date": "2026-11-12",
+          "time": "10:30",
+          "location": null
+        },
+        "no_fit_reason": null
+      },
+      "usage": {
+        "input": 610,
+        "cached_input": 0,
+        "output": 58,
+        "reasoning": 24
+      },
+      "latency_ms": 1300
+    }
+  ]
+}

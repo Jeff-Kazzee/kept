@@ -15,5 +15,39 @@
       "question": null
     }
   ],
+  "d3": [
+    {
+      "expect": "SP12.4: Dana's short note \"Confirmed, 10:30\" after m1 picks the accept template for Thursday 10:30 AM, the offered slot at that time.",
+      "steps": [
+        { "message": "m1" },
+        { "suggest": { "intent": "Confirmed, 10:30", "expect": { "template": "accept_offer", "slot": "2026-11-12T10:30" } } }
+      ],
+      "options": [
+        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
+        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
+        { "template": "accept_offer", "slot": "2026-11-12T10:30" },
+        { "template": "decline_offer", "slot": "2026-11-12T10:30" }
+      ],
+      "draft": { "template": "accept_offer", "slot": "2026-11-12T10:30", "origin": "model", "edited": false },
+      "suggestion": { "outcome": "valid", "problems": [[]] },
+      "sent": []
+    },
+    {
+      "expect": "SP12.4: Dana's short note \"See you Thursday\" after m1 picks the accept template for Thursday, the offered slot on that day.",
+      "steps": [
+        { "message": "m1" },
+        { "suggest": { "intent": "See you Thursday", "expect": { "template": "accept_offer", "slot": "2026-11-12T10:30" } } }
+      ],
+      "options": [
+        { "template": "accept_offer", "slot": "2026-11-10T14:00" },
+        { "template": "decline_offer", "slot": "2026-11-10T14:00" },
+        { "template": "accept_offer", "slot": "2026-11-12T10:30" },
+        { "template": "decline_offer", "slot": "2026-11-12T10:30" }
+      ],
+      "draft": { "template": "accept_offer", "slot": "2026-11-12T10:30", "origin": "model", "edited": false },
+      "suggestion": { "outcome": "valid", "problems": [[]] },
+      "sent": []
+    }
+  ],
   "later": []
 }

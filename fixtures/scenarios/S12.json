@@ -26,6 +26,24 @@
       "draft": null,
       "suggestion": { "outcome": "valid", "problems": [[]] },
       "sent": [{ "template": "accept_offer", "slot": "2026-11-16T13:00" }]
+    },
+    {
+      "expect": "SP12.4: Dana's short note \"See you Thursday\" after m3 picks the keep-original template for Thursday 10:30 AM, the confirmed slot the office wants to move.",
+      "steps": [
+        { "message": "m3" },
+        { "suggest": { "intent": "See you Thursday", "expect": { "template": "keep_original", "slot": "2026-11-12T10:30" } } }
+      ],
+      "options": [
+        { "template": "ask_still_stands", "slot": "2026-11-12T10:30" },
+        { "template": "keep_original", "slot": "2026-11-12T10:30" },
+        { "template": "accept_offer", "slot": "2026-11-13T09:15" },
+        { "template": "decline_offer", "slot": "2026-11-13T09:15" },
+        { "template": "accept_offer", "slot": "2026-11-16T13:00" },
+        { "template": "decline_offer", "slot": "2026-11-16T13:00" }
+      ],
+      "draft": { "template": "keep_original", "slot": "2026-11-12T10:30", "origin": "model", "edited": false },
+      "suggestion": { "outcome": "valid", "problems": [[]] },
+      "sent": []
     }
   ],
   "later": []
