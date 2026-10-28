@@ -15,6 +15,12 @@ folder by default). In the commands below, use your own folder for
 `ssh <host>` in front of the command, with key login so it runs with no
 prompt.
 
+If the agent has its own Gmail and Google Calendar connectors, it can read
+your appointment emails itself and pass each one to this app's import
+tool, and keep your calendar with its own connector. The app also has a
+built-in Google connection, and its Google tools are MCP tools too.
+`docs/google.md` covers both.
+
 Grok Build:
 
 ```sh

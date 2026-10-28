@@ -82,3 +82,6 @@ Notes:
 - Sprint 7B (2026-10-28): no dependency added. Vite, already pinned, builds
   the production bundle. Compression uses `node:zlib`. Tailwind was
   considered and not added (see `0008-web-app.md`, B15).
+- Sprint 11 (2026-10-28): no dependency added. The Google connection uses
+  `fetch` and `node:crypto` (see `0012-google.md`). No Google client
+  library was needed.

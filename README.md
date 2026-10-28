@@ -134,6 +134,22 @@ in this repo is synthetic.
   action you can undo.
 - The chat is saved with the case. Delete case erases it.
 
+## Gmail and Google Calendar
+
+- `src/google/` connects one Google account with OAuth (PKCE, a
+  single-use state, ID token checks), only for the permissions you turn
+  on: Gmail read only, Google Calendar, or both.
+- Gmail emails become imports like a paste, with the sender and sent time
+  from their headers, and go through the same checks and your review.
+- The app keeps one calendar event per appointment, tentative until the
+  office confirms, edits only events it created, and every change has Undo.
+- `GET /api/google`, `POST /api/google/connect` and
+  `POST /api/google/disconnect`, with the callback at
+  `/auth/google/callback`. The refresh token stays on the server in a
+  mode 600 file outside the event log.
+- Setup, testing-mode limits and the agent's own connectors:
+  `docs/google.md`. Design: `docs/decisions/0012-google.md`.
+
 See `docs/decisions/0001-stack.md` for the stack and dependency checks,
 `docs/decisions/0002-slot-states.md` for the slot rules,
 `docs/decisions/0003-reply-templates.md` for the reply rules, and
