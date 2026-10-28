@@ -93,7 +93,12 @@ per account at `data/accounts/<account id>/`.
   closes the least recently used idle one. A workspace with a request in
   progress is never closed. Review round 1, finding 5: nor is one used in
   the last 10 minutes, or one with a Google connect waiting for its
-  callback. A full cache with none to close grows past 64 instead.
+  callback. A full cache with none to close grows past 64 instead. Final
+  review, finding 2: never past 4 times 64. At that ceiling the least
+  recently used workspace with no request running closes, even a recent
+  one or one with a Google connect waiting, which the person can start
+  again. When every one has a request running, a new workspace is refused
+  with 503 `site_busy`, retryable, and a plain sentence.
 - A6. A workspace is reached only through the account id of the request's
   session. The id must match `^a[0-9a-f]{32}$`, and its folder must sit
   directly inside the accounts folder. A symbolic link in its place is
@@ -143,8 +148,14 @@ change one `BEGIN IMMEDIATE` transaction, as the secrets store does.
   Review round 1, finding 6: sign-in and sign-out do not let the request's
   claim of HTTPS pick the cookie. They end the session of either cookie
   form the browser sent, and clear both forms.
-- A13. HTTPS is read from the page's Origin or `X-Forwarded-Proto: https`,
-  which the tunnel sets.
+- A13. HTTPS is read from `X-Forwarded-Proto: https`, which the tunnel
+  sets. Final review, finding 3: in hosted mode only from a loopback
+  socket, as Tailscale serve and cloudflared connect from loopback, and
+  never from the page's Origin. Every request reads both session cookie
+  forms, the `__Host-` one first, and so does the sign-in callback for its
+  flow cookie, so a claimed scheme can neither hide nor pick a session. A
+  new session is set in the form the trusted scheme supports. Local mode
+  keeps its earlier rule.
 - The host allowlist, the same-origin guard and the app header run on
   every route (`server/http.ts`).
 - A14. Sign-in starts are limited to 10 per address in 10 minutes. Judge
@@ -289,10 +300,15 @@ streams that fail with and without usage.
 - A31. Each account takes one code, and a judge account takes none. A
   code attached to a Google account does not sign in on its own. Revoke
   ends the judge account's sessions and removes the code's unspent credit
-  from the account. Review round 1, finding 2: the part of it inside open
-  holds is owed (`revoke_due`). No new hold may draw on it, and it leaves
-  the balance as those holds close, so the revoked credit is fully gone
-  once they settle. Other credit on the account stays usable. An expired code no longer signs in, and a judge
+  from the account. Review round 1, finding 2, and the final review,
+  finding 1: with no hold open, the unspent part goes at once. With holds
+  open, all of it is owed (`revoke_due`), because those holds may still
+  spend it. No new hold may draw on it, and the shown balance leaves it
+  out. What the holds that were open at the revoke charge counts against
+  it first. Once the last of them closes, what is still owed leaves the
+  balance. So the revoked credit is fully gone once they settle, and other
+  credit on the account, granted before or after the revoke, is never
+  taken. An expired code no longer signs in, and a judge
   account's session ends with it. Credit already on a Google account
   stays after expiry.
 - A32. "Spent" for a code is its account's charges, up to the code's cap.
@@ -356,6 +372,30 @@ Seven findings, each fixed with a test that failed before the fix, in
    and cleared (A12).
 7. Low: local mode exited on hosted-only settings. Now they are read only
    in hosted mode (A2).
+
+## Final review (Muse Wonder, 2026-10-28)
+
+Round 1's findings 1 and 3 to 7 closed. Finding 2 and two new findings
+were fixed, each with a test that failed before the fix, in
+`test/hosted-review2.test.ts`:
+
+1. High: a revoke could take other credit when an open hold settled for
+   less than itself. Now the held judge credit is owed whole, lowered by
+   what the open holds charge, and collected only once they have all
+   closed (A31). Tests: Muse's case ($5 judge, $2 other, a $6 hold, a $1
+   charge, which leaves $2), two holds released and charged in turn, and
+   40 seeded runs of judge and other grants, holds, partial settles, a
+   revoke and grants after it. They check that the balance never goes
+   negative and that the removal is exactly the code's unspent credit less
+   what its open holds charged.
+2. Medium: the workspace cache could grow without limit. Now it has a
+   ceiling of 4 times its size (A5). Tests: the ceiling closes the oldest
+   idle workspace, recent or not, and a cache full of running requests
+   refuses with 503 `site_busy`.
+3. Low: the claimed scheme picked the cookie form. Now both forms are
+   read, the `__Host-` one first, and `X-Forwarded-Proto` counts only from
+   loopback (A13). Tests: the trust rule, a loopback session and a Google
+   sign-in callback that wrongly claim HTTPS, and both forms sent at once.
 
 ## Not done in this sprint
 

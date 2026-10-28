@@ -80,9 +80,10 @@ pnpm admin judges revoke --id j0123456789ab
   at once.
 - `create` and `grant` refuse while `APP_JUDGE_TOTAL_CAP_USD` is unset.
 - `revoke` stops a code: it no longer signs in, its judge account is
-  signed out, and its unspent credit is removed. Credit held for a step
-  already running is removed as that step finishes, and no new step may
-  use it.
+  signed out, and its unspent credit is removed. While a step that was
+  already running holds credit, the code's credit cannot be spent, and
+  what is left of it is removed once those steps finish. Other credit on
+  the account is never taken.
 - The total cap counts each standing code's cap and what revoked codes
   already spent. A new code or a grant past it is refused.
 
@@ -90,7 +91,12 @@ Judges open the site, choose "I have a judge code", or go straight to
 `/judge`. Code tries are limited to 10 per address in 15 minutes, and
 Google sign-in starts to 10 per address in 10 minutes. Behind the tunnel,
 set `APP_TRUSTED_PROXY=cloudflare`, or every visitor shares the tunnel's
-one address.
+one address. The site counts a request as HTTPS only when a proxy on this
+server says so in `X-Forwarded-Proto`, as cloudflared does.
+
+The app keeps the workspaces of recent visitors open, up to 256. When all
+of them are busy at once, a new visitor reads that the site is busy and
+can try again in a minute.
 
 ## How credits are priced
 
