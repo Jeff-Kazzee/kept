@@ -1,5 +1,5 @@
 {
-  "key": "7890fccb178d1dd4",
+  "key": "a927237d5796da38",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,16 +9,21 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_28",
+        "id": "rs_44",
         "summary": []
       },
       {
-        "type": "function_call",
-        "id": "fc_27",
-        "call_id": "call_27",
-        "name": "import_message",
-        "arguments": "{\"text\":\"Lantern Hill Clinic: Dana, we need to move your Thursday 11/12 10:30 AM visit. Can you do Friday 11/13 at 9:15 AM or Monday 11/16 at 1:00 PM instead? Reply FRI or MON.\",\"channel\":\"sms\",\"from\":\"Lantern Hill Clinic\",\"received_at\":\"2026-11-04T11:40:00-07:00\"}",
-        "status": "completed"
+        "type": "message",
+        "id": "msg_43",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Thursday 11/12 10:30 AM is confirmed.",
+            "annotations": []
+          }
+        ]
       }
     ],
     "usage": {

@@ -1,5 +1,5 @@
 {
-  "key": "f85311960303272f",
+  "key": "b53791622f15eb75",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,15 +9,15 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_68",
+        "id": "rs_4",
         "summary": []
       },
       {
         "type": "function_call",
-        "id": "fc_67",
-        "call_id": "call_67",
+        "id": "fc_3",
+        "call_id": "call_3",
         "name": "import_message",
-        "arguments": "{\"text\":\"Hi Dana,\\n\\nThis confirms your appointment on Monday, November 16 at 1:00 PM at Lantern Hill Clinic, 400 Elm Street, Suite 2. Your Thursday, November 12 appointment is canceled.\\n\\nFront Desk\\nLantern Hill Clinic\",\"channel\":\"email\",\"from\":\"Front Desk, Lantern Hill Clinic\",\"received_at\":\"2026-11-05T10:02:00-07:00\"}",
+        "arguments": "{\"text\":\"Lantern Hill Clinic: Hi Dana, we can see you Tuesday, November 10 at 2:00 PM or Thursday, November 12 at 10:30 AM at our Elm Street office. Reply 1 or 2.\",\"channel\":\"sms\",\"from\":\"Lantern Hill Clinic\",\"received_at\":\"2026-10-30T15:04:00-06:00\"}",
         "status": "completed"
       }
     ],

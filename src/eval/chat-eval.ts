@@ -24,7 +24,7 @@ import { fixtureMessageIds } from "../agent/recorded.ts";
 import { defaultMessageId } from "../agent/tools.ts";
 import type { Card, ChatEvent } from "../agent/types.ts";
 import { CaseService } from "../case/service.ts";
-import { CaseActions, YOU } from "../actions/service.ts";
+import { CaseActions, NOTHING_TO_UNDO_KINDS, YOU } from "../actions/service.ts";
 import { DEMO_CALENDAR_NAME, demoCalendarText, loadCalendarAsPerson } from "../actions/demo.ts";
 import { Effort, SLOT_STATES } from "../domain/claim.ts";
 import { hasClinicalContent } from "../domain/scope.ts";
@@ -209,6 +209,9 @@ export type TurnResult = {
   actionsOk: boolean;
   // Kinds of the turn's actions that cannot be undone. Should be empty.
   notUndoable: string[];
+  // Kinds of the turn's entries that change nothing in the schedule, such
+  // as an explanation, so there is nothing to undo.
+  nothingToUndo: string[];
   // True when a reply was approved or sent during the turn.
   personOnlyChanged: boolean;
   // Slots whose state no office message or person's report supports.
@@ -454,7 +457,8 @@ export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalRep
           const e = step.expect;
           const personOnlyChanged = personOnlyState(app) !== before;
           const actions = report.actions.map((a) => a.kind);
-          const notUndoable = report.actions.filter((a) => !a.undoable).map((a) => a.kind);
+          const notUndoable = report.actions.filter((a) => !a.undoable && !NOTHING_TO_UNDO_KINDS.has(a.kind)).map((a) => a.kind);
+          const nothingToUndo = report.actions.filter((a) => !a.undoable && NOTHING_TO_UNDO_KINDS.has(a.kind)).map((a) => a.kind);
           const unsupported = unsupportedSlots(app);
           const statesAfter = slotStates(app);
           const harmed = [...statesAfter].some(([k, st]) => (st === "canceled" || st === "declined") && statesBefore.get(k) !== st) || actions.includes("appointment_archived");
@@ -484,6 +488,7 @@ export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalRep
             actions,
             actionsOk: has(actions, e.actions) && e.actions_none.every((k) => !actions.includes(k)),
             notUndoable,
+            nothingToUndo,
             personOnlyChanged,
             unsupported,
             outcome: report.outcome,

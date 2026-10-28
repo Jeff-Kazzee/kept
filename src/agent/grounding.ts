@@ -136,6 +136,9 @@ const UNMAPPED_STATUS =
 const NEGATIONS = /\b(?:not|never|no|none|nothing|neither|nor|yet to|no longer|cannot)\b|n't\b/g;
 const negations = (text: string) => (text.match(NEGATIONS) ?? []).length;
 
+// A noun right after a state word that makes it describe claims.
+const CLAIM_NOUN_AFTER = /^\s+(?:items?|claims?|facts?|evidence|reviews?)\b/;
+
 // Words before a state word that make the clause a condition or an open
 // question rather than a statement: "I can check whether Monday is
 // confirmed", "once it is confirmed".
@@ -210,6 +213,9 @@ export function statesAgree(text: string, grounds: Grounds): boolean {
         for (const m of c.matchAll(w.re)) {
           const before = c.slice(0, m.index);
           if (CONDITIONAL.test(before)) continue;
+          // "8 pending items" describes claims waiting for review, not a
+          // slot (sprint 12, live run L2).
+          if (CLAIM_NOUN_AFTER.test(c.slice(m.index! + m[0].length))) continue;
           const n = negations(before);
           // Finding 5: two negations read either way, so they fail closed.
           if (n > 1) return false;
@@ -287,32 +293,58 @@ const VERBS: Array<{ past: string; base: string; kinds: string[] }> = [
   { past: "approved|sent|submitted|confirmed|canceled|cancelled|declined|booked|rescheduled|moved|deleted", base: "approve|send|submit|confirm|cancel|decline|book|reschedule|move|delete", kinds: [] },
 ];
 const VERB_RES = VERBS.map((v) => ({
-  re: new RegExp(`${SUBJECT}${HELPERS}\\s+(?:(?:${v.past})\\b|did\\s+(?:${v.base})\\b)`, "g"),
+  re: new RegExp(`${SUBJECT}${HELPERS}\\s+(?:(${v.past})\\b|did\\s+(?:${v.base})\\b)`, "g"),
   kinds: v.kinds,
 }));
 
 // A verb joined by "and" to the assistant's own verb in the same sentence,
-// as in "I saved your message and confirmed Monday" (the live
-// meaning-flips run). The words between must not hold another subject with
-// its own verb, so in "I see the office confirmed Monday and canceled
-// Thursday" the cancel is the office's.
-const OTHER_SUBJECT = /\b(?:that|which|who|they|it|he|she|you|office|clinic|desk|doctor|they've|it's)\s+(?:has\s+|have\s+|had\s+|just\s+|already\s+)*[a-z]+(?:ed|t)\b/;
+// as in "I saved your message and confirmed Monday" or "... and have
+// confirmed Monday" (the live meaning-flips run, Muse round 2, item 4).
+// Another subject with its own verb between them excuses the second verb
+// only when it governs it: "I see the office confirmed Monday and canceled
+// Thursday" is the office's doing, but in "I saved the note that you sent
+// and confirmed Monday" the subject sits in a relative clause and the
+// confirmation is the assistant's.
+const OTHER_SUBJECT = /\b(?:that|which|who|they|it|he|she|you|office|clinic|desk|doctor|they've|it's)\s+(?:has\s+|have\s+|had\s+|just\s+|already\s+)*[a-z]+(?:ed|t)\b/g;
 const JOINED_RES = VERBS.map((v) => ({
-  re: new RegExp(`${SUBJECT}${HELPERS}\\s+[a-z']+\\b([^.!?;]*?)\\band\\s+(?:also\\s+|then\\s+)?(?:${v.past})\\b`, "g"),
+  re: new RegExp(`${SUBJECT}${HELPERS}\\s+([a-z']+)\\b([^.!?;]*?)\\band\\s+(?:also\\s+|then\\s+)?(?:(?:have|has|had)\\s+(?:also\\s+)?)?(${v.past})\\b`, "g"),
   kinds: v.kinds,
 }));
+// Verbs after which "that" opens what was seen or said, not a relative
+// clause: "I see that the office confirmed ...".
+const REPORTING = /^(?:see|saw|seen|noticed|read|say|said|says|shows|showed|think|know|knew|found|noted|checked|hear|heard)$/;
+
+// True when an other subject in `between` governs the verb after "and".
+// `verb` is the assistant's first verb, before `between`.
+function otherSubjectGoverns(verb: string, between: string): boolean {
+  for (const m of between.matchAll(OTHER_SUBJECT)) {
+    const before = between.slice(0, m.index);
+    const opens = /^(?:that|which|who)\b/.test(m[0]) ? before : /\b(?:that|which|who)\s+(?:the\s+|your\s+|our\s+|their\s+)?$/.exec(before) ? before.replace(/\b(?:that|which|who)\s+(?:the\s+|your\s+|our\s+|their\s+)?$/, "") : null;
+    // No relative pronoun: the subject governs what follows.
+    if (opens === null) return true;
+    // "that" right after a reporting verb opens what was seen, so its
+    // subject governs. After a noun it opens a relative clause.
+    const word = /([a-z']+)\s*$/.exec(opens)?.[1] ?? verb;
+    if (REPORTING.test(word)) return true;
+  }
+  return false;
+}
+
+// "confirmed that ..." or "confirmed the time is ..." checks what the case
+// says, so it claims no action (Muse round 2, item 4).
+const CHECKED = /^\s+(?:that\b|the (?:time|date|day|place|location) (?:is|was)\b)/;
 
 // True when the text claims the assistant did something the turn's
 // actions do not show. `done` holds the kinds of this turn's entries.
 export function claimsAction(text: string, done: ReadonlySet<string> = new Set()): boolean {
   const t = normalizeForScope(text).toLowerCase().replace(/[’‘]/g, "'");
   const untrue = (kinds: string[]) => !kinds.some((k) => (k === ANY_ACTION ? done.size > 0 : done.has(k)));
-  const direct = VERB_RES.some(({ re, kinds }) => {
-    re.lastIndex = 0;
-    return re.test(t) && untrue(kinds);
-  });
+  const checked = (verb: string | undefined, end: number) => verb === "confirmed" && CHECKED.test(t.slice(end));
+  const direct = VERB_RES.some(({ re, kinds }) => [...t.matchAll(re)].some((m) => !checked(m[1], m.index! + m[0].length) && untrue(kinds)));
   if (direct) return true;
-  return JOINED_RES.some(({ re, kinds }) => [...t.matchAll(re)].some((m) => !OTHER_SUBJECT.test(m[1] ?? "") && untrue(kinds)));
+  return JOINED_RES.some(({ re, kinds }) =>
+    [...t.matchAll(re)].some((m) => !otherSubjectGoverns(m[1]!, m[2] ?? "") && !checked(m[3], m.index! + m[0].length) && untrue(kinds)),
+  );
 }
 
 export function checkAnswer(text: string, grounds: Grounds): TextProblem[] {

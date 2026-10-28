@@ -16,7 +16,8 @@ import { main } from "../src/eval/cli.ts";
 import { loadChatScripts, runChatEval, type ChatEvalReport } from "../src/eval/chat-eval.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { buildToolRequest, type InputItem } from "../src/model/responses.ts";
-import { RECORDED_LABEL, appEnv, parseEvents, runDemoCheck } from "../scripts/demo-check.ts";
+import { RECORDED_LABEL, REPLACED_LINE, appEnv, parseEvents, runDemoCheck } from "../scripts/demo-check.ts";
+import { replacedAnswerLine } from "../src/agent/agent.ts";
 import { PLACEHOLDER_NOTE } from "../scripts/demo-recordings.ts";
 import { scriptModel } from "./script-model.ts";
 
@@ -117,7 +118,10 @@ describe("SP12.3 and J12: the demo, live and offline", () => {
 
   it("demo:check gives the live app the key and no Google client, and reads the chat's event stream", () => {
     const base = { PATH: "/bin", MODEL_API_KEY: "k-123", GOOGLE_CLIENT_ID: "id", GOOGLE_CLIENT_SECRET: "s", APP_LIVE_MODEL: "1", APP_ALLOWED_HOSTS: "x", APP_DB: "data/app.sqlite" };
-    expect(appEnv(base, 5193, "/tmp/x/app.sqlite")).toEqual({ PATH: "/bin", MODEL_API_KEY: "k-123", APP_PORT: "5193", APP_DB: "/tmp/x/app.sqlite" });
+    expect(appEnv(base, 5193, "/tmp/x/app.sqlite")).toEqual({ PATH: "/bin", MODEL_API_KEY: "k-123", APP_PORT: "5193", APP_DB: "/tmp/x/app.sqlite", APP_LOG_REJECTED: "1" });
+    // The app's line for a refused answer reads back.
+    const line = replacedAnswerLine("t-1", { text: 'Monday is "booked".', problems: ["ungrounded", "state_mismatch"] });
+    expect(REPLACED_LINE.exec(line)?.slice(1)).toEqual(["ungrounded, state_mismatch", '"Monday is \\"booked\\"."']);
     const body = 'event: turn.started\ndata: {"turnId":"t1","userMessageId":"cm1"}\n\nevent: text.delta\ndata: {"turnId":"t1","text":"Hi"}\n\n';
     expect(parseEvents(body)).toEqual([
       { event: "turn.started", data: { turnId: "t1", userMessageId: "cm1" } },

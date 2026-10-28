@@ -33,6 +33,7 @@ import { CaseAgent } from "../src/agent/agent.ts";
 import { RecordedChatClient, fixtureMessageIds } from "../src/agent/recorded.ts";
 import { defaultMessageId } from "../src/agent/tools.ts";
 import type { ChatEvent } from "../src/agent/types.ts";
+import type { ToolModelClient } from "../src/model/responses.ts";
 import { CaseService } from "../src/case/service.ts";
 import { loadChatScripts, stepText, type ChatStep } from "../src/eval/chat-eval.ts";
 import { loadCaseProfile } from "../src/fixtures/load.ts";
@@ -47,13 +48,22 @@ type Line = (line: string) => void;
 type SayStep = Extract<ChatStep, { say: string }>;
 type Problem = { step: number; text: string; fatal: boolean };
 
-export type DemoCheckOptions = { recorded?: boolean; log?: Line; env?: NodeJS.ProcessEnv; startTimeoutMs?: number };
+// `chatClient` replaces the recorded chat double in --recorded mode, for tests.
+export type DemoCheckOptions = { recorded?: boolean; log?: Line; env?: NodeJS.ProcessEnv; startTimeoutMs?: number; chatClient?: ToolModelClient };
+
+// An answer the checks refused in a turn, with its problems (L2).
+type Replaced = { problems: string[]; text: string };
 
 export const RECORDED_LABEL = "recorded, not a product run";
 
 // One request, as the page sends it, and the answer's status and body.
 // close() says whether the app was stopped.
-type Transport = { call(method: string, path: string, body: unknown, generation: number): Promise<{ status: number; text: string }>; close(): Promise<boolean> };
+// drainReplaced() gives the answers refused since it was last called.
+type Transport = {
+  call(method: string, path: string, body: unknown, generation: number): Promise<{ status: number; text: string }>;
+  drainReplaced(): Replaced[];
+  close(): Promise<boolean>;
+};
 export type DemoCheckResult = { ok: boolean; problems: Problem[]; turns: number };
 
 const freePort = () =>
@@ -67,14 +77,15 @@ const freePort = () =>
   });
 
 // The environment the live app starts with: the key, no Google client and
-// no proxy host list, so the agent's tools are the same on every run.
+// no proxy host list, so the agent's tools are the same on every run, and
+// APP_LOG_REJECTED, so the app writes each refused answer to stderr.
 export function appEnv(base: NodeJS.ProcessEnv, port: number, db: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(base)) {
     if (/^(?:APP_|GOOGLE_)/.test(k)) continue;
     env[k] = v;
   }
-  return { ...env, APP_PORT: String(port), APP_DB: db };
+  return { ...env, APP_PORT: String(port), APP_DB: db, APP_LOG_REJECTED: "1" };
 }
 
 function waitForStart(child: ChildProcess, timeoutMs: number): Promise<void> {
@@ -121,20 +132,33 @@ const sameProcess = (a: ProcessIdentity | null, b: ProcessIdentity | null) =>
 
 // Stops a child this script started, through its handle, and only while
 // the process behind it is still the one recorded when it started. Any
-// doubt sends no signal. True when the child is stopped.
-export async function stopChild(child: ChildProcess, recorded: ProcessIdentity | null): Promise<boolean> {
-  if (child.exitCode !== null || child.signalCode !== null) return true;
-  if (child.pid === undefined || !sameProcess(recorded, processIdentity(child.pid))) return false;
+// doubt sends no signal. SIGKILL follows after `killAfterMs` under the same
+// check, and after `giveUpMs` it stops waiting, so an app that ignores
+// SIGTERM and can no longer be confirmed never holds the check open (Muse
+// round 2, item 9). True when the child is stopped.
+export type StopOptions = { killAfterMs?: number; giveUpMs?: number; identityOf?: (pid: number) => ProcessIdentity | null };
+
+export async function stopChild(child: ChildProcess, recorded: ProcessIdentity | null, options: StopOptions = {}): Promise<boolean> {
+  const identityOf = options.identityOf ?? processIdentity;
+  const gone = () => child.exitCode !== null || child.signalCode !== null;
+  if (gone()) return true;
+  if (child.pid === undefined || !sameProcess(recorded, identityOf(child.pid))) return false;
   const pid = child.pid;
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  const exited = new Promise<boolean>((resolve) => child.once("exit", () => resolve(true)));
   child.kill("SIGTERM");
-  const timer = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null && sameProcess(recorded, processIdentity(pid))) child.kill("SIGKILL");
-  }, 10_000);
-  await exited;
-  clearTimeout(timer);
-  return true;
+  const kill = setTimeout(() => {
+    if (!gone() && sameProcess(recorded, identityOf(pid))) child.kill("SIGKILL");
+  }, options.killAfterMs ?? 10_000);
+  let giveUp: ReturnType<typeof setTimeout> | undefined;
+  const gaveUp = new Promise<boolean>((resolve) => (giveUp = setTimeout(() => resolve(false), options.giveUpMs ?? 15_000)));
+  const stopped = await Promise.race([exited, gaveUp]);
+  clearTimeout(kill);
+  clearTimeout(giveUp);
+  return stopped;
 }
+
+// The line the app writes for a refused answer (replacedAnswerLine).
+export const REPLACED_LINE = /^Replaced answer \(turn [^)]*\) \[([^\]]*)\]: (".*")$/;
 
 // The events of a chat turn from its event stream.
 export function parseEvents(body: string): ChatEvent[] {
@@ -157,6 +181,7 @@ async function liveApp(dir: string, options: DemoCheckOptions, log: Line): Promi
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";
+  let replacedFrom = 0;
   child.stderr?.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
   // Who the child is, recorded as soon as it runs, for stopChild.
   await new Promise<void>((resolve, reject) => {
@@ -185,9 +210,18 @@ async function liveApp(dir: string, options: DemoCheckOptions, log: Line): Promi
       });
       return { status: res.status, text: await res.text() };
     },
+    drainReplaced() {
+      const fresh = stderr.slice(replacedFrom);
+      replacedFrom = stderr.length;
+      return fresh.split("\n").flatMap((l) => {
+        const m = REPLACED_LINE.exec(l);
+        return m ? [{ problems: m[1]!.split(", "), text: JSON.parse(m[2]!) as string }] : [];
+      });
+    },
     async close() {
       const stopped = await stop();
-      if (stderr.trim() !== "") log(`App errors:\n${stderr.trim()}`);
+      const errors = stderr.split("\n").filter((l) => l.trim() !== "" && !REPLACED_LINE.test(l));
+      if (errors.length > 0) log(`App errors:\n${errors.join("\n")}`);
       return stopped;
     },
   };
@@ -195,7 +229,8 @@ async function liveApp(dir: string, options: DemoCheckOptions, log: Line): Promi
 
 // --recorded: the same routes in this process, on the recorded test
 // doubles. Not the product: the app has no recorded mode (J12).
-function recordedApp(dir: string): Transport {
+function recordedApp(dir: string, chatClient?: ToolModelClient): Transport {
+  const replaced: Replaced[] = [];
   const store = new EventStore(path.join(dir, "app.sqlite"));
   const client = RecordedModelClient.fromDirectory();
   const intake = new IntakeService(store, client);
@@ -204,7 +239,10 @@ function recordedApp(dir: string): Transport {
   const records = new RecordsService(store, intake, kase);
   const api = createApi(intake, kase, {}, reply, { store, records });
   const chat = createChat(
-    new CaseAgent(store, { intake, kase, reply, records }, RecordedChatClient.fromDirectory(), { messageIdFor: fixtureMessageIds(defaultMessageId) }),
+    new CaseAgent(store, { intake, kase, reply, records }, chatClient ?? RecordedChatClient.fromDirectory(), {
+      messageIdFor: fixtureMessageIds(defaultMessageId),
+      onRejected: ({ rejected }) => replaced.push(...rejected.map((r) => ({ problems: [...r.problems], text: r.text }))),
+    }),
   );
   return {
     async call(method, p, body, generation) {
@@ -227,6 +265,7 @@ function recordedApp(dir: string): Transport {
       );
       return { status, text };
     },
+    drainReplaced: () => replaced.splice(0),
     async close() {
       store.close();
       return true;
@@ -246,7 +285,7 @@ export async function runDemoCheck(options: DemoCheckOptions = {}): Promise<Demo
   let turns = 0;
   let app: Transport | null = null;
   try {
-    app = recorded ? recordedApp(dir) : await liveApp(dir, options, log);
+    app = recorded ? recordedApp(dir, options.chatClient) : await liveApp(dir, options, log);
     if (recorded) log("Running the demo path in this process on the recorded test doubles.");
     let generation = 0;
     const transport = app;
@@ -312,6 +351,7 @@ export async function runDemoCheck(options: DemoCheckOptions = {}): Promise<Demo
       const text = of("text.delta").map((d) => d.text).join("");
       const e = say.expect;
       log(`step ${n}: ${ms} ms, tools ${tools.join(", ") || "none"}, actions ${actions.join(", ") || "none"}${error ? `, error ${error}` : ""}`);
+      for (const r of transport.drainReplaced()) log(`  step ${n}: replaced answer [${r.problems.join(", ")}]: ${JSON.stringify(r.text)}`);
       if (of("turn.done").length !== 1) fail("the turn did not finish");
       const missing = e.tools.filter((t) => !tools.includes(t));
       if (missing.length > 0) fail(`tools not called: ${missing.join(", ")}`);

@@ -10,6 +10,10 @@
 //   APP_PORT           port, default 5180
 //   APP_DB             event log file, default data/app.sqlite in the package
 //   MODEL_API_KEY      the server's Meta key, used when the user set none
+//   APP_LOG_REJECTED   set to 1 to write each answer the checks refused,
+//                      with its problems, to stderr. Only `pnpm demo:check`
+//                      sets it, for its temporary app. Model output about
+//                      the case, never a key.
 //   APP_ALLOWED_HOSTS  more host names, comma-separated, for a private
 //                      proxy such as Tailscale serve (see hosts.ts)
 //   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
@@ -32,7 +36,7 @@ import { createApi } from "./api.ts";
 import { CALLBACK_PATH, createAuth } from "./auth.ts";
 import { timezoneSettings } from "../src/settings/events.ts";
 import { CHAT_PATH, createChat, sseFrame } from "./chat.ts";
-import { CaseAgent } from "../src/agent/agent.ts";
+import { CaseAgent, replacedAnswerLine } from "../src/agent/agent.ts";
 import { defaultMessageId } from "../src/agent/tools.ts";
 import { APP_HEADER, requestSourceProblem } from "./guard.ts";
 import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
@@ -107,6 +111,11 @@ const chat = createChat(
   new CaseAgent(store, { intake, kase, reply, records, google }, client, {
     messageIdFor: defaultMessageId,
     ready,
+    ...(process.env.APP_LOG_REJECTED === "1"
+      ? { onRejected: ({ turnId, rejected }: { turnId: string; rejected: Array<{ text: string; problems: string[] }> }) => {
+          for (const r of rejected) console.error(replacedAnswerLine(turnId, r));
+        } }
+      : {}),
     // Codes only: no key, headers or message text.
     onCallError: (e) =>
       console.error(`Chat model call ${e.call} (${e.kind}) failed: HTTP ${e.status ?? "none"}, type ${e.type ?? "none"}, code ${e.code ?? "none"}.`),

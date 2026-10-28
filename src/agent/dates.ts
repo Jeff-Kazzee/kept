@@ -127,6 +127,10 @@ export function canonicalDates(input: string, today: string | null): Canonical {
       return written(addDays(today, which === "next" && ahead === 0 ? 7 : ahead));
     });
   }
+  // The tools label a claim with a date and no time as "Thursday 11/12, no
+  // time". That label names the date alone, so its ", no time" is not a
+  // negation of what follows (sprint 12, live run L2).
+  t = t.replace(/(\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?),\s*no time\b/g, "$1");
   return { text: t, unreadable: unreadable(t) };
 }
 

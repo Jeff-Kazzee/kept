@@ -1,5 +1,5 @@
 {
-  "key": "4d0c4f466afaf61e",
+  "key": "6c7d1ef24a232be5",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,16 +9,21 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_20",
+        "id": "rs_64",
         "summary": []
       },
       {
-        "type": "function_call",
-        "id": "fc_19",
-        "call_id": "call_19",
-        "name": "accept_claim",
-        "arguments": "{\"claims\":[{\"evidence_id\":\"m2-e1\",\"expected_version\":1},{\"evidence_id\":\"m2-e2\",\"expected_version\":1},{\"evidence_id\":\"m2-e3\",\"expected_version\":1}]}",
-        "status": "completed"
+        "type": "message",
+        "id": "msg_63",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "A reply accepting Monday 11/16 1:00 PM is ready. Read it back and approve it on the card.",
+            "annotations": []
+          }
+        ]
       }
     ],
     "usage": {

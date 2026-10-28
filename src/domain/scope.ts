@@ -86,9 +86,12 @@ const TERMS = [
   "(?:mis|tus|sus) resultados",
   "resultados? (?:de|del) (?:laboratorio|analisis|la prueba|las pruebas|examen(?:es)?|sangre)",
   "(?:mes|tes|vos) resultats",
-  "resultats? (?:d['’]analyses?|de laboratoire|du test|des tests|sanguins?|d['’]examens?)",
-  "(?:labor|test|blut|befund)ergebniss?e?",
+  "resultats? (?:d['’]analyses?|d[eu] laboratoire|du test|des tests|sanguins?|d['’]examens?)",
+  "(?:labor|test|blut|befund|untersuchungs)ergebniss?e?",
   "(?:meine|ihre|deine) ergebniss?e?",
+  // Muse round 2, item 7.
+  "blutuntersuchung\\w*",
+  "befund\\w*",
 ];
 
 const CLINICAL = new RegExp(`\\b(?:${TERMS.join("|")})\\b`, "i");
@@ -165,11 +168,11 @@ export function despaced(text: string): string {
 }
 
 // Review round 1, finding 4: a clinical word written in chunks of two or
-// more letters ("symp toms", "medi cation", "can cer"). Two or three
-// neighbouring chunks, apart only by the marks above, are joined and read
-// against whole clinical words. Whole words, not stems, so "the rapper"
-// and "can certainly" stay ordinary words. A chunk of one letter is left
-// to the run of single letters above, so "Joe's can" stays as it is.
+// more letters ("symp toms", "medi cation", "can cer"). Neighbouring
+// chunks are joined and read against whole clinical words. Whole words,
+// not stems, so "the rapper" and "can certainly" stay ordinary words. A
+// chunk of one letter is left to the run of single letters above, so
+// "Joe's can" stays as it is.
 const WHOLE_WORDS = new Set(
   (
     "symptom symptoms medication medications medicine medicines medical treatment treatments therapy therapies therapist therapists " +
@@ -183,18 +186,35 @@ const WHOLE_WORDS = new Set(
     "douleurs schmerz schmerzen enfermedad maladie krankheit embarazo embarazada schwanger"
   ).split(" "),
 );
-const CHUNK_GAP = /^[ .\-_*·]+$/;
+// Muse round 2, items 5 and 6: chunks keep joining while the joined text
+// starts a whole clinical word ("me di ca tion"), and a comma may sit
+// between them ("symp, toms"). A sentence end may not, and chunks that are
+// all ordinary standalone words are never joined, so "the rapist" stays
+// two words while "the rapy" is read as "therapy".
+const CHUNK_GAP = /^[ \-_*·,]+$/;
+const MAX_CHUNKS = 6;
+const PREFIXES = new Set([...WHOLE_WORDS].flatMap((w) => Array.from({ length: w.length - 1 }, (_, i) => w.slice(0, i + 2))));
+const COMMON_WORDS = new Set(
+  (
+    "a an the and or but to in on at of for by as is it be do so no my me we us he she his her our you your they them this that " +
+    "can will may not all any one two new old see did has had have was are its into from with than then there here what when who " +
+    "rapist rapists rapper certain certainly"
+  ).split(" "),
+);
 
 export function joinsClinicalWord(text: string): boolean {
   const words = [...text.toLowerCase().matchAll(/\p{L}+/gu)].map((m) => ({ w: m[0], start: m.index!, end: m.index! + m[0].length }));
   for (let i = 0; i < words.length; i++) {
     let joined = words[i]!.w;
-    if (joined.length < 2) continue;
-    for (let j = i + 1; j < Math.min(words.length, i + 3); j++) {
+    if (joined.length < 2 || !PREFIXES.has(joined)) continue;
+    let allCommon = COMMON_WORDS.has(joined);
+    for (let j = i + 1; j < Math.min(words.length, i + MAX_CHUNKS); j++) {
       const next = words[j]!;
       if (next.w.length < 2 || !CHUNK_GAP.test(text.slice(words[j - 1]!.end, next.start))) break;
       joined += next.w;
-      if (WHOLE_WORDS.has(joined)) return true;
+      allCommon &&= COMMON_WORDS.has(next.w);
+      if (WHOLE_WORDS.has(joined) && !allCommon) return true;
+      if (!PREFIXES.has(joined)) break;
     }
   }
   return false;

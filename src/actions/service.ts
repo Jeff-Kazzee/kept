@@ -119,6 +119,12 @@ const NOT_UNDOABLE = {
   recordUndo: "This undo cannot be undone. Make the change again instead.",
 } as const;
 
+// Entries that change nothing the person relies on: an explanation and a
+// template suggestion. They are logged like every action (0009, design 3)
+// with the reason there is nothing to undo, and the chat eval does not
+// count them as actions that cannot be undone (sprint 12, live run L1).
+export const NOTHING_TO_UNDO_KINDS: ReadonlySet<string> = new Set(["conflict_explained", "reply_suggested"]);
+
 // An undo that would throw away the person's own edit of a draft.
 const editedDraft = (id: string) => `You edited draft ${id} after it was started, so undo would throw your edit away. Discard the draft yourself if you no longer want it.`;
 

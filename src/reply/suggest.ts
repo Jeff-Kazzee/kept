@@ -78,6 +78,7 @@ export const REPLY_INSTRUCTIONS = [
   "A short note may name its slot only by a weekday, a date or a time, such as MON, See you Thursday or Confirmed, 10:30.",
   "Read such a note as the person choosing that slot: accept_offer when the slot is offered, keep_original when it is the confirmed slot with a proposed change.",
   "Answer no fit for a short note only when no listed slot matches what it names, or the slot it names is in neither of those states.",
+  "Every template needs the slot's date and time. A slot whose time is null fits no template: answer no fit with template_not_allowed.",
   "In fields, copy the slot's date, time and location exactly as listed, or use null.",
   "Do not write the reply text. Code writes it from the template.",
   "Administrative content only: times, places, confirmations and office requests. Never give medical or clinical content.",
