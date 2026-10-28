@@ -49,6 +49,18 @@ export class ReplyService {
     return { version: log.version, openDraft: openDraft(log)?.id ?? null };
   };
 
+  // Writes the reply events in one transaction that first checks, inside
+  // the lock, that the draft's slot is not archived. An archive that
+  // commits after the command read the case still stops the write.
+  #appendFor(slotKey: string | null, write: () => void): void {
+    this.#store.transaction(() => {
+      if (slotKey !== null && this.#kase.archivedKeys().has(slotKey)) {
+        throw new InvalidRequestError(`Appointment ${slotKey} is archived. Undo the archive first.`);
+      }
+      write();
+    });
+  }
+
   #open(draftId: string): DraftRecord {
     const draft = openDraft(this.#kase.replyState().log);
     if (!draft || draft.id !== draftId) throw new InvalidRequestError(`Draft ${draftId} is not open.`);
@@ -79,7 +91,7 @@ export class ReplyService {
       declines: built.content.declines,
       text: built.content.text,
     });
-    this.#store.append(REPLY_STREAM, expectedVersion, events.map(asEvent), this.#describe);
+    this.#appendFor(built.content.slot.key, () => this.#store.append(REPLY_STREAM, expectedVersion, events.map(asEvent), this.#describe));
     return this.#kase.view();
   }
 
@@ -142,7 +154,7 @@ export class ReplyService {
         }),
       );
     }
-    this.#store.append(REPLY_STREAM, expectedVersion, events.map(asEvent), this.#describe);
+    this.#appendFor(built?.ok ? built.content.slot.key : null, () => this.#store.append(REPLY_STREAM, expectedVersion, events.map(asEvent), this.#describe));
     return this.#kase.view();
   }
 
@@ -244,8 +256,10 @@ export class ReplyService {
       },
       { type: "reply_send_simulated", data: { draft_id: draftId } },
     ];
-    this.#store.appendMany([{ streamId: REPLY_STREAM, expectedVersion, events: events.map(asEvent) }, ...writes], (streamId, evs) =>
-      streamId === REPLY_STREAM ? this.#describe(streamId, evs) : null,
+    this.#appendFor(draft.slotKey, () =>
+      this.#store.appendMany([{ streamId: REPLY_STREAM, expectedVersion, events: events.map(asEvent) }, ...writes], (streamId, evs) =>
+        streamId === REPLY_STREAM ? this.#describe(streamId, evs) : null,
+      ),
     );
     return this.#kase.view();
   }

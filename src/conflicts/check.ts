@@ -19,6 +19,7 @@ export type OutputProblem =
   | "conflict_not_open"
   // Reply template checks (src/reply/suggest.ts).
   | "unknown_slot"
+  | "slot_archived"
   | "template_not_valid_for_state"
   | "missing_field"
   | "field_mismatch"

@@ -116,7 +116,7 @@ const D3Step = z.union([
 ]);
 export type D3Step = z.infer<typeof D3Step>;
 
-const DraftProblem = z.enum(["unknown_slot", "template_not_valid_for_state", "missing_field"]);
+const DraftProblem = z.enum(["unknown_slot", "slot_archived", "template_not_valid_for_state", "missing_field"]);
 
 export const D3Checkpoint = z
   .object({

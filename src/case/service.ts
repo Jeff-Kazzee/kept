@@ -20,7 +20,7 @@ import { arrivalTime } from "../slots/time.ts";
 import type { Conflict } from "../slots/types.ts";
 import { StaleEditError, type EventStore, type StoredEvent, type StreamWrite } from "../store/event-log.ts";
 import { GRANT_PREFIX } from "../grants/grants.ts";
-import { ACCESS_LOG_STREAM } from "../records/events.ts";
+import { ACCESS_LOG_STREAM, RECORD_PREFIX, projectRecords } from "../records/events.ts";
 import { buildDraft, type ReplyContext } from "../reply/draft.ts";
 import { REPLY_STREAM, draftEvents, projectReplies, type ReplyLog } from "../reply/events.ts";
 import { replyView } from "../reply/view.ts";
@@ -136,6 +136,14 @@ export class CaseService {
     return this.#store.latestSeqExcept([GRANT_PREFIX, ACCESS_LOG_STREAM]);
   }
 
+  // What the page polls to learn that anything changed: the case generation
+  // and the highest event number in the file. Every write by the app, the
+  // MCP server or another tab moves one of them, grants and agent calls
+  // included.
+  liveVersion(): { generation: number; seq: number } {
+    return { generation: this.#store.caseGeneration(), seq: this.#store.latestSeqExcept([]) };
+  }
+
   // Delete case: erases every event of the case, its access log and its
   // rate-limit counters, and clears them from the file on disk. Grants stay.
   // App only, after the user types the confirmation. No MCP tool calls it.
@@ -153,29 +161,53 @@ export class CaseService {
     return { erased };
   }
 
+  // The appointments the user archived. Archive hides a slot from the
+  // default list, the question queue and the reply panel. Its state and its
+  // conflicts stay.
+  archivedKeys(): Set<string> {
+    const records = projectRecords(this.#store.readPrefix(RECORD_PREFIX));
+    return new Set([...records.values()].filter((r) => r.archived).map((r) => r.id));
+  }
+
+  // For use inside a write's transaction, so an archive that commits after
+  // the command read the case still stops the write.
+  #assertNotArchived(keys: string[]): void {
+    const archived = this.archivedKeys();
+    const hit = keys.find((k) => archived.has(k));
+    if (hit) throw new InvalidRequestError(`Appointment ${hit} is archived. Undo the archive first.`);
+  }
+
   #build() {
     const evidence = this.#intake.evidence();
     const queue = projectQuestions(this.#store.readStream(QUESTIONS_STREAM));
     const calendar = latestCalendar(this.#store.readStream(CALENDAR_STREAM));
     const events = calendar ? parseIcs(calendar.text) : null;
     const projection = projectSlots({ evidence, settled: queue.settled, calendar: events });
+    const archived = this.archivedKeys();
+    const archivedIn = (c: Conflict) => c.slotKeys.filter((k) => archived.has(k));
 
     // The open question stays current only while its conflict exists with
-    // the same evidence.
+    // the same evidence and names no archived appointment.
     const open = queue.questions.find((q) => q.status === "open") ?? null;
     const current =
       open &&
-      projection.conflicts.some((c) => c.id === open.conflictId && signature(c.evidenceIds) === signature(open.conflictEvidenceIds))
+      projection.conflicts.some(
+        (c) => c.id === open.conflictId && signature(c.evidenceIds) === signature(open.conflictEvidenceIds) && archivedIn(c).length === 0,
+      )
         ? open
         : null;
 
-    const conflicts: ConflictView[] = projection.conflicts.map((c) => this.#conflictView(c, queue.questions, current));
+    const conflicts: ConflictView[] = projection.conflicts.map((c) => ({
+      ...this.#conflictView(c, queue.questions, current),
+      archivedSlotKeys: archivedIn(c),
+    }));
     const replyContext: ReplyContext = {
       slots: projection.slots,
       evidence,
       messages: this.#intake.messages(),
       userName: this.#userName,
       officeAcceptedSeqs: this.#officeAcceptedSeqs(evidence),
+      archived: [...archived].sort(),
     };
     const replies = projectReplies(this.#store.readStream(REPLY_STREAM));
     const view: CaseView = {
@@ -183,7 +215,7 @@ export class CaseService {
       conflicts,
       staleEvidenceIds: projection.staleEvidenceIds,
       question: current ? questionView(current) : null,
-      waiting: conflicts.filter((c) => c.askable && c.status === "open").length,
+      waiting: conflicts.filter(isWaiting).length,
       questionsVersion: queue.version,
       calendar: calendar && events ? { name: calendar.name, events, timeZone: CASE_TIME_ZONE, assumedSlotMinutes: ASSUMED_SLOT_MINUTES } : null,
       calendarVersion: calendar?.version ?? 0,
@@ -210,7 +242,7 @@ export class CaseService {
     return { view: built.view, context: built.replyContext, log: built.replies };
   }
 
-  #conflictView(c: Conflict, questions: QuestionRecord[], current: QuestionRecord | null): ConflictView {
+  #conflictView(c: Conflict, questions: QuestionRecord[], current: QuestionRecord | null): Omit<ConflictView, "archivedSlotKeys"> {
     const sig = signature(c.evidenceIds);
     const answered = questions.filter((q) => q.conflictId === c.id && q.status === "answered" && signature(q.conflictEvidenceIds) === sig).at(-1);
     const stream = projectExplanations(this.#store.readStream(conflictStream(c.id)));
@@ -299,7 +331,7 @@ export class CaseService {
     this.#store.assertVersion(QUESTIONS_STREAM, expectedVersion, this.#describeQueue);
     const { view, evidence, conflicts, queue, open, current } = this.#build();
     if (current) throw new InvalidRequestError(`Question ${current.id} is still open. Answer it first.`);
-    const waiting = new Set(view.conflicts.filter((c) => c.askable && c.status === "open").map((c) => c.id));
+    const waiting = new Set(view.conflicts.filter(isWaiting).map((c) => c.id));
     const candidates = conflicts.filter((c) => waiting.has(c.id));
     if (candidates.length === 0) throw new InvalidRequestError("No conflict waits for a question.");
 
@@ -322,7 +354,10 @@ export class CaseService {
         attempts: result.attempts.map(attemptData),
       },
     });
-    this.#store.append(QUESTIONS_STREAM, expectedVersion, events.map(asEvent), this.#describeQueue);
+    this.#store.transaction(() => {
+      this.#assertNotArchived(conflict.slotKeys);
+      this.#store.append(QUESTIONS_STREAM, expectedVersion, events.map(asEvent), this.#describeQueue);
+    });
     return this.view();
   }
 
@@ -337,8 +372,9 @@ export class CaseService {
 
   #answer(questionId: string, choiceId: string, expectedVersion: number, replyVersion?: number): CaseView {
     this.#store.assertVersion(QUESTIONS_STREAM, expectedVersion, this.#describeQueue);
-    const { evidence, current, replyContext, replies } = this.#build();
+    const { evidence, current, replyContext, replies, conflicts } = this.#build();
     if (!current || current.id !== questionId) throw new InvalidRequestError(`Question ${questionId} is not open.`);
+    const asked = conflicts.find((c) => c.id === current.conflictId)!;
     const choice = current.choices.find((c) => c.id === choiceId);
     if (!choice) throw new InvalidRequestError(`Question ${questionId} has no choice ${choiceId}.`);
 
@@ -396,13 +432,20 @@ export class CaseService {
       });
       writes.push({ streamId: REPLY_STREAM, expectedVersion: replyVersion, events: events.map((e) => ({ type: e.type, data: e.data })) });
     }
-    this.#store.appendMany(
-      [{ streamId: QUESTIONS_STREAM, expectedVersion, events: [asEvent(answered)] }, ...writes],
-      (streamId, events) => (streamId === QUESTIONS_STREAM ? this.#describeQueue(streamId, events) : null),
-    );
+    this.#store.transaction(() => {
+      this.#assertNotArchived(asked.slotKeys);
+      this.#store.appendMany(
+        [{ streamId: QUESTIONS_STREAM, expectedVersion, events: [asEvent(answered)] }, ...writes],
+        (streamId, events) => (streamId === QUESTIONS_STREAM ? this.#describeQueue(streamId, events) : null),
+      );
+    });
     return this.view();
   }
 }
+
+// A conflict the app may ask about now. One that names an archived
+// appointment waits until the archive is undone.
+const isWaiting = (c: ConflictView) => c.askable && c.status === "open" && c.archivedSlotKeys.length === 0;
 
 function questionView(q: QuestionRecord): QuestionView {
   return {

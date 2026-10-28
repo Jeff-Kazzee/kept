@@ -17,9 +17,18 @@ export type ReplyContext = {
   // Event seq numbers at which the user accepted a claim from an office
   // message. Used only to say why a draft no longer fits.
   officeAcceptedSeqs?: number[];
+  // Slot keys of archived appointments. They leave the reply panel, and no
+  // draft is built for one until the archive is undone.
+  archived?: string[];
 };
 
-export type DraftProblem = "unknown_slot" | "template_not_valid_for_state" | "missing_field";
+export type DraftProblem = "unknown_slot" | "slot_archived" | "template_not_valid_for_state" | "missing_field";
+
+// The slots a reply may name: every slot that is not archived.
+export function replySlots(ctx: ReplyContext): SlotView[] {
+  const archived = new Set(ctx.archived ?? []);
+  return archived.size === 0 ? ctx.slots : ctx.slots.filter((s) => !archived.has(s.key));
+}
 
 export type DraftContent = {
   template: TemplateId;
@@ -100,6 +109,7 @@ export function buildDraft(template: TemplateId, slotKey: string, ctx: ReplyCont
   const def = TEMPLATES[template];
   const slot = ctx.slots.find((s) => s.key === slotKey);
   if (!slot) return { ok: false, problems: ["unknown_slot"], missing: [] };
+  if (ctx.archived?.includes(slotKey)) return { ok: false, problems: ["slot_archived"], missing: [] };
   const problems: DraftProblem[] = [];
   if (!def.validStates.includes(slot.state)) problems.push("template_not_valid_for_state");
   const { fields, declines } = slotFields(template, slot, ctx);
@@ -114,7 +124,7 @@ export function buildDraft(template: TemplateId, slotKey: string, ctx: ReplyCont
 export function replyOptions(ctx: ReplyContext): { options: ReplyOption[]; withheld: WithheldOption[] } {
   const options: ReplyOption[] = [];
   const withheld: WithheldOption[] = [];
-  for (const slot of ctx.slots) {
+  for (const slot of replySlots(ctx)) {
     for (const template of TEMPLATE_IDS) {
       if (!TEMPLATES[template].validStates.includes(slot.state)) continue;
       const option = { template, title: TEMPLATES[template].title, slotKey: slot.key, slotLabel: slot.label };

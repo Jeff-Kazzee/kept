@@ -14,7 +14,7 @@ import type { Effort } from "../domain/claim.ts";
 import { parseMentions, weekdayOf, type Mention } from "../domain/datetime.ts";
 import type { ModelClient } from "../model/client.ts";
 import { MODEL, type TokenUsage } from "../model/request.ts";
-import { buildDraft, slotFields, type ReplyContext } from "./draft.ts";
+import { buildDraft, replySlots, slotFields, type ReplyContext } from "./draft.ts";
 import { TEMPLATES, TEMPLATE_IDS, type TemplateId } from "./templates.ts";
 
 export const REPLY_SCHEMA_NAME = "reply_template";
@@ -133,7 +133,9 @@ export function checkReply(output: ReplyOutput, ctx: ReplyContext, note: string 
 export function replyInput(intent: string | null, ctx: ReplyContext): string {
   return JSON.stringify({
     note: intent,
-    slots: ctx.slots.map((s) => ({ id: s.key, label: s.label, state: s.state, date: s.date, time: s.time, location: s.location })),
+    // Archived slots are left out. With none archived the input is the same
+    // as before archive existed, so recorded responses still match.
+    slots: replySlots(ctx).map((s) => ({ id: s.key, label: s.label, state: s.state, date: s.date, time: s.time, location: s.location })),
     templates: TEMPLATE_IDS.map((id) => ({ id, asserts: TEMPLATES[id].asserts, valid_states: TEMPLATES[id].validStates })),
   });
 }

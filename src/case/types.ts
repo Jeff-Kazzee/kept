@@ -33,6 +33,9 @@ export type ConflictView = Conflict & {
   explanation: ExplanationView | null;
   // Version of the conflict's stream, for the expected version of a write.
   version: number;
+  // The appointments in this conflict that the user archived. The app does
+  // not ask about the conflict while any is archived.
+  archivedSlotKeys: string[];
 };
 
 export type QuestionView = {
