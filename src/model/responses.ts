@@ -161,6 +161,8 @@ export async function* readSse(stream: AsyncIterable<Uint8Array>): AsyncGenerato
     buffer += decoder.decode(chunk, { stream: true });
     let nl: number;
     while ((nl = buffer.search(/\r\n|\n|\r/)) !== -1) {
+      // A \r at the end of a chunk may be the first half of \r\n.
+      if (buffer[nl] === "\r" && nl === buffer.length - 1) break;
       const line = buffer.slice(0, nl);
       buffer = buffer.slice(nl + (buffer.startsWith("\r\n", nl) ? 2 : 1));
       yield* flushLine(line);
