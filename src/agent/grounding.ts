@@ -161,8 +161,9 @@ function ownReview(clause: string, done: ReadonlySet<string> = new Set()): boole
 }
 
 // A colon splits a clause only before a space, so "10:30" stays whole.
-// SP12.1: an answer word at the start, set off by a dash ("No — Monday is
-// offered"), is a clause of its own, so its "no" does not negate the rest.
+// SP12.1: an answer word at the start, set off by a dash, as in "No",
+// a dash and "Monday is offered", is a clause of its own, so its "no" does
+// not negate the rest.
 const ANSWER_WORD = /^((?:no|nope|not yet|not quite|yes|yeah|yep)\b)\s*[—–-]+\s*/;
 const clauses = (s: string) =>
   s

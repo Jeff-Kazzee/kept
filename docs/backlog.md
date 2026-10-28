@@ -75,8 +75,9 @@ tier. Read-only MCP is the floor.
   against 3.2 s for `low`.
 - [x] A weekday alone ("Monday") can match two dates inside the 14-day
   window. Sprint 2 raises it as a question instead of choosing.
-- [ ] A time written before its date can attach to the previous date and
-  reject a real claim. Watch the live rejection rate.
+- [x] A time written before its date can attach to the previous date and
+  reject a real claim. Sprint 12's meaning-flip probe found it and fixed
+  the parser (0013, F16).
 
 ## Carried over from sprint 2
 
@@ -103,8 +104,8 @@ tier. Read-only MCP is the floor.
   coordinator's live run of `af00de3` (3 runs, effort low) gave no meaning
   flips. S9.1 and S9.2 answered no fit in every run. System outcomes were as
   expected in 21 of 24 items.
-- [ ] Sprint 7 work: the template call answers no fit too often for short
-  notes. In the run above, "MON" (S12.1) got no fit in 2 of 3 runs and S3.4
+- [ ] Sprint 7 work, changed in sprint 12 (SP12.4) with the live rate
+  pending: the template call answers no fit too often for short notes. In the run above, "MON" (S12.1) got no fit in 2 of 3 runs and S3.4
   once. Each falls back to a manual pick, which is safe but costs the user a
   step. Tune the prompt or try effort minimal, then measure again.
 - [ ] Look at the reply panel in a browser. Sprint 3 checked it over HTTP
@@ -429,23 +430,30 @@ contract.
 
 Branch `sprint/12-failure-testing`. Fix what breaks. No new features.
 
-- [ ] SP12.1 "Am I booked Monday?" answers instead of falling back. The
-  live chat eval on `47c36d6` replaced the first answer in 2 of 3 runs.
-  The eval report should keep the replaced answer, so the cause can be
-  read.
-- [ ] SP12.2 Turn latency. Demo story p50 went from 4.5 s to 7.2 s after
-  the Google tools joined the registry. Offer only the tools the case can
-  use, and measure each model call and tool.
-- [ ] SP12.3 Live chat recordings, so the recorded mode answers the demo
-  story with no key. The coordinator runs the live recording.
-- [ ] SP12.4 Reply template no-fit on short office notes.
-- [ ] SP12.5 Out-of-scope set for S11, including evasions (other
-  languages, spacing, role play, split across turns), and meaning-flip
-  probes (negation, date and time swaps). A manual review finds no
-  clinical content in any response.
-- [ ] SP12.6 Full fixture suite S1 to S19 against the final model and
-  host, and `pnpm demo:check` running the demo path end to end.
-- [ ] SP12.7 The phone sheet audit (`<aside role="dialog">`).
+- [x] SP12.1 "Am I booked Monday?" answers instead of falling back. The
+  eval report keeps each replaced answer with its problems. The cause in
+  the code: the schedule's state meanings used words the answer check
+  cannot map, and the model repeated them (0013, F1 to F4). Confirm with
+  the coordinator's live chat eval.
+- [x] SP12.2 Turn latency. A turn offers only the tools the case can use,
+  and the eval report times each model call, tool, check and retry (0013,
+  F5, F6). The coordinator measures demo-story p50 against 5 s.
+- [x] SP12.3 Replaced by J12 (0013): the app has no recorded mode. With no
+  provider ready the chat and every model step answer one fixed sentence
+  with a link to Settings. The recorded clients are test doubles only.
+- [x] SP12.4 Reply template no-fit on short notes: the instructions say how
+  to read a short note, and the D3 fixtures add three (0013, F11, F12).
+  The coordinator measures the live rate.
+- [x] SP12.5 Out-of-scope and meaning-flip probes in `fixtures/chat/`
+  (0013, F13 to F16). The probes found and fixed the carried-over time
+  written before its date. The live set and a manual review of its
+  answers are the coordinator's.
+- [x] SP12.6 `pnpm eval:live --all` runs S1 to S19 in one command under one
+  spend limit, and `pnpm demo:check` runs the demo path on the live app
+  (`--recorded` offline) (0013, F17, F18). The live runs are the
+  coordinator's.
+- [x] SP12.7 The phone sheet is a div with the dialog role only while open.
+  Lighthouse gives 100 on mobile and desktop (0013, F19).
 - [ ] SP12.8 Real runs with Jeff: Sign in with ChatGPT, the Google
   connect, and the OpenCode connect test on his laptop.
 - [ ] SP12.9 Milestone: fast-forward `prod` to `dev` with Jeff's approval.
