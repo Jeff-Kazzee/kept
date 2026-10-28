@@ -19,22 +19,14 @@ function fakeServer(generations: number[], refuse?: (path: string) => { status: 
   return sent;
 }
 
-function fakeSessionStorage() {
-  const items = new Map<string, string>();
-  vi.stubGlobal("sessionStorage", {
-    getItem: (k: string) => items.get(k) ?? null,
-    setItem: (k: string, v: string) => void items.set(k, v),
-    removeItem: (k: string) => void items.delete(k),
-  });
-  return items;
-}
+
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.resetModules();
 });
 
-const READS = new Set(["state", "fixtures", "calendar", "liveVersion"]);
+const READS = new Set(["state", "fixtures", "calendar", "liveVersion", "pair"]);
 
 describe("ui api", () => {
   it("reads the case before its first write, then sends the generation on every write", async () => {
@@ -54,31 +46,19 @@ describe("ui api", () => {
     expect(sent.every((s) => s.method === "POST" && s.generation === "3")).toBe(true);
     // Sprint 6 review, finding 1: every write carries the app's header.
     expect(sent.every((s) => s.app === "1")).toBe(true);
-    // No pairing code is stored, so none is sent.
+    // The session is an HttpOnly cookie the browser sends. No code header.
     expect(sent.some((s) => s.pairing !== undefined)).toBe(false);
   });
 
-  it("sends the pairing code from this tab only with grant create and proposal confirm, and drops a refused one", async () => {
-    const items = fakeSessionStorage();
-    const sent = fakeServer([3], (p) => (p === "/api/proposals/p-2/confirm" ? { status: 403, body: { error: "pairing_failed", message: "That pairing code is not right." } } : null));
-    const { api, pairing } = await import("./api.ts");
-    pairing.set(" ABCD-EFGH ");
-    await api.state();
-    await api.createGrant("Agent", "read");
-    await api.confirmProposal("p-1", 1);
-    await api.rejectProposal("p-1", 2);
-    await api.revokeGrant("g-1", 1);
-    await api.archive("2026-11-12T10:30", 0);
-    expect(sent.filter((s) => s.method === "POST").map((s) => [s.path, s.pairing])).toEqual([
-      ["/api/grants", "ABCD-EFGH"],
-      ["/api/proposals/p-1/confirm", "ABCD-EFGH"],
-      ["/api/proposals/p-1/reject", undefined],
-      ["/api/grants/g-1/revoke", undefined],
-      ["/api/records/2026-11-12T10%3A30/archive", undefined],
-    ]);
-    await expect(api.confirmProposal("p-2", 1)).rejects.toThrow("That pairing code is not right.");
-    expect(pairing.get()).toBeNull();
-    expect(items.size).toBe(0);
+  it("pairs with one request that needs no case read, and reports not_paired so the page can show the pairing screen", async () => {
+    const sent = fakeServer([3], (p) => (p === "/api/state" ? { status: 401, body: { error: "not_paired", message: "Pair this browser with the app first." } } : null));
+    const { api, isNotPaired } = await import("./api.ts");
+    await api.pair("ABCD-EFGH");
+    expect(sent).toEqual([{ method: "POST", path: "/api/pair", generation: undefined, app: "1", pairing: undefined }]);
+    const err = await api.state().catch((e: unknown) => e);
+    expect(isNotPaired(err)).toBe(true);
+    // A write before any read of the case is refused the same way.
+    expect(isNotPaired(await api.accept("m2-e1", 1).catch((e: unknown) => e))).toBe(true);
   });
 
   it("sends the new generation after Delete case reloads the state", async () => {

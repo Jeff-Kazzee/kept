@@ -137,23 +137,16 @@ export class ApiError extends Error {
 // page that has not seen a Delete case is refused by the server.
 let lastGeneration: number | null = null;
 
-// The pairing code the user typed, kept for this browser tab only. The
-// server asks for it to create a grant or confirm an agent's proposal.
-const PAIRING_KEY = "appointments-pairing-code";
+// Every /api route answers this until the browser is paired with the app.
+// The server keeps the session in an HttpOnly cookie, which this page
+// cannot read and the browser sends by itself.
+export const NOT_PAIRED = "not_paired";
+export const isNotPaired = (e: unknown) => e instanceof ApiError && e.body.error === NOT_PAIRED;
 
-export const pairing = {
-  get: (): string | null => globalThis.sessionStorage?.getItem(PAIRING_KEY) ?? null,
-  set: (code: string) => globalThis.sessionStorage?.setItem(PAIRING_KEY, code.trim()),
-  clear: () => globalThis.sessionStorage?.removeItem(PAIRING_KEY),
-};
-
-export const PAIRING_ERRORS = new Set(["pairing_required", "pairing_failed", "pairing_locked"]);
-
-async function request<T>(method: "GET" | "POST", path: string, body?: unknown, options: { paired?: boolean } = {}): Promise<T> {
+async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
   // The server refuses a write without the generation. A write before the
   // page has read the case reads it first.
   if (method === "POST" && lastGeneration === null) await api.state();
-  const code = options.paired ? pairing.get() : null;
   const res = await fetch(path, {
     method,
     headers: {
@@ -162,18 +155,27 @@ async function request<T>(method: "GET" | "POST", path: string, body?: unknown, 
       // Sec-Fetch-Site and Origin, which the server checks too.
       ...(method === "POST" ? { "X-Appointments-App": "1" } : {}),
       ...(method === "POST" && lastGeneration !== null ? { "X-Case-Generation": String(lastGeneration) } : {}),
-      ...(code ? { "X-Pairing-Code": code } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const json = await res.json();
-  // A wrong or old code is dropped, so the page asks for it again.
-  if (!res.ok && PAIRING_ERRORS.has(json?.error)) pairing.clear();
   if (!res.ok) throw new ApiError(res.status, json);
   return json as T;
 }
 
 export const api = {
+  // Sends the pairing code once. On success the server sets the session
+  // cookie. It needs no case generation, because it reads no case.
+  pair: async (code: string) => {
+    const res = await fetch("/api/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Appointments-App": "1" },
+      body: JSON.stringify({ code }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new ApiError(res.status, json);
+    return json as { paired: true };
+  },
   state: async () => {
     const state = await request<AppState>("GET", "/api/state");
     lastGeneration = state.generation;
@@ -208,10 +210,10 @@ export const api = {
     request<{ erased: number }>("POST", "/api/case/delete", { expectedVersion, confirmation }),
   liveVersion: () => request<LiveVersion>("GET", "/api/case/version"),
   // The response holds the new token. It is shown once and never stored here.
-  createGrant: (name: string, tier: Tier) => request<{ grant: GrantInfo; token: string }>("POST", "/api/grants", { name, tier }, { paired: true }),
+  createGrant: (name: string, tier: Tier) => request<{ grant: GrantInfo; token: string }>("POST", "/api/grants", { name, tier }),
   revokeGrant: (id: string, expectedVersion: number) => request<GrantInfo>("POST", `/api/grants/${encodeURIComponent(id)}/revoke`, { expectedVersion }),
   confirmProposal: (id: string, expectedVersion: number, recordVersion?: number) =>
-    request<ProposalView>("POST", `/api/proposals/${encodeURIComponent(id)}/confirm`, { expectedVersion, recordVersion }, { paired: true }),
+    request<ProposalView>("POST", `/api/proposals/${encodeURIComponent(id)}/confirm`, { expectedVersion, recordVersion }),
   rejectProposal: (id: string, expectedVersion: number) =>
     request<ProposalView>("POST", `/api/proposals/${encodeURIComponent(id)}/reject`, { expectedVersion }),
   archive: (id: string, expectedVersion: number) => request<RecordView>("POST", `/api/records/${encodeURIComponent(id)}/archive`, { expectedVersion }),

@@ -5,7 +5,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createApi } from "../server/api.ts";
-import { Pairing } from "../server/guard.ts";
 import { CaseService } from "../src/case/service.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
@@ -29,7 +28,7 @@ function setup() {
   const client = RecordedModelClient.fromDirectory();
   const service = new IntakeService(store, client);
   const kase = new CaseService(store, service, client, { userName: "Dana Reyes" });
-  return asFreshPage(createApi(service, kase, { mode: "recorded", pairing: new Pairing() }, new ReplyService(store, kase, client), agentAccess(store, service, kase)), kase);
+  return asFreshPage(createApi(service, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, service, kase)), kase);
 }
 
 describe("local API", () => {
@@ -190,9 +189,12 @@ describe("dev server", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  // The paired session (review round 2, B1). Every /api route needs it.
+  let session = "";
+
   const get = (port: number, host: string) =>
     new Promise<number>((resolve, reject) => {
-      const req = request({ host: "127.0.0.1", port, path: "/api/state", headers: { Host: host } }, (res) => {
+      const req = request({ host: "127.0.0.1", port, path: "/api/state", headers: { Host: host, Cookie: session } }, (res) => {
         res.resume();
         resolve(res.statusCode ?? 0);
       });
@@ -202,7 +204,7 @@ describe("dev server", () => {
 
   const getJson = (port: number) =>
     new Promise<unknown>((resolve, reject) => {
-      const req = request({ host: "127.0.0.1", port, path: "/api/state", headers: { Host: `127.0.0.1:${port}` } }, (res) => {
+      const req = request({ host: "127.0.0.1", port, path: "/api/state", headers: { Host: `127.0.0.1:${port}`, Cookie: session } }, (res) => {
         let text = "";
         res.on("data", (d: Buffer) => (text += d.toString()));
         res.on("end", () => resolve(JSON.parse(text)));
@@ -219,6 +221,7 @@ describe("dev server", () => {
         "Content-Type": "application/json",
         Origin: `http://127.0.0.1:${port}`,
         "X-Appointments-App": "1",
+        Cookie: session,
       };
       if (generation !== undefined) headers["X-Case-Generation"] = generation;
       const req = request({ host: "127.0.0.1", port, path: p, method: "POST", headers }, (res) => {
@@ -238,12 +241,25 @@ describe("dev server", () => {
       let out = "";
       child!.stdout!.on("data", (d: Buffer) => {
         out += d.toString();
-        if (out.includes("on http")) resolve(out);
+        if (out.includes("Pairing code for this run")) resolve(out);
       });
       child!.on("exit", (code) => reject(new Error(`server exited ${code}`)));
       setTimeout(() => reject(new Error(`server did not start: ${out}`)), 15_000);
     });
     expect(line).toContain(`http://127.0.0.1:${port} (model: recorded responses)`);
+    const code = /Pairing code for this run: (\S+)\./.exec(line)![1]!;
+    const paired = await new Promise<string>((resolve, reject) => {
+      const req = request(
+        { host: "127.0.0.1", port, path: "/api/pair", method: "POST", headers: { Host: `127.0.0.1:${port}`, "Content-Type": "application/json", Origin: `http://127.0.0.1:${port}`, "X-Appointments-App": "1" } },
+        (res) => {
+          res.resume();
+          resolve(String(res.headers["set-cookie"]?.[0] ?? "").split(";")[0]!);
+        },
+      );
+      req.on("error", reject);
+      req.end(JSON.stringify({ code }));
+    });
+    session = paired;
     expect(await get(port, `127.0.0.1:${port}`)).toBe(200);
     expect(await get(port, `attacker.example:${port}`)).toBe(403);
 

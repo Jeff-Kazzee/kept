@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { RateLimiter } from "../mcp/rate-limit.ts";
 import { callTool, type McpDeps } from "../mcp/server.ts";
 import { createApi, type ApiResponse } from "../server/api.ts";
-import { Pairing } from "../server/guard.ts";
 import { CaseService } from "../src/case/service.ts";
 import type { CaseView } from "../src/case/types.ts";
 import { loadCaseProfile, readFixtureText } from "../src/fixtures/load.ts";
@@ -67,13 +66,11 @@ function services(store: EventStore) {
 // carries the generation of the page's latest read.
 function appOn(store: EventStore) {
   const svc = services(store);
-  const pairing = new Pairing();
-  const handle = createApi(svc.intake, svc.kase, { mode: "recorded", pairing }, svc.reply, svc);
+  const handle = createApi(svc.intake, svc.kase, { mode: "recorded" }, svc.reply, svc);
   let generation: number | undefined;
   // `gen` null sends no generation, as a page that never read the case.
-  // The page sends the pairing code unless `code` says otherwise.
-  const raw = async (method: string, p: string, body?: unknown, gen: number | null = generation ?? null, code: string | undefined = pairing.code): Promise<ApiResponse> =>
-    handle({ method, path: p, body, generation: method === "GET" || gen === null ? undefined : gen, pairing: code });
+  const raw = async (method: string, p: string, body?: unknown, gen: number | null = generation ?? null): Promise<ApiResponse> =>
+    handle({ method, path: p, body, generation: method === "GET" || gen === null ? undefined : gen });
   const call = async (method: string, p: string, body?: unknown) => {
     const res = await raw(method, p, body);
     if (res.status !== 200) throw new Error(`${method} ${p}: ${res.status} ${JSON.stringify(res.body)}`);

@@ -21,7 +21,7 @@ import { RecordedModelClient } from "../src/model/recorded.ts";
 import { PACKAGE_ROOT, fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { createApi } from "./api.ts";
-import { APP_HEADER, PAIRING_HEADER, Pairing, requestSourceProblem } from "./guard.ts";
+import { APP_HEADER, Pairing, Sessions, createGate, requestSourceProblem } from "./guard.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.APP_PORT ?? 5180);
@@ -51,9 +51,11 @@ try {
 }
 const intake = new IntakeService(store, client);
 const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
-// Kept in memory only. A restart makes a new one.
+// Kept in memory only. A restart makes a new code and forgets every
+// paired session.
 const pairing = new Pairing();
-const api = createApi(intake, kase, { mode: live ? "live" : "recorded", pairing }, new ReplyService(store, kase, client), {
+const gate = createGate({ pairing, sessions: new Sessions(), port: PORT });
+const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, new ReplyService(store, kase, client), {
   records: new RecordsService(store, intake, kase),
   grants: new GrantStore(store),
 });
@@ -114,6 +116,13 @@ server.on("request", async (req, res) => {
     appOrigins,
   );
   if (problem) return send(res, 403, { error: "forbidden_source", message: problem });
+  // Pairing is the one route a browser may use before it has a session.
+  // Every other route, reads included, needs the paired session.
+  const pairRoute = url.pathname === "/api/pair";
+  if (!pairRoute) {
+    const unpaired = gate.sessionProblem(headerOf("cookie"));
+    if (unpaired) return send(res, unpaired.status, unpaired.body);
+  }
   if (req.method === "POST" && !String(req.headers["content-type"] ?? "").startsWith("application/json")) {
     return send(res, 415, { error: "json_required" });
   }
@@ -123,17 +132,23 @@ server.on("request", async (req, res) => {
   } catch (err) {
     return send(res, 400, { error: err instanceof Error ? err.message : "bad_body" });
   }
+  if (pairRoute) {
+    if (req.method !== "POST") return send(res, 405, { error: "method_not_allowed" });
+    const paired = gate.pair(body);
+    if (paired.setCookie) res.setHeader("Set-Cookie", paired.setCookie);
+    return send(res, paired.status, paired.body);
+  }
   const header = req.headers["x-case-generation"];
   // A missing or malformed header leaves it undefined, and the API refuses
   // the write.
   const generation = typeof header === "string" && /^\d{1,15}$/.test(header) ? Number(header) : undefined;
-  const result = await api({ method: req.method ?? "GET", path: url.pathname, body, generation, pairing: headerOf(PAIRING_HEADER) });
+  const result = await api({ method: req.method ?? "GET", path: url.pathname, body, generation });
   send(res, result.status, result.body);
 });
 
 server.listen(PORT, HOST, () => {
   console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? "live" : "recorded responses"})`);
-  console.log(`Pairing code for this run: ${pairing.code}. The app asks for it once per browser tab, to create a grant or confirm an agent's proposal.`);
+  console.log(`Pairing code for this run: ${pairing.code}. The app asks for it once per browser, until the app restarts.`);
 });
 
 const shutdown = async () => {

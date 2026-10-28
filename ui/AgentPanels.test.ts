@@ -6,7 +6,6 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { createApi } from "../server/api.ts";
-import { Pairing } from "../server/guard.ts";
 import { CaseService } from "../src/case/service.ts";
 import { GrantStore } from "../src/grants/grants.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
@@ -15,7 +14,7 @@ import { ReplyService } from "../src/reply/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { acceptMessages, intake } from "../test/helpers.ts";
 import { versionChanged, type AppState } from "./api.ts";
-import { GrantPanel, PROVIDER_NOTICE, PairingForm, ProposalCard, RecordNotes, TOKEN_NOTICE, denverTime } from "./AgentPanels.tsx";
+import { GrantPanel, PROVIDER_NOTICE, PairingScreen, ProposalCard, RecordNotes, TOKEN_NOTICE, denverTime } from "./AgentPanels.tsx";
 import { ChecklistPanel, SlotsPanel, activeArchive } from "./App.tsx";
 import { ReplyPanel } from "./ReplyPanel.tsx";
 
@@ -36,7 +35,7 @@ async function caseState(clock = () => "2026-11-06T17:00:00.000Z") {
   const agent = { kind: "agent" as const, grant_id: grant.id, grant_name: grant.name };
   records.addNote(THU, "Bring parking pass <b>now</b>", 0, agent);
   records.propose({ kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: "Dana says the office confirmed Monday by phone." }, grant);
-  const api = createApi(svc, kase, { mode: "recorded", pairing: new Pairing() }, new ReplyService(store, kase, client), { records, grants });
+  const api = createApi(svc, kase, { mode: "recorded" }, new ReplyService(store, kase, client), { records, grants });
   const state = async () => (await api({ method: "GET", path: "/api/state", body: undefined })).body as AppState;
   return { store, records, grants, state };
 }
@@ -157,10 +156,11 @@ describe("sprint 6 panels", () => {
     expect(html).toContain(`<code>${p.id}-1</code><div class="untrusted"><div class="label">Words from Phone helper. Untrusted text, shown as data.</div><pre>Dana says Monday is in Suite 9.</pre></div>`);
   });
 
-  it("finding 1b: the pairing form shows while this tab has no pairing code", () => {
-    const html = renderToStaticMarkup(createElement(PairingForm));
-    expect(html).toContain("Pair this browser tab");
-    expect(html).toContain("An agent cannot see that terminal.");
+  it("B1: the pairing screen asks for the code from the app's terminal", () => {
+    const html = renderToStaticMarkup(createElement(PairingScreen, { onPaired: () => {} }));
+    expect(html).toContain("Pair this browser with the app");
+    expect(html).toContain("The browser stays paired until the app restarts. An agent cannot see that terminal.");
+    expect(html).toContain('name="pairing-code"');
   });
 
   it("times show in America/Denver across the 2026-11-01 change", () => {

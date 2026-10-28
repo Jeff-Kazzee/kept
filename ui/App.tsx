@@ -6,8 +6,8 @@ import { sourceLabel } from "../src/slots/labels.ts";
 import type { ConflictKind } from "../src/slots/types.ts";
 import {
   ApiError,
-  PAIRING_ERRORS,
   api,
+  isNotPaired,
   type AppState,
   type CaseView,
   type ChecklistItem,
@@ -18,7 +18,7 @@ import {
   type MessageView,
   type RecordView,
 } from "./api.ts";
-import { GrantPanel, PairingForm, ProposalCard, RecordNotes, UntrustedText, useLiveRefresh } from "./AgentPanels.tsx";
+import { GrantPanel, PairingScreen, ProposalCard, RecordNotes, UntrustedText, useLiveRefresh } from "./AgentPanels.tsx";
 import { ReplyPanel, shortTime } from "./ReplyPanel.tsx";
 import { UntrustedBox } from "./Untrusted.tsx";
 
@@ -58,12 +58,17 @@ export function App() {
   // The fixed decline for a health question (S11). Shown as a notice, not
   // as an error.
   const [notice, setNotice] = useState<string | null>(null);
+  // True when the server answers not_paired: this browser has no session,
+  // or the app restarted. Only the pairing screen shows then.
+  const [unpaired, setUnpaired] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       setState(await api.state());
+      setUnpaired(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (isNotPaired(e)) setUnpaired(true);
+      else setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
@@ -84,9 +89,7 @@ export function App() {
         await action();
       } catch (e) {
         if (e instanceof ApiError && e.body.error === "out_of_scope") setNotice(e.body.message ?? null);
-        // The server's message says what to do. A wrong code is dropped, so
-        // the pairing form shows again.
-        else if (e instanceof ApiError && PAIRING_ERRORS.has(e.body.error ?? "")) setError(e.body.error === "pairing_failed" ? `${e.message} Enter the right code, then try again.` : e.message);
+        else if (isNotPaired(e)) setUnpaired(true);
         else if (e instanceof ApiError && e.body.error === "case_deleted") setError("The case was deleted. Nothing was saved. The empty case is loaded.");
         else if (e instanceof ApiError && e.status === 409) setError("This record changed since it was shown. The current version is loaded.");
         else setError(e instanceof Error ? e.message : String(e));
@@ -96,7 +99,20 @@ export function App() {
     [refresh],
   );
 
-  if (!state) return <p>Loading…</p>;
+  if (unpaired) {
+    return (
+      <>
+        <h1>Appointment change assistant</h1>
+        <PairingScreen
+          onPaired={() => {
+            setError(null);
+            void refresh();
+          }}
+        />
+      </>
+    );
+  }
+  if (!state) return <p>{error ?? "Loading…"}</p>;
   const pending = state.evidence.filter((e) => e.status === "pending");
   const decided = state.evidence.filter((e) => e.status !== "pending");
   const pendingProposals = state.proposals.filter((p) => p.status === "pending");
@@ -144,7 +160,6 @@ export function App() {
         {pending.map((e) => (
           <EvidenceCard key={e.id} item={e} state={state} run={run} />
         ))}
-        {pendingProposals.length > 0 && <PairingForm />}
         {pendingProposals.map((p) => (
           <ProposalCard key={p.id} proposal={p} records={state.records} run={run} />
         ))}

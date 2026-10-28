@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { untrustedLabel } from "../src/domain/untrusted.ts";
 import { describeChange } from "../src/records/types.ts";
 import { UntrustedBox } from "./Untrusted.tsx";
-import { api, pairing, versionChanged, type GrantInfo, type LiveVersion, type ProposalView, type RecordView, type Tier } from "./api.ts";
+import { api, isNotPaired, versionChanged, type GrantInfo, type LiveVersion, type ProposalView, type RecordView, type Tier } from "./api.ts";
 
 type Run = (action: () => Promise<unknown>) => Promise<void>;
 
@@ -46,29 +46,35 @@ export function UntrustedText({ label, text }: { label: string; text: string }) 
   return <UntrustedBox label={untrustedLabel(label)} text={text} />;
 }
 
-// Sprint 6 review, finding 1: creating a grant and confirming an agent's
-// proposal need the pairing code the app printed in its terminal at start.
-// Asked once per browser tab and kept in sessionStorage. A wrong code is
-// dropped, so this form shows again.
-export function PairingForm() {
+// Review round 2, B1: until this browser is paired, every /api route
+// answers not_paired, and the app shows only this screen. The code is the
+// one the app printed in its terminal at start. An agent cannot see it.
+export function PairingScreen({ onPaired }: { onPaired: () => void }) {
   const [code, setCode] = useState("");
-  const [, setStored] = useState(pairing.get());
-  if (pairing.get()) return null;
+  const [message, setMessage] = useState<string | null>(null);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setMessage(null);
+    try {
+      await api.pair(code);
+      setCode("");
+      onPaired();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
   return (
-    <form
-      className="card token"
-      onSubmit={(e) => {
-        e.preventDefault();
-        pairing.set(code);
-        setStored(code);
-        setCode("");
-      }}
-    >
-      <div className="label">Pair this browser tab</div>
+    <form className="card token" onSubmit={(e) => void submit(e)}>
+      <div className="label">Pair this browser with the app</div>
       <p>
-        Creating a grant and confirming an agent's proposal need the pairing code the app printed in its terminal when it
-        started. An agent cannot see that terminal.
+        Enter the pairing code the app printed in its terminal when it started. The browser stays paired until the app
+        restarts. An agent cannot see that terminal.
       </p>
+      {message && (
+        <p className="error" role="alert">
+          {message}
+        </p>
+      )}
       <label>
         Pairing code <input name="pairing-code" value={code} onChange={(e) => setCode(e.target.value)} required maxLength={20} autoComplete="off" />
       </label>
@@ -90,8 +96,10 @@ export function useLiveRefresh(current: LiveVersion | null, refresh: () => Promi
       try {
         const now = await api.liveVersion();
         if (latest.current && versionChanged(now, latest.current)) await refresh();
-      } catch {
-        // The next poll tries again.
+      } catch (e) {
+        // After a restart the session is gone. The reload shows the pairing
+        // screen. Any other failure is tried again at the next poll.
+        if (isNotPaired(e)) await refresh();
       } finally {
         busy = false;
       }
@@ -187,7 +195,6 @@ export function GrantPanel({ grants, run }: { grants: GrantInfo[]; run: Run }) {
         the lowest tier that does the job. An agent can never confirm, cancel or change a slot, contact the office, send a
         reply, delete the case or manage grants. {PROVIDER_NOTICE} Grants are app settings and stay after Delete case.
       </p>
-      <PairingForm />
       {created && (
         <div className="card token" role="status">
           <div className="label">New token for {created.name}</div>
