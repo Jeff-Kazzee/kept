@@ -165,9 +165,9 @@ pnpm scan:secrets  # tokens and keys in the repository, see "What the secret sca
 With `pnpm dev`, add `?mockchat=1` to the page address for the scripted
 chat, which plays the demo through the existing routes with no model. Its
 replies are labeled "Scripted demo reply, not a model". It also turns on a
-development fake of the routes that do not exist yet: the model provider,
-the model, sign-in and Google. The time zone, activity and undo are the
-real routes (`docs/decisions/0011-ui-polish.md`, U37). The production
+development fake of the Google routes, which do not exist yet. The time
+zone, activity, undo, the model provider, the model and sign-in are the
+real routes (`docs/decisions/0011-ui-polish.md`, U37 and U47). The production
 build (`pnpm build`, `pnpm start`) leaves both out and ignores the
 parameter.
 `APP_UI_FAKES=1 pnpm build` makes a check build with them, for a browser
