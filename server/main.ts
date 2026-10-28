@@ -1,12 +1,15 @@
 // Local server for the UI. Binds to 127.0.0.1 only. `pnpm dev` serves the
 // UI through Vite in middleware mode. `pnpm start` (--static) serves the
 // production build from dist/ui (see static.ts). Uses recorded model
-// responses unless APP_LIVE_MODEL=1 is set, which also needs MODEL_API_KEY.
+// responses unless APP_LIVE_MODEL=1 is set. Live calls go to the provider
+// chosen in the app's settings (0010): the user's Meta key, the server's
+// MODEL_API_KEY, or Sign in with ChatGPT.
 //
 // Environment:
 //   APP_PORT           port, default 5180
 //   APP_DB             event log file, default data/app.sqlite in the package
 //   APP_LIVE_MODEL     set to 1 for the live model
+//   MODEL_API_KEY      the server's Meta key, used when the user set none
 //   APP_ALLOWED_HOSTS  more host names, comma-separated, for a private
 //                      proxy such as Tailscale serve (see hosts.ts)
 import { mkdirSync } from "node:fs";
@@ -17,11 +20,15 @@ import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
-import { MetaResponsesClient, type ModelClient } from "../src/model/client.ts";
+import type { ModelClient } from "../src/model/client.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
+import { ChatGptAuth } from "../src/model/providers/chatgpt-auth.ts";
+import { createProviderClient } from "../src/model/providers/factory.ts";
+import { SecretsStore, appSecretsPath } from "../src/model/providers/secrets.ts";
 import { appDbPath, fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { createApi } from "./api.ts";
+import { CALLBACK_PATH, createAuth } from "./auth.ts";
 import { CHAT_PATH, createChat, sseFrame } from "./chat.ts";
 import { CaseAgent } from "../src/agent/agent.ts";
 import { defaultMessageId } from "../src/agent/tools.ts";
@@ -46,17 +53,19 @@ try {
   process.exit(2);
 }
 
+// Provider settings and secrets, beside the event log (0010).
+const secrets = new SecretsStore(appSecretsPath());
+const chatgptAuth = new ChatGptAuth({ store: secrets, port: PORT });
+const serverMetaKey = process.env.MODEL_API_KEY || null;
+const auth = createAuth({ store: secrets, auth: chatgptAuth, serverMetaKey });
+
 let client: ModelClient;
 let chatClient: ToolModelClient;
 if (live) {
-  const apiKey = process.env.MODEL_API_KEY;
-  if (!apiKey) {
-    console.error("APP_LIVE_MODEL=1 needs MODEL_API_KEY in the environment.");
-    process.exit(2);
-  }
-  const meta = new MetaResponsesClient({ apiKey });
-  client = meta;
-  chatClient = meta;
+  // Every model call goes to the provider chosen in settings, and only to it.
+  const providers = createProviderClient({ store: secrets, auth: chatgptAuth, serverMetaKey });
+  client = providers;
+  chatClient = providers;
 } else {
   client = RecordedModelClient.fromDirectory();
   chatClient = RecordedChatClient.fromDirectory();
@@ -146,6 +155,11 @@ server.on("request", async (req, res) => {
   // site cannot reach this server through DNS rebinding.
   if (!hostAllowed(allowed, req.headers.host)) return send(res, 403, { error: "forbidden_host" });
   const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
+  if (url.pathname === CALLBACK_PATH) {
+    const result = await auth.callback(req.method ?? "GET", url.searchParams);
+    res.writeHead(result.status, { ...API_SECURITY_HEADERS, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", ...(result.location ? { Location: result.location } : {}) });
+    return res.end();
+  }
   if (!url.pathname.startsWith("/api/")) return ui(req, res);
   // Set before any route runs, so a route that writes its own response,
   // such as the chat's event stream, carries them too.
@@ -172,6 +186,9 @@ server.on("request", async (req, res) => {
   } catch (err) {
     return send(res, 400, { error: err instanceof Error ? err.message : "bad_body" });
   }
+  // App settings and sign-in. They need no case generation.
+  const settingsResult = await auth.handle({ method: req.method ?? "GET", path: url.pathname, body });
+  if (settingsResult) return send(res, settingsResult.status, settingsResult.body);
   const header = req.headers["x-case-generation"];
   // A missing or malformed header leaves it undefined, and the API refuses
   // the write.
@@ -208,7 +225,8 @@ server.on("request", async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? "live" : "recorded responses"})`);
+  console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? `live, ${client.label}` : "recorded responses"})`);
+  if (live) console.log("The model provider is chosen in the app's settings. ChatGPT sign-in finishes only in a browser on this computer, or through an SSH tunnel to this port.");
   if (extraHosts.length > 0) console.log(`Also answers to: ${extraHosts.join(", ")}`);
   // Last, so a script that waits for this line has read the others.
   console.log(serveBuild ? "Serving the production build from dist/ui." : "Serving the UI through Vite for development.");
