@@ -75,7 +75,11 @@ in this repo is synthetic.
   file and empties its WAL, so the removed text is gone from disk, not only
   hidden. Grants stay, because they are app settings. Revoke them with
   `pnpm grant revoke`. An MCP server that has the file open keeps running
-  and finds no case. No MCP tool can delete a case.
+  and finds no case. No MCP tool can delete a case. A command that started
+  before the delete, such as a model call, a page opened earlier or an
+  agent's call, saves nothing afterwards. If the app stops before the file
+  is cleared, the app or the MCP server finishes clearing it at the next
+  start.
 
 ## D5: records and the MCP server
 

@@ -75,7 +75,8 @@ Code: `src/store/event-log.ts` (`eraseCase`), `src/case/service.ts`
   that the compaction cannot finish, the app answers HTTP 503 with
   `compaction_incomplete`: the case is deleted, old text may remain in the
   file until that program closes, and running Delete case again finishes
-  the job. Delete case on an empty case only compacts.
+  the job. The app and the MCP server also finish it at start (R3). Delete
+  case on an empty case only compacts.
 - S3. The API route is `POST /api/case/delete` with `expectedVersion` and
   `confirmation`. The server checks the confirmation word too, not only the
   UI. No MCP tool reaches it.
@@ -113,8 +114,9 @@ Code: `src/store/event-log.ts` (`eraseCase`), `src/case/service.ts`
 ### History
 
 - S8. The case history lists every case event in order with a label built
-  by code from the event kind, ids, dates and times. It does not repeat
-  message text, quotes, notes or proposal statements. Those stay in the
+  by code from the event kind, ids, counts, dates and times. It does not
+  repeat message text, quotes, notes, proposal statements, tags, file names
+  or choice labels (R4). Those stay in the
   views that label them. Grant events are left out. Access log entries are
   included. The simulated send is written with the approval, so the
   approval entry says "Approved. Simulated send." and the send has no entry
@@ -131,12 +133,43 @@ Code: `src/store/event-log.ts` (`eraseCase`), `src/case/service.ts`
   m2 recordings already split the two requests, so only a note was added
   to each.
 
+## Review round 1
+
+- R1. Case generation. A counter in a `case_meta` table, outside the
+  events table, that Delete case increments in its transaction. A command
+  on the case reads it when it starts and runs in a scope
+  (`EventStore.inCase`, on AsyncLocalStorage, so it holds across the
+  awaits of a model call). Every write transaction in that scope checks,
+  inside the lock, that the generation has not moved. If it has, the write
+  fails with `CaseDeletedError` and nothing is written. Stream versions
+  start again at 0 after a delete, so the expected version alone could not
+  catch this. The API runs every request as one command, at the generation
+  the page last read, which the UI sends in the `X-Case-Generation` header.
+  A stale page gets HTTP 409 `case_deleted`. The MCP server runs every tool
+  call as one command at the generation read when the call starts. explain,
+  askNext, suggest, extraction, add_note, set_tags and propose_change also
+  open their own scope, so a direct caller is covered too.
+- R2. An MCP call that crosses a Delete case returns `not_found` with a
+  message that the case was deleted, returns no data, and is not logged. A
+  waiting log entry from a busy call carries its generation and is dropped,
+  never written, once the generation moves. This removes the known limit
+  sprint 5 first recorded here.
+- R3. Delete case sets an `erase_pending` mark in `case_meta` in the
+  delete transaction. The mark is cleared only after the TRUNCATE
+  checkpoint, VACUUM and the second TRUNCATE checkpoint succeed. The app
+  and the MCP server finish a pending erase at start, before they serve.
+  The Delete case panel warns while the mark is set.
+- R4. History labels hold no free text. A loaded calendar is "Calendar
+  loaded", a tag change gives the number of tags, and an answer gives the
+  choice id, which code builds from slot keys and fixed words.
+- R5. Confirming a proposal checks its statement, place and request item
+  again, before any write, so a proposal stored before the check existed
+  cannot become evidence with clinical text.
+- R6. The checklist key drops every punctuation mark, quote and bracket at
+  either end of the request, so "Bring new insurance card?" and "Bring new
+  insurance card" are one item.
+
 ## Known limits
 
-- A tool call that could not get the write lock keeps its access log entry
-  in the MCP server's memory until the next call writes it (M-q in 0004).
-  If the user deletes the case in between, that entry is written into the
-  empty case afterwards. It holds the grant name, the tool, the result and
-  at most an appointment id, never message text.
 - VACUUM rewrites the whole file, so Delete case takes longer as the file
   grows. Grants and the empty schema are all that remain afterwards.
