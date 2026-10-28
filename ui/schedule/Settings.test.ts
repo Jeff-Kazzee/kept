@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AgentContext, DEFAULT_AGENT, type AgentState } from "../agent/AgentContext.tsx";
 import { DEFAULT_SETTINGS, type Settings as SettingsView } from "../contract.ts";
+import { normalizeSettings } from "../agentApi.ts";
 import { GoogleSetting, PROVIDERS, SettingsPanel, TimeZoneSetting } from "./Settings.tsx";
 
 const run = async () => {};
@@ -15,6 +16,7 @@ const withAgent = (agent: Partial<AgentState>, node: ReactNode) =>
 
 const meta: SettingsView = {
   ...DEFAULT_SETTINGS,
+  providersInBuild: true,
   settingsVersion: 4,
   timezone: "Europe/Berlin",
   timezoneSource: "agent",
@@ -30,7 +32,7 @@ const meta: SettingsView = {
 describe("settings", () => {
   it("lists Meta first as the default and ChatGPT under its own line, with what each receives", () => {
     expect(PROVIDERS.map((p) => p.id)).toEqual(["meta", "chatgpt"]);
-    const html = withAgent({ settings: { ...DEFAULT_SETTINGS, settingsVersion: 1 }, settingsAvailable: true }, createElement(SettingsPanel, { mode: "recorded", modelClient: "recorded", version: 1, erasePending: false, run }));
+    const html = withAgent({ settings: { ...DEFAULT_SETTINGS, settingsVersion: 1, providersInBuild: true }, settingsAvailable: true }, createElement(SettingsPanel, { mode: "recorded", modelClient: "recorded", version: 1, erasePending: false, run }));
     const metaAt = html.indexOf("Meta Model API");
     const altAt = html.indexOf("Or use your ChatGPT plan");
     expect(metaAt).toBeGreaterThan(-1);
@@ -59,6 +61,15 @@ describe("settings", () => {
     expect(html).toContain('<input id="');
     expect(html).toContain('name="timezone"');
     expect(html).toMatch(/<datalist[^>]*>.*<option value="America\/Denver"/);
+  });
+
+  it("on sprint 8's server, the time zone works and the provider part says it is not available yet", () => {
+    const sprint8 = normalizeSettings({ settingsVersion: 3, timezone: "America/Denver", timezoneSource: "agent", provider: null, meta: { keySet: false, source: null }, chatgpt: { signedIn: false, name: null, email: null, planUsage: false } });
+    expect(sprint8.providersInBuild).toBe(false);
+    const html = withAgent({ settings: sprint8, settingsAvailable: true }, createElement(SettingsPanel, { mode: "recorded", modelClient: "recorded", version: 1, erasePending: false, run }));
+    expect(html).toContain("Choosing a provider is not available in this build yet.");
+    expect(html).toContain('name="timezone"');
+    expect(html).not.toContain('name="meta-key"');
   });
 
   it("without the routes, says what is not available in this build yet", () => {

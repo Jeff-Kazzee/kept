@@ -10,8 +10,8 @@ export type AgentBackend = {
   kind: "real" | "fake";
   // Null when this build has no settings route yet.
   settings(): Promise<Settings | null>;
-  // `from` says the browser sent its own zone on first load. The real
-  // route takes only the zone and the version (see 0011, U12).
+  // `from` says the browser sent its own zone on first load. The route
+  // then records it as the browser's (0009, contract, `source`).
   setTimezone(timezone: string, expectedVersion: number, from?: "browser" | "you"): Promise<unknown>;
   setProvider(provider: Provider, expectedVersion: number): Promise<unknown>;
   setModel(model: string, expectedVersion: number): Promise<unknown>;
@@ -42,10 +42,28 @@ async function orNull<T>(read: () => Promise<T>): Promise<T | null> {
   }
 }
 
+// The settings as the page uses them. A server without the model routes
+// (sprint 10) sends no model list, and the page then says choosing a
+// provider is not available in this build.
+export function normalizeSettings(raw: Partial<Settings> & Pick<Settings, "settingsVersion" | "timezone" | "timezoneSource">): Settings {
+  return {
+    provider: null,
+    meta: { keySet: false, source: null },
+    chatgpt: { signedIn: false, name: null, email: null, planUsage: false },
+    ...raw,
+    model: raw.model ?? "",
+    models: raw.models ?? [],
+    providersInBuild: Array.isArray(raw.models),
+  };
+}
+
 export const realBackend: AgentBackend = {
   kind: "real",
-  settings: () => orNull(() => request<Settings>("GET", "/api/settings")),
-  setTimezone: (timezone, expectedVersion) => request("PUT", "/api/settings/timezone", { timezone, expectedVersion }),
+  settings: async () => {
+    const raw = await orNull(() => request<Parameters<typeof normalizeSettings>[0]>("GET", "/api/settings"));
+    return raw ? normalizeSettings(raw) : null;
+  },
+  setTimezone: (timezone, expectedVersion, from) => request("PUT", "/api/settings/timezone", { timezone, expectedVersion, ...(from === "browser" ? { source: "browser" } : {}) }),
   setProvider: (provider, expectedVersion) => request("PUT", "/api/settings/provider", { provider, expectedVersion }),
   setModel: (model, expectedVersion) => request("PUT", "/api/settings/model", { model, expectedVersion }),
   saveMetaKey: (key, expectedVersion) => request("POST", "/api/auth/meta-key", { key, expectedVersion }),

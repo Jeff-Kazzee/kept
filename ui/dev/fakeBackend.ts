@@ -1,7 +1,9 @@
-// A development fake of the routes sprints 8 and 10 bring: settings, the
-// time zone, the model provider, sign-in, activity and undo. Only a
-// development build (or a check build made with APP_UI_FAKES=1) has it,
-// next to the scripted chat. It calls no server for these routes and holds
+// A development fake of the routes sprints 10 and 11 bring: the model
+// provider, the model, sign-in and Google. Only a development build (or a
+// check build made with APP_UI_FAKES=1) has it, next to the scripted chat.
+// `createHybridBackend` puts it beside sprint 8's real routes: the real
+// settings, time zone, activity and undo, and the fake for the rest. The
+// fake's own settings, time zone and activity are kept for tests. It calls no server for these routes and holds
 // no key or token: saving a Meta key keeps only "a key is set", and
 // ChatGPT sign-in is a synthetic account.
 //
@@ -60,7 +62,7 @@ export type FakeBackend = AgentBackend & {
   reset(): void;
 };
 
-const fresh = (): Saved => ({ settings: structuredClone(DEFAULT_SETTINGS), google: { ...GOOGLE_OFF }, events: [], log: { activityVersion: 0, entries: [] }, seq: 0, undo: {} });
+const fresh = (): Saved => ({ settings: { ...structuredClone(DEFAULT_SETTINGS), providersInBuild: true }, google: { ...GOOGLE_OFF }, events: [], log: { activityVersion: 0, entries: [] }, seq: 0, undo: {} });
 
 const refuse = (status: number, error: string, message: string) => new ApiError(status, { error, message });
 
@@ -238,5 +240,45 @@ export function createFakeBackend({ storage = null, now = () => new Date().toISO
       save();
       return {};
     },
+  };
+}
+
+// Sprint 8's real routes for the time zone, activity and undo, and the fake
+// for the provider, model, sign-in and Google (0011, U37). The settings
+// view is the real one with the fake's provider part. The activity is the
+// real log with the fake's Google Calendar and Gmail entries merged in by
+// time. A fake entry's id starts with "act-", so undo goes to the fake for
+// those and to the server for the rest, each with its own version.
+export function createHybridBackend(real: AgentBackend, fake: FakeBackend): AgentBackend {
+  const fakeVersion = () => fake.current().settingsVersion;
+  const isFake = (id: string) => id.startsWith("act-");
+  return {
+    kind: "fake",
+    async settings() {
+      const r = await real.settings();
+      if (!r) return null;
+      const f = fake.current();
+      return { ...r, provider: f.provider, model: f.model, models: f.models, meta: f.meta, chatgpt: f.chatgpt, providersInBuild: true };
+    },
+    setTimezone: (zone, version, from) => real.setTimezone(zone, version, from),
+    setProvider: (p) => fake.setProvider(p, fakeVersion()),
+    setModel: (m) => fake.setModel(m, fakeVersion()),
+    saveMetaKey: (k) => fake.saveMetaKey(k, fakeVersion()),
+    removeMetaKey: () => fake.removeMetaKey(fakeVersion()),
+    chatgptStart: () => fake.chatgptStart(),
+    chatgptSignOut: () => fake.chatgptSignOut(fakeVersion()),
+    async activity() {
+      const [r, f] = await Promise.all([real.activity(), fake.activity()]);
+      if (!r) return f;
+      const entries = [...r.entries, ...(f?.entries ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+      return { activityVersion: r.activityVersion, entries };
+    },
+    async undo(id, version) {
+      if (isFake(id)) return fake.undo(id, (await fake.activity())!.activityVersion);
+      return real.undo(id, version);
+    },
+    google: () => fake.google(),
+    googleConnect: () => fake.googleConnect(),
+    googleDisconnect: (v) => fake.googleDisconnect(v),
   };
 }

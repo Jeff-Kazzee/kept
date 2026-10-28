@@ -12,11 +12,9 @@
 // Closing the tab or Delete case clears it.
 import { WITHHELD_USER_TEXT } from "../../src/agent/types.ts";
 import { SCOPE_DECLINE, hasClinicalContent } from "../../src/domain/scope.ts";
-import { slotLabel } from "../../src/slots/labels.ts";
 import type { AppState, FixtureScenario, MessageView } from "../api.ts";
-import { DEFAULT_ZONE, GMAIL_IMPORTED, type ActivityEntry } from "../contract.ts";
+import { GMAIL_IMPORTED, type ActivityEntry, type ActivityLog } from "../contract.ts";
 import type { FakeBackend } from "../dev/fakeBackend.ts";
-import { claimWord } from "../format.ts";
 import { DEMO_IDS } from "./demo.ts";
 import type { Card, ChatErrorCode, ChatEvent, ChatLog, ChatMessage, ChatTransport, FactChip } from "./types.ts";
 
@@ -33,9 +31,19 @@ export type MockApi = {
 
 // The fake activity and settings. Without them the mock still reads and
 // accepts facts, and records nothing.
-export type MockAgent = Pick<FakeBackend, "record" | "agentSetTimezone" | "agentAddEvent" | "agentRemoveEvent" | "hasEvent" | "googleNow">;
+export type MockAgent = Pick<FakeBackend, "record" | "agentAddEvent" | "agentRemoveEvent" | "hasEvent" | "googleNow">;
 
-export type MockOptions = { api: MockApi; now?: () => string; delayMs?: number; storage?: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null; agent?: MockAgent | null };
+// `activity` reads sprint 8's real activity log, so each write the mock
+// makes through a route reaches the page as an action event with the
+// entry the server wrote for it (0009, design 3).
+export type MockOptions = {
+  api: MockApi;
+  now?: () => string;
+  delayMs?: number;
+  storage?: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null;
+  agent?: MockAgent | null;
+  activity?: (() => Promise<ActivityLog | null>) | null;
+};
 
 // Also the marker test/bundle.test.ts looks for: it must not be in the
 // production bundle.
@@ -58,7 +66,7 @@ export function intentOf(text: string): "message" | "gmail" | "status" | "confli
   return "help";
 }
 
-export function createMockTransport({ api, now = () => new Date().toISOString(), delayMs = 18, storage = null, agent = null }: MockOptions): ChatTransport & { reset(): void } {
+export function createMockTransport({ api, now = () => new Date().toISOString(), delayMs = 18, storage = null, agent = null, activity = null }: MockOptions): ChatTransport & { reset(): void } {
   type Saved = { log: ChatLog; generation: number | null; seq: number };
   let saved: Saved | null = null;
   try {
@@ -111,9 +119,19 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
       // about 80 characters, as the agent sends checked text (0007, C1).
       const actions: string[] = [];
       const act = (entry: ActivityEntry | null | undefined) => {
-        if (!entry) return;
+        if (!entry || actions.includes(entry.id)) return;
         actions.push(entry.id);
         emit({ event: "action", data: { turnId, entry } });
+      };
+      // The entries the server wrote since the last look, oldest first.
+      const seen = new Set((await activity?.())?.entries.map((e) => e.id) ?? []);
+      const sync = async () => {
+        const log = await activity?.();
+        for (const e of [...(log?.entries ?? [])].reverse() as ActivityEntry[]) {
+          if (seen.has(e.id)) continue;
+          seen.add(e.id);
+          act(e);
+        }
       };
       const finish = async (answer: ChatMessage, userText: string, code?: { code: ChatErrorCode; message: string }) => {
         if (answer.chips.length > 0) emit({ event: "facts", data: { turnId, chips: answer.chips } });
@@ -122,7 +140,7 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
           await sleep(delayMs);
         }
         if (code) emit({ event: "turn.error", data: { turnId, ...code } });
-        const user: ChatMessage = { id: userMessageId, role: "user", text: userText, createdAt: now(), cards: [], chips: [] };
+        const user: ChatMessage = { id: userMessageId, role: "user", text: userText, createdAt: now(), cards: [], chips: [], actions: [] };
         log = { chatVersion: log.chatVersion + 1, messages: [...log.messages, user, answer] };
         persist();
         emit({ event: "turn.done", data: { turnId, assistantMessageId: answer.id, chatVersion: log.chatVersion } });
@@ -130,7 +148,7 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
       // The fixed decline. No script runs, and the person's words are not
       // kept: the stored message is a fixed sentence (0007, C2).
       if (hasClinicalContent(text)) {
-        const decline: ChatMessage = { id: nextId("msg"), role: "assistant", text: SCOPE_DECLINE, createdAt: now(), cards: [], chips: [], declined: true };
+        const decline: ChatMessage = { id: nextId("msg"), role: "assistant", text: SCOPE_DECLINE, createdAt: now(), cards: [], chips: [], actions: [], declined: true };
         await finish(decline, WITHHELD_USER_TEXT, { code: "out_of_scope", message: SCOPE_DECLINE });
         return;
       }
@@ -161,9 +179,9 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
       };
 
       // Imports a message (or finds it already in the case), reads it and
-      // accepts its facts, as the agent-first back end does. A demo
-      // message sets the time zone to the clinic's. Each step is an action
-      // with its activity entry.
+      // accepts its facts through the routes. The server logs each step,
+      // and each reaches the page as an action. Loading the demo calendar
+      // already set the demo's zone on the server (0009, A14).
       const takeIn = async (m: { id?: string; channel: string; from: string; received_at: string; text: string }, fixture: boolean, viaGmail = false): Promise<{ words: string } | null> => {
         const before = await api.state();
         const already = m.id !== undefined && before.messages.some((x) => x.id === m.id);
@@ -173,6 +191,7 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
             const imported = await api.addMessage(m);
             await api.extract(imported.id, "minimal", imported.version).catch(() => undefined);
             id = imported.id;
+            await sync();
           }
           const found = (await api.state()).messages.find((x) => x.id === id);
           if (!found) throw new Error("not imported");
@@ -183,19 +202,13 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
         if (!view) return null;
         if (already) return { words: `This message from ${view.message.from} is already in your case. Its facts are below.` };
         if (viaGmail) act(agent?.record({ actor: "agent", kind: GMAIL_IMPORTED, summary: `Imported a message from ${view.message.from} found in Gmail.`, target: { type: "message", id: view.id }, undoable: false }));
-        if (fixture && m.id !== undefined && DEMO_IDS.includes(m.id)) {
-          act(agent?.agentSetTimezone(DEFAULT_ZONE, `Set the time zone to ${DEFAULT_ZONE}, where ${view.message.from} is, for the demo.`));
-        }
         let accepted = 0;
         await tool("accept_facts", "Checking each fact against the message", async () => {
           const st = await api.state();
           for (const e of st.evidence.filter((x) => x.messageId === view.id && x.status === "pending")) {
             await api.accept(e.id, e.version);
             accepted++;
-            const c = e.claim;
-            const what = claimWord(c.claim_type).toLowerCase();
-            const summary = c.slot.date ? `Accepted the ${what} for ${slotLabel(c.slot.date, c.slot.time)} from ${view.message.from}.` : `Accepted an ${what} from ${view.message.from}.`;
-            act(agent?.record({ actor: "agent", kind: "claim_accepted", summary, target: { type: "claim", id: e.id }, undoable: true }));
+            await sync();
           }
           card({ kind: "claims", messageId: view.id, evidenceIds: view.evidenceIds });
         });
@@ -325,7 +338,7 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
           break;
       }
 
-      await finish({ id: nextId("msg"), role: "assistant", text: said, createdAt: now(), cards, chips, ...(actions.length > 0 ? { actions } : {}) }, text);
+      await finish({ id: nextId("msg"), role: "assistant", text: said, createdAt: now(), cards, chips, actions }, text);
     },
   };
 }

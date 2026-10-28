@@ -20,7 +20,7 @@ import { createMockTransport } from "./chat/mockStream.ts";
 import { realTransport } from "./chat/transport.ts";
 import type { ChatTransport } from "./chat/types.ts";
 import { useChat } from "./chat/useChat.ts";
-import { createFakeBackend, type FakeBackend } from "./dev/fakeBackend.ts";
+import { createFakeBackend, createHybridBackend, type FakeBackend } from "./dev/fakeBackend.ts";
 import { errorSentence, setCaseZone } from "./format.ts";
 import { SchedulePanel, TABS, waitingCount, type PanelTab } from "./schedule/SchedulePanel.tsx";
 import { slotElementId } from "./schedule/Agenda.tsx";
@@ -40,7 +40,10 @@ const scriptedChat = () => fakesBuilt && new URLSearchParams(window.location.sea
 
 export function App() {
   const scripted = useMemo(scriptedChat, []);
-  const backend: AgentBackend = useMemo(() => (fakesBuilt && scripted ? createFakeBackend({ storage: sessionStorage }) : realBackend), [scripted]);
+  // The fake covers only what sprint 8 does not serve yet: the provider,
+  // model, sign-in and Google (0011, U37).
+  const fake = useMemo(() => (fakesBuilt && scripted ? createFakeBackend({ storage: sessionStorage }) : null), [scripted]);
+  const backend: AgentBackend = useMemo(() => (fakesBuilt && fake ? createHybridBackend(realBackend, fake) : realBackend), [fake]);
   const [state, setState] = useState<AppState | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [activity, setActivity] = useState<ActivityLog | null>(null);
@@ -74,8 +77,8 @@ export function App() {
       if (stale()) return;
       let aNow = aRead;
       // Delete case moves the generation. The fake activity goes with it.
-      if (generation.current !== null && generation.current !== next.generation && backend.kind === "fake") {
-        (backend as FakeBackend).clearActivity();
+      if (generation.current !== null && generation.current !== next.generation && fake) {
+        fake.clearActivity();
         aNow = await settle(() => backend.activity());
         if (stale()) return;
       }
@@ -109,7 +112,7 @@ export function App() {
     } catch (e) {
       if (!stale()) setLoadError(errorSentence(e));
     }
-  }, [backend]);
+  }, [backend, fake]);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
 
@@ -204,6 +207,7 @@ export function App() {
       setToasts={setToasts}
       scripted={scripted}
       backend={backend}
+      fake={fake}
       settings={settings}
       activity={activity}
       google={google}
@@ -224,6 +228,7 @@ function Shell({
   setToasts,
   scripted,
   backend,
+  fake,
   settings,
   activity,
   google,
@@ -240,6 +245,7 @@ function Shell({
   setToasts: (f: (t: Toast[]) => Toast[]) => void;
   scripted: boolean;
   backend: AgentBackend;
+  fake: FakeBackend | null;
   settings: Settings | null;
   activity: ActivityLog | null;
   google: GoogleStatus | null;
@@ -249,8 +255,8 @@ function Shell({
   degraded: boolean;
 }) {
   const transport: ChatTransport = useMemo(
-    () => (fakesBuilt && scripted ? createMockTransport({ api, storage: sessionStorage, agent: backend.kind === "fake" ? (backend as FakeBackend) : null }) : realTransport),
-    [scripted, backend],
+    () => (fakesBuilt && scripted ? createMockTransport({ api, storage: sessionStorage, agent: fake, activity: () => backend.activity() }) : realTransport),
+    [scripted, backend, fake],
   );
   const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh());
   const [sheetOpen, setSheetOpen] = useState(false);

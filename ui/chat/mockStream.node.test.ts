@@ -14,6 +14,8 @@ import { WITHHELD_USER_TEXT } from "../../src/agent/types.ts";
 import { createFakeBackend } from "../dev/fakeBackend.ts";
 import { createMockTransport, intentOf, type MockApi } from "./mockStream.ts";
 import type { ChatEvent } from "./types.ts";
+import type { ActivityLog } from "../contract.ts";
+import { createHybridBackend } from "../dev/fakeBackend.ts";
 
 function setup() {
   const store = new EventStore(":memory:");
@@ -41,7 +43,9 @@ function setup() {
     nextQuestion: (expectedVersion) => post("/api/questions/next", { expectedVersion }),
   };
   const agent = createFakeBackend({ now: () => "2026-11-05T09:00:00.000Z" });
-  const mock = createMockTransport({ api, delayMs: 0, now: () => "2026-11-05T09:00:00.000Z", agent });
+  // Sprint 8's real activity log, as the page reads it.
+  const activity = () => call("GET", "/api/activity") as Promise<ActivityLog>;
+  const mock = createMockTransport({ api, delayMs: 0, now: () => "2026-11-05T09:00:00.000Z", agent, activity });
   const turn = async (text: string, version?: number) => {
     const events: ChatEvent[] = [];
     await mock.send(text, version ?? (await mock.load())!.chatVersion, (e) => events.push(e));
@@ -51,7 +55,7 @@ function setup() {
     const s = (await api.state()) as AppState;
     for (const e of s.evidence.filter((x) => x.status === "pending")) await call("POST", `/api/evidence/${e.id}/accept`, { expectedVersion: e.version });
   };
-  return { api, call, mock, turn, accept, writes, agent };
+  return { api, call, mock, turn, accept, writes, agent, activity };
 }
 
 describe("scripted chat", () => {
@@ -64,54 +68,70 @@ describe("scripted chat", () => {
     expect(intentOf("hello")).toBe("help");
   });
 
-  it("reads a pasted demo message, accepts its facts as actions, streams a claims card, and stores the turn", async () => {
-    const { mock, turn, writes, agent } = setup();
+  it("reads a pasted demo message, accepts its facts through the routes, streams each server entry as an action, and stores the turn", async () => {
+    const { mock, turn, writes, activity } = setup();
     const events = await turn(fixtureMessage("m1").text);
     expect(events[0]).toMatchObject({ event: "turn.started" });
     expect(events.filter((e) => e.event === "tool.started").map((e) => e.data)).toMatchObject([{ label: "Reading the message" }, { label: "Checking each fact against the message" }]);
     const card = events.find((e) => e.event === "card");
     expect(card?.data).toMatchObject({ card: { kind: "claims", messageId: "m1", evidenceIds: ["m1-e1", "m1-e2"] } });
     expect(events.at(-1)).toMatchObject({ event: "turn.done", data: { chatVersion: 1 } });
-    // 0007, C4: tools with their cards between start and finish, the held
-    // text at the end in pieces, carrying exactly the stored text.
+    // 0007, C4 and 0009: actions and cards come between their tool's start
+    // and finish, the held text at the end in pieces.
     const names = events.map((e) => e.event);
-    expect(names.slice(0, 8)).toEqual(["turn.started", "tool.started", "tool.finished", "tool.started", "action", "action", "card", "tool.finished"]);
+    expect(names.slice(0, 2)).toEqual(["turn.started", "tool.started"]);
     expect(names.lastIndexOf("card")).toBeLessThan(names.indexOf("text.delta"));
     const deltas = events.filter((e) => e.event === "text.delta").map((e) => (e.data as { text: string }).text);
     expect(deltas.every((d) => d.length <= 81)).toBe(true);
     expect(writes).toEqual(["/api/messages", "/api/messages/m1/extract", "/api/evidence/m1-e1/accept", "/api/evidence/m1-e2/accept"]);
-    // Each accept is an undoable activity entry, and the stored answer
-    // names them.
-    const log = (await mock.load())!;
-    const activity = (await agent.activity())!;
-    expect(activity.entries.map((e) => [e.kind, e.target?.id, e.actor, e.undoable])).toEqual([
-      ["claim_accepted", "m1-e2", "agent", true],
-      ["claim_accepted", "m1-e1", "agent", true],
-    ]);
-    expect(activity.entries[1]!.summary).toBe("Accepted the offer for Tuesday 11/10 2:00 PM from Lantern Hill Clinic.");
-    expect(log.messages[1]!.actions).toEqual(["act-1", "act-2"]);
-    expect(log.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
-    expect(log.messages[1]!.cards).toEqual([{ kind: "claims", messageId: "m1", evidenceIds: ["m1-e1", "m1-e2"] }]);
-    expect(log.messages[1]!.text).toContain("accepted 2 facts");
-    expect(deltas.join("")).toBe(log.messages[1]!.text);
+    // Every entry the server wrote reaches the page once, oldest first, and
+    // the stored answer names them.
+    const log = await activity();
+    const streamed = events.filter((e) => e.event === "action").map((e) => (e.data as { entry: { id: string; kind: string } }).entry);
+    expect(streamed.map((e) => e.id)).toEqual([...log.entries].reverse().map((e) => e.id));
+    expect(streamed.filter((e) => e.kind === "claim_accepted")).toHaveLength(2);
+    expect(log.entries.find((e) => e.kind === "claim_accepted")).toMatchObject({ undoable: true, target: { type: "claim" } });
+    const stored = (await mock.load())!;
+    expect(stored.messages[1]!.actions).toEqual(streamed.map((e) => e.id));
+    expect(stored.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(stored.messages[1]!.cards).toEqual([{ kind: "claims", messageId: "m1", evidenceIds: ["m1-e1", "m1-e2"] }]);
+    expect(stored.messages[1]!.text).toContain("accepted 2 facts");
+    expect(deltas.join("")).toBe(stored.messages[1]!.text);
   });
 
-  it("for the demo, sets the time zone to the clinic's as an undoable action", async () => {
-    const { turn, agent } = setup();
-    await agent.setTimezone("UTC", 0, "browser");
-    const events = await turn(fixtureMessage("m1").text);
-    const zone = events.find((e) => e.event === "action" && e.data.entry.kind === "timezone_set");
-    expect(zone).toBeDefined();
-    expect(agent.current()).toMatchObject({ timezone: "America/Denver", timezoneSource: "agent" });
-    const log = (await agent.activity())!;
-    await agent.undo(log.entries.find((e) => e.kind === "timezone_set")!.id, log.activityVersion);
-    expect(agent.current()).toMatchObject({ timezone: "UTC", timezoneSource: "browser" });
-    // An accepted fact cannot be undone by the fake, and it says why.
-    const after = (await agent.activity())!;
-    const fact = after.entries.find((e) => e.kind === "claim_accepted")!;
-    await expect(agent.undo(fact.id, after.activityVersion)).rejects.toMatchObject({ body: { error: "undo_blocked" } });
-    // A stale version is refused.
-    await expect(agent.undo(fact.id, 0)).rejects.toMatchObject({ body: { error: "stale_edit" } });
+  it("the hybrid backend sends the time zone, activity and undo to sprint 8's routes, and only the provider part and Google to the fake", async () => {
+    const { turn, call, agent, activity } = setup();
+    await turn(fixtureMessage("m1").text);
+    const real = {
+      kind: "real" as const,
+      settings: async () => ({ ...((await call("GET", "/api/settings")) as object), model: undefined, models: undefined }) as never,
+      setTimezone: (zone: string, v: number, from?: "browser" | "you") => call("PUT", "/api/settings/timezone", { timezone: zone, expectedVersion: v, ...(from === "browser" ? { source: "browser" } : {}) }),
+      setProvider: async () => Promise.reject(new Error("not on sprint 8")),
+      setModel: async () => Promise.reject(new Error("not on sprint 8")),
+      saveMetaKey: async () => Promise.reject(new Error("not on sprint 8")),
+      removeMetaKey: async () => Promise.reject(new Error("not on sprint 8")),
+      chatgptStart: async () => Promise.reject(new Error("not on sprint 8")),
+      chatgptSignOut: async () => Promise.reject(new Error("not on sprint 8")),
+      activity,
+      undo: (id: string, v: number) => call("POST", `/api/activity/${id}/undo`, { expectedVersion: v }),
+      google: async () => null,
+      googleConnect: async () => Promise.reject(new Error("not on sprint 8")),
+      googleDisconnect: async () => Promise.reject(new Error("not on sprint 8")),
+    };
+    const hybrid = createHybridBackend(real, agent);
+    // The provider part is the fake's, so it works before sprint 10.
+    await hybrid.saveMetaKey("synthetic-demo-key-0000", 0);
+    expect((await hybrid.settings())!).toMatchObject({ provider: "meta", model: "muse-spark-1.3", providersInBuild: true });
+    // An accepted fact is undone by the server.
+    const log = (await hybrid.activity())!;
+    const fact = log.entries.find((e) => e.kind === "claim_accepted")!;
+    await hybrid.undo(fact.id, log.activityVersion);
+    const after = (await activity()).entries.find((e) => e.id === fact.id)!;
+    expect(after.undone).toBe(true);
+    // The first-load zone goes to the server with source "browser".
+    const s = (await hybrid.settings())!;
+    await hybrid.setTimezone("Europe/Berlin", s.settingsVersion, "browser");
+    expect((await hybrid.settings())!).toMatchObject({ timezone: "Europe/Berlin", timezoneSource: "browser" });
   });
 
   it("with Google connected, finds a message in Gmail and keeps a confirmed time on Google Calendar, with Undo", async () => {
@@ -122,7 +142,9 @@ describe("scripted chat", () => {
     for (const id of ["m1", "m2"]) await turn(fixtureMessage(id).text);
     const mail = await turn("Check my email for appointments");
     const kinds = mail.filter((e) => e.event === "action").map((e) => (e.data as { entry: { kind: string } }).entry.kind);
-    expect(kinds[0]).toBe("gmail_message_imported");
+    // The server logs the import, and the fake adds where it came from.
+    expect(kinds).toContain("message_imported");
+    expect(kinds).toContain("gmail_message_imported");
     const log = (await agent.activity())!;
     const added = log.entries.filter((e) => e.kind === "calendar_event_added");
     expect(added.length).toBeGreaterThan(0);

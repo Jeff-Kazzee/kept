@@ -56,7 +56,7 @@ export function SettingsPanel({ mode, modelClient, version, erasePending, run }:
       </section>
       <section className="card stack-sm" aria-labelledby="set-model">
         <h3 id="set-model">Model provider</h3>
-        {settingsAvailable ? (
+        {settingsAvailable && settings.providersInBuild ? (
           <>
             <ProviderSetting settings={settings} run={run} />
             <ModelSelect />

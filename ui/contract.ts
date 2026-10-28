@@ -1,42 +1,32 @@
-// The sprint 8, 9 and 10 contract as the page uses it: activity and undo,
-// the chat's action event, settings, the time zone and model sign-in. The
-// back-end routes come with sprints 8 and 10. Until then a development
-// build fakes them (ui/dev/fakeBackend.ts), and a production build says
-// what is not available yet. Runs in the browser and in Node.
-import type { ChatEvent as BaseChatEvent, ChatMessage as BaseChatMessage } from "../src/agent/types.ts";
+// The sprint 8, 9, 10 and 11 contract as the page uses it: activity and
+// undo, the chat's action event, settings, the time zone, model sign-in
+// and Google. Sprint 8 serves activity, undo and the time zone. The
+// provider, model, sign-in and Google routes come with sprints 10 and 11.
+// Until then a development build fakes only those (ui/dev/fakeBackend.ts),
+// and a production build says they are not available yet. Runs in the
+// browser and in Node.
+import type { ActivityActor, ActivityEntry, ActivityTarget, ActivityView } from "../src/activity/types.ts";
+import type { ChatEvent, ChatMessage } from "../src/agent/types.ts";
 
-export type ActivityActor = "agent" | "you" | "mcp";
-
-export type ActivityTarget = { type: "message" | "claim" | "slot" | "question" | "draft" | "note"; id: string };
-
-export type ActivityEntry = {
-  id: string;
-  at: string; // ISO with offset
-  actor: ActivityActor; // "mcp" is an external agent over MCP
-  kind: string; // "claim_accepted", "question_answered", "timezone_set" and so on
-  summary: string; // a plain sentence written by code
-  target: ActivityTarget | null;
-  undoable: boolean;
-  undone: boolean;
-  undoneAt?: string;
-};
-
-export type ActivityLog = { activityVersion: number; entries: ActivityEntry[] };
-
-// The chat message gains the ids of the activity entries done in its turn.
-export type ChatMessage = BaseChatMessage & { actions?: string[] };
-
-export type ChatEvent = BaseChatEvent | { event: "action"; data: { turnId: string; entry: ActivityEntry } };
+// Sprint 8's types, used as they are: the activity log, and the chat
+// message with its actions and the action event.
+export type { ActivityActor, ActivityEntry, ActivityTarget, ChatEvent, ChatMessage };
+export type ActivityLog = ActivityView;
 
 export type Provider = "meta" | "chatgpt";
 
 export type ModelOption = { id: string; label: string; costHint: "lower" | "higher" | null };
 
+// What GET /api/settings answers. Sprint 8 serves the time zone part and
+// the provider part as not set. The model part comes with sprint 10.
+// `providersInBuild` is the page's own: true when the server sent the
+// model list, so the provider, model and sign-in routes exist (0011, U37).
 export type Settings = {
   settingsVersion: number;
   // The model of the current provider, and the models it offers.
   model: string;
   models: ModelOption[];
+  providersInBuild: boolean;
   timezone: string;
   timezoneSource: "you" | "agent" | "browser" | "default";
   provider: Provider | null;
@@ -52,6 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
   settingsVersion: 0,
   model: "",
   models: [],
+  providersInBuild: false,
   timezone: DEFAULT_ZONE,
   timezoneSource: "default",
   provider: null,

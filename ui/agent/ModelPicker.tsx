@@ -31,7 +31,8 @@ export function ModelPicker({ fallback, scripted = false }: { fallback: string; 
   const menu = useMenu();
   const id = useId();
   const [busy, setBusy] = useState(false);
-  const chosen = settingsAvailable ? modelLabel(settings) : null;
+  const ready = settingsAvailable && settings.providersInBuild;
+  const chosen = ready ? modelLabel(settings) : null;
   // The scripted chat answers whatever is picked, and says so.
   const label = chosen ? (scripted ? `${chosen} (scripted)` : chosen) : fallback;
   const pick = async (model: string) => {
@@ -65,7 +66,7 @@ export function ModelPicker({ fallback, scripted = false }: { fallback: string; 
         <Icon name="chevronDown" size="sm" />
       </button>
       <div ref={menu.menuRef} id={id} className="menu menu-wide" hidden={!menu.open}>
-        {settingsAvailable && settings.models.length > 0 ? (
+        {ready && settings.models.length > 0 ? (
           <>
             <p className="menu-label">{settings.provider ? `${PROVIDER_SHORT[settings.provider]} models` : "Models"}</p>
             {settings.models.map((m) => (
@@ -88,7 +89,7 @@ export function ModelPicker({ fallback, scripted = false }: { fallback: string; 
             ))}
           </>
         ) : (
-          <p className="menu-label">{settingsAvailable ? "Pick a provider in Settings to choose a model." : "Choosing a model is not available in this build yet."}</p>
+          <p className="menu-label">{ready ? "Pick a provider in Settings to choose a model." : "Choosing a model is not available in this build yet."}</p>
         )}
         <button type="button" className="menu-item" onClick={() => menu.choose(openSettings)}>
           <Icon name="settings" />
