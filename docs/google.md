@@ -165,7 +165,9 @@ client". If they do not, the app did not see both values.
 
 If something fails, the app returns to `/?google_error=<code>`. Codes:
 `invalid_state` (the sign-in was started in another browser, took more
-than 10 minutes, or was used twice), `access_denied` (you chose Cancel),
+than 10 minutes, was used twice, or Google was disconnected meanwhile),
+`stale_flow` (another connect finished first), `access_denied` (you chose
+Cancel),
 `no_permission_granted` (every box was unchecked), `code_exchange_failed`
 (usually a client secret or redirect URI that does not match),
 `google_unavailable`, and the ID token checks (`id_token_audience`,

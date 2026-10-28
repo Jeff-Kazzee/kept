@@ -134,9 +134,17 @@ the wiring in `server/main.ts`. Tests: `test/google.test.ts` and
 - G4 (proposed). The state is single use, expires after 10 minutes, at
   most 5 flows wait at once, and only hashes of the state and the cookie
   are kept, in memory. The connect route sets an HttpOnly, SameSite=Lax
-  cookie on `/auth/google` (Secure over HTTPS), and the callback needs it,
-  so a code from another browser is refused. Lax is needed because the
-  callback is a top-level navigation from Google.
+  cookie, and the callback needs it, so a code from another browser is
+  refused. Lax is needed because the callback is a top-level navigation
+  from Google. The cookie is `appt_google_flow_<port>` on `/auth/google`
+  over plain http, and `__Host-appt_google_flow_<port>` on `/` with Secure
+  over HTTPS. The callback reads the `__Host-` name first. Cookies are not
+  separated by port, so another page on the same host can still set the
+  plain name. The server's state is the second factor, and the cookie is
+  not tied to pairing or a session, which sprint 8 removes. Each flow also
+  keeps the connection version it started at. The callback refuses a flow
+  whose version moved (`stale_flow`), and a disconnect drops every open
+  flow.
 - G5 (proposed). Every connect sends `prompt=consent`, so Google always
   returns a refresh token, and leaves out `include_granted_scopes`, so the
   grant holds exactly the scopes turned on.
@@ -156,19 +164,29 @@ the wiring in `server/main.ts`. Tests: `test/google.test.ts` and
   `http` is refused, because Google allows `http` only for loopback.
 - G10 (proposed). The access token is kept in memory only. A restart
   refreshes it.
-- G11 (proposed). The app counts an event as its own only when the
-  private property names the slot and the event id is in the app's own
-  list of created events, kept in the connection file per account and
-  calendar and kept after a disconnect. An event that copies the property
-  is left alone. Every patch and delete sends `If-Match` with the ETag, so
-  a change at Google wins.
-- G12 (proposed). Undo of a create deletes the event, undo of an update
-  patches the earlier fields back, undo of a delete creates the event
-  again (Google gives it a new id). Each is refused when the event changed
-  at Google since the write (`google_changed`), when it is no longer the
-  app's, when the connection now points at another account or calendar,
-  or, for a delete, when the slot already has a new event. An undo records
-  its own activity entry with no undo.
+- G11 (proposed). Each event's id is `appt` and the base32hex of an HMAC
+  of the slot key under a random secret, 56 characters from a to v and 0
+  to 9, which Google accepts as a client id. The secret is kept in the
+  connection file per account and calendar, and kept after a disconnect.
+  The app looks its event up by that id, never by a list, and counts an
+  event as its own only when the id is the one it derives and the private
+  property names the same slot. An event that copies the property, or sits
+  at the app's id without it, is left alone (`google_not_app_event`).
+  Every patch and delete sends `If-Match` with the ETag, so a change at
+  Google wins.
+- G12 (proposed). Creates are idempotent. A create that gets 409 reads the
+  event at that id: a live one is taken as the slot's event and brought in
+  line, so two syncs at once or a retry after a timed-out create make one
+  event, and a deleted one is put back with the new fields. Undo of a
+  create deletes the event, undo of an update patches the earlier fields
+  back, undo of a delete puts the event back under the same id. Each is
+  refused when the event changed at Google since the write
+  (`google_changed`), when it is not the app's, when the connection now
+  points at another account or calendar, or, for a delete, when the slot
+  already has a live event. An undo records its own activity entry with no
+  undo. Putting a deleted event back with a patch of its status follows
+  Google's 409 rule for taken ids, and is checked only against the fake
+  until Jeff's real connect test.
 - G13 (proposed). A slot in state `change_proposed` keeps a tentative
   event. `offered` and `declined` get none, the same as `canceled`. A slot
   with no time gets an all-day event. A timed event lasts 60 minutes, the
@@ -194,13 +212,48 @@ the wiring in `server/main.ts`. Tests: `test/google.test.ts` and
   Nothing from a response body reaches an error, a log or the browser.
 - G19 (proposed). Activity entries hold code-written summaries only: no
   email text, no event title, no token. The interface is
-  `record(entry) -> { activityId }`, and `undo` is plain JSON.
+  `record(entry) -> { activityId }`, and `undo` is plain JSON. Each entry
+  has a `kind`, matching sprint 9's U15: `calendar_event_added`,
+  `calendar_event_updated`, `calendar_event_removed` for a calendar write
+  or an undo that did one, `gmail_message_imported` for a new Gmail
+  import, and null for reads, no-ops and failed calls.
+- G21 (proposed). A Gmail import is recorded with `imported_from: "gmail"`
+  on its `message_imported` event, and the message view has
+  `importedFrom: "gmail"`, as sprint 9's U15 assumes. A paste has no such
+  field. It is not read from the message id, because a pasted message may
+  also have an id that starts with `gmail-`.
 - G20 (proposed). The Google tools take their own context
   (`GoogleToolContext`: the Google services, intake, the case, the
   activity log, the extraction effort) and return the fields of
   `ToolResult`. The coordinator adapts them to sprint 8's registry and
   passes sprint 8's case time zone to `GoogleCalendar` (`timeZone`
   option, America/Denver until then).
+
+## Review round 1 (Muse Wonder, xhigh, 2fc3063..3801bb3)
+
+1. A refresh for one account could land after another account connected.
+   The cached access token and the refresh in progress now carry the
+   account and a hash of the refresh token, and a refresh result is kept
+   only while the stored connection still has that identity. A failed
+   refresh marks only its own connection.
+2. An open flow could finish after a disconnect. Flows keep their start
+   version, the callback refuses a moved version, and a disconnect drops
+   open flows. A stale flow for the account already stored is not revoked,
+   because that would end the live grant.
+3. The token file followed symbolic links. Reads use lstat, O_NOFOLLOW
+   and O_NONBLOCK, check the descriptor with fstat (regular file, owned by
+   the server's user) and fix the mode with fchmod.
+4. The size cap was checked after the whole body was read. The body is
+   now read as a stream and counted, the stream is canceled past the cap,
+   and a declared length past the cap is refused before any read.
+5. Creates were not idempotent. See G11 and G12.
+6. The lookup read one page of a property search. It is now a read by id.
+7. The flow cookie name was shared. See G4.
+8. The MIME walk took any shape. The part tree is rebuilt from string
+   fields only, at most 20 levels and 200 parts, and any failure while
+   reading a message is `google_invalid_response`.
+9. A subject-only email was refused as empty. The import shape is built
+   first and checked for text and length.
 
 ## Not done here
 
