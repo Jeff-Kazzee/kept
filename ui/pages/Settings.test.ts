@@ -1,15 +1,20 @@
-// Settings as the user sees them: Meta first and the default, ChatGPT as
-// the alternative, the key field that never holds a key, the model choice,
-// Google with its permissions, and the time zone. Rendered to static markup
-// with the server renderer.
+// Connections and Settings as the user sees them: Meta first and the
+// default, ChatGPT as the alternative, the key field that never holds a
+// key, the model choice, Google with its permissions, and the time zone.
+// Rendered to static markup with the server renderer. Since 0015 the
+// provider, the model and Google are in Connections, and the time zone,
+// the theme and Delete case in Settings.
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AgentContext, DEFAULT_AGENT, type AgentState } from "../agent/AgentContext.tsx";
 import { DEFAULT_SETTINGS, GOOGLE_OFF, type Settings as SettingsView } from "../contract.ts";
-import { GoogleSetting, PROVIDERS, SettingsPanel, TimeZoneSetting } from "./Settings.tsx";
+import { ConnectionsPage, GoogleSetting, PROVIDERS, SettingsPage, TimeZoneSetting } from "./Settings.tsx";
 
 const run = async () => {};
+// Both pages, as one string, for the checks that read across them.
+const pages = (agent: Partial<AgentState>) =>
+  withAgent(agent, createElement(ConnectionsPage, { modelClient: "meta-responses", run })) + withAgent(agent, createElement(SettingsPage, { version: 1, erasePending: false, run }));
 const withAgent = (agent: Partial<AgentState>, node: ReactNode) =>
   renderToStaticMarkup(createElement(AgentContext.Provider, { value: { ...DEFAULT_AGENT, ...agent } }, node)).replaceAll("&#x27;", "'");
 
@@ -30,7 +35,7 @@ const meta: SettingsView = {
 describe("settings", () => {
   it("lists Meta first as the default and ChatGPT under its own line, with what each receives", () => {
     expect(PROVIDERS.map((p) => p.id)).toEqual(["meta", "chatgpt"]);
-    const html = withAgent({ settings: { ...DEFAULT_SETTINGS, settingsVersion: 1 }, settingsAvailable: true }, createElement(SettingsPanel, { modelClient: "meta-responses", version: 1, erasePending: false, run }));
+    const html = pages({ settings: { ...DEFAULT_SETTINGS, settingsVersion: 1 }, settingsAvailable: true });
     const metaAt = html.indexOf("Meta Model API");
     const altAt = html.indexOf("Or use your ChatGPT plan");
     expect(metaAt).toBeGreaterThan(-1);
@@ -49,7 +54,7 @@ describe("settings", () => {
   });
 
   it("with a key saved, says so without the key, offers the models with their cost, and shows the zone with its source", () => {
-    const html = withAgent({ settings: meta, settingsAvailable: true }, createElement(SettingsPanel, { modelClient: "meta-responses", version: 1, erasePending: false, run }));
+    const html = pages({ settings: meta, settingsAvailable: true });
     expect(html).toContain("Your key is saved on the server.");
     expect(html).toContain(">Remove the key</button>");
     expect(html).toContain('<option value="muse-spark-1.3" selected="">Muse Spark 1.3 (lower cost)</option>');
@@ -63,12 +68,24 @@ describe("settings", () => {
 
   it("sprint 10: a provider that lost its key stays the provider and says it needs setup, and the model notice shows under the choice", () => {
     const lost = { ...meta, meta: { keySet: false, source: null }, modelNotice: "Muse Wonder 1.0 could not use tools in the last call. Pick another model." } as SettingsView;
-    const html = withAgent({ settings: lost, settingsAvailable: true }, createElement(SettingsPanel, { modelClient: "meta-responses", version: 1, erasePending: false, run }));
+    const html = pages({ settings: lost, settingsAvailable: true });
     expect(html).toContain('<span class="pill pill-pending">Needs setup</span>');
     expect(html).toContain("Meta is still the provider, but it has no key. Add a key, or pick another provider.");
     expect(html).not.toContain(">In use</span>");
     expect(html).toContain("Muse Wonder 1.0 could not use tools in the last call. Pick another model.");
     expect(html).toContain('name="meta-key"');
+  });
+
+  it("0015: Connections holds the provider, the model and Google, and Settings the time zone, the theme and Delete case", () => {
+    const connections = withAgent({ settings: meta, settingsAvailable: true, google: GOOGLE_OFF }, createElement(ConnectionsPage, { modelClient: "meta-responses", run }));
+    const settings = withAgent({ settings: meta, settingsAvailable: true, google: GOOGLE_OFF }, createElement(SettingsPage, { version: 1, erasePending: false, run }));
+    for (const part of ["Model provider", "Meta Model API", "Muse Spark 1.3 (lower cost)", "Google"]) expect(connections).toContain(part);
+    for (const part of ["Time zone", "Delete case", "About this app"]) expect(connections).not.toContain(part);
+    for (const part of ["Time zone", "Europe/Berlin", ">Theme</legend>", "About this app", "Delete case"]) expect(settings).toContain(part);
+    for (const part of ["Model provider", "Meta Model API", 'name="meta-key"']) expect(settings).not.toContain(part);
+    // Each page's sections are h2, under the work area's h1.
+    expect(settings).toContain('<h2 id="set-zone">Time zone</h2>');
+    expect(connections).toContain('<h2 id="set-model">Model provider</h2>');
   });
 
   it("without the routes, says what is not available in this build yet", () => {

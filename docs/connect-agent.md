@@ -44,7 +44,7 @@ provider and model chosen in the app's settings, as for the app (a Meta
 key, the server's `MODEL_API_KEY`, or the ChatGPT connection the app
 saved), read from `app-secrets.sqlite` beside `APP_DB`. There is no
 recorded mode. With no provider ready those calls fail with the fixed
-sentence that says to add one in Settings. `APPT_NODE` selects the Node 24 binary when `node` on the
+sentence that says to add one in Connections. `APPT_NODE` selects the Node 24 binary when `node` on the
 PATH is another version. Ask the agent to list the appointments tools: it
 should name the same tools as the app's assistant, from `get_schedule` to
 `set_timezone`.

@@ -70,14 +70,14 @@ describe("format", () => {
     expect(sentence(400, "invalid_key", "That does not look like a Meta Model API key. Paste the key on its own, with no spaces. Nothing was saved.")).not.toMatch(/Nothing was saved\. Nothing was saved/);
     expect(errorSentence(new ApiError(503, { error: "settings_busy", retryable: true, message: "The app's settings are busy in another window or process. Try again in a moment. Nothing was changed." }))).toContain("busy in another window");
     expect(errorSentence(new ApiError(400, { error: "invalid_body", issues: [{ path: "expectedVersion", message: "Send the settingsVersion" }] }))).toBe("The page sent a request the app could not read. Nothing was saved.");
-    expect(signInErrorSentence("access_denied")).toBe("ChatGPT sign-in was canceled. Nothing changed. You can try again in Settings.");
-    expect(signInErrorSentence("something_new")).toBe("The ChatGPT sign-in did not finish. Nothing changed. Try again in Settings.");
+    expect(signInErrorSentence("access_denied")).toBe("ChatGPT sign-in was canceled. Nothing changed. You can try again in Connections.");
+    expect(signInErrorSentence("something_new")).toBe("The ChatGPT sign-in did not finish. Nothing changed. Try again in Connections.");
   });
 
   it("sprint 11: each Google callback code has its own plain sentence, and an unknown code the general one", () => {
     const codes = ["invalid_state", "stale_flow", "access_denied", "no_permission_granted", "code_exchange_failed", "google_unavailable", "no_id_token", "no_refresh_token", "id_token_audience", "id_token_issuer", "id_token_expired", "id_token_nonce", "email_unverified"];
     const general = googleErrorSentence("something_new");
-    expect(general).toBe("The Google sign-in did not finish. Nothing changed. Try again in Settings.");
+    expect(general).toBe("The Google sign-in did not finish. Nothing changed. Try again in Connections.");
     const sentences = codes.map(googleErrorSentence);
     expect(new Set(sentences).size).toBe(codes.length);
     for (const [i, text] of sentences.entries()) {
@@ -86,7 +86,7 @@ describe("format", () => {
       expect(text, codes[i]).not.toMatch(/[;\u2014]/);
       expect(text, codes[i]).not.toContain(codes[i]);
     }
-    expect(googleErrorSentence("access_denied")).toBe("Google sign-in was canceled. Nothing changed. You can connect again in Settings.");
+    expect(googleErrorSentence("access_denied")).toBe("Google sign-in was canceled. Nothing changed. You can connect again in Connections.");
   });
 
   it("a sign-in return says what happened and leaves the rest of the address", () => {

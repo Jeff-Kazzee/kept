@@ -8,6 +8,10 @@ export type ThemeChoice = "dark" | "light" | "system";
 
 const KEY = "appointments-theme";
 
+// Sent on the window after every change, so each theme switch on the page
+// shows the choice (0015, Z7).
+export const THEME_EVENT = "appointments-theme";
+
 export const THEME_COLORS = { dark: "#0f1714", light: "#f3f2ec" } as const;
 
 export function readTheme(): ThemeChoice {
@@ -38,4 +42,5 @@ export function saveTheme(choice: ThemeChoice): void {
   } catch {
     // Storage can be off. The choice then lasts until the page reloads.
   }
+  window.dispatchEvent(new CustomEvent<ThemeChoice>(THEME_EVENT, { detail: choice }));
 }

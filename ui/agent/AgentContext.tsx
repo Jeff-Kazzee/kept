@@ -1,5 +1,5 @@
 // What the agent did and the settings, shared by the chat receipts, the
-// claims rows, the Activity tab and Settings. The shell reads both with the
+// claims rows, the Activity tab and the sidebar pages. The shell reads both with the
 // case, and every undo re-reads them.
 import { createContext, useContext } from "react";
 import type { AgentBackend } from "../agentApi.ts";
@@ -23,15 +23,16 @@ export type AgentState = {
   // The reason Undo was refused, by entry id, until the next undo.
   blocked: Readonly<Record<string, string>>;
   reload: () => Promise<void>;
-  // Opens the Settings tab, for the composer's model indicator.
-  openSettings: () => void;
+  // Opens Connections (0015), for the composer's model indicator and the
+  // setup notice.
+  openConnections: () => void;
   // Says what went wrong in a plain sentence (a toast).
   report: (e: unknown) => void;
   // A plain note from the server, such as the sign-out notice (a toast).
   notify: (text: string) => void;
   // The hosted site's session (0014). Null in local mode.
   hosted: SignedInSession | null;
-  // Opens Settings at Usage, on the hosted site.
+  // Opens Usage, on the hosted site.
   openUsage: () => void;
   // The session ended, or the account was deleted: back to sign-in.
   signedOut: () => void;
@@ -66,7 +67,7 @@ export const DEFAULT_AGENT: AgentState = {
   undoBusy: false,
   blocked: {},
   reload: noop,
-  openSettings: () => {},
+  openConnections: () => {},
   report: () => {},
   notify: () => {},
   hosted: null,

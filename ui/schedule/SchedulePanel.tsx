@@ -1,5 +1,5 @@
-// The schedule panel beside the chat: Schedule, Checklist, Activity and
-// Settings. The Schedule tab starts with what waits for the user, so
+// The schedule panel beside the chat: Schedule, Checklist and Activity.
+// Settings moved to the sidebar (0015). The Schedule tab starts with what waits for the user, so
 // nothing depends on finding the right chat card.
 import { useRef, type KeyboardEvent } from "react";
 import type { AppState } from "../api.ts";
@@ -15,15 +15,13 @@ import { zoneWithShortName } from "../format.ts";
 import { Agenda } from "./Agenda.tsx";
 import { InfoTip } from "../components/InfoTip.tsx";
 import { ActivityTab, ChecklistPanel } from "./CaseTabs.tsx";
-import { SettingsPanel } from "./Settings.tsx";
 
-export type PanelTab = "schedule" | "checklist" | "activity" | "settings";
+export type PanelTab = "schedule" | "checklist" | "activity";
 
 export const TABS: Array<{ id: PanelTab; label: string; icon: IconName }> = [
   { id: "schedule", label: "Schedule", icon: "calendar" },
   { id: "checklist", label: "Checklist", icon: "checklist" },
   { id: "activity", label: "Activity", icon: "activity" },
-  { id: "settings", label: "Settings", icon: "settings" },
 ];
 
 // A conflict that waits to be asked about, when no question is open. The
@@ -120,7 +118,6 @@ export function SchedulePanel({
         {tab === "schedule" && <ScheduleTab state={state} run={run} highlight={highlight} />}
         {tab === "checklist" && <ChecklistPanel items={state.case.checklist} />}
         {tab === "activity" && <ActivityTab history={state.history} />}
-        {tab === "settings" && <SettingsPanel modelClient={state.modelClient} version={state.caseVersion} erasePending={state.erasePending} run={run} />}
       </div>
     </>
   );

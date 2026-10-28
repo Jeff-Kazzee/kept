@@ -1,6 +1,7 @@
-// Settings on the hosted site (0014, design item 6): the provider choice
-// as usage credits or ChatGPT (not here yet), the Usage section with the
-// balance, each recent charge and the plans, and Delete account.
+// The hosted site's parts of the sidebar pages (0014, design item 6, and
+// 0015): the provider choice as usage credits or ChatGPT (not here yet) in
+// Connections, the Usage page with the balance, each recent charge and the
+// plans, and Delete account in Settings.
 import { useCallback, useEffect, useId, useState, type FormEvent } from "react";
 import { DELETE_CONFIRMATION } from "../../src/case/constants.ts";
 import { useAgent } from "../agent/AgentContext.tsx";
@@ -81,8 +82,8 @@ export function UsageSection({ run }: { run: Run }) {
   };
 
   return (
-    <section id="set-usage" className="card stack-sm" aria-labelledby="set-usage-title" tabIndex={-1}>
-      <h3 id="set-usage-title">Usage</h3>
+    <section id="set-usage" className="card stack-sm" aria-labelledby="set-usage-title">
+      <h2 id="set-usage-title">Balance and charges</h2>
       {failed && (
         <p className="warn" role="status">
           <Icon name="alert" size="sm" /> {failed}
@@ -95,7 +96,7 @@ export function UsageSection({ run }: { run: Run }) {
             <strong>{usage.balance}</strong>
           </p>
           <p className="small muted">Each model call on this site is charged at {usage.markup} times the model's token cost, from what Meta reports it used. The assistant holds the most a step can cost before it runs, and gives back what it did not use.</p>
-          <h4 className="field-label">Recent charges</h4>
+          <h3 className="field-label">Recent charges</h3>
           {usage.charges.length === 0 ? (
             <p className="small muted">No charges yet.</p>
           ) : (
@@ -128,7 +129,7 @@ export function UsageSection({ run }: { run: Run }) {
               </table>
             </div>
           )}
-          <h4 className="field-label">Get more credit</h4>
+          <h3 className="field-label">Get more credit</h3>
           <div className="btn-row">
             {usage.plans.map((p) => (
               <button key={p.id} type="button" className="btn" disabled={!p.available} aria-describedby={`${uid}-soon`}>
@@ -175,9 +176,9 @@ export function DeleteAccountPanel({ run, onDeleted }: { run: Run; onDeleted: ()
   const [typed, setTyped] = useState("");
   return (
     <section className="card danger-zone stack-sm">
-      <h3>
+      <h2>
         <Icon name="trash" size="sm" /> Delete account
-      </h3>
+      </h2>
       <p className="small">Delete account erases your case, its chat and activity, your settings and your Google connection on this site, and signs you out everywhere. The record of what you were charged stays, without your email. This cannot be undone.</p>
       <label className="field" htmlFor="delete-account-confirm">
         <span>Type {DELETE_CONFIRMATION} to confirm</span>

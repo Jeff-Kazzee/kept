@@ -125,13 +125,13 @@ const SERVER_SENTENCE_CODES = new Set([
 // code is the server's, the sentence the page's. An unknown code gets the
 // general sentence.
 const SIGN_IN_ERRORS: Record<string, string> = {
-  access_denied: "ChatGPT sign-in was canceled. Nothing changed. You can try again in Settings.",
-  expired: "The ChatGPT sign-in took too long and expired. Start it again in Settings.",
-  state_mismatch: "That ChatGPT sign-in did not match one this app started. Start it again in Settings.",
+  access_denied: "ChatGPT sign-in was canceled. Nothing changed. You can try again in Connections.",
+  expired: "The ChatGPT sign-in took too long and expired. Start it again in Connections.",
+  state_mismatch: "That ChatGPT sign-in did not match one this app started. Start it again in Connections.",
   authorization_failed: "ChatGPT did not complete the sign-in. Nothing changed. Try again in a moment.",
   exchange_failed: "ChatGPT did not complete the sign-in. Nothing changed. Try again in a moment.",
   registration_incomplete: "ChatGPT sign-in is not set up on its side yet. Use a Meta key for now.",
-  client_mismatch: "ChatGPT answered for a different app. Nothing changed. Start the sign-in again in Settings.",
+  client_mismatch: "ChatGPT answered for a different app. Nothing changed. Start the sign-in again in Connections.",
   identity_unavailable: "ChatGPT sign-in is not reachable just now. Try again in a moment, or use a Meta key.",
   identity_invalid: "ChatGPT sent an account this app could not check. Nothing changed. Try again in a moment.",
   account_mismatch: "That ChatGPT account is not the one this app signed in before. Sign out first, then sign in again.",
@@ -139,15 +139,15 @@ const SIGN_IN_ERRORS: Record<string, string> = {
   server_error: "The app could not finish the ChatGPT sign-in. Nothing changed. Try again in a moment.",
 };
 
-export const signInErrorSentence = (code: string) => SIGN_IN_ERRORS[code] ?? "The ChatGPT sign-in did not finish. Nothing changed. Try again in Settings.";
+export const signInErrorSentence = (code: string) => SIGN_IN_ERRORS[code] ?? "The ChatGPT sign-in did not finish. Nothing changed. Try again in Connections.";
 
 // A failed Google connect comes back to /?google_error=<code> (0012, G8).
 // The code is the server's, the sentence the page's. An unknown code gets
 // the general sentence.
 const GOOGLE_ERRORS: Record<string, string> = {
-  invalid_state: "That Google sign-in did not match one this app started, or it was already used. Nothing changed. Connect again in Settings.",
-  stale_flow: "Google was connected or disconnected while that sign-in was open, so it was not used. Nothing changed. Connect again in Settings.",
-  access_denied: "Google sign-in was canceled. Nothing changed. You can connect again in Settings.",
+  invalid_state: "That Google sign-in did not match one this app started, or it was already used. Nothing changed. Connect again in Connections.",
+  stale_flow: "Google was connected or disconnected while that sign-in was open, so it was not used. Nothing changed. Connect again in Connections.",
+  access_denied: "Google sign-in was canceled. Nothing changed. You can connect again in Connections.",
   no_permission_granted: "Google gave neither Gmail nor Calendar access, so nothing was connected. Connect again and leave at least one box checked on Google's page.",
   code_exchange_failed: "Google did not complete the sign-in. Nothing changed. Try again in a moment.",
   google_unavailable: "Google did not answer. Nothing changed. Try again in a moment.",
@@ -156,16 +156,16 @@ const GOOGLE_ERRORS: Record<string, string> = {
   id_token_audience: "Google answered for a different app, so nothing was connected. Check the Google client in docs/google.md.",
   id_token_issuer: "The sign-in answer did not come from Google, so nothing was connected. Try again in a moment.",
   id_token_expired: "The Google sign-in answer was too old, so nothing was connected. Check this computer's clock, then try again.",
-  id_token_nonce: "The Google sign-in answer did not match the one this app asked for, so nothing was connected. Connect again in Settings.",
+  id_token_nonce: "The Google sign-in answer did not match the one this app asked for, so nothing was connected. Connect again in Connections.",
   id_token_invalid: "Google sent a sign-in answer the app could not read, so nothing was connected. Try again in a moment.",
   email_unverified: "That Google account has no verified email address, so nothing was connected. Verify it with Google, or use another account.",
   google_error: "Google ended the sign-in with an error. Nothing changed. Try again in a moment.",
-  no_code: "Google came back without a sign-in code. Nothing changed. Connect again in Settings.",
+  no_code: "Google came back without a sign-in code. Nothing changed. Connect again in Connections.",
   google_not_configured: "This server has no Google client yet, so nothing was connected. docs/google.md says how to set one up.",
   server_error: "The app could not finish the Google sign-in. Nothing changed. Try again in a moment.",
 };
 
-export const googleErrorSentence = (code: string) => GOOGLE_ERRORS[code] ?? "The Google sign-in did not finish. Nothing changed. Try again in Settings.";
+export const googleErrorSentence = (code: string) => GOOGLE_ERRORS[code] ?? "The Google sign-in did not finish. Nothing changed. Try again in Connections.";
 
 // Where a sign-in sent the browser back: the ChatGPT sign-in to
 // /?signedIn=chatgpt or /?signInError=<code> (0010), Google to

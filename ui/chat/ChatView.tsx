@@ -254,7 +254,7 @@ function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean
               <strong>New here?</strong>
               <span className="small muted">
                 Try the demo: four made-up messages from Lantern Hill Clinic and a made-up calendar. The assistant is live: it reads them with the model you set up in
-                Settings.
+                Connections.
               </span>
             </div>
             <button type="button" className="btn btn-primary" onClick={onDemo}>
@@ -519,9 +519,9 @@ function PendingItem({
   );
 }
 
-// J12: the setup sentence, written by code, with a link to Settings.
+// J12: the setup sentence, written by code, with a link to Connections.
 function SetupNotice({ text }: { text: string }) {
-  const { openSettings } = useAgent();
+  const { openConnections } = useAgent();
   return (
     <div className="notice" role="alert">
       <Icon name="info" />
@@ -531,8 +531,8 @@ function SetupNotice({ text }: { text: string }) {
           <span className="model-tag">Written by code</span>
         </div>
         <p>{text}</p>
-        <button type="button" className="btn btn-sm" onClick={openSettings}>
-          <Icon name="settings" size="sm" /> Open Settings
+        <button type="button" className="btn btn-sm" onClick={openConnections}>
+          <Icon name="google" size="sm" /> Open Connections
         </button>
       </div>
     </div>

@@ -31,7 +31,7 @@ export const providerNeedsSetup = (s: Settings) => (s.provider === "meta" && !s.
 // `fallback` names what the composer says when the settings cannot be read
 // or no provider is set, such as "No model set".
 export function ModelPicker({ fallback, scripted = false }: { fallback: string; scripted?: boolean }) {
-  const { settings, settingsAvailable, backend, reload, openSettings, report } = useAgent();
+  const { settings, settingsAvailable, backend, reload, openConnections, report } = useAgent();
   const menu = useMenu();
   const id = useId();
   const [busy, setBusy] = useState(false);
@@ -96,18 +96,18 @@ export function ModelPicker({ fallback, scripted = false }: { fallback: string; 
             ))}
           </>
         ) : (
-          <p className="menu-label">{ready ? "Pick a provider in Settings to choose a model." : "Choosing a model is not available in this build yet."}</p>
+          <p className="menu-label">{ready ? "Pick a provider in Connections to choose a model." : "Choosing a model is not available in this build yet."}</p>
         )}
-        <button type="button" className="menu-item" onClick={() => menu.choose(openSettings)}>
-          <Icon name="settings" />
-          <span>Provider and sign-in settings</span>
+        <button type="button" className="menu-item" onClick={() => menu.choose(openConnections)}>
+          <Icon name="google" />
+          <span>Provider and sign-in, in Connections</span>
         </button>
       </div>
     </div>
   );
 }
 
-// The same choice in Settings, as a labeled select.
+// The same choice in Connections, as a labeled select.
 export function ModelSelect() {
   const { settings, backend, reload, report } = useAgent();
   const uid = useId();

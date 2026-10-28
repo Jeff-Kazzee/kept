@@ -1,7 +1,9 @@
-// Settings: the time zone, the model provider and sign-in, the theme, what
-// the app is, and Delete case. Each write sends the settings version it
-// was shown at. A key goes to the server once and is never shown again.
-import { useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
+// The sidebar's pages for the settings (0015, Z4). Connections: the model
+// provider and sign-in, the model, and Google. Settings: the time zone, the
+// theme, what the app is, and Delete case. Usage, on the hosted site. Each
+// write sends the settings version it was shown at. A key goes to the
+// server once and is never shown again.
+import { useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { DELETE_CONFIRMATION } from "../../src/case/constants.ts";
 import { safeAuthorizeUrl, type GoogleGrants } from "../agentApi.ts";
 import { googleOrOff, useAgent } from "../agent/AgentContext.tsx";
@@ -11,7 +13,7 @@ import { deviceZone, knownZones, validZone, type Provider, type Settings } from 
 import { zoneWithShortName } from "../format.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon, type IconName } from "../components/Icon.tsx";
-import { readTheme, saveTheme, type ThemeChoice } from "../theme.ts";
+import { THEME_EVENT, readTheme, saveTheme, type ThemeChoice } from "../theme.ts";
 import { DeleteAccountPanel, HostedProviderSetting, UsageSection } from "../hosted/Usage.tsx";
 
 const THEMES: Array<{ value: ThemeChoice; label: string; icon: IconName }> = [
@@ -20,18 +22,26 @@ const THEMES: Array<{ value: ThemeChoice; label: string; icon: IconName }> = [
   { value: "system", label: "System", icon: "monitor" },
 ];
 
-export function ThemeSetting() {
+// The theme switch, in Settings and in the account menu. Both stay in step
+// through the theme event (Z7).
+export function ThemeSetting({ compact = false }: { compact?: boolean }) {
+  const uid = useId();
   const [choice, setChoice] = useState<ThemeChoice>(() => (typeof localStorage === "undefined" ? "dark" : readTheme()));
+  useEffect(() => {
+    const update = (e: Event) => setChoice((e as CustomEvent<ThemeChoice>).detail);
+    window.addEventListener(THEME_EVENT, update);
+    return () => window.removeEventListener(THEME_EVENT, update);
+  }, []);
   return (
-    <fieldset className="stack-sm">
-      <legend className="field-label">Theme</legend>
+    <fieldset className={compact ? "stack-xs theme-compact" : "stack-sm"}>
+      <legend className={compact ? "menu-label" : "field-label"}>Theme</legend>
       <div className="segmented">
         {THEMES.map((t) => (
-          <label key={t.value} htmlFor={`theme-${t.value}`}>
+          <label key={t.value} htmlFor={`${uid}-${t.value}`}>
             <input
-              id={`theme-${t.value}`}
+              id={`${uid}-${t.value}`}
               type="radio"
-              name="theme"
+              name={`${uid}-theme`}
               value={t.value}
               checked={choice === t.value}
               onChange={() => {
@@ -47,16 +57,13 @@ export function ThemeSetting() {
   );
 }
 
-export function SettingsPanel({ modelClient, version, erasePending, run }: { modelClient: string; version: number; erasePending: boolean; run: Run }) {
-  const { settings, settingsAvailable, hosted, signedOut } = useAgent();
+// Connections: the model provider and the model, and Google.
+export function ConnectionsPage({ modelClient, run }: { modelClient: string; run: Run }) {
+  const { settings, settingsAvailable, hosted } = useAgent();
   return (
     <div className="stack settings">
-      <section className="card stack-sm" aria-labelledby="set-zone">
-        <h3 id="set-zone">Time zone</h3>
-        <TimeZoneSetting run={run} />
-      </section>
       <section className="card stack-sm" aria-labelledby="set-model">
-        <h3 id="set-model">Model provider</h3>
+        <h2 id="set-model">Model provider</h2>
         {settingsAvailable ? (
           <>
             {hosted ? <HostedProviderSetting /> : <ProviderSetting settings={settings} run={run} />}
@@ -68,18 +75,31 @@ export function SettingsPanel({ modelClient, version, erasePending, run }: { mod
           </p>
         )}
       </section>
-      {hosted && <UsageSection run={run} />}
       <section className="card stack-sm" aria-labelledby="set-google">
-        <h3 id="set-google">
+        <h2 id="set-google">
           <Icon name="google" size="sm" /> Google
-        </h3>
+        </h2>
         <GoogleSetting run={run} />
+      </section>
+    </div>
+  );
+}
+
+// Settings: the time zone, the theme, what the app is, Delete case, and on
+// the hosted site Delete account.
+export function SettingsPage({ version, erasePending, run }: { version: number; erasePending: boolean; run: Run }) {
+  const { hosted, signedOut } = useAgent();
+  return (
+    <div className="stack settings">
+      <section className="card stack-sm" aria-labelledby="set-zone">
+        <h2 id="set-zone">Time zone</h2>
+        <TimeZoneSetting run={run} />
       </section>
       <section className="card">
         <ThemeSetting />
       </section>
-      <section className="card stack-sm">
-        <h3>About this app</h3>
+      <section className="card stack-sm" aria-labelledby="set-about">
+        <h2 id="set-about">About this app</h2>
         <p className="small">
           Administrative facts only: times, places, confirmations and what the office asked you to bring or do. It reads your email only when you connect Google, and then only to
           search for appointment messages. Sending a reply is simulated. All data here is synthetic.
@@ -88,6 +108,15 @@ export function SettingsPanel({ modelClient, version, erasePending, run }: { mod
       </section>
       <DeleteCasePanel version={version} erasePending={erasePending} run={run} />
       {hosted && <DeleteAccountPanel run={run} onDeleted={signedOut} />}
+    </div>
+  );
+}
+
+// Usage, on the hosted site.
+export function UsagePage({ run }: { run: Run }) {
+  return (
+    <div className="stack settings">
+      <UsageSection run={run} />
     </div>
   );
 }
@@ -477,9 +506,9 @@ export function DeleteCasePanel({ version, erasePending = false, run }: { versio
   const [typed, setTyped] = useState("");
   return (
     <section className="card danger-zone">
-      <h3>
+      <h2>
         <Icon name="trash" size="sm" /> Delete case
-      </h3>
+      </h2>
       {erasePending && (
         <p className="warn-box" role="alert">
           A deleted case is not cleared from the database file yet, because another program kept the file busy. Close the MCP client or other programs that use it, then run Delete case again.

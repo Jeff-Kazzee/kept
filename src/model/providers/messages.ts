@@ -6,7 +6,7 @@ import { ModelCallError } from "../client.ts";
 
 // J12: what the chat and every model step answer while no provider is
 // ready. The page shows it with a link to Settings.
-export const NO_PROVIDER_TEXT = "The assistant needs a Meta Model API key or Sign in with ChatGPT. Add one in Settings. Nothing in your case changed.";
+export const NO_PROVIDER_TEXT = "The assistant needs a Meta Model API key or Sign in with ChatGPT. Add one in Connections. Nothing in your case changed.";
 export const META_KEY_MISSING_TEXT =
   "Meta is selected, but no Meta Model API key is set. Add your key in settings, or switch to ChatGPT. Nothing in your case changed.";
 export const CHATGPT_SIGNED_OUT_TEXT =

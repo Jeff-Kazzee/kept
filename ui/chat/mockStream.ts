@@ -242,10 +242,10 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
               : g.connected && g.gmail
                 ? "Gmail is connected, but this is the scripted chat, so I do not search it. Turn off the scripted chat, and the assistant can search your email for messages about appointments."
                 : g.connected
-                  ? "Google is connected without Gmail. Connect it again in Settings with Gmail turned on, and the assistant can search your email for messages about appointments."
+                  ? "Google is connected without Gmail. Connect it again in Connections with Gmail turned on, and the assistant can search your email for messages about appointments."
                   : g.needsReconnect
-                    ? "Google needs you to sign in again. Reconnect it in Settings, and the assistant can search your email for messages about appointments."
-                    : "Gmail is not connected. Connect Google in Settings, and the assistant can search your email for messages about appointments.",
+                    ? "Google needs you to sign in again. Reconnect it in Connections, and the assistant can search your email for messages about appointments."
+                    : "Gmail is not connected. Connect Google in Connections, and the assistant can search your email for messages about appointments.",
           );
           break;
         }

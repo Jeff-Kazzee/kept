@@ -25,7 +25,7 @@ pnpm start   # http://127.0.0.1:5180
 The assistant always runs on the live model you set up. There is no
 recorded mode. Until you add a key or sign in, the chat and every step
 that needs the model answer "The assistant needs a Meta Model API key or
-Sign in with ChatGPT. Add one in Settings." with a link to Settings, and
+Sign in with ChatGPT. Add one in Connections." with a link to Settings, and
 nothing in your case changes. The schedule, Activity, Undo, Settings and
 Delete case work without a model.
 

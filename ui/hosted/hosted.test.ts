@@ -1,7 +1,7 @@
-// The hosted site's pages as a person sees them (0014, design item 6):
-// the sign-in screen, the account menu, Settings with usage credits in
-// place of a key, the model costs, Delete account, and the usage stop in
-// the chat. Rendered to static markup with the server renderer. Local
+// The hosted site's pages as a person sees them (0014, design item 6, and
+// 0015): the sign-in screen, the sidebar's account menu, Connections with
+// usage credits in place of a key, the model costs, Usage, Delete account
+// in Settings, and the usage stop in the chat. Rendered to static markup with the server renderer. Local
 // mode shows none of it.
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -14,8 +14,9 @@ import { turnErrorText } from "../chat/ChatView.tsx";
 import { DEFAULT_SETTINGS, type Settings } from "../contract.ts";
 import { errorSentence } from "../format.ts";
 import { ApiError } from "../api.ts";
-import { SettingsPanel } from "../schedule/Settings.tsx";
-import { AccountMenu } from "./AccountMenu.tsx";
+import { ConnectionsPage, SettingsPage, UsagePage } from "../pages/Settings.tsx";
+import { AccountMenu } from "../shell/AccountMenu.tsx";
+import { person } from "../shell/shell.ts";
 import { SignIn, judgePath } from "./SignIn.tsx";
 import { accountLabel, hostedSignInError, type SignedInSession } from "./session.ts";
 
@@ -62,29 +63,44 @@ describe("the hosted site", () => {
     expect(hostedSignInError("anything")).toMatch(/did not finish/);
   });
 
-  it("the account menu names the account and its balance", () => {
-    const menu = html(createElement(AccountMenu, { session, onUsage: () => {}, onSignOut: () => {} }));
-    expect(menu).toContain("Account: Dana Demo. Balance $4.87");
+  it("the sidebar's account menu names the account and its balance, with Settings, Usage, the theme and Sign out", () => {
+    const menu = html(createElement(AccountMenu, { mode: "hosted", who: person(session, null), session, compact: false, onOpen: () => {}, onSignOut: () => {} }));
+    expect(menu).toContain('aria-label="Account: Dana Demo, Balance $4.87"');
+    expect(menu).toContain(">DD</span>");
     expect(menu).toContain("dana@example.com");
-    expect(menu).toContain("Usage and credit");
-    expect(menu).toContain("Sign out");
+    for (const item of ["Settings", "Usage", ">Theme</legend>", "Sign out"]) expect(menu).toContain(item);
     expect(accountLabel({ kind: "judge", email: null, name: null })).toBe("Judge account");
+    // A judge account is named for what it is.
+    const judge: SignedInSession = { ...session, account: { kind: "judge", email: null, name: null } };
+    const judgeMenu = html(createElement(AccountMenu, { mode: "hosted", who: person(judge, null), session: judge, compact: false, onOpen: () => {}, onSignOut: () => {} }));
+    expect(judgeMenu).toContain("Judge access");
   });
 
-  it("Settings shows usage credits in place of a key, ChatGPT as not available here, Usage and Delete account", () => {
-    const page = html(createElement(SettingsPanel, { modelClient: "meta-responses", version: 1, erasePending: false, run }), { settings: hostedSettings, settingsAvailable: true, hosted: session });
+  it("local mode's account menu has Settings and the theme, and no Usage, Sign out or balance", () => {
+    const menu = html(createElement(AccountMenu, { mode: "local", who: person(null, null), session: null, compact: false, onOpen: () => {}, onSignOut: () => {} }));
+    expect(menu).toContain('aria-label="Account: You, This computer"');
+    expect(menu).toContain("Settings");
+    expect(menu).toContain(">Theme</legend>");
+    expect(menu).not.toContain("Usage");
+    expect(menu).not.toContain("Sign out");
+    expect(menu).not.toContain("Balance");
+  });
+
+  it("Connections shows usage credits in place of a key and ChatGPT as not available here, Usage is its own page, and Settings has Delete account", () => {
+    const agent = { settings: hostedSettings, settingsAvailable: true, hosted: session };
+    const page = html(createElement(ConnectionsPage, { modelClient: "meta-responses", run }), agent);
     expect(page).toContain("Usage credits (Meta models)");
     expect(page).toContain("Sign in with ChatGPT (not available on the hosted site yet)");
     expect(page).toContain("Muse Spark 1.3 costs about $0.09 a turn at your price.");
     expect(page).not.toContain('name="meta-key"');
     expect(page).not.toContain("Continue with ChatGPT");
-    expect(page).toContain('id="set-usage"');
-    expect(page).toContain("Delete account");
-    expect(page).toContain("Delete case");
-    const local = html(createElement(SettingsPanel, { modelClient: "meta-responses", version: 1, erasePending: false, run }), { settings: { ...hostedSettings, hosted: undefined }, settingsAvailable: true });
-    expect(local).not.toContain("Usage credits");
-    expect(local).not.toContain('id="set-usage"');
-    expect(local).not.toContain("Delete account");
+    expect(html(createElement(UsagePage, { run }), agent)).toContain('id="set-usage"');
+    const settings = html(createElement(SettingsPage, { version: 1, erasePending: false, run }), agent);
+    expect(settings).toContain("Delete account");
+    expect(settings).toContain("Delete case");
+    const localAgent = { settings: { ...hostedSettings, hosted: undefined }, settingsAvailable: true };
+    expect(html(createElement(ConnectionsPage, { modelClient: "meta-responses", run }), localAgent)).not.toContain("Usage credits");
+    expect(html(createElement(SettingsPage, { version: 1, erasePending: false, run }), localAgent)).not.toContain("Delete account");
   });
 
   it("the model choice shows each model's cost per turn", () => {

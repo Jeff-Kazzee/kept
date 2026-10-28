@@ -243,7 +243,7 @@ describe("dev server", () => {
       setTimeout(() => reject(new Error(`server did not start: ${out}`)), 15_000);
     });
     // J12: no recorded mode. With no key the server says none is ready.
-    expect(line).toContain(`http://127.0.0.1:${port} (model: none ready, add one in Settings)`);
+    expect(line).toContain(`http://127.0.0.1:${port} (model: none ready, add one in Connections)`);
     expect(line).not.toMatch(/recorded/i);
     expect(line).not.toMatch(/pairing/i);
     expect(await get(port, `127.0.0.1:${port}`)).toBe(200);

@@ -109,7 +109,7 @@ describe("scripted chat", () => {
     google.now = null;
     expect(await said()).toContain("This server has no Google client");
     google.now = { ...GOOGLE_OFF, configured: true };
-    expect(await said()).toContain("Gmail is not connected. Connect Google in Settings");
+    expect(await said()).toContain("Gmail is not connected. Connect Google in Connections");
     google.now = { ...GOOGLE_OFF, configured: true, needsReconnect: true, email: "sample.person@example.com", gmail: true };
     expect(await said()).toContain("Google needs you to sign in again.");
     google.now = { ...GOOGLE_OFF, configured: true, connected: true, email: "sample.person@example.com", calendar: true };

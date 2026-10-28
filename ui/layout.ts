@@ -3,8 +3,12 @@
 import { useEffect, useState } from "react";
 
 // The schedule is a column (or a rail) beside the chat from this width up,
-// and a sheet below it (styles.css uses the same breakpoints).
+// and a sheet below it (styles.css uses the same breakpoints). The sidebar
+// is 248 px or a rail from this width up (0015).
 export const LAPTOP = "(min-width: 1024px)";
+
+// The sidebar is a rail from this width up, and a drawer below it (0015).
+export const TABLET_UP = "(min-width: 768px)";
 
 export function useMedia(query: string): boolean {
   const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
@@ -16,6 +20,19 @@ export function useMedia(query: string): boolean {
     return () => list.removeEventListener("change", update);
   }, [query]);
   return matches;
+}
+
+// Moves focus to an element once it can take it. A sheet or the drawer
+// that just opened refuses focus for a frame or two while it slides in, so
+// this tries again each frame, up to about half a second (0015).
+export function focusSoon(target: () => HTMLElement | null, frames = 30): void {
+  const attempt = (left: number) =>
+    requestAnimationFrame(() => {
+      const el = target();
+      el?.focus({ preventScroll: true });
+      if (el && document.activeElement !== el && left > 0) attempt(left - 1);
+    });
+  attempt(frames);
 }
 
 // The chip that opened the schedule, by its message id and slot key, not

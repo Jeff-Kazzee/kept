@@ -64,7 +64,7 @@ describe("J12: no provider ready", () => {
     expect(events.map((e) => e.event)).toEqual(["turn.error"]);
     expect(events[0]!.data).toMatchObject({ code: "provider_not_ready", message: NO_PROVIDER_TEXT });
     expect(a.store.readAll()).toHaveLength(before);
-    expect(NO_PROVIDER_TEXT).toMatch(/Meta Model API key or Sign in with ChatGPT\. Add one in Settings\./);
+    expect(NO_PROVIDER_TEXT).toMatch(/Meta Model API key or Sign in with ChatGPT\. Add one in Connections\./);
   });
 
   it("every model route answers 422 provider_not_ready and writes nothing, and the code-only routes work", async () => {

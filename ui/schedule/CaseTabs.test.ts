@@ -9,7 +9,7 @@ import { OFFICE_REPLIED_NOTICE } from "../../src/reply/templates.ts";
 import type { ReplyView } from "../../src/reply/types.ts";
 import { ReplyPanel } from "../case/ReplyCard.tsx";
 import { ChecklistPanel, HistoryPanel } from "./CaseTabs.tsx";
-import { DeleteCasePanel } from "./Settings.tsx";
+import { DeleteCasePanel } from "../pages/Settings.tsx";
 import { setCaseZone } from "../format.ts";
 
 // These tests read times as the demo shows them, in the clinic's zone. The

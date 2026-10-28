@@ -1,8 +1,12 @@
-// The app shell: a centered chat with the schedule beside it. Laptop (1024
-// px and up): the schedule is a column on the right that folds to a narrow
-// rail. Tablet (768 to 1023 px): a side sheet. Phone: a bottom sheet. The
-// shell reads the case, the settings and the activity together, and gives
-// the settings and activity to every part through AgentContext.
+// The app shell (0015): a left sidebar with the navigation and the
+// account, and the work area beside it, the chat and the schedule. Laptop
+// (1024 px and up): the sidebar is 248 px and folds to a rail, and the
+// schedule is a column on the right that folds to its own rail. Tablet (768
+// to 1023 px): the sidebar is the rail and the schedule a side sheet.
+// Phone: the sidebar is a drawer and the schedule a bottom sheet. A sidebar
+// page opens in the work area in place of the case. The shell reads the
+// case, the settings and the activity together, and gives the settings and
+// activity to every part through AgentContext.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { realBackend, type AgentBackend } from "./agentApi.ts";
 import { AgentContext, type AgentState } from "./agent/AgentContext.tsx";
@@ -10,7 +14,6 @@ import { keep, sendDeviceZone, settle } from "./agent/reads.ts";
 import { runUndo, serialUndo } from "./agent/undo.ts";
 import { ApiError, api, type AppState, type FixtureScenario } from "./api.ts";
 import type { Run } from "./components/ActionButton.tsx";
-import { Mark } from "./components/Art.tsx";
 import { LoadError } from "./components/LoadError.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { DEFAULT_SETTINGS, deviceZone, type ActivityLog, type GoogleStatus, type Settings } from "./contract.ts";
@@ -24,16 +27,24 @@ import { errorSentence, setCaseZone, signInReturn } from "./format.ts";
 import { SchedulePanel, TABS, waitingCount, type PanelTab } from "./schedule/SchedulePanel.tsx";
 import { slotElementId } from "./schedule/Agenda.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
-import { LAPTOP, chipRef, findChip, useMedia, type ChipRef } from "./layout.ts";
-import { AccountMenu } from "./hosted/AccountMenu.tsx";
+import { LAPTOP, TABLET_UP, chipRef, findChip, focusSoon, useMedia, type ChipRef } from "./layout.ts";
+import { ConnectionsPage, SettingsPage, UsagePage } from "./pages/Settings.tsx";
+import { Avatar } from "./shell/AccountMenu.tsx";
+import { AgentAccessPage, PageFrame } from "./shell/Pages.tsx";
+import { Sidebar, type SideLayout } from "./shell/Sidebar.tsx";
+import { VIEW_TITLES, person, readFolded, saveFolded, viewIn, type View } from "./shell/shell.ts";
 import { SignIn } from "./hosted/SignIn.tsx";
 import { hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
 
-// `settings`: the toast links to Settings, for the setup sentence (J12).
-type Toast = { id: number; kind: "error" | "info"; text: string; settings?: boolean };
+// `link`: the toast opens Connections for the setup sentence (J12), or
+// Usage when the credit ran out (0014).
+type ToastLink = "connections" | "usage";
+type Toast = { id: number; kind: "error" | "info"; text: string; link?: ToastLink };
 
-// J12: the server refused a model step because no provider is ready.
-const needsSetup = (e: unknown) => e instanceof ApiError && (e.body.error === "provider_not_ready" || e.body.error === "credits_exhausted");
+// J12: the server refused a model step because no provider is ready, or
+// on the hosted site because the credit ran out.
+const setupLink = (e: unknown): ToastLink | undefined =>
+  e instanceof ApiError ? (e.body.error === "provider_not_ready" ? "connections" : e.body.error === "credits_exhausted" ? "usage" : undefined) : undefined;
 
 // The scripted chat is a development tool. It makes real case writes, so
 // only a development build has it (or a check build made with
@@ -147,9 +158,9 @@ export function App({
   const toastId = useRef(0);
   const sentZone = useRef(false);
 
-  const toast = useCallback((kind: Toast["kind"], text: string, settings = false) => {
+  const toast = useCallback((kind: Toast["kind"], text: string, link?: ToastLink) => {
     const id = ++toastId.current;
-    setToasts((t) => [...t.slice(-2), { id, kind, text, ...(settings ? { settings } : {}) }]);
+    setToasts((t) => [...t.slice(-2), { id, kind, text, ...(link ? { link } : {}) }]);
     if (kind === "info") setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 5000);
   }, []);
 
@@ -225,7 +236,7 @@ export function App({
         await action();
       } catch (e) {
         if (signedOut(e)) return onSignedOutRef.current("Your session ended. Sign in again.");
-        toast("error", errorSentence(e), needsSetup(e));
+        toast("error", errorSentence(e), setupLink(e));
       }
       await refresh();
     },
@@ -327,7 +338,7 @@ function Shell({
   state: AppState;
   run: Run;
   refresh: () => Promise<void>;
-  toast: (kind: Toast["kind"], text: string, settings?: boolean) => void;
+  toast: (kind: Toast["kind"], text: string, link?: ToastLink) => void;
   toasts: Toast[];
   setToasts: (f: (t: Toast[]) => Toast[]) => void;
   scripted: boolean;
@@ -345,17 +356,31 @@ function Shell({
     [scripted, backend],
   );
   const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh());
+  const mode = hosted ? "hosted" : "local";
   const [sheetOpen, setSheetOpen] = useState(false);
   const [railed, setRailed] = useState(false);
   const [tab, setTab] = useState<PanelTab>("schedule");
   const [highlight, setHighlight] = useState<string | null>(null);
   const [fixtures, setFixtures] = useState<FixtureScenario["messages"]>([]);
+  // The view the work area shows (0015). A page covers the case, which
+  // stays mounted under it, so the chat, its scroll and the draft stay.
+  const [view, setView] = useState<View>("case");
+  const [folded, setFolded] = useState(readFolded);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const sheetToggle = useRef<HTMLButtonElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const drawerClose = useRef<HTMLButtonElement>(null);
+  const title = useRef<HTMLHeadingElement>(null);
   const laptop = useMedia(LAPTOP);
+  const phone = !useMedia(TABLET_UP);
   const online = useOnline();
+  const layout: SideLayout = phone ? "drawer" : laptop && !folded ? "full" : "rail";
+  const pageOpen = view !== "case";
   // Below a laptop the schedule is a sheet: at the side on a tablet, at the
-  // bottom on a phone. It is a modal dialog while open (review 2, B4).
-  const sheetModal = !laptop && sheetOpen;
+  // bottom on a phone. It is a modal dialog while open (review 2, B4). On a
+  // phone the sidebar is a modal drawer the same way.
+  const sheetModal = !laptop && sheetOpen && !pageOpen;
+  const drawerModal = phone && drawerOpen;
   const panelShown = laptop ? !railed : sheetOpen;
   // The fact chip that opened the schedule. Focus goes back to it when the
   // sheet closes.
@@ -367,9 +392,9 @@ function Shell({
     // After React has rendered the chat again.
     requestAnimationFrame(() => ((ref ? findChip(document, ref) : null) ?? fallback)?.focus());
   };
-  // What opened the sheet when it was not a fact chip, such as the
-  // composer's model pill opening Settings. Focus goes back to it (Muse
-  // round 1, finding 11).
+  // What opened the sheet when it was not a fact chip, such as Open
+  // Activity on the Agent access page. Focus goes back to it (Muse round 1,
+  // finding 11).
   const opener = useRef<HTMLElement | null>(null);
   const closeSchedule = () => {
     setSheetOpen(false);
@@ -379,15 +404,46 @@ function Shell({
   };
   const closeRef = useRef(closeSchedule);
   closeRef.current = closeSchedule;
-  const focusPanel = () => requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("panel-title")?.focus()));
+  const focusPanel = () => focusSoon(() => document.getElementById("panel-title"));
   const openPanel = (t?: PanelTab) => {
     const from = document.activeElement;
-    opener.current = from instanceof HTMLElement && from !== document.body ? from : null;
+    // A page's button goes away with the page, so focus then goes back to
+    // the Schedule button.
+    opener.current = from instanceof HTMLElement && from !== document.body && !pageOpen ? from : null;
+    setView("case");
+    setDrawerOpen(false);
     if (t) setTab(t);
     if (laptop) setRailed(false);
     else setSheetOpen(true);
     focusPanel();
   };
+
+  // Opens a view of the work area and puts focus on its heading (Z8). A
+  // view this mode does not have shows the case.
+  const focusTitle = () => focusSoon(() => title.current);
+  const openView = (next: View) => {
+    setView(viewIn(mode, next));
+    setDrawerOpen(false);
+    setSheetOpen(false);
+    focusTitle();
+  };
+  const fold = () =>
+    setFolded((f) => {
+      saveFolded(!f);
+      return !f;
+    });
+  // The drawer takes focus at its close button when it opens, after it is
+  // no longer inert.
+  const openDrawer = () => {
+    setDrawerOpen(true);
+    focusSoon(() => drawerClose.current);
+  };
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    focusSoon(() => menuButton.current);
+  };
+  const closeDrawerRef = useRef(closeDrawer);
+  closeDrawerRef.current = closeDrawer;
 
   useEffect(() => {
     void api.fixtures().then(
@@ -396,34 +452,35 @@ function Shell({
     );
   }, []);
 
-  // Escape closes the sheet. An open dialog, such as the import sheet,
-  // takes Escape first.
+  // Escape closes the sheet or the drawer. An open dialog, such as the
+  // import sheet, and an open menu take Escape first.
   useEffect(() => {
-    if (!sheetModal) return;
+    if (!sheetModal && !drawerModal) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || document.querySelector("dialog[open]")) return;
-      closeRef.current();
+      if (drawerModal) closeDrawerRef.current();
+      else closeRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [sheetModal]);
+  }, [sheetModal, drawerModal]);
+
 
   // Opens the schedule at one appointment, outlines it and moves focus to
   // it, so a keyboard or screen reader user lands there, not behind the
   // sheet.
   const showSlot = (slotKey: string, from?: HTMLElement) => {
     returnTo.current = chipRef(from, slotKey);
+    setView("case");
     setTab("schedule");
     if (laptop) setRailed(false);
     else setSheetOpen(true);
     setHighlight(slotKey);
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        const el = document.getElementById(slotElementId(slotKey));
-        el?.scrollIntoView({ block: "center" });
-        el?.focus({ preventScroll: true });
-      }),
-    );
+    focusSoon(() => {
+      const el = document.getElementById(slotElementId(slotKey));
+      el?.scrollIntoView({ block: "center" });
+      return el;
+    });
   };
 
   const loadCalendar = async (file: File) => {
@@ -453,10 +510,10 @@ function Shell({
   };
 
   const waiting = waitingCount(state);
-  // What the composer's indicator says when no provider is picked.
   // What the composer's indicator says when no provider is picked, or when
   // the settings cannot be read.
   const modelLabel = scripted ? "Scripted demo, no model" : settings ? "No model set" : "Model settings unavailable";
+  const who = person(hosted, google);
 
   const agent: AgentState = {
     backend,
@@ -468,21 +525,12 @@ function Shell({
     blocked,
     // Undo waits while a turn streams or another undo runs (finding 4).
     undoBusy: streaming || undoing,
-    report: (e) => toast("error", errorSentence(e), needsSetup(e)),
+    report: (e) => toast("error", errorSentence(e), setupLink(e)),
     notify: (text) => toast("info", text),
     reload: refresh,
-    openSettings: () => openPanel("settings"),
+    openConnections: () => openView("connections"),
     hosted,
-    openUsage: () => {
-      openPanel("settings");
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          const el = document.getElementById("set-usage");
-          el?.scrollIntoView({ block: "start" });
-          el?.focus({ preventScroll: true });
-        }),
-      );
-    },
+    openUsage: () => openView("usage"),
     signedOut: () => onSignedOut(null),
   };
   const signOut = async () => {
@@ -493,33 +541,61 @@ function Shell({
       toast("error", errorSentence(e));
     }
   };
+  const back = () => openView("case");
 
   return (
     <AgentContext.Provider value={agent}>
-      <div className="app" data-panel={sheetOpen ? "open" : "closed"} data-rail={railed ? "folded" : "open"}>
-        <header className="topbar" inert={sheetModal}>
-          <div className="brand">
-            <span className="brand-mark" aria-hidden="true">
-              <Mark size={20} />
-            </span>
-            <h1>Appointment assistant</h1>
-          </div>
-          {hosted && <AccountMenu session={hosted} onUsage={agent.openUsage} onSignOut={() => void signOut()} />}
+      <div className="app" data-panel={sheetOpen ? "open" : "closed"} data-rail={railed ? "folded" : "open"} data-side={layout} data-drawer={drawerOpen ? "open" : "closed"} data-view={view}>
+        <Sidebar
+          mode={mode}
+          layout={layout}
+          view={view}
+          who={who}
+          session={hosted}
+          waiting={waiting}
+          drawerOpen={drawerOpen}
+          inert={sheetModal || (phone && !drawerOpen)}
+          folded={laptop ? folded : null}
+          closeRef={drawerClose}
+          onFold={fold}
+          onClose={closeDrawer}
+          onOpen={openView}
+          onSignOut={() => void signOut()}
+        />
+        <button type="button" className="drawer-scrim" aria-label="Close the menu" tabIndex={-1} onClick={closeDrawer} />
+        <header className="topbar" inert={sheetModal || drawerModal}>
           <button
-            ref={sheetToggle}
+            ref={menuButton}
             type="button"
-            className="btn btn-ghost sheet-toggle"
-            aria-expanded={sheetOpen}
-            aria-controls="schedule-panel"
-            onClick={() => (sheetOpen ? closeSchedule() : openPanel())}
+            className="btn btn-ghost menu-btn"
+            aria-expanded={drawerOpen}
+            aria-controls="sidebar"
+            aria-label={`Open the menu. ${who.name}, ${who.line}`}
+            onClick={openDrawer}
           >
-            <Icon name="calendar" /> Schedule
-            {waiting > 0 && (
-              <span className="count" aria-label={`${waiting} waiting for you`}>
-                {waiting}
-              </span>
-            )}
+            <Icon name="menu" />
+            <Avatar who={who} />
           </button>
+          <h1 ref={title} id="view-title" className="view-title" tabIndex={-1}>
+            {VIEW_TITLES[view]}
+          </h1>
+          {!pageOpen && (
+            <button
+              ref={sheetToggle}
+              type="button"
+              className="btn btn-ghost sheet-toggle"
+              aria-expanded={sheetOpen}
+              aria-controls="schedule-panel"
+              onClick={() => (sheetOpen ? closeSchedule() : openPanel())}
+            >
+              <Icon name="calendar" /> Schedule
+              {waiting > 0 && (
+                <span className="count" aria-label={`${waiting} waiting for you`}>
+                  {waiting}
+                </span>
+              )}
+            </button>
+          )}
         </header>
         <div className="banners">
           {!online && (
@@ -534,7 +610,7 @@ function Shell({
           )}
         </div>
         <main className="main">
-          <div className="chat-slot" inert={sheetModal}>
+          <div className="chat-slot" inert={sheetModal || drawerModal || pageOpen}>
             <ChatView
               state={state}
               run={run}
@@ -552,7 +628,7 @@ function Shell({
           </div>
           <button type="button" className="scrim" aria-label="Close the schedule" tabIndex={-1} onClick={closeSchedule} />
           {laptop && railed && (
-            <nav className="rail" aria-label="Schedule panel">
+            <nav className="rail" aria-label="Schedule panel" inert={pageOpen}>
               <button type="button" className="rail-btn" onClick={() => openPanel()} aria-label="Open the schedule panel" title="Open the schedule panel">
                 <Icon name="rail" />
               </button>
@@ -575,7 +651,7 @@ function Shell({
             hidden={laptop && railed}
             role={sheetModal ? "dialog" : "complementary"}
             aria-modal={sheetModal || undefined}
-            inert={!laptop && !panelShown}
+            inert={(!laptop && !panelShown) || pageOpen || drawerModal}
           >
             {!laptop && <SheetHandle onClose={closeSchedule} />}
             <SchedulePanel
@@ -588,22 +664,32 @@ function Shell({
               onCollapse={laptop ? () => setRailed(true) : undefined}
             />
           </div>
+          {pageOpen && (
+            <section className="page" aria-labelledby="view-title" inert={drawerModal}>
+              <PageFrame onBack={back}>
+                {view === "connections" && <ConnectionsPage modelClient={state.modelClient} run={run} />}
+                {view === "access" && <AgentAccessPage onActivity={() => openPanel("activity")} />}
+                {view === "settings" && <SettingsPage version={state.caseVersion} erasePending={state.erasePending} run={run} />}
+                {view === "usage" && <UsagePage run={run} />}
+              </PageFrame>
+            </section>
+          )}
         </main>
         <div className="toasts" aria-live="polite">
           {toasts.map((t) => (
             <div key={t.id} className={`toast toast-${t.kind}`} role={t.kind === "error" ? "alert" : "status"}>
               <Icon name={t.kind === "error" ? "alert" : "info"} />
               <p>{t.text}</p>
-              {t.settings && (
+              {t.link && (
                 <button
                   type="button"
                   className="btn btn-sm"
                   onClick={() => {
                     setToasts((all) => all.filter((x) => x.id !== t.id));
-                    openPanel("settings");
+                    openView(t.link!);
                   }}
                 >
-                  Open Settings
+                  {t.link === "usage" ? "Open Usage" : "Open Connections"}
                 </button>
               )}
               <button type="button" className="btn btn-ghost btn-icon" aria-label="Dismiss" onClick={() => setToasts((all) => all.filter((x) => x.id !== t.id))}>

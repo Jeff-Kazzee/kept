@@ -7,8 +7,8 @@ export type UsageRefusal = "credits_exhausted" | "daily_cap" | "server_key_off";
 // sentence alone, for a turn that already changed something.
 export const USAGE_TEXT: Record<UsageRefusal, { reason: string; text: string }> = {
   credits_exhausted: {
-    reason: "Your usage credit has run out, so the assistant did not run this step. To get more, open Settings and then Usage, where you can enter a judge code. Plans to buy credit are coming soon.",
-    text: "Your usage credit has run out, so the assistant did not run this step. To get more, open Settings and then Usage, where you can enter a judge code. Plans to buy credit are coming soon. Nothing in your case changed.",
+    reason: "Your usage credit has run out, so the assistant did not run this step. To get more, open Usage from your account menu, where you can enter a judge code. Plans to buy credit are coming soon.",
+    text: "Your usage credit has run out, so the assistant did not run this step. To get more, open Usage from your account menu, where you can enter a judge code. Plans to buy credit are coming soon. Nothing in your case changed.",
   },
   daily_cap: {
     reason: "This site reached its daily limit for Meta usage, so the assistant did not run this step. Try again tomorrow. Your credit was not charged.",

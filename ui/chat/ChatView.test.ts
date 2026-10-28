@@ -136,8 +136,8 @@ describe("chat view", () => {
     expect(turnErrorText({ code: "server_error", message: "" })).toBe("The app could not finish that answer. Nothing was saved.");
     expect(turnErrorText({ code: "ungrounded", message: "Check your schedule for the current state." })).toBe("Check your schedule for the current state.");
     // J12: with no provider ready the turn shows the server's setup
-    // sentence once, with a link to Settings.
-    const NO_PROVIDER_TEXT = "The assistant needs a Meta Model API key or Sign in with ChatGPT. Add one in Settings. Nothing in your case changed.";
+    // sentence once, with a link to Connections.
+    const NO_PROVIDER_TEXT = "The assistant needs a Meta Model API key or Sign in with ChatGPT. Add one in Connections. Nothing in your case changed.";
     const setup = render({
       status: "ready",
       chatVersion: 0,
@@ -145,13 +145,13 @@ describe("chat view", () => {
       pending: { turnId: "t1", userMessageId: "u1", userText: "What is confirmed?", createdAt: at, text: "", tools: [], cards: [], chips: [], status: "ended", error: { code: "provider_not_ready", message: NO_PROVIDER_TEXT }, unsaved: true },
     });
     expect(setup).toContain(`<p>${NO_PROVIDER_TEXT}</p>`);
-    expect(setup).toContain("Open Settings</button>");
+    expect(setup).toContain("Open Connections</button>");
     expect(setup).toContain("Written by code");
     // Once in the thread, and once in the screen reader live region.
     expect(setup.split(NO_PROVIDER_TEXT)).toHaveLength(3);
     expect(setup).not.toContain("Model output");
     expect(turnErrorText({ code: "provider_not_ready", message: NO_PROVIDER_TEXT })).toBe(NO_PROVIDER_TEXT);
-    expect(failed).not.toContain("Open Settings");
+    expect(failed).not.toContain("Open Connections");
   });
 
   it("J12: the demo offer says the messages are made up and the assistant is live", () => {
