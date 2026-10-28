@@ -7,5 +7,6 @@
     "jsx": "react-jsx",
     "types": []
   },
-  "include": [".", "../src/domain"]
+  "include": [".", "../src/domain"],
+  "exclude": ["AgentPanels.test.ts"]
 }
