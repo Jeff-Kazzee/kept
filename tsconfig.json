@@ -6,5 +6,5 @@
     "lib": ["es2024"],
     "types": ["node"]
   },
-  "include": ["src", "server", "mcp", "scripts/**/*.ts", "test", "vitest.config.ts"]
+  "include": ["src", "server", "mcp", "scripts/**/*.ts", "test", "vitest.config.ts", "vite.config.ts"]
 }

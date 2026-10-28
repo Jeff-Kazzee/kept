@@ -129,12 +129,15 @@ export function createGate(options: { pairing: Pairing; sessions: Sessions; port
   const name = sessionCookieName(options.port);
   return {
     cookieName: name,
-    pair(body: unknown): GateResponse {
+    // `secure` is true when the page was reached over HTTPS, for example
+    // through a private proxy (APP_ALLOWED_HOSTS). The cookie is then sent
+    // over HTTPS only.
+    pair(body: unknown, request: { secure?: boolean } = {}): GateResponse {
       const code = (body as { code?: unknown } | null)?.code;
       const result = options.pairing.check(code);
       if (result.ok) {
         const id = options.sessions.create();
-        return { status: 200, body: { paired: true }, setCookie: `${name}=${id}; HttpOnly; SameSite=Strict; Path=/` };
+        return { status: 200, body: { paired: true }, setCookie: `${name}=${id}; HttpOnly; SameSite=Strict; Path=/${request.secure ? "; Secure" : ""}` };
       }
       if (result.error === "pairing_wait") {
         return {

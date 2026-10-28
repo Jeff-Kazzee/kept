@@ -1,15 +1,17 @@
-// Local server for the UI. Binds to 127.0.0.1 only and serves the UI
-// through Vite in middleware mode. Uses recorded model responses unless
-// APP_LIVE_MODEL=1 is set, which also needs MODEL_API_KEY.
+// Local server for the UI. Binds to 127.0.0.1 only. `pnpm dev` serves the
+// UI through Vite in middleware mode. `pnpm start` (--static) serves the
+// production build from dist/ui (see static.ts). Uses recorded model
+// responses unless APP_LIVE_MODEL=1 is set, which also needs MODEL_API_KEY.
 //
 // Environment:
-//   APP_PORT        port, default 5180
-//   APP_DB          event log file, default data/app.sqlite in the package
-//   APP_LIVE_MODEL  set to 1 for the live model
+//   APP_PORT           port, default 5180
+//   APP_DB             event log file, default data/app.sqlite in the package
+//   APP_LIVE_MODEL     set to 1 for the live model
+//   APP_ALLOWED_HOSTS  more host names, comma-separated, for a private
+//                      proxy such as Tailscale serve (see hosts.ts)
 import { mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
-import { createServer as createVite } from "vite";
 import { CaseService } from "../src/case/service.ts";
 import { GrantStore } from "../src/grants/grants.ts";
 import { loadCaseProfile } from "../src/fixtures/load.ts";
@@ -27,11 +29,23 @@ import { defaultMessageId } from "../src/agent/tools.ts";
 import { RecordedChatClient, fixtureMessageIds } from "../src/agent/recorded.ts";
 import type { ToolModelClient } from "../src/model/responses.ts";
 import { APP_HEADER, Pairing, Sessions, createGate, requestSourceProblem } from "./guard.ts";
+import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
+import { createStaticHandler } from "./static.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.APP_PORT ?? 5180);
 const MAX_BODY = 64 * 1024;
 const live = process.env.APP_LIVE_MODEL === "1";
+const serveBuild = process.argv.includes("--static");
+
+let extraHosts: string[];
+try {
+  extraHosts = parseAllowedHosts(process.env.APP_ALLOWED_HOSTS);
+} catch (err) {
+  if (!(err instanceof AllowedHostsError)) throw err;
+  console.error(err.message);
+  process.exit(2);
+}
 
 let client: ModelClient;
 let chatClient: ToolModelClient;
@@ -81,8 +95,8 @@ const chat = createChat(
   }),
 );
 
-const allowedHosts = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]);
-const appOrigins = [...allowedHosts].map((h) => `http://${h}`);
+const allowed = appHosts(PORT, extraHosts);
+const appOrigins = allowed.origins;
 
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -113,20 +127,34 @@ function send(res: ServerResponse, status: number, body: unknown) {
 }
 
 const server = createServer();
-const vite = await createVite({
-  root: fromPackage("ui"),
-  configFile: false,
-  appType: "spa",
-  logLevel: "warn",
-  server: { middlewareMode: true, hmr: { server } },
-});
+// The production build, or Vite for development. Vite is loaded only for
+// development, so `pnpm start` does not need it.
+let ui: (req: IncomingMessage, res: ServerResponse) => void;
+let closeUi = async () => {};
+if (serveBuild) {
+  try {
+    ui = createStaticHandler(fromPackage("dist/ui"));
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(2);
+  }
+} else {
+  const { createServer: createVite } = await import("vite");
+  const vite = await createVite({
+    configFile: fromPackage("vite.config.ts"),
+    logLevel: "warn",
+    server: { middlewareMode: true, hmr: { server }, allowedHosts: allowed.names },
+  });
+  ui = vite.middlewares;
+  closeUi = () => vite.close();
+}
 
 server.on("request", async (req, res) => {
   // Refuse requests addressed to any other host name, so a page on another
   // site cannot reach this server through DNS rebinding.
-  if (!allowedHosts.has(req.headers.host ?? "")) return send(res, 403, { error: "forbidden_host" });
+  if (!hostAllowed(allowed, req.headers.host)) return send(res, 403, { error: "forbidden_host" });
   const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
-  if (!url.pathname.startsWith("/api/")) return vite.middlewares(req, res);
+  if (!url.pathname.startsWith("/api/")) return ui(req, res);
   const headerOf = (name: string) => {
     const v = req.headers[name];
     return typeof v === "string" ? v : undefined;
@@ -155,7 +183,10 @@ server.on("request", async (req, res) => {
   }
   if (pairRoute) {
     if (req.method !== "POST") return send(res, 405, { error: "method_not_allowed" });
-    const paired = gate.pair(body);
+    // A page reached over HTTPS, through a private proxy, gets a cookie
+    // marked Secure. The browser always sends Origin on this POST.
+    const secure = (headerOf("origin") ?? "").startsWith("https://") || headerOf("x-forwarded-proto") === "https";
+    const paired = gate.pair(body, { secure });
     if (paired.setCookie) res.setHeader("Set-Cookie", paired.setCookie);
     return send(res, paired.status, paired.body);
   }
@@ -196,11 +227,13 @@ server.on("request", async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? "live" : "recorded responses"})`);
+  console.log(serveBuild ? "Serving the production build from dist/ui." : "Serving the UI through Vite for development.");
+  if (extraHosts.length > 0) console.log(`Also answers to: ${extraHosts.join(", ")}`);
   console.log(`Pairing code for this run: ${pairing.code}. The app asks for it once per browser, until the app restarts.`);
 });
 
 const shutdown = async () => {
-  await vite.close();
+  await closeUi();
   server.close();
   store.close();
   process.exit(0);

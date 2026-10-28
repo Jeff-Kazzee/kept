@@ -10,6 +10,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ui/tsconfig.json && tsc --noEmit -p ui/tsconfig.node-tests.json",
     "dev": "node server/main.ts",
+    "build": "vite build && node scripts/precompress.ts",
+    "start": "node server/main.ts --static",
     "mcp": "node mcp/main.ts",
     "grant": "node src/grants/cli.ts",
     "eval:live": "node scripts/eval-live.ts",
