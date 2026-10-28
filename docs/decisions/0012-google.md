@@ -367,8 +367,7 @@ Findings 1 to 9 were confirmed. New items:
   header, and the writes need the case generation. Connect and disconnect
   both need `expectedVersion`, the `version` of `GET /api/google`
   (R3-8). Connect turns on both permissions and the primary calendar
-  unless the body says otherwise. The page sends `{}` to connect today, so
-  sprint 9 adds the version.
+  unless the body says otherwise. The page sends the version (R4-1).
 
 ## Review round 3 (Muse Wonder, xhigh, cfe9ee4)
 
@@ -413,6 +412,32 @@ Findings 1 to 9 were confirmed. New items:
 - R3-9. The grounding verbs "added", "created" and "put" need an entry
   that added something: `calendar_event_added`, an import, a note, tags or
   a draft.
+
+## Review round 4 (Muse Wonder, final round, 7a7aa93..ee402be)
+
+- R4-1. The page sends `{ expectedVersion }` to connect, from the
+  `version` it holds, as it does for disconnect (`ui/agentApi.ts`, the
+  call in `ui/schedule/Settings.tsx`, the development fake and two UI
+  tests). Nothing else in `ui/` changed.
+- R4-2 and R4-5. A commit writes its entry only while its intent is still
+  open. A reconcile that closed it first already wrote the entry, which is
+  the commit's answer, so a write is logged once and an undo ends with no
+  error. The two-minute rule for intents of another process is a heuristic
+  only. One gap stays: a reconcile that finds a write not applied while it
+  is still running in another process, past two minutes, drops the
+  intent, and the write that lands after it writes no entry (proposed).
+- R4-3. A disconnect, and a connect that names another account or
+  calendar, close every open intent with no entry, with the reason
+  `disconnected` or `account_changed` on the intent. Reconcile does the
+  same for an intent of another account or calendar, or when Google is no
+  longer connected, instead of writing an entry or keeping the
+  appointment busy.
+- R4-4. `undoEntry` reconciles first, so a stale intent does not answer
+  every Undo with `google_busy`. A reconcile that finishes the very undo
+  being retried returns its entry.
+- R4-6. The clash events are cleared only after the connect started.
+- R4-7. "I put" is an add or an undo, so "I put the event back" after an
+  undo is not flagged.
 
 ## Not done here
 
