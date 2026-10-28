@@ -112,7 +112,7 @@ describe("prices and config", () => {
     expect(readHostedConfig({})).toMatchObject({ mode: "local" });
     expect(config({ APP_MARKUP: "2.5", APP_DAILY_COST_CAP_USD: "7.25", APP_SERVER_KEY: "off" })).toMatchObject({ markupHundredths: 250, dailyCapMicros: 7_250_000, serverKeyOn: false });
     expect(() => readHostedConfig({ APP_MODE: "cloud" })).toThrow(ConfigError);
-    for (const env of [{ APP_MARKUP: "0.5" }, { APP_MARKUP: "3.001" }, { APP_MARKUP: "1e3" }, { APP_DAILY_COST_CAP_USD: "-1" }, { APP_SERVER_KEY: "maybe" }, { APP_JUDGE_TOTAL_CAP_USD: "lots" }]) {
+    for (const env of [{ APP_MARKUP: "0.5" }, { APP_MARKUP: "3.001" }, { APP_MARKUP: "1e3" }, { APP_DAILY_COST_CAP_USD: "-1" }, { APP_SERVER_KEY: "maybe" }, { APP_JUDGE_TOTAL_CAP_USD: "lots" }] as Array<Record<string, string>>) {
       expect(() => config(env), JSON.stringify(env)).toThrow(ConfigError);
     }
     expect(parseUsd("0.000001")).toBe(1);
