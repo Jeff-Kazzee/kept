@@ -33,9 +33,10 @@ Shared with sprints 8 and 9.
   that is not set up answers 422 `provider_not_ready` (P5).
 - `PUT /api/settings/model` with `{ model, expectedVersion }`. The id must
   be in the current provider's `models`, else 422 `unknown_model`.
-- `POST /api/auth/meta-key` with `{ key }` and `DELETE /api/auth/meta-key`
-  answer the settings view. A malformed key answers 400 `invalid_key` with
-  a fixed message that never repeats the key.
+- `POST /api/auth/meta-key` with `{ key, expectedVersion }` and
+  `DELETE /api/auth/meta-key` with `{ expectedVersion }` answer the
+  settings view. A malformed key answers 400 `invalid_key` with a fixed
+  message that never repeats the key.
 - `POST /api/auth/chatgpt/start` answers `{ authorizeUrl }`. OpenAI's
   sign-in not being reachable answers 503 `sign_in_unavailable`.
 - `GET /auth/callback` is the loopback redirect (P1). It always redirects
@@ -44,9 +45,16 @@ Shared with sprints 8 and 9.
   `authorization_failed`, `registration_incomplete`, `client_mismatch`,
   `exchange_failed`, `identity_unavailable`, `identity_invalid`,
   `account_mismatch` or `server_error`.
-- `POST /api/auth/chatgpt/signout` answers the settings view plus
-  `notice`: null, or a fixed sentence when OpenAI did not confirm the
-  revocation (P13).
+- `POST /api/auth/chatgpt/signout` with `{ expectedVersion }` answers the
+  settings view plus `notice`: null, or a fixed sentence when OpenAI did
+  not confirm the revocation (P13).
+- Every settings write except the sign-in start carries the
+  `settingsVersion` the page read (from the sprint 9 review). A stale one
+  answers 409 `stale_edit` with the current view and writes nothing, so a
+  stale tab cannot remove a key or sign out an account another tab just
+  set up. The version is checked in the same read as the write, and for
+  sign-out under the sign-out lock. A missing or malformed version answers
+  400 `invalid_body`.
 - The settings routes need the page's source checks, as every `/api`
   write does, but no case generation header (P6).
 

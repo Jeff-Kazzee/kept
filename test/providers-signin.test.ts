@@ -269,7 +269,7 @@ describe("0010 Sign in with ChatGPT", () => {
     const s = setup();
     await signIn(s.fake, s.store, s.auth);
     const refresh = s.fake.refreshToken;
-    expect(await s.auth.signOut()).toEqual({ revoked: true });
+    expect(await s.auth.signOut()).toEqual({ revoked: true, refused: false });
     expect(Object.fromEntries(s.fake.form(s.fake.to(REVOKE_URL)[0]!))).toEqual({ token: refresh, token_type_hint: "refresh_token", client_id: ISSUED_CLIENT });
     const saved = s.store.read();
     expect(saved.chatgpt.session).toBeNull();
@@ -282,7 +282,7 @@ describe("0010 Sign in with ChatGPT", () => {
     const s = setup();
     await signIn(s.fake, s.store, s.auth);
     s.fake.revoke = () => new Response("", { status: 502 });
-    expect(await s.auth.signOut()).toEqual({ revoked: false });
+    expect(await s.auth.signOut()).toEqual({ revoked: false, refused: false });
     expect(s.fake.to(REVOKE_URL)).toHaveLength(2);
     expect(s.store.read().chatgpt.session).toBeNull();
   });

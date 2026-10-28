@@ -62,7 +62,7 @@ describe("review round 1, finding 1: sign-out and a refresh in flight", () => {
     expect(s.fake.to(REVOKE_URL)).toHaveLength(0);
     release();
     expect(await call).toBe("access-2");
-    expect(await out).toEqual({ revoked: true });
+    expect(await out).toEqual({ revoked: true, refused: false });
     const revoked = s.fake.to(REVOKE_URL).map((r) => s.fake.form(r).get("token"));
     expect(revoked).toEqual(["refresh-2"]);
     expect(s.store.read().chatgpt.session).toBeNull();

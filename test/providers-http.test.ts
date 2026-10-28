@@ -24,7 +24,8 @@ type Res = { status: number; headers: Record<string, string | string[] | undefin
 
 function call(port: number, method: string, p: string, headers: Record<string, string>, body?: string): Promise<Res> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: "127.0.0.1", port, path: p, method, headers: { Host: `127.0.0.1:${port}`, ...headers } }, (res) => {
+    const length = body === undefined ? {} : { "Content-Length": String(Buffer.byteLength(body)) };
+    const req = request({ host: "127.0.0.1", port, path: p, method, headers: { Host: `127.0.0.1:${port}`, ...length, ...headers } }, (res) => {
       let text = "";
       res.on("data", (d: Buffer) => (text += d.toString()));
       res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, text }));
@@ -75,9 +76,9 @@ describe("0010 provider routes on the real server", () => {
     expect(JSON.parse(settings.text)).toMatchObject({ settingsVersion: 0, provider: null, meta: { keySet: false } });
 
     const key = fakeSecret("metakey");
-    const foreign = await call(app.port, "POST", "/api/auth/meta-key", { ...app.page, Origin: "https://evil.example" }, JSON.stringify({ key }));
+    const foreign = await call(app.port, "POST", "/api/auth/meta-key", { ...app.page, Origin: "https://evil.example" }, JSON.stringify({ key, expectedVersion: 0 }));
     expect(foreign.status).toBe(403);
-    const saved = await call(app.port, "POST", "/api/auth/meta-key", app.page, JSON.stringify({ key }));
+    const saved = await call(app.port, "POST", "/api/auth/meta-key", app.page, JSON.stringify({ key, expectedVersion: 0 }));
     expect(saved.status).toBe(200);
     expect(saved.text).not.toContain(key);
     const file = path.join(app.dir, "app-secrets.json");
@@ -89,7 +90,9 @@ describe("0010 provider routes on the real server", () => {
     const model = await call(app.port, "PUT", "/api/settings/model", app.page, JSON.stringify({ model: "muse-wonder-1.0", expectedVersion: 1 }));
     expect(JSON.parse(model.text)).toMatchObject({ model: "muse-wonder-1.0", settingsVersion: 2 });
 
-    const removed = await call(app.port, "DELETE", "/api/auth/meta-key", app.page);
+    const stale = await call(app.port, "DELETE", "/api/auth/meta-key", app.page, JSON.stringify({ expectedVersion: 1 }));
+    expect(stale.status).toBe(409);
+    const removed = await call(app.port, "DELETE", "/api/auth/meta-key", app.page, JSON.stringify({ expectedVersion: 2 }));
     expect(JSON.parse(removed.text)).toMatchObject({ meta: { keySet: false } });
     expect(app.output()).not.toContain(key);
   }, 30_000);

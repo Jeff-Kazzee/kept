@@ -2,7 +2,7 @@
 // against offline fakes. No route answer holds a key or a token.
 import { afterEach, describe, expect, it } from "vitest";
 import { ChatGptAuth } from "../src/model/providers/chatgpt-auth.ts";
-import { createAuth, KEY_FORMAT_TEXT, SIGNED_OUT_UNCONFIRMED_TEXT } from "../server/auth.ts";
+import { createAuth, KEY_FORMAT_TEXT, SIGNED_OUT_UNCONFIRMED_TEXT, VERSION_REQUIRED } from "../server/auth.ts";
 import { FakeOpenAi, ISSUED_CLIENT, PORT, REVOKE_URL, fakeSecret, tempStore } from "./provider-fakes.ts";
 
 const cleanups: Array<() => void> = [];
@@ -57,16 +57,21 @@ describe("0010 settings and sign-in routes", () => {
   it("POST and DELETE /api/auth/meta-key store and remove the key without ever answering with it", async () => {
     const s = setup();
     const key = fakeSecret("metakey");
-    const saved = await s.call("POST", "/api/auth/meta-key", { key: `  ${key}\n` });
+    const saved = await s.call("POST", "/api/auth/meta-key", { key: `  ${key}\n`, expectedVersion: 0 });
     expect(saved.status).toBe(200);
     expect(saved.body).toMatchObject({ provider: "meta", meta: { keySet: true, source: "you" }, settingsVersion: 1 });
     expect(JSON.stringify(saved.body)).not.toContain(key);
     expect(s.store.read().meta).toEqual({ key });
-    for (const bad of [{ key: "short" }, { key: "has a space in it" }, { key: 5 }, { key, extra: 1 }, null]) {
-      const res = await s.call("POST", "/api/auth/meta-key", bad);
+    for (const bad of [{ key: "short" }, { key: "has a space in it" }, { key: 5 }, { key, extra: 1 }]) {
+      const res = await s.call("POST", "/api/auth/meta-key", { ...bad, expectedVersion: 1 });
       expect(res).toEqual({ status: 400, body: { error: "invalid_key", message: KEY_FORMAT_TEXT } });
     }
-    const removed = await s.call("DELETE", "/api/auth/meta-key");
+    for (const bad of [{ key }, null, { key, expectedVersion: -1 }, { key, expectedVersion: "1" }]) {
+      const res = await s.call("POST", "/api/auth/meta-key", bad);
+      expect(res).toEqual(VERSION_REQUIRED);
+      expect(JSON.stringify(res)).not.toContain(key);
+    }
+    const removed = await s.call("DELETE", "/api/auth/meta-key", { expectedVersion: 1 });
     expect(removed.body).toMatchObject({ meta: { keySet: false, source: null }, settingsVersion: 2 });
     // The provider stays Meta: removing the key does not switch it.
     expect(removed.body).toMatchObject({ provider: "meta" });
@@ -137,12 +142,12 @@ describe("0010 settings and sign-in routes", () => {
   it("sign-out revokes and clears, and says when the revocation was not confirmed", async () => {
     const s = setup();
     await signInThroughRoutes(s);
-    const out = await s.call("POST", "/api/auth/chatgpt/signout", {});
+    const out = await s.call("POST", "/api/auth/chatgpt/signout", { expectedVersion: 1 });
     expect(out.body).toMatchObject({ chatgpt: { signedIn: false }, notice: null, provider: "chatgpt" });
     expect(s.fake.to(REVOKE_URL)).toHaveLength(1);
     await signInThroughRoutes(s);
     s.fake.revoke = () => new Response("", { status: 500 });
-    expect((await s.call("POST", "/api/auth/chatgpt/signout", {})).body).toMatchObject({ notice: SIGNED_OUT_UNCONFIRMED_TEXT });
+    expect((await s.call("POST", "/api/auth/chatgpt/signout", { expectedVersion: 3 })).body).toMatchObject({ notice: SIGNED_OUT_UNCONFIRMED_TEXT });
   });
 
   it("no route answer, start URL included, holds a token, the verifier or an ID token", async () => {
@@ -157,6 +162,36 @@ describe("0010 settings and sign-in routes", () => {
     const verifier = new URLSearchParams(s.fake.requests.find((r) => r.body.includes("code_verifier"))!.body).get("code_verifier")!;
     const text = JSON.stringify(answers);
     for (const secret of [s.fake.accessToken, s.fake.refreshToken, verifier, ...s.fake.idTokens]) expect(text).not.toContain(secret);
+  });
+
+  it("sprint 9 review: a stale tab cannot remove a key or sign out an account another tab just set up", async () => {
+    const s = setup();
+    const page = (await s.call("GET", "/api/settings")).body as { settingsVersion: number };
+    // Another tab saves a key.
+    const key = fakeSecret("metakey");
+    const other = await s.call("POST", "/api/auth/meta-key", { key, expectedVersion: page.settingsVersion });
+    const now = (other.body as { settingsVersion: number }).settingsVersion;
+    // The stale tab tries to remove it, or to save its own.
+    const removed = await s.call("DELETE", "/api/auth/meta-key", { expectedVersion: page.settingsVersion });
+    expect(removed).toMatchObject({ status: 409, body: { error: "stale_edit", currentVersion: now, current: { meta: { keySet: true } } } });
+    expect(JSON.stringify(removed.body)).not.toContain(key);
+    expect((await s.call("POST", "/api/auth/meta-key", { key: fakeSecret("older"), expectedVersion: page.settingsVersion })).status).toBe(409);
+    expect(s.store.read().meta).toEqual({ key });
+    expect(s.store.read().version).toBe(now);
+
+    // Another tab signs in with ChatGPT. The stale tab's sign-out is refused,
+    // nothing is revoked and the tokens stay.
+    await signInThroughRoutes(s);
+    const signedIn = (await s.call("GET", "/api/settings")).body as { settingsVersion: number };
+    const out = await s.call("POST", "/api/auth/chatgpt/signout", { expectedVersion: now });
+    expect(out).toMatchObject({ status: 409, body: { error: "stale_edit", currentVersion: signedIn.settingsVersion, current: { chatgpt: { signedIn: true } } } });
+    expect(s.fake.to(REVOKE_URL)).toHaveLength(0);
+    expect(s.store.read().chatgpt.session).not.toBeNull();
+    expect((await s.call("POST", "/api/auth/chatgpt/signout", {})).status).toBe(400);
+    expect((await s.call("DELETE", "/api/auth/meta-key", undefined)).status).toBe(400);
+    // With the current version both go through.
+    const done = await s.call("POST", "/api/auth/chatgpt/signout", { expectedVersion: signedIn.settingsVersion });
+    expect(done.body).toMatchObject({ chatgpt: { signedIn: false } });
   });
 
   it("unknown methods get 405 and other paths are left to the API", async () => {
