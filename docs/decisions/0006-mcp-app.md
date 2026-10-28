@@ -162,8 +162,8 @@ Code: `ui/AgentPanels.tsx` (grant screen, proposals, notes, live refresh),
     `X-Appointments-App: 1` header the page sends. Otherwise the server
     answers 403 `forbidden_source` before reading the body, and nothing
     runs. GET needs neither.
-  - Creating a grant and confirming an agent's proposal also need the
-    pairing code. The server makes it at start from 8 characters of a
+  - Superseded by B1 below. Creating a grant and confirming an agent's
+    proposal also needed the pairing code. The server makes it at start from 8 characters of a
     31-letter alphabet with no 0, O, 1, I or L (about 40 bits), keeps it in
     memory only and prints it once to its own stdout. The page asks for it
     once per tab and keeps it in sessionStorage. It sends the code only
@@ -194,6 +194,58 @@ Code: `ui/AgentPanels.tsx` (grant screen, proposals, notes, live refresh),
   appointment, as the app's question queue does (A12).
 - R8. The token file is opened with `O_NONBLOCK`, so a FIFO at the path is
   refused as not a regular file instead of hanging the server at start.
+
+## Review round 2
+
+- B1 (coordinator decision, proposed, pending Jeff, replaces R1's
+  per-action code). A local client could read `/api/state` with no
+  credential, send the public `Origin` and `X-Appointments-App` headers,
+  and call routes that needed no code: Delete case, or importing a made-up
+  office message, extracting it and accepting its claims. Now the browser
+  pairs once. `POST /api/pair` with the pairing code sets a random session
+  cookie (32 bytes, HttpOnly, SameSite=Strict, Path=/). The server keeps
+  only its SHA-256 hash, in memory, until it stops. Every other `/api`
+  route, reads included, answers 401 `not_paired` without a valid session,
+  before the body is read. Grant create and proposal confirm need nothing
+  more. The page check stays as CSRF defense, with or without a session.
+  The UI shows only a pairing screen while the server answers
+  `not_paired`, also after a restart. Writer choices: the cookie name
+  carries the port (`appointments_session_<port>`), because cookies do not
+  tell ports apart and two apps on one computer would otherwise replace
+  each other's session. The MCP server and `pnpm grant` open the database
+  file, not the web API, so they are unchanged.
+- B2. Wrong codes no longer lock pairing until a restart. Five wrong codes
+  in a row are free. After that each wrong code sets a wait, 1 minute after
+  the fifth, doubling to at most 10 minutes. During a wait no code is
+  checked, the right one included. A right code resets the count, and so
+  do 10 quiet minutes after the last wait or wrong code. The response and
+  the pairing screen say how long to wait. About 40 bits at that pace
+  cannot be guessed.
+- B3. Grok Build no longer gets `--tools read_file`. Its guide documents no
+  empty `--tools` list and warns that a `--tools` entry naming no tool
+  leaves the other tools available, so the settings leave `--tools` out and
+  remove `read_file`, `grep` and `list_dir` by name with the other tools.
+  Grok was not run here. Step 0 of the connect test now also asks the agent
+  to read the token file, read the database file and fetch a web page, and
+  each must fail. The OpenCode note that its settings were not run on the
+  host stays.
+- B4. The secret scan takes the id length from
+  `git rev-parse --show-object-format` (SHA-1 or SHA-256), lists ids with
+  `--no-object-names`, and builds paths from `ls-files -z` and the tree
+  objects, which are NUL-delimited. A name with a control character is
+  printed escaped. An unknown format, an id or header it cannot parse, a
+  missing object or a short read stops the scan with exit code 2.
+- B5. A tracked path that is not a regular file or a symbolic link is not
+  opened and is listed as skipped. A file is opened with `O_NONBLOCK` and
+  checked again after the open. A symbolic link is scanned as its link
+  text. Files and objects are read as streams, and a line over 1 MB is
+  scanned in segments that overlap by 256 bytes, more than the longest
+  pattern (96 characters).
+- B6. The readback shows each field as code builds it from the case now,
+  so its sources and labels are current. A stored draft is stale when its
+  fields' values, words, sources or labels differ from that build, so a
+  draft stored before labels existed, or one whose place gained an agent's
+  source, cannot be approved until it is made again.
 
 ## For Jeff
 

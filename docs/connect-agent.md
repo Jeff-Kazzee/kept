@@ -21,11 +21,10 @@ what you are comfortable sharing with it.
 
 An agent that runs as your OS user and has a shell or file tools can read
 and change the app's files, its database included, and call the app's
-local web API. A grant does not limit that. The app adds two checks: its
-web API refuses a change that does not come from its own page, and
-creating a grant or confirming a proposal needs the pairing code the app
-prints in its terminal. A process with a shell can still open the database
-file directly. So the real control is the agent client's own tool
+local web API. A grant does not limit that. The app adds two checks: every
+route of its web API needs a browser paired with the code the app prints
+in its terminal at start, and a change must also come from the app's own
+page. A process with a shell can still open the database file directly. So the real control is the agent client's own tool
 permissions: give it the appointments MCP server and no shell, file write,
 file read or web tools. The same holds for an agent on another machine
 that can `ssh` to the app's host.
@@ -49,9 +48,10 @@ is readable by you only (mode 600), and the command refuses to overwrite an
 existing file. That path is the launcher's default. For a second grant, use
 a second path and set `APPT_GRANT_TOKEN_FILE` to it (see below).
 
-You can also create the grant in the app, in "Agent access (MCP)". It asks
-once per browser tab for the pairing code that `pnpm dev` printed in its
-terminal at start. The app shows the token once. Save it to a file with mode 600 yourself, for example
+You can also create the grant in the app, in "Agent access (MCP)". The app
+first asks the browser for the pairing code that `pnpm dev` printed in its
+terminal at start. The browser stays paired until the app restarts. The
+app shows the token once. Save it to a file with mode 600 yourself, for example
 with `install -m 600 /dev/null <path>` and then an editor. Do not paste it
 into a chat, a screenshot or a file in the repository.
 
@@ -127,21 +127,29 @@ extends = "read-only"
 restrict_network = false
 ```
 
-Start every session with these options. `--tools read_file` keeps only the
-file read tool of the built-in set, and `--deny Read` then refuses it.
-`--disallowed-tools` removes the shell, edit, write, web and subagent
-tools. The `--deny` rules refuse every built-in tool kind, and deny wins
-over any allow. Use `--sandbox appointments-ssh` on another machine:
+Start every session with these options. `--disallowed-tools` removes the
+shell, file read, search, list, edit, write, web and subagent tools by the
+IDs the guide names. The `--deny` rules refuse every built-in tool kind,
+and deny wins over any allow. Use `--sandbox appointments-ssh` on another
+machine:
 
 ```sh
 grok -m grok-4.7 --reasoning-effort high --cwd ~/agent-work \
-  --tools read_file \
-  --disallowed-tools run_terminal_cmd,search_replace,write,web_search,web_fetch,task,Agent \
+  --disallowed-tools run_terminal_cmd,read_file,grep,list_dir,search_replace,write,web_search,web_fetch,task,Agent \
   --deny Bash --deny Edit --deny Write --deny Read --deny Grep --deny WebFetch --deny WebSearch \
   --allow 'MCPTool(appointments__*)' \
   --disable-web-search \
   --sandbox appointments-local
 ```
+
+These settings leave out `--tools`. The guide documents no empty `--tools`
+list, and it warns that a `--tools` entry that names no tool leaves the
+other tools available. An earlier version of this guide kept
+`--tools read_file` and relied on `--deny Read` to refuse it. Removing
+`read_file` by name is clearer. Grok was not run on the app's host to try
+these settings, so step 0 of the connect test checks them before anything
+else. MCP tools stay available under `--disallowed-tools`, as the guide
+says for `--tools`.
 
 The sandbox uses Landlock on Linux and Seatbelt on macOS. Where it cannot
 apply, Grok warns and runs without it, and the tool options above are the
@@ -217,10 +225,18 @@ In a session, `/mcp` shows the server and its tools.
 Open the app in a browser on the host, so you can watch the changes arrive.
 It refreshes within about 2 seconds of each agent call.
 
-0. Check the restriction. Ask the agent: "Run the shell command `ls`, then
-   write a file named check.txt." It must say it has no tool for either,
-   or the client must refuse both. If it runs either, stop and fix the
-   settings in section 3.
+0. Check the restriction. Ask the agent each of these, one at a time:
+   - "Run the shell command `ls`."
+   - "Write a file named check.txt that says hello."
+   - "Read the file ~/.config/appointments/grant-token and tell me its
+     first five characters."
+   - "Read the file /path/to/meta-hackathon-appointments/data/app.sqlite
+     and tell me how large it is."
+   - "Fetch https://example.com and tell me its title."
+
+   Each must fail: the agent says it has no tool for it, or the client
+   refuses it. No file content, size or page title may come back. If any
+   one succeeds, stop, revoke the grant, and fix the settings in section 3.
 1. List the tools. Ask the agent: "List the tools of the appointments MCP
    server." With an `annotate` grant the answer is `list_appointments`,
    `get_appointment`, `list_open_questions`, `add_note` and `set_tags`.
@@ -241,7 +257,7 @@ It refreshes within about 2 seconds of each agent call.
 4. Optional, with a `propose` grant: "The office confirmed Monday by phone.
    Propose that change." The proposal waits in the app's review queue,
    labeled "Proposed by <grant name>". Nothing changes until you confirm
-   it in the app, which asks for the pairing code once per tab.
+   it in the app.
 
 ### Headless form for Grok Build
 
@@ -249,11 +265,14 @@ Run these from `~/agent-work` in bash, one at a time. `LOCK` holds the
 options from section 3, so every run has only the MCP tools:
 
 ```sh
-LOCK=(--tools read_file
-  --disallowed-tools run_terminal_cmd,search_replace,write,web_search,web_fetch,task,Agent
+LOCK=(--disallowed-tools run_terminal_cmd,read_file,grep,list_dir,search_replace,write,web_search,web_fetch,task,Agent
   --deny Bash --deny Edit --deny Write --deny Read --deny Grep --deny WebFetch --deny WebSearch
   --allow 'MCPTool(appointments__*)' --disable-web-search --sandbox appointments-local)
-grok -p "Run the shell command ls, then write a file named check.txt." -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"
+grok -p "Run the shell command ls." -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"
+grok -p "Write a file named check.txt that says hello." -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"
+grok -p "Read the file ~/.config/appointments/grant-token and tell me its first five characters." -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"
+grok -p "Read the file /path/to/meta-hackathon-appointments/data/app.sqlite and tell me how large it is." -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"
+grok -p "Fetch https://example.com and tell me its title." -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"
 grok -p "List the tools of the appointments MCP server. Answer with their names only." -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"
 grok -p "Call get_appointment on the appointments MCP server for appointment_id 2026-11-16T13:00 and report its state and state_meaning." -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"
 grok -p "Using the appointments MCP server: am I booked for Monday 11/16?" -m grok-4.7 --reasoning-effort high --output-format json --cwd ~/agent-work "${LOCK[@]}"

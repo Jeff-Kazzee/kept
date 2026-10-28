@@ -102,10 +102,10 @@ in this repo is synthetic.
   the reply panel. "Show archived" lists it with Undo.
 - `pnpm scan:secrets` checks the repository for grant tokens. See "What
   the secret scan finds" below for exactly what it covers.
-- Creating a grant and confirming an agent's proposal need a pairing code
-  that the app prints in its terminal when it starts. The page asks for it
-  once per browser tab. Every change through the app's web API must come
-  from its own page.
+- The app prints a pairing code in its terminal when it starts. A browser
+  enters it once and gets a session that lasts until the app restarts.
+  Every route of the app's web API, reads included, needs that session,
+  and every change must also come from the app's own page.
 
 See `docs/decisions/0001-stack.md` for the stack and dependency checks,
 `docs/decisions/0002-slot-states.md` for the slot rules,
@@ -182,9 +182,9 @@ test.
 
 Run the agent with only the MCP tools. An agent that runs as your OS user
 and has a shell or file tools can read and change the app's files, its
-database included, whatever its grant allows. The app's pairing code and
-its web API checks raise the bar, but a process with a shell can open the
-database file directly. The agent client's own tool permissions are the
+database included, whatever its grant allows. The app's paired session
+and its web API checks raise the bar, but a process with a shell can open
+the database file directly. The agent client's own tool permissions are the
 real control. `docs/connect-agent.md` gives the exact settings for each
 client.
 
@@ -298,9 +298,9 @@ app's hands:
   or widen its grant through MCP.
 - An agent with a shell or file tools on the app's host, or one that can
   `ssh` to it, is not limited by its grant. It can open the database file
-  or call the app's web API. The pairing code stops it only from creating
-  grants and confirming proposals through that API. Give agents only the
-  MCP tools.
+  and change the app's other files. The paired session keeps it
+  out of the app's web API only while it cannot read the app's terminal.
+  Give agents only the MCP tools.
 - Anyone who holds the token can use the grant until you revoke it. The
   token file must stay readable by you only. Revoking stops the next call,
   not data already read.
