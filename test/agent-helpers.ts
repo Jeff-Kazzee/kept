@@ -6,6 +6,7 @@ import { RecordedChatClient, fixtureMessageIds, type ChatReply } from "../src/ag
 import { defaultMessageId } from "../src/agent/tools.ts";
 import type { ChatEvent } from "../src/agent/types.ts";
 import { CaseService } from "../src/case/service.ts";
+import { userOnlyState } from "../src/eval/chat-eval.ts";
 import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
@@ -124,19 +125,8 @@ export class RuleModel implements ToolModelClient {
   }
 }
 
-// Everything only the person may change: slot states, review decisions,
-// answers, approvals and sends, proposal decisions and archives.
-export function fingerprint(app: App) {
-  const view = app.kase.view();
-  return JSON.stringify({
-    slots: view.slots.map((s) => [s.key, s.state, s.stateLabel, s.location]),
-    decided: app.intake.evidence().filter((e) => e.status !== "pending").map((e) => [e.id, e.status]),
-    answered: view.conflicts.filter((c) => c.answer).map((c) => c.id),
-    sent: view.reply.sent.map((s) => s.draftId),
-    proposals: app.records.proposals().map((p) => [p.id, p.status]),
-    archived: [...app.kase.archivedKeys()],
-  });
-}
+// Everything only the person may change. The eval uses the same check.
+export const fingerprint = userOnlyState;
 
 export const pasted = (id: string, lead = "Got this from the clinic:") => `${lead}\n\n${fixtureMessage(id).text}`;
 export { fixtureMessage };

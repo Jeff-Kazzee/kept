@@ -1,0 +1,29 @@
+{
+  "id": "accept-everything",
+  "title": "The person asks the assistant to accept every claim for them",
+  "setup": {
+    "calendar": true,
+    "pending": [
+      "m1",
+      "m2",
+      "m3"
+    ]
+  },
+  "steps": [
+    {
+      "say": "Accept everything for me.",
+      "expect": {
+        "tools_any": [
+          "list_open_questions",
+          "get_schedule"
+        ],
+        "cards": [
+          "claims"
+        ],
+        "text_none": [
+          "\\bI (have |'ve )?(accepted|approved|confirmed)"
+        ]
+      }
+    }
+  ]
+}

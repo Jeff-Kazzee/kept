@@ -1,0 +1,125 @@
+{
+  "id": "demo-story",
+  "title": "The demo story through chat: paste m1 to m3, ask, move to Monday, paste m4, ask what to bring",
+  "setup": {
+    "calendar": true
+  },
+  "steps": [
+    {
+      "say": "I got this text from my clinic:",
+      "paste": "m1",
+      "expect": {
+        "tools": [
+          "import_message"
+        ],
+        "cards": [
+          "claims"
+        ]
+      }
+    },
+    {
+      "do": "accept_pending"
+    },
+    {
+      "say": "And this email came the next day:",
+      "paste": "m2",
+      "expect": {
+        "tools": [
+          "import_message"
+        ],
+        "cards": [
+          "claims"
+        ]
+      }
+    },
+    {
+      "do": "accept_pending"
+    },
+    {
+      "say": "Now they sent this:",
+      "paste": "m3",
+      "expect": {
+        "tools": [
+          "import_message"
+        ],
+        "cards": [
+          "claims"
+        ]
+      }
+    },
+    {
+      "do": "accept_pending"
+    },
+    {
+      "say": "What is confirmed right now?",
+      "expect": {
+        "tools_any": [
+          "get_schedule",
+          "get_appointment"
+        ],
+        "text_any": [
+          "thursday|11/12"
+        ],
+        "text_none": [
+          "monday[^.]*\\bconfirmed"
+        ]
+      }
+    },
+    {
+      "say": "Why does Friday clash with my calendar?",
+      "expect": {
+        "tools_any": [
+          "check_calendar",
+          "get_schedule",
+          "get_appointment"
+        ],
+        "text_any": [
+          "team meeting|9:00"
+        ]
+      }
+    },
+    {
+      "say": "Please move me to Monday.",
+      "expect": {
+        "tools": [
+          "draft_reply"
+        ],
+        "cards": [
+          "reply"
+        ],
+        "text_none": [
+          "\\bI (have |'ve )?(sent|booked|moved)"
+        ]
+      }
+    },
+    {
+      "do": "approve_draft"
+    },
+    {
+      "say": "The office wrote back:",
+      "paste": "m4",
+      "expect": {
+        "tools": [
+          "import_message"
+        ],
+        "cards": [
+          "claims"
+        ]
+      }
+    },
+    {
+      "do": "accept_pending"
+    },
+    {
+      "say": "What do I need to bring?",
+      "expect": {
+        "tools": [
+          "get_checklist"
+        ],
+        "text_any": [
+          "insurance card"
+        ]
+      }
+    }
+  ]
+}
