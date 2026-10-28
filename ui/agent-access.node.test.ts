@@ -1,7 +1,7 @@
 // The sprint 6 panels as the user sees them: the grant screen, an agent
 // proposal in the review queue, agent notes, the archived toggle and the
 // live refresh check. Rendered to static markup with the server renderer,
-// from state the real API returns.
+// from state the real API returns. Moved to the sprint 7B components.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -14,9 +14,13 @@ import { ReplyService } from "../src/reply/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { acceptMessages, intake } from "../test/helpers.ts";
 import { versionChanged, type AppState } from "./api.ts";
-import { GrantPanel, PROVIDER_NOTICE, PairingScreen, ProposalCard, RecordNotes, TOKEN_NOTICE, denverTime } from "./AgentPanels.tsx";
-import { ChecklistPanel, SlotsPanel, activeArchive } from "./App.tsx";
-import { ReplyPanel } from "./ReplyPanel.tsx";
+import { ProposalCard } from "./case/ProposalCard.tsx";
+import { ReplyPanel } from "./case/ReplyCard.tsx";
+import { denverTime } from "./format.ts";
+import { PairingScreen } from "./PairingScreen.tsx";
+import { GrantPanel, PROVIDER_NOTICE, TOKEN_NOTICE } from "./schedule/Access.tsx";
+import { Agenda, RecordNotes, activeArchive } from "./schedule/Agenda.tsx";
+import { ChecklistPanel } from "./schedule/CaseTabs.tsx";
 
 const run = async () => {};
 const THU = "2026-11-12T10:30";
@@ -49,12 +53,15 @@ describe("sprint 6 panels", () => {
     expect(TOKEN_NOTICE).toBe(
       "Shown once. Anyone with this token can use the access you chose. Your agent's model provider may receive the case data it reads.",
     );
-    for (const h of ["Name", "Tier", "Created", "Last used", "Status"]) expect(html).toContain(`<th>${h}</th>`);
-    expect(html).toContain("<td>Phone helper</td><td>propose</td>");
+    for (const h of ["Tier", "Created", "Last used"]) expect(html).toContain(`<dt>${h}</dt>`);
+    expect(html).toContain("<strong>Phone helper</strong>");
+    expect(html).toContain("Active");
+    expect(html).toContain("<dt>Tier</dt><dd>propose</dd>");
     expect(html).toContain("2026-11-06 10:00 MST");
     expect(html).toContain("not in this case");
     expect(html).toContain('maxLength="60"');
-    expect(html).toContain("<button>Revoke</button>");
+    expect(html).toContain('name="grant-name"');
+    expect(html).toContain('<button type="button" class="btn">Revoke</button>');
     // Nothing secret is on the list.
     expect(html).not.toMatch(/appt_|[0-9a-f]{64}/);
   });
@@ -69,13 +76,14 @@ describe("sprint 6 panels", () => {
       '<div class="untrusted"><div class="label">What Phone helper says you told it. Untrusted text, shown as data.</div><pre>Dana says the office confirmed Monday by phone.</pre></div>',
     );
     expect(html).toContain("Confirming records this as reported by you through Phone helper.");
-    expect(html).toContain("<button>Confirm</button><button>Reject</button>");
+    expect(html).toContain(">Confirm</button>");
+    expect(html).toContain(">Reject</button>");
 
     records.confirmProposal(s.proposals[0]!.id, s.proposals[0]!.version);
     const after = await state();
     const done = renderToStaticMarkup(createElement(ProposalCard, { proposal: after.proposals[0]!, records: after.records, run }));
-    expect(done).toContain("confirmed");
-    expect(done).not.toContain("<button>");
+    expect(done).toContain("Confirmed");
+    expect(done).not.toContain("<button");
   });
 
   it("an agent's note is labeled with its grant and shown as untrusted text, never as markup", async () => {
@@ -89,14 +97,14 @@ describe("sprint 6 panels", () => {
     const { state, records } = await caseState();
     records.archive(THU, 1);
     const s = await state();
-    const hidden = renderToStaticMarkup(createElement(SlotsPanel, { state: s, run }));
+    const hidden = renderToStaticMarkup(createElement(Agenda, { state: s, run }));
     expect(hidden).toContain("Show archived (1)");
     expect(hidden).not.toContain("Thursday 11/12 10:30 AM");
-    expect(hidden).toContain("Every slot is archived.");
-    const shown = renderToStaticMarkup(createElement(SlotsPanel, { state: s, run, initialShowArchived: true }));
+    expect(hidden).toContain("Every appointment is archived.");
+    const shown = renderToStaticMarkup(createElement(Agenda, { state: s, run, initialShowArchived: true }));
     expect(shown).toContain("Thursday 11/12 10:30 AM");
-    expect(shown).toContain('<div class="warn">Archived</div>');
-    expect(shown).toContain("<button>Undo archive</button>");
+    expect(shown).toContain('<span class="badge">Archived</span>');
+    expect(shown).toContain(" Undo archive</button>");
     expect(activeArchive(s.records.find((r) => r.id === THU))).toBe(2);
   });
 
@@ -104,8 +112,9 @@ describe("sprint 6 panels", () => {
     const { state, records } = await caseState();
     const p = (await state()).proposals[0]!;
     records.confirmProposal(p.id, p.version);
-    const html = renderToStaticMarkup(createElement(SlotsPanel, { state: await state(), run }));
+    const html = renderToStaticMarkup(createElement(Agenda, { state: await state(), run }));
     expect(html).toContain("Confirmed · reported by you through Phone helper");
+    expect(html).toContain('<span class="badge badge-confirmed">Confirmed</span><span class="small muted">reported by you through Phone helper</span>');
     expect(html).toContain(
       `<div class="untrusted"><div class="label">${p.id}-1 · words from Phone helper. Untrusted text, shown as data.</div><pre>Dana says the office confirmed Monday by phone.</pre></div>`,
     );
@@ -152,8 +161,8 @@ describe("sprint 6 panels", () => {
     // Fields from the office carry no label.
     expect(view.reply.draft!.fields.find((f) => f.name === "office_name")).not.toHaveProperty("untrustedLabel");
     const html = renderToStaticMarkup(createElement(ReplyPanel, { reply: view.reply, run }));
-    expect(html).toContain('<div class="warn">Reported only by Phone helper. Untrusted text, shown as data.</div>');
-    expect(html).toContain(`<code>${p.id}-1</code><div class="untrusted"><div class="label">Words from Phone helper. Untrusted text, shown as data.</div><pre>Dana says Monday is in Suite 9.</pre></div>`);
+    expect(html).toContain('<p class="warn">Reported only by Phone helper. Untrusted text, shown as data.</p>');
+    expect(html).toContain(`<code class="small muted">${p.id}-1</code><div class="untrusted"><div class="label">Words from Phone helper. Untrusted text, shown as data.</div><pre>Dana says Monday is in Suite 9.</pre></div>`);
   });
 
   it("B1: the pairing screen asks for the code from the app's terminal", () => {

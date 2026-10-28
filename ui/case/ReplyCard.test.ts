@@ -1,10 +1,12 @@
-// The reply panel as the user sees it: the readback, the edit label and the
+// The reply card as the user sees it: the readback, the edit label and the
 // simulated-send label. Rendered to static markup with the server renderer.
+// Moved from the old ReplyPanel tests in sprint 7B.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { ReplyView } from "../src/reply/types.ts";
-import { ReplyPanel, readbackDone } from "./ReplyPanel.tsx";
+import type { ReplyView } from "../../src/reply/types.ts";
+import type { AppState } from "../api.ts";
+import { ReplyCard, ReplyPanel, readbackDone } from "./ReplyCard.tsx";
 
 const draft = {
   id: "d1",
@@ -40,7 +42,8 @@ describe("reply panel", () => {
     expect(html).toContain("Monday 11/16");
     expect(html).toContain("<code>m3-e3</code> Monday 11/16 1:00 PM, Offered · office message");
     expect(html).toContain("Not in any accepted evidence. Left out of the reply.");
-    expect(html).toMatch(/<button disabled="">Approve and send \(simulated\)<\/button>/);
+    expect(html).toContain('aria-label="I read Date"');
+    expect(html).toMatch(/<button type="button" class="btn btn-primary" disabled="">Approve and send \(simulated\)<\/button>/);
     expect(html).not.toContain("Edited by you. Not checked.");
   });
 
@@ -54,8 +57,9 @@ describe("reply panel", () => {
       draft: null,
       sent: [{ draftId: "d1", template: "accept_offer", title: draft.title, slotKey: draft.slotKey, slotLabel: draft.slotLabel, text: draft.text, edited: false, evidenceIds: ["reply-d1-1"], claims: "recorded", approvedAt: "2026-11-05T09:00:00.000Z", simulated: true }],
     });
-    expect(html).toContain('<div class="simulated" role="status">Simulated. Nothing was sent.</div>');
-    expect(html).toContain("approved <span class=\"nowrap\">2026-11-05 09:00 UTC</span>");
+    expect(html).toMatch(/<span class="sent-label" role="status">.*Simulated. Nothing was sent.<\/span>/);
+    // Times show in America/Denver with the zone.
+    expect(html).toContain("Approved Thu, Nov 5, 2:00 AM MST");
   });
 
   it("S7: names the template withheld for a missing time", () => {
@@ -79,14 +83,14 @@ describe("review round 1", () => {
 
   it("finding 1: an edited draft shows the unticked claim statement, and a sent reply says no claim was recorded", () => {
     const edited = render({ ...base, draft: { ...draft, edited: true, text: "I can't take it.", claimConfirmation: "This reply still requests Monday 11/16 1:00 PM" } });
-    expect(edited).toContain('<input type="checkbox"/> This reply still requests Monday 11/16 1:00 PM');
+    expect(edited).toMatch(/<input [^>]*type="checkbox"[^>]*\/><span>This reply still requests Monday 11\/16 1:00 PM<\/span>/);
     expect(edited).toContain("If you leave it unticked, approval records no slot change.");
     const sent = render({
       ...base,
       draft: null,
       sent: [{ draftId: "d1", template: "accept_offer", title: draft.title, slotKey: draft.slotKey, slotLabel: draft.slotLabel, text: "I can't take it.", edited: true, evidenceIds: [], claims: "not_confirmed", approvedAt: "2026-11-05T09:00:00.000Z", simulated: true }],
     });
-    expect(sent).toContain("No slot change was recorded. You edited the text and did not confirm what it asserts.");
+    expect(sent).toContain("No appointment change was recorded. You edited the text and did not confirm what it asserts.");
   });
 });
 
@@ -113,5 +117,25 @@ describe("C1", () => {
     });
     expect(html).toContain("Model output: no template fits your note, because it names a date or time that no open slot has. Pick a template yourself below.");
     expect(html).toContain("Accept an offered slot: Tuesday 11/10 2:00 PM");
+    // W8: the model's raw output is never on screen.
+    expect(html).not.toContain("no_fit_reason");
+    expect(html).not.toContain("slot_id");
+  });
+});
+
+describe("reply card in the chat", () => {
+  const state = (reply: ReplyView) => ({ case: { reply } }) as unknown as AppState;
+  const card = (reply: ReplyView, draftId = "d1") => renderToStaticMarkup(createElement(ReplyCard, { draftId, state: state(reply), run: async () => {} }));
+
+  it("shows the open draft, then its simulated send, from the live case", () => {
+    expect(card(base)).toContain("Read back every field before you approve");
+    const sent = card({
+      ...base,
+      draft: null,
+      sent: [{ draftId: "d1", template: "accept_offer", title: draft.title, slotKey: draft.slotKey, slotLabel: draft.slotLabel, text: draft.text, edited: false, evidenceIds: ["reply-d1-1"], claims: "recorded", approvedAt: "2026-11-05T09:00:00.000Z", simulated: true }],
+    });
+    expect(sent).toContain("Simulated. Nothing was sent.");
+    expect(sent).not.toContain("Approve and send");
+    expect(card({ ...base, draft: null })).toContain("This reply draft was discarded or replaced. Nothing was sent.");
   });
 });

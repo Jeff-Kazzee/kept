@@ -6,8 +6,11 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { AppState, EvidenceView } from "./api.ts";
-import { EvidenceCard, SourceQuote, evidenceOrigin } from "./App.tsx";
+import { CLAIM_TYPES as DOMAIN_CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT as DOMAIN_EFFORT } from "../../src/domain/claim.ts";
+import type { AppState, EvidenceView } from "../api.ts";
+import { CLAIM_TYPES, DEFAULT_EXTRACTION_EFFORT } from "../format.ts";
+import { ClaimsCard, EvidenceCard } from "./ClaimsCard.tsx";
+import { SourceQuote, evidenceOrigin } from "./Source.tsx";
 
 const item: EvidenceView = {
   id: "p-1a2b3c4d-1",
@@ -35,12 +38,15 @@ const state = { messages: [], evidence: [item], case: { staleEvidenceIds: [] } }
 describe("evidence list", () => {
   it("finding 8: shows a confirmed agent report as reported by you through the grant's name", () => {
     const html = renderToStaticMarkup(createElement(EvidenceCard, { item, state, run: async () => {} }));
-    expect(html).toContain("p-1a2b3c4d-1 · Reported by you through Laptop assistant · accepted");
-    expect(html).toContain("from you through Laptop assistant");
+    expect(html).toContain("p-1a2b3c4d-1 · Reported by you through Laptop assistant");
+    expect(html).toContain("Accepted");
+    // The agent's words stay in a labeled untrusted box.
+    expect(html).toContain('<div class="untrusted"><div class="label">p-1a2b3c4d-1 · words from Laptop assistant. Untrusted text, shown as data.</div>');
     expect(html).not.toContain("Entered by you");
     // The source shown beside a conflict uses the same name.
     const quote = renderToStaticMarkup(createElement(SourceQuote, { id: item.id, state }));
-    expect(quote).toContain("p-1a2b3c4d-1 · reported by you through Laptop assistant");
+    expect(quote).toContain("Confirmation · reported by you through Laptop assistant");
+    expect(quote).toContain("<code>p-1a2b3c4d-1</code>");
   });
 
   it("takes the name only from the evidence's agent_name", () => {
@@ -53,5 +59,45 @@ describe("evidence list", () => {
     expect(evidenceOrigin({ ...item, origin: "model" })).toBe("Model output, passed the quote check");
     expect(evidenceOrigin({ ...item, origin: "answer" })).toBe("Your answer to a question");
     expect(evidenceOrigin({ ...item, origin: "reply" })).toBe("Your approved reply (simulated send)");
+  });
+});
+
+describe("claims card", () => {
+  const message = {
+    id: "m9",
+    version: 2,
+    message: { id: "m9", channel: "sms", from: "Lantern Hill Clinic", received_at: "2026-11-01T07:30:00Z", text: "See you <b>Monday</b>." },
+    sourceType: "office_message",
+    status: "claims_pending",
+    attempts: [],
+    rejections: [],
+    evidenceIds: ["m9-e1"],
+    manualEvidenceIds: [],
+  };
+  const pending: EvidenceView = { ...item, id: "m9-e1", messageId: "m9", origin: "model", status: "pending", decidedAt: null, claim: { ...item.claim, source_type: "office_message", quote: "See you Monday", agent_name: null } };
+  const st = { messages: [message], evidence: [pending], case: { staleEvidenceIds: [] } } as unknown as AppState;
+
+  it("lists each claim with its quote and the accept and reject buttons, and shows the message only as data", () => {
+    const html = renderToStaticMarkup(createElement(ClaimsCard, { messageId: "m9", evidenceIds: ["m9-e1"], state: st, run: async () => {} }));
+    expect(html).toContain("Facts from Lantern Hill Clinic");
+    // Received 2026-11-01 07:30 UTC is 01:30 MDT, before the clocks change.
+    expect(html).toContain("received Sun, Nov 1, 1:30 AM MDT");
+    expect(html).toContain("Confirmation: Monday 11/16 1:00 PM");
+    expect(html).toContain("“See you Monday”");
+    expect(html).toContain("Model output, passed the quote check");
+    expect(html).toContain(" Accept</button>");
+    expect(html).toContain(" Reject</button>");
+    expect(html).toContain("<pre>See you &lt;b&gt;Monday&lt;/b&gt;.</pre>");
+    expect(html).not.toContain("<b>Monday</b>");
+  });
+
+  it("says when the message is no longer in the case", () => {
+    const html = renderToStaticMarkup(createElement(ClaimsCard, { messageId: "gone", evidenceIds: [], state: st, run: async () => {} }));
+    expect(html).toContain("This message is no longer in the case.");
+  });
+
+  it("keeps its claim types and default effort the same as the domain's", () => {
+    expect([...CLAIM_TYPES]).toEqual([...DOMAIN_CLAIM_TYPES]);
+    expect(DEFAULT_EXTRACTION_EFFORT).toBe(DOMAIN_EFFORT);
   });
 });
