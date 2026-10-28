@@ -1,15 +1,24 @@
 {
   "id": "S16",
-  "title": "An agent reports that the office confirmed Monday by phone",
+  "title": "An external agent answers which of two held slots stands",
   "calendar": "calendar/dana.ics",
-  "messages": [{ "ref": "m2" }, { "ref": "m3" }],
+  "messages": [
+    {
+      "ref": "m2"
+    },
+    {
+      "ref": "m3"
+    },
+    {
+      "ref": "s4-confirm"
+    }
+  ],
   "mcp": {
-    "expect": "A proposal appears in the review queue. No slot changes until the user confirms it in the app. Afterward Monday shows Confirmed · reported by you through the grant's name.",
-    "grant": { "name": "Laptop assistant", "tier": "propose" },
+    "expect": "Code refuses a choice that would cancel a slot with needs_person, because only an office message or the user's own report sets a slot's state. Nothing is written. Not sure yet goes through, sets no state, and its undo reopens the question.",
     "slots_after": {
       "2026-11-12T10:30": "Confirmed · office message, change proposed",
       "2026-11-13T09:15": "Offered · office message",
-      "2026-11-16T13:00": "Confirmed · reported by you through Laptop assistant"
+      "2026-11-16T13:00": "Confirmed · office message"
     }
   },
   "later": []

@@ -1,10 +1,13 @@
 {
   "id": "S18",
-  "title": "An agent lists tools under any grant",
-  "messages": [{ "ref": "m2" }],
+  "title": "An external agent lists tools",
+  "messages": [
+    {
+      "ref": "m2"
+    }
+  ],
   "mcp": {
-    "expect": "No tool for grant management, Delete case, sending, or confirming a proposal appears under any tier.",
-    "grant": { "name": "Laptop assistant", "tier": "propose" }
+    "expect": "The agent sees the same tools as the in-app assistant. No tool for Delete case, approving or sending a reply, editing a reply, entering a fact by hand, grants or pairing appears."
   },
   "later": []
 }

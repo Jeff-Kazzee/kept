@@ -1,6 +1,6 @@
 {
   "source": "hand-written",
-  "note": "The model keeps calling get_schedule. The seventh call is refused and the turn stops with a notice.",
+  "note": "The model keeps calling get_schedule. The ninth call is refused and the turn stops with a notice.",
   "replies": [
     {
       "output": [
@@ -163,6 +163,56 @@
           "type": "function_call",
           "id": "fc_f27",
           "call_id": "call_f27",
+          "name": "get_schedule",
+          "arguments": "{}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_l8",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_l8",
+          "call_id": "call_l8",
+          "name": "get_schedule",
+          "arguments": "{}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input": 1200,
+        "cached_input": 0,
+        "output": 60,
+        "reasoning": 20
+      },
+      "latency_ms": 900,
+      "first_byte_ms": 300
+    },
+    {
+      "output": [
+        {
+          "type": "reasoning",
+          "id": "rs_l9",
+          "summary": []
+        },
+        {
+          "type": "function_call",
+          "id": "fc_l9",
+          "call_id": "call_l9",
           "name": "get_schedule",
           "arguments": "{}",
           "status": "completed"

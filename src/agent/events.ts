@@ -5,7 +5,7 @@
 // are never stored: an assistant event keeps only the checked text, the
 // card references, the chips, the tool names and the call measurements.
 import type { TokenUsage } from "../model/request.ts";
-import { CASE_TIME_ZONE } from "../slots/clash.ts";
+import { zonedIso } from "../domain/zone.ts";
 import type { StoredEvent } from "../store/event-log.ts";
 import type { Card, ChatMessage, FactChip } from "./types.ts";
 
@@ -55,6 +55,9 @@ export type ChatEventData =
         // attempt. Never the text itself.
         problems: string[][];
         calls: ChatCallRecord[];
+        // Activity entry ids of the actions taken in the turn (0009).
+        // Absent in chats from before sprint 8.
+        actions?: string[];
       };
     }
   | {
@@ -72,7 +75,8 @@ export type ChatLog = {
   imported: Map<string, Array<{ message_id: string; first_line: number; last_line: number }>>;
 };
 
-export function projectChat(events: StoredEvent[]): ChatLog {
+// `zone` is the case's time zone, for the messages' times.
+export function projectChat(events: StoredEvent[], zone: string): ChatLog {
   const log: ChatLog = { version: 0, messages: [], imported: new Map() };
 
   for (const e of events) {
@@ -80,7 +84,7 @@ export function projectChat(events: StoredEvent[]): ChatLog {
     log.version = e.version;
     const event = { type: e.type, data: e.data } as ChatEventData;
     if (event.type === "chat_user_message") {
-      log.messages.push({ id: event.data.message_id, role: "user", text: event.data.text, createdAt: caseIso(e.recordedAt), cards: [], chips: [] });
+      log.messages.push({ id: event.data.message_id, role: "user", text: event.data.text, createdAt: zonedIso(e.recordedAt, zone), cards: [], chips: [], actions: [] });
     } else if (event.type === "chat_lines_imported") {
       const { user_message_id, message_id, first_line, last_line } = event.data;
       log.imported.set(user_message_id, [...(log.imported.get(user_message_id) ?? []), { message_id, first_line, last_line }]);
@@ -89,37 +93,14 @@ export function projectChat(events: StoredEvent[]): ChatLog {
         id: event.data.message_id,
         role: "assistant",
         text: event.data.text,
-        createdAt: caseIso(e.recordedAt),
-        cards: event.data.cards,
+        createdAt: zonedIso(e.recordedAt, zone),
+        // Proposal cards from before sprint 8 are dropped.
+        cards: event.data.cards.filter((c) => (c.kind as string) !== "proposal"),
         chips: event.data.chips,
+        actions: event.data.actions ?? [],
         ...(event.data.outcome === "declined" ? { declined: true } : {}),
       });
     }
   }
   return log;
-}
-
-// An instant written with the America/Denver offset of that instant, so
-// times before and after the 2026-11-01 change carry -06:00 and -07:00.
-export function caseIso(iso: string): string {
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return iso;
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: CASE_TIME_ZONE,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(new Date(ms));
-  const get = (type: string) => parts.find((p) => p.type === type)!.value;
-  const local = Date.UTC(Number(get("year")), Number(get("month")) - 1, Number(get("day")), Number(get("hour")), Number(get("minute")), Number(get("second")));
-  const offsetMin = Math.round((local - Math.floor(ms / 1000) * 1000) / 60_000);
-  const sign = offsetMin < 0 ? "-" : "+";
-  const abs = Math.abs(offsetMin);
-  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
-  const millis = pad(new Date(ms).getUTCMilliseconds(), 3);
-  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}.${millis}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
 }

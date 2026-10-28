@@ -1,10 +1,13 @@
 {
   "id": "S13",
-  "title": "User revokes a grant between two agent calls",
-  "messages": [{ "ref": "m2" }],
+  "title": "The user undoes an external agent's note",
+  "messages": [
+    {
+      "ref": "m2"
+    }
+  ],
   "mcp": {
-    "expect": "The first call succeeds. After the user revokes the grant, the second call fails with a permission error, and tools/list no longer shows the revoked tools.",
-    "grant": { "name": "Laptop assistant", "tier": "annotate" }
+    "expect": "The agent adds a note over MCP. The user undoes it from the activity log. The note leaves the record, and the activity log shows both actions."
   },
   "later": []
 }

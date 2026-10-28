@@ -12,10 +12,12 @@
 //   or sentence names, negation included. With no slot named, a positive
 //   state needs a slot in that state among the facts. Questions assert
 //   nothing and are not checked for states.
-// - a statement that a claim, reply or proposal was accepted, rejected,
-//   approved, sent or confirmed needs that status among the facts.
-// - no first-person claim that the assistant changed anything, because no
-//   tool can.
+// - a statement that a claim or reply was accepted, rejected, approved,
+//   sent or confirmed needs that status among the facts.
+// - a first-person claim that the assistant did something must match an
+//   action the activity log shows it took in this turn (0009, design 5).
+//   It never approves, sends, confirms, cancels, books, moves or deletes,
+//   because no tool does.
 // - no clinical content.
 import { parseMentions, weekdayOf, type Mention } from "../domain/datetime.ts";
 import { hasClinicalContent, normalizeForScope } from "../domain/scope.ts";
@@ -29,11 +31,13 @@ import type { FactChip } from "./types.ts";
 export type Fact = { date: string; time: string | null; state?: SlotState };
 
 // Statuses a tool result showed. Code-written, never model text.
-export type Status = "claim:accepted" | "claim:rejected" | "reply:sent" | "proposal:confirmed" | "proposal:rejected";
+export type Status = "claim:accepted" | "claim:rejected" | "reply:sent";
 
 // `scheduleRead` is true when a tool read the whole schedule this turn, so
 // a statement such as "nothing is confirmed" has the case behind it.
-export type Grounds = { facts: Fact[]; statuses: Set<Status>; today: string | null; scheduleRead?: boolean };
+// `done` holds the kinds of the activity entries the agent wrote in this
+// turn, such as claim_accepted.
+export type Grounds = { facts: Fact[]; statuses: Set<Status>; today: string | null; scheduleRead?: boolean; done?: ReadonlySet<string> };
 
 export type TextProblem = "ungrounded" | "state_mismatch" | "clinical_content" | "claims_action" | "empty";
 
@@ -142,12 +146,11 @@ const CONDITIONAL = /\b(?:whether|if|once|unless|in case|until|when|after)\b/;
 const PRONOUN = /\b(?:it|it's|its|that one|this one|that appointment|this appointment|that time|this time|that visit|this visit|that slot|this slot)\b/;
 const OTHER = /\b(?:other|another|different|new|second|first|earlier|later)\s+(?:appointment|time|slot|visit|one)\b/;
 
-// Statuses of claims, replies and proposals.
+// Statuses of claims and replies.
 const STATUS_WORDS: Array<{ re: RegExp; noun: RegExp; statuses: Status[] }> = [
   { re: /\baccepted\b/, noun: /\b(?:claims?|items?|evidence|facts?)\b/, statuses: ["claim:accepted"] },
-  { re: /\brejected\b/, noun: /\b(?:claims?|items?|evidence|facts?|proposals?|changes?)\b/, statuses: ["claim:rejected", "proposal:rejected"] },
+  { re: /\brejected\b/, noun: /\b(?:claims?|items?|evidence|facts?|changes?)\b/, statuses: ["claim:rejected"] },
   { re: /\b(?:approved|sent)\b/, noun: /\b(?:repl(?:y|ies)|drafts?|answers?)\b/, statuses: ["reply:sent"] },
-  { re: /\b(?:confirmed|accepted|approved)\b/, noun: /\b(?:proposals?|proposed changes?)\b/, statuses: ["proposal:confirmed"] },
 ];
 
 // A colon splits a clause only before a space, so "10:30" stays whole.
@@ -216,17 +219,42 @@ export function statesAgree(text: string, grounds: Grounds): boolean {
   return true;
 }
 
-// The agent has no tool that changes the schedule, so a first-person claim
-// that it did is false whatever the case holds. "We" counts, as the
-// assistant speaking for the app.
+// A first-person claim that the assistant did something. "We" counts, as
+// the assistant speaking for the app. Each verb names the activity kinds
+// that make it true. A verb with none is never true, because no tool does
+// it: only the person approves (sends) a reply, and a slot is confirmed,
+// canceled or moved only by the office's message or the person's report.
 const SUBJECT = String.raw`\b(?:i|we)(?:'ve|'d)?`;
 const HELPERS = String.raw`(?:\s+(?:have|has|had|just|already|now|also|successfully|went ahead and|gone ahead and))*`;
-const PAST = "accepted|approved|confirmed|canceled|cancelled|sent|rejected|declined|booked|rescheduled|moved|archived|deleted|answered|submitted|changed|updated|removed";
-const BASE = "accept|approve|confirm|cancel|send|reject|decline|book|reschedule|move|archive|delete|answer|submit|change|update|remove";
-const ACTION_CLAIM = new RegExp(`${SUBJECT}${HELPERS}\\s+(?:${PAST})\\b|${SUBJECT}${HELPERS}\\s+did\\s+(?:${BASE})\\b`);
+const ANY_ACTION = "*";
+const VERBS: Array<{ past: string; base: string; kinds: string[] }> = [
+  { past: "accepted", base: "accept", kinds: ["claim_accepted"] },
+  { past: "rejected", base: "reject", kinds: ["claim_rejected"] },
+  { past: "answered", base: "answer", kinds: ["question_answered"] },
+  { past: "archived", base: "archive", kinds: ["appointment_archived"] },
+  { past: "unarchived|restored", base: "unarchive|restore", kinds: ["appointment_unarchived", "undo"] },
+  { past: "discarded", base: "discard", kinds: ["draft_discarded"] },
+  { past: "undid|undone|reversed", base: "undo|reverse", kinds: ["undo"] },
+  { past: "imported", base: "import", kinds: ["message_imported"] },
+  { past: "tagged", base: "tag", kinds: ["tags_set"] },
+  { past: "removed", base: "remove", kinds: ["appointment_archived", "draft_discarded", "undo"] },
+  { past: "changed|updated", base: "change|update", kinds: [ANY_ACTION] },
+  { past: "approved|sent|submitted|confirmed|canceled|cancelled|declined|booked|rescheduled|moved|deleted", base: "approve|send|submit|confirm|cancel|decline|book|reschedule|move|delete", kinds: [] },
+];
+const VERB_RES = VERBS.map((v) => ({
+  re: new RegExp(`${SUBJECT}${HELPERS}\\s+(?:(?:${v.past})\\b|did\\s+(?:${v.base})\\b)`, "g"),
+  kinds: v.kinds,
+}));
 
-export function claimsAction(text: string): boolean {
-  return ACTION_CLAIM.test(normalizeForScope(text).toLowerCase().replace(/[’‘]/g, "'"));
+// True when the text claims the assistant did something the turn's
+// actions do not show. `done` holds the kinds of this turn's entries.
+export function claimsAction(text: string, done: ReadonlySet<string> = new Set()): boolean {
+  const t = normalizeForScope(text).toLowerCase().replace(/[’‘]/g, "'");
+  return VERB_RES.some(({ re, kinds }) => {
+    re.lastIndex = 0;
+    if (!re.test(t)) return false;
+    return !kinds.some((k) => (k === ANY_ACTION ? done.size > 0 : done.has(k)));
+  });
 }
 
 export function checkAnswer(text: string, grounds: Grounds): TextProblem[] {
@@ -236,7 +264,7 @@ export function checkAnswer(text: string, grounds: Grounds): TextProblem[] {
   if (hasClinicalContent(text)) problems.push("clinical_content");
   if (!grounded(text, grounds.facts, grounds.today) || text.length > MAX_ANSWER_CHARS) problems.push("ungrounded");
   if (!statesAgree(text, grounds)) problems.push("state_mismatch");
-  if (claimsAction(text)) problems.push("claims_action");
+  if (claimsAction(text, grounds.done)) problems.push("claims_action");
   return problems;
 }
 

@@ -1,10 +1,13 @@
 {
   "id": "S14",
   "title": "The app saves a note at version 3, then an agent writes with expected version 2",
-  "messages": [{ "ref": "m2" }],
+  "messages": [
+    {
+      "ref": "m2"
+    }
+  ],
   "mcp": {
-    "expect": "The agent gets a stale-edit error with the current record at version 3. Nothing is overwritten.",
-    "grant": { "name": "Laptop assistant", "tier": "annotate" }
+    "expect": "The agent gets a stale-edit error with the current record at version 3. Nothing is overwritten."
   },
   "later": []
 }

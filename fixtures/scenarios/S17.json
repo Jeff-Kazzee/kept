@@ -1,10 +1,13 @@
 {
   "id": "S17",
-  "title": "An agent proposes archiving an appointment, and the user confirms",
-  "messages": [{ "ref": "m1" }],
+  "title": "An external agent archives an appointment, and the user undoes it",
+  "messages": [
+    {
+      "ref": "m1"
+    }
+  ],
   "mcp": {
-    "expect": "The record leaves the default list, stays in history, and comes back with undo.",
-    "grant": { "name": "Laptop assistant", "tier": "propose" }
+    "expect": "The record leaves the default list, stays in history, and comes back with undo from the activity log."
   },
   "later": []
 }

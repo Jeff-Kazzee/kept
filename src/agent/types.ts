@@ -1,15 +1,19 @@
-// The chat contract shared with the web app (0007). Cards hold references
-// only: the page renders each one from the current case view, so a card
-// always shows the live state, and an action on it uses the existing route
-// with that entity's expected version. Runs in the browser and in Node, so
-// it must not import Node modules.
+// The chat contract shared with the web app (0007, 0009). Cards hold
+// references only: the page renders each one from the current case view,
+// so a card always shows the live state, and an action on it uses the
+// existing route with that entity's expected version. The agent acts on
+// the case itself, and each action reaches the page as an `action` event
+// with its activity entry, which the person can undo. Runs in the browser
+// and in Node, so it must not import Node modules.
+import type { ActivityEntry } from "../activity/types.ts";
+
+export type { ActivityEntry };
 
 export type Card =
-  | { kind: "claims"; messageId: string; evidenceIds: string[] } // review each claim
-  | { kind: "question"; conflictId: string } // the current question
-  | { kind: "reply"; draftId: string } // readback and approve
+  | { kind: "claims"; messageId: string; evidenceIds: string[] } // each claim with its status, pending or decided
+  | { kind: "question"; conflictId: string } // the question, open or answered
+  | { kind: "reply"; draftId: string } // readback and approve: the person only
   | { kind: "explanation"; conflictId: string } // checked explanation
-  | { kind: "proposal"; proposalId: string } // from an agent grant
   | { kind: "notice"; text: string }; // code-written
 
 export type FactChip = {
@@ -25,9 +29,11 @@ export type ChatMessage = {
   // Assistant text is model output that passed the code checks, or a fixed
   // sentence written by code. The page labels it.
   text: string;
-  createdAt: string; // ISO with the America/Denver offset
+  createdAt: string; // ISO with the case time zone's offset
   cards: Card[];
   chips: FactChip[];
+  // Activity entry ids of the actions the agent took in this turn.
+  actions: string[];
   // True for the fixed scope decline.
   declined?: boolean;
 };
@@ -52,6 +58,7 @@ export type ChatEvent =
   | { event: "tool.started"; data: { turnId: string; callId: string; tool: string; label: string } }
   | { event: "tool.finished"; data: { turnId: string; callId: string; ok: boolean } }
   | { event: "card"; data: { turnId: string; card: Card } }
+  | { event: "action"; data: { turnId: string; entry: ActivityEntry } }
   | { event: "facts"; data: { turnId: string; chips: FactChip[] } }
   | { event: "text.delta"; data: { turnId: string; text: string } }
   | { event: "turn.error"; data: { turnId: string; code: ChatErrorCode; message: string } }
@@ -71,6 +78,8 @@ export const PARTIAL_ERROR_TEXT = "The assistant stopped before finishing. Check
 // Shown beside source fields of a pasted message that the assistant
 // suggested (E1).
 export const SOURCE_SUGGESTED_LABEL = "Source suggested by the assistant";
+// Shown beside a message an external agent added over MCP (0009, design 4).
+export const EXTERNAL_SOURCE_LABEL = "Added by an external agent";
 export const QUESTION_WITHHELD_NOTICE = "The question's wording did not pass the chat checks. Answer it in the schedule panel.";
 export const DRAFT_OPEN_NOTICE = "A reply draft is already open. Finish or discard it before starting another.";
 export const WITHHELD_USER_TEXT = "Not saved: this message asked about health, which this app does not handle.";
