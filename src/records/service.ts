@@ -157,9 +157,12 @@ export class RecordsService {
     return { id: slot.key, slot, record: this.record(slot.key), evidence, proposals, conflicts };
   }
 
+  // A conflict that names an archived appointment is not asked in the app,
+  // so it is not an open question here either. The question is already
+  // null while its conflict names one.
   openQuestions(): OpenQuestions {
     const view = this.#kase.view();
-    return { conflicts: view.conflicts.filter((c) => c.status !== "answered"), question: view.question };
+    return { conflicts: view.conflicts.filter((c) => c.status !== "answered" && c.archivedSlotKeys.length === 0), question: view.question };
   }
 
   proposals(): ProposalView[] {

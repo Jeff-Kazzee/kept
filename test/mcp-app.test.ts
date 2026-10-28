@@ -364,6 +364,26 @@ describe("G-f: archive in the app", () => {
     expect((await app.raw("POST", `/api/records/${THU}/archive`, { expectedVersion: 1 })).status).toBe(409);
   });
 
+  it("finding 7: list_open_questions over MCP leaves out a conflict on an archived slot, as the app does", async () => {
+    const file = tempFile();
+    const app = appOn(new EventStore(file));
+    const asked = await demoToQuestion(app);
+    const { token } = (await app.call("POST", "/api/grants", { name: "Laptop assistant", tier: "read" })) as { token: string };
+    const agent = mcpOn(file, token);
+    let r = structured(await callTool(agent, "list_open_questions", {}));
+    expect(r.conflicts.map((c: { appointment_ids: string[] }) => c.appointment_ids)).toEqual([expect.arrayContaining([THU])]);
+    expect(r.question).toMatchObject({ question_id: asked.question!.id });
+
+    await app.call("POST", `/api/records/${THU}/archive`, { expectedVersion: 0 });
+    r = structured(await callTool(agent, "list_open_questions", {}));
+    expect(r).toEqual({ conflicts: [], question: null });
+
+    await app.call("POST", `/api/records/${THU}/undo`, { expectedVersion: 1, version: 1 });
+    r = structured(await callTool(agent, "list_open_questions", {}));
+    expect(r.conflicts).toHaveLength(1);
+    expect(r.question).toMatchObject({ question_id: asked.question!.id });
+  });
+
   it("an open draft for a slot the user archives cannot be approved, and an archive that commits after approval read the case stops it", async () => {
     const file = tempFile();
     // The app's approval reads the case, then another tab archives Monday
