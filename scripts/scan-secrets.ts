@@ -1,6 +1,8 @@
-// Secret scan for the product key (0009, design 6). Grant tokens no longer
-// exist. The secret that matters is MODEL_API_KEY, the Meta Model API key,
-// which lives only in .env.local and in the server's environment.
+// Secret scan for the product key (0009, design 6) and the provider
+// secrets of 0010. Grant tokens no longer exist. The secrets that matter
+// are MODEL_API_KEY, the Meta Model API key, which lives only in .env.local
+// and in the server's environment, and the user's Meta key and ChatGPT
+// tokens, which live only in the app's settings file.
 //
 // What it reads:
 // - every tracked file as it is on disk, as bytes, binary files included,
@@ -25,6 +27,14 @@
 //   least 24 token characters with an upper-case letter, a lower-case
 //   letter and a digit. `Bearer ${key}` in code is a template, and a
 //   made-up test value such as `Bearer server-key-1` has one case only.
+// - a provider secret in the shape the app's settings file stores it: a
+//   JSON field named accessToken, refreshToken, access_token,
+//   refresh_token or id_token whose value is 20 or more token characters,
+//   or a "meta": { "key": ... } field with a value of 8 or more.
+// - a file or folder name that is the app's settings file
+//   (app-secrets.json, or its temporary .app-secrets.json.<id>.tmp) or a
+//   local env file (.env.local, .env.<name>.local), in the working tree or
+//   in any tree in history.
 // The key's own shape is not known to this scan, so it does not look for a
 // bare key. A key written anywhere without its name or `Bearer` is not
 // found, nor one in another encoding (base64, URL encoding, UTF-16,
@@ -65,10 +75,27 @@ const PLACEHOLDER = /^redacted/i;
 const BEARER = /(?<![A-Za-z0-9_])Bearer[ \t]+([A-Za-z0-9._~+/=|-]{24,})/g;
 const MIXED = (v: string) => /[A-Z]/.test(v) && /[a-z]/.test(v) && /\d/.test(v);
 
+// Provider secrets as the settings file writes them (0010). Read as latin1,
+// so each character is one byte and a match index is a byte offset.
+const FIELD_SECRET = /"(?:accessToken|refreshToken|access_token|refresh_token|id_token)"\s*:\s*"([A-Za-z0-9._~+\/=-]{20,})"|"meta"\s*:\s*\{\s*"key"\s*:\s*"([\x21\x23-\x5b\x5d-\x7e]{8,})"/g;
+
+function fieldSecrets(line: string, start: number, out: Range[]): void {
+  for (const m of line.matchAll(FIELD_SECRET)) {
+    const value = (m[1] ?? m[2])!;
+    const at = start + m.index + m[0].lastIndexOf(value);
+    out.push([at, at + value.length]);
+  }
+}
+
+// The app's settings file and local env files must never be tracked.
+const SECRET_FILE_NAME = /^(?:app-secrets\.json|\.app-secrets\.json\..*\.tmp|\.env\.local|\.env\.[^/]+\.local)$/;
+export const isSecretFileName = (name: string) => SECRET_FILE_NAME.test(name.split("/").at(-1) ?? name);
+
 // Every secret in bytes [start, end) of `b`, one line.
 export function lineSecrets(b: Buffer, start = 0, end = b.length): Range[] {
   const line = b.toString("latin1", start, end);
   const out: Range[] = [];
+  fieldSecrets(line, start, out);
   for (const re of [ASSIGNMENT, BEARER]) {
     for (const m of line.matchAll(re)) {
       const value = m[1]!;
@@ -193,6 +220,7 @@ function scanWorkingTree(repo: string, hit: Hit, note: (text: string) => void): 
   for (const file of files) {
     const name = redact(file);
     if (nameHasSecret(file)) hit(`tracked path ${name}`);
+    if (isSecretFileName(file)) hit(`tracked settings or env file ${name}`);
     const full = path.join(root, file);
     let stat: ReturnType<typeof lstatSync>;
     try {
@@ -251,6 +279,7 @@ function scanTreeObject(id: string, b: Buffer, raw: number, paths: Map<string, s
     const name = b.toString("utf8", space + 1, nul);
     const child = b.toString("hex", nul + 1, nul + 1 + raw);
     if (nameHasSecret(name)) hit(`a file or folder name in tree ${id.slice(0, 12)}: ${redact(name)}`);
+    if (isSecretFileName(name)) hit(`a settings or env file in tree ${id.slice(0, 12)}: ${redact(name)}`);
     if (!paths.has(child)) paths.set(child, parent === undefined || parent === "" ? name : `${parent}/${name}`);
     i = nul + 1 + raw;
   }
@@ -372,13 +401,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   try {
     const { hits, notes, files, commits, objects } = await scanRepo(repo);
     for (const n of notes) console.log(n);
-    for (const h of hits) console.log(`Possible model API key at ${h}`);
+    for (const h of hits) console.log(`Possible secret at ${h}`);
     if (hits.length > 0) {
       console.log(`Secret scan failed: ${hits.length} place${hits.length === 1 ? "" : "s"} to check. The matched text is not shown.`);
       console.log("For a blob, `git log --all --find-object=<id>` lists the commits that hold it.");
       process.exit(1);
     }
-    console.log(`Secret scan passed: no model API key in ${files} tracked files, ${commits} commits or ${objects} reachable objects.`);
+    console.log(`Secret scan passed: no secret in ${files} tracked files, ${commits} commits or ${objects} reachable objects.`);
   } catch (err) {
     console.error(`Secret scan could not run: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(2);

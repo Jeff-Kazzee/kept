@@ -104,15 +104,15 @@ describe("the secret scan", () => {
     const r = repo();
     r.write("README.md", "Nothing here.\n");
     r.commit("First");
-    expect(scan(r.dir)).toMatchObject({ status: 0, stdout: expect.stringMatching(/^Secret scan passed: no model API key in 1 tracked files, 1 commits or 3 reachable objects\.\n$/) });
+    expect(scan(r.dir)).toMatchObject({ status: 0, stdout: expect.stringMatching(/^Secret scan passed: no secret in 1 tracked files, 1 commits or 3 reachable objects\.\n$/) });
 
     const planted = assignment();
     r.write(".env.local.backup", `# saved\nAPP_PORT=5180\n${planted.text}\n`);
     r.commit("Add a backup");
     let run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toContain("Possible model API key at .env.local.backup:3\n");
-    expect(run.stdout).toMatch(new RegExp(`Possible model API key at blob ${BLOB} \\.env\\.local\\.backup:3\\n`));
+    expect(run.stdout).toContain("Possible secret at .env.local.backup:3\n");
+    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} \\.env\\.local\\.backup:3\\n`));
     expectSilent(run, planted.key);
 
     // Removed from the tree, it is still in history.
@@ -139,7 +139,7 @@ describe("the secret scan", () => {
     r.git("checkout", "-q", "main");
     const run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toContain("Possible model API key at run.log:2\n");
+    expect(run.stdout).toContain("Possible secret at run.log:2\n");
     expect(run.stdout).toMatch(new RegExp(`commit ${BLOB}, line \\d+ of its message or header\\n`));
     expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} docs\\.md:1\\n`));
     expectSilent(run, logged.key, inMessage.key, onBranch.key);
@@ -152,7 +152,7 @@ describe("the secret scan", () => {
     r.commit("Add an icon");
     const run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toContain("Possible model API key at assets/icon.bin:1\n");
+    expect(run.stdout).toContain("Possible secret at assets/icon.bin:1\n");
     expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} assets/icon\\.bin:1\\n`));
     expectSilent(run, planted.key);
   });
@@ -197,8 +197,8 @@ describe("the secret scan", () => {
     r.git("branch", `backup/${inRef.text}`);
     let run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toContain("Possible model API key at tracked path keys/MODEL_API_KEY=<redacted>\n");
-    expect(run.stdout).toContain("Possible model API key at ref name refs/heads/backup/MODEL_API_KEY=<redacted>\n");
+    expect(run.stdout).toContain("Possible secret at tracked path keys/MODEL_API_KEY=<redacted>\n");
+    expect(run.stdout).toContain("Possible secret at ref name refs/heads/backup/MODEL_API_KEY=<redacted>\n");
     expect(run.stdout).toMatch(new RegExp(`a file or folder name in tree ${BLOB}: MODEL_API_KEY=<redacted>\\n`));
     expectSilent(run, inPath.key, inRef.key);
 
@@ -221,7 +221,7 @@ describe("the secret scan", () => {
     let run = scan(r.dir);
     expect(run.status).toBe(1);
     // The path is read from NUL-delimited output and printed escaped, on one line.
-    expect(run.stdout).toContain('Possible model API key at "odd\\nfolder/notes.md":1\n');
+    expect(run.stdout).toContain('Possible secret at "odd\\nfolder/notes.md":1\n');
     expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} "odd\\\\nfolder/notes\\.md":1\\n`));
 
     const dir = mkdtempSync(path.join(tmpdir(), "scan-256-"));
@@ -237,7 +237,7 @@ describe("the secret scan", () => {
     git("commit", "-q", "-m", "b");
     run = scan(dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toMatch(/Possible model API key at blob [0-9a-f]{12} fixtures\/a\.env:1\n/);
+    expect(run.stdout).toMatch(/Possible secret at blob [0-9a-f]{12} fixtures\/a\.env:1\n/);
     expect(git("rev-parse", "--show-object-format").stdout.trim()).toBe("sha256");
   });
 
@@ -273,7 +273,7 @@ describe("the secret scan", () => {
     // The link's target is not followed. The link text with a key is found,
     // in the tree and in the blob git stores for the link.
     expect(run.stdout).not.toContain("plain-link");
-    expect(run.stdout).toContain("Possible model API key at key-link:1\n");
+    expect(run.stdout).toContain("Possible secret at key-link:1\n");
     expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} key-link:1\\n`));
     expect(run.status).toBe(1);
     expectSilent(run, target.key, inLink.key);
@@ -294,18 +294,18 @@ describe("the secret scan", () => {
     const run = scan(r.dir);
     expect(run.status).toBe(1);
     for (let i = 0; i < keys.length; i++) {
-      expect(run.stdout).toContain(`Possible model API key at big${i}.txt:2\n`);
+      expect(run.stdout).toContain(`Possible secret at big${i}.txt:2\n`);
       expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} big${i}\\.txt:2\\n`));
     }
     expectSilent(run, ...keys);
     // Only line 2 of each, once.
-    expect(run.stdout.match(/Possible model API key/g)).toHaveLength(8);
+    expect(run.stdout.match(/Possible secret/g)).toHaveLength(8);
   }, 60_000);
 
   it("passes on this repository", () => {
     const run = scan(PACKAGE_ROOT);
     expect(run.stderr).toBe("");
     expect(run.status).toBe(0);
-    expect(run.stdout).toMatch(/^Secret scan passed: no model API key in \d+ tracked files, \d+ commits or \d+ reachable objects\.\n$/);
+    expect(run.stdout).toMatch(/^Secret scan passed: no secret in \d+ tracked files, \d+ commits or \d+ reachable objects\.\n$/);
   }, 60_000);
 });
