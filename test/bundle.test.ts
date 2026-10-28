@@ -93,6 +93,8 @@ describe("production bundle", () => {
     expect(prod).not.toContain(MOCK_MARKER);
     expect(prod).not.toContain("Checking the change against your messages");
     expect(prod).not.toContain("sample.person@example.com");
+    // J12: no recorded client or recording reaches the page.
+    for (const marker of ["recorded-chat", "No chat recording for", "fixtures/recordings", "RecordedChatClient", "RecordedModelClient"]) expect(prod).not.toContain(marker);
     const dev = await bundle("development");
     expect(dev).toContain(MOCK_MARKER);
   }, 2 * BUILD_LIMIT_MS + 10_000);

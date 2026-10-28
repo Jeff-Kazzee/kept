@@ -46,7 +46,7 @@ export function ThemeSetting() {
   );
 }
 
-export function SettingsPanel({ mode, modelClient, version, erasePending, run }: { mode: "recorded" | "live"; modelClient: string; version: number; erasePending: boolean; run: Run }) {
+export function SettingsPanel({ modelClient, version, erasePending, run }: { modelClient: string; version: number; erasePending: boolean; run: Run }) {
   const { settings, settingsAvailable } = useAgent();
   return (
     <div className="stack settings">
@@ -63,7 +63,7 @@ export function SettingsPanel({ mode, modelClient, version, erasePending, run }:
           </>
         ) : (
           <p className="small muted">
-            Choosing a provider is not available in this build yet. The assistant uses {mode === "live" ? "the live model" : "recorded responses"} ({modelClient}).
+            The app could not read its model settings, so the provider cannot be chosen here now. The assistant uses {modelClient}.
           </p>
         )}
       </section>

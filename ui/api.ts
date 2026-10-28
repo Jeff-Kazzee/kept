@@ -63,7 +63,6 @@ export type EvidenceView = {
 };
 
 export type AppState = {
-  mode: "recorded" | "live";
   modelClient: string;
   messages: MessageView[];
   evidence: EvidenceView[];

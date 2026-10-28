@@ -59,7 +59,7 @@ function start(env: Record<string, string>) {
   dirs.push(dir);
   const port = 20000 + Math.floor(Math.random() * 20000);
   const child = spawn(process.execPath, [fromPackage("server/main.ts")], {
-    env: { ...process.env, APP_PORT: String(port), APP_DB: path.join(dir, "app.sqlite"), APP_LIVE_MODEL: "", MODEL_API_KEY: "", ...env },
+    env: { ...process.env, APP_PORT: String(port), APP_DB: path.join(dir, "app.sqlite"), MODEL_API_KEY: "", ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   children.push(child);
@@ -135,7 +135,8 @@ describe("the server with APP_ALLOWED_HOSTS", () => {
     // The headers do not change for either.
     expect(responses[4]!.headers["content-type"]).toBe("application/json");
     expect(responses[5]!.headers["content-type"]).toBe("text/event-stream");
-    expect(String(responses[5]!.body)).toContain("event: turn.done");
+    // J12: with no provider ready the turn is refused in the stream.
+    expect(String(responses[5]!.body)).toContain('"code":"provider_not_ready"');
     for (const r of responses) {
       expect(r.headers["x-content-type-options"]).toBe("nosniff");
       expect(r.headers["content-security-policy"]).toBe("default-src 'none'; frame-ancestors 'none'");

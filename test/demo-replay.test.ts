@@ -1,20 +1,22 @@
-// SP12.3: the recorded mode answers "Try the demo" with no key. The chat
+// SP12.3 and J12: the app has no recorded mode. The recorded clients are
+// test doubles, and the committed demo recordings let tests and
+// `pnpm demo:check --recorded` play the demo path offline. The chat
 // recording key leaves out the clock's values in tool results, so a
 // recording made on one day replays on another. --record-chat records only
-// the agent's calls live, with the other calls replayed, so its recordings
-// replay in the recorded app. The committed recordings play the whole demo
-// story with no network.
+// the agent's calls, with the other calls replayed, so its recordings
+// replay with the same doubles. With no provider ready the live app refuses
+// every turn with the setup sentence.
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CHAT_RECORDINGS_DIR, ChatRecording, RecordedChatClient, chatRecordingKey } from "../src/agent/recorded.ts";
 import { functionTools } from "../src/agent/tools.ts";
 import { main } from "../src/eval/cli.ts";
 import { loadChatScripts, runChatEval, type ChatEvalReport } from "../src/eval/chat-eval.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { buildToolRequest, type InputItem } from "../src/model/responses.ts";
-import { appEnv, parseEvents } from "../scripts/demo-check.ts";
+import { RECORDED_LABEL, appEnv, parseEvents, runDemoCheck } from "../scripts/demo-check.ts";
 import { PLACEHOLDER_NOTE } from "../scripts/demo-recordings.ts";
 import { scriptModel } from "./script-model.ts";
 
@@ -46,7 +48,7 @@ function expectWholeDemo(report: ChatEvalReport) {
   expect(report.unsupportedStates).toBe(0);
 }
 
-describe("SP12.3: the recorded demo", () => {
+describe("SP12.3 and J12: the demo, live and offline", () => {
   it("the key reads the turn's date and the clock's times in tool results as placeholders, and nothing else", () => {
     const tools = functionTools();
     const out = (o: unknown): InputItem => ({ type: "function_call_output", call_id: "call_1", output: JSON.stringify(o) });
@@ -113,14 +115,40 @@ describe("SP12.3: the recorded demo", () => {
     expectWholeDemo(replay);
   });
 
-  it("demo:check starts the app with no key or Google client in recorded mode, and reads the chat's event stream", () => {
+  it("demo:check gives the live app the key and no Google client, and reads the chat's event stream", () => {
     const base = { PATH: "/bin", MODEL_API_KEY: "k-123", GOOGLE_CLIENT_ID: "id", GOOGLE_CLIENT_SECRET: "s", APP_LIVE_MODEL: "1", APP_ALLOWED_HOSTS: "x", APP_DB: "data/app.sqlite" };
-    expect(appEnv(base, 5193, "/tmp/x/app.sqlite", false)).toEqual({ PATH: "/bin", APP_PORT: "5193", APP_DB: "/tmp/x/app.sqlite" });
-    expect(appEnv(base, 5193, "/tmp/x/app.sqlite", true)).toEqual({ PATH: "/bin", APP_PORT: "5193", APP_DB: "/tmp/x/app.sqlite", APP_LIVE_MODEL: "1", MODEL_API_KEY: "k-123" });
+    expect(appEnv(base, 5193, "/tmp/x/app.sqlite")).toEqual({ PATH: "/bin", MODEL_API_KEY: "k-123", APP_PORT: "5193", APP_DB: "/tmp/x/app.sqlite" });
     const body = 'event: turn.started\ndata: {"turnId":"t1","userMessageId":"cm1"}\n\nevent: text.delta\ndata: {"turnId":"t1","text":"Hi"}\n\n';
     expect(parseEvents(body)).toEqual([
       { event: "turn.started", data: { turnId: "t1", userMessageId: "cm1" } },
       { event: "text.delta", data: { turnId: "t1", text: "Hi" } },
     ]);
   });
+
+  it("demo:check --recorded runs the demo path on the test doubles, and every line says it is not a product run", async () => {
+    const lines: string[] = [];
+    const r = await runDemoCheck({ recorded: true, log: (l) => lines.push(l) });
+    expect(r.problems).toEqual([]);
+    expect(r).toMatchObject({ ok: true, turns: 8 });
+    expect(lines.length).toBeGreaterThan(10);
+    for (const l of lines) expect(l.startsWith(`[${RECORDED_LABEL}] `), l).toBe(true);
+  }, 60_000);
+
+  it("J12: the live app with no provider answers the setup sentence on every turn, replays nothing, and keeps the code-only parts working", async () => {
+    // The check talks to the app it started on 127.0.0.1 only. With no key
+    // the app itself calls no one.
+    vi.unstubAllGlobals();
+    const lines: string[] = [];
+    const env = { ...process.env };
+    delete env.MODEL_API_KEY;
+    const r = await runDemoCheck({ env, log: (l) => lines.push(l) });
+    expect(r.ok).toBe(false);
+    const text = lines.join("\n");
+    // "Try the demo" still loads the calendar, a code-only step.
+    expect(text).toContain("Loaded the demo calendar dana.ics.");
+    // Each turn is refused before it starts, and no tool runs.
+    expect(r.problems.filter((p) => p.text === "error provider_not_ready, expected none")).toHaveLength(8);
+    expect(text).not.toMatch(/ ms, tools (?!none)/);
+    expect(text).toContain("App stopped and its temporary database removed.");
+  }, 90_000);
 });

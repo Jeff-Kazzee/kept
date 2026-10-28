@@ -1,6 +1,8 @@
 // pnpm demo:check (SP12.6): starts the app on a free port with a temporary
 // database, runs the demo path end to end through the HTTP routes as the
-// page does, checks each step and stops the app.
+// page does, checks each step and stops the app. It checks the real
+// product, so it runs on the live model (J12): the provider is Meta with
+// MODEL_API_KEY, for example through varlock.
 //
 // The demo path is the chat script fixtures/chat/demo-story.json: "Try the
 // demo" loads the demo calendar through its route, then each `say` step is
@@ -12,27 +14,45 @@
 // the checklist must hold the insurance card, and only the person's one
 // approval may have sent a reply.
 //
-//   pnpm demo:check          recorded mode: the recorded chat client, no key
-//   pnpm demo:check --live   the live model (the coordinator only). Needs
-//                            MODEL_API_KEY, for example through varlock.
+//   pnpm demo:check             the live app on the live model
+//   pnpm demo:check --recorded  offline, for CI: the same routes in this
+//                               process with the recorded test doubles. Its
+//                               output says "recorded, not a product run".
 //
-// The app gets no Google client and no key in recorded mode. It is stopped
-// by the process id it was started with, after checking that the process
-// runs from this package.
+// The live app gets the key and no Google client. It is stopped by the
+// process id it was started with, after checking that the process runs
+// from this package.
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readlinkSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createApi } from "../server/api.ts";
+import { createChat, sseFrame } from "../server/chat.ts";
+import { CaseAgent } from "../src/agent/agent.ts";
+import { RecordedChatClient, fixtureMessageIds } from "../src/agent/recorded.ts";
+import { defaultMessageId } from "../src/agent/tools.ts";
 import type { ChatEvent } from "../src/agent/types.ts";
+import { CaseService } from "../src/case/service.ts";
 import { loadChatScripts, stepText, type ChatStep } from "../src/eval/chat-eval.ts";
+import { loadCaseProfile } from "../src/fixtures/load.ts";
+import { IntakeService } from "../src/intake/service.ts";
+import { RecordedModelClient } from "../src/model/recorded.ts";
 import { PACKAGE_ROOT } from "../src/paths.ts";
+import { RecordsService } from "../src/records/service.ts";
+import { ReplyService } from "../src/reply/service.ts";
+import { EventStore } from "../src/store/event-log.ts";
 
 type Line = (line: string) => void;
 type SayStep = Extract<ChatStep, { say: string }>;
 type Problem = { step: number; text: string; fatal: boolean };
 
-export type DemoCheckOptions = { live?: boolean; log?: Line; env?: NodeJS.ProcessEnv; startTimeoutMs?: number };
+export type DemoCheckOptions = { recorded?: boolean; log?: Line; env?: NodeJS.ProcessEnv; startTimeoutMs?: number };
+
+export const RECORDED_LABEL = "recorded, not a product run";
+
+// One request, as the page sends it, and the answer's status and body.
+type Transport = { call(method: string, path: string, body: unknown, generation: number): Promise<{ status: number; text: string }>; close(): Promise<void> };
 export type DemoCheckResult = { ok: boolean; problems: Problem[]; turns: number };
 
 const freePort = () =>
@@ -45,21 +65,15 @@ const freePort = () =>
     });
   });
 
-// The environment the app starts with: no key and no Google client in
-// recorded mode, the key in live mode, and never a proxy host list.
-export function appEnv(base: NodeJS.ProcessEnv, port: number, db: string, live: boolean): NodeJS.ProcessEnv {
+// The environment the live app starts with: the key, no Google client and
+// no proxy host list, so the agent's tools are the same on every run.
+export function appEnv(base: NodeJS.ProcessEnv, port: number, db: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(base)) {
-    if (/^(?:APP_|GOOGLE_)/.test(k) || k === "MODEL_API_KEY") continue;
+    if (/^(?:APP_|GOOGLE_)/.test(k)) continue;
     env[k] = v;
   }
-  env.APP_PORT = String(port);
-  env.APP_DB = db;
-  if (live) {
-    env.APP_LIVE_MODEL = "1";
-    if (base.MODEL_API_KEY) Object.assign(env, { MODEL_API_KEY: base.MODEL_API_KEY });
-  }
-  return env;
+  return { ...env, APP_PORT: String(port), APP_DB: db };
 }
 
 function waitForStart(child: ChildProcess, timeoutMs: number): Promise<void> {
@@ -111,35 +125,97 @@ export function parseEvents(body: string): ChatEvent[] {
   return events;
 }
 
-export async function runDemoCheck(options: DemoCheckOptions = {}): Promise<DemoCheckResult> {
-  const log = options.log ?? ((l) => console.log(l));
-  const live = options.live === true;
-  const script = loadChatScripts().find((s) => s.id === "demo-story");
-  if (!script) throw new Error("No chat script demo-story.");
-  const dir = mkdtempSync(path.join(tmpdir(), "demo-check-"));
+// The live app: `node server/main.ts` on a free port, called over HTTP.
+async function liveApp(dir: string, options: DemoCheckOptions, log: Line): Promise<Transport> {
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ["server/main.ts"], {
     cwd: PACKAGE_ROOT,
-    env: appEnv(options.env ?? process.env, port, path.join(dir, "app.sqlite"), live),
+    env: appEnv(options.env ?? process.env, port, path.join(dir, "app.sqlite")),
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";
   child.stderr?.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
-  const problems: Problem[] = [];
-  let turns = 0;
   try {
     await waitForStart(child, options.startTimeoutMs ?? 60_000);
-    log(`App started on port ${port} with a temporary database (${live ? "live model" : "recorded responses"}), process ${child.pid}.`);
-    let generation = 0;
-    const call = async (method: string, p: string, body?: unknown) => {
+  } catch (err) {
+    await stop(child);
+    throw err;
+  }
+  log(`App started on port ${port} with a temporary database, process ${child.pid}.`);
+  return {
+    async call(method, p, body, generation) {
       const res = await fetch(`${origin}${p}`, {
         method,
         headers: method === "GET" ? {} : { "Content-Type": "application/json", "X-Appointments-App": "1", Origin: origin, "X-Case-Generation": String(generation) },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
       return { status: res.status, text: await res.text() };
-    };
+    },
+    async close() {
+      await stop(child);
+      if (stderr.trim() !== "") log(`App errors:\n${stderr.trim()}`);
+    },
+  };
+}
+
+// --recorded: the same routes in this process, on the recorded test
+// doubles. Not the product: the app has no recorded mode (J12).
+function recordedApp(dir: string): Transport {
+  const store = new EventStore(path.join(dir, "app.sqlite"));
+  const client = RecordedModelClient.fromDirectory();
+  const intake = new IntakeService(store, client);
+  const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
+  const reply = new ReplyService(store, kase, client);
+  const records = new RecordsService(store, intake, kase);
+  const api = createApi(intake, kase, {}, reply, { store, records });
+  const chat = createChat(
+    new CaseAgent(store, { intake, kase, reply, records }, RecordedChatClient.fromDirectory(), { messageIdFor: fixtureMessageIds(defaultMessageId) }),
+  );
+  return {
+    async call(method, p, body, generation) {
+      if (p !== "/api/chat") {
+        const r = await api({ method, path: p, body, generation });
+        return { status: r.status, text: JSON.stringify(r.body) };
+      }
+      let status = 200;
+      let text = "";
+      await chat.serve(
+        { method, body, generation },
+        {
+          json: (s, payload) => {
+            status = s;
+            text = JSON.stringify(payload);
+          },
+          event: (e) => (text += sseFrame(e)),
+          end: () => {},
+        },
+      );
+      return { status, text };
+    },
+    async close() {
+      store.close();
+    },
+  };
+}
+
+export async function runDemoCheck(options: DemoCheckOptions = {}): Promise<DemoCheckResult> {
+  const recorded = options.recorded === true;
+  const out = options.log ?? ((l) => console.log(l));
+  // Every line of a recorded run says it is not the product.
+  const log: Line = recorded ? (l) => out(`[${RECORDED_LABEL}] ${l}`) : out;
+  const script = loadChatScripts().find((s) => s.id === "demo-story");
+  if (!script) throw new Error("No chat script demo-story.");
+  const dir = mkdtempSync(path.join(tmpdir(), "demo-check-"));
+  const problems: Problem[] = [];
+  let turns = 0;
+  let app: Transport | null = null;
+  try {
+    app = recorded ? recordedApp(dir) : await liveApp(dir, options, log);
+    if (recorded) log("Running the demo path in this process on the recorded test doubles.");
+    let generation = 0;
+    const transport = app;
+    const call = (method: string, p: string, body?: unknown) => transport.call(method, p, body, generation);
     const json = async (method: string, p: string, body?: unknown) => {
       const r = await call(method, p, body);
       if (r.status !== 200) throw new Error(`${method} ${p} answered ${r.status}: ${r.text.slice(0, 200)}`);
@@ -214,7 +290,7 @@ export async function runDemoCheck(options: DemoCheckOptions = {}): Promise<Demo
       if (error !== e.error) fail(`error ${error ?? "none"}, expected ${e.error ?? "none"}`);
       const textOk = (e.text_any.length === 0 || e.text_any.some((p) => new RegExp(p, "i").test(text))) && e.text_none.every((p) => !new RegExp(p, "i").test(text));
       // The words of a live answer vary, so a text check only warns there.
-      if (!textOk) fail(`the answer does not read as expected: ${JSON.stringify(text)}`, !live);
+      if (!textOk) fail(`the answer does not read as expected: ${JSON.stringify(text)}`, recorded);
     }
 
     s = await state();
@@ -229,26 +305,27 @@ export async function runDemoCheck(options: DemoCheckOptions = {}): Promise<Demo
     end(items.some((t: string) => /insurance card/i.test(t)), `the checklist holds ${items.length} items, with the insurance card`);
     end(s.case.reply.sent.length === 1, `${s.case.reply.sent.length} reply sent, only the person's approval`);
   } finally {
-    await stop(child);
+    await app?.close();
     rmSync(dir, { recursive: true, force: true });
     log("App stopped and its temporary database removed.");
   }
-  if (stderr.trim() !== "") log(`App errors:\n${stderr.trim()}`);
   return { ok: problems.every((p) => !p.fatal), problems, turns };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const args = process.argv.slice(2).filter((a) => a !== "--");
-  const unknown = args.filter((a) => a !== "--live");
+  const unknown = args.filter((a) => a !== "--recorded");
+  const recorded = args.includes("--recorded");
   if (unknown.length > 0) {
-    console.error(`Unknown option ${unknown.join(" ")}. Usage: pnpm demo:check [--live]`);
+    console.error(`Unknown option ${unknown.join(" ")}. Usage: pnpm demo:check [--recorded]`);
     process.exitCode = 2;
-  } else if (args.includes("--live") && !process.env.MODEL_API_KEY) {
-    console.error("MODEL_API_KEY is not set. Run the live check through varlock.");
+  } else if (!recorded && !process.env.MODEL_API_KEY) {
+    console.error("MODEL_API_KEY is not set. The demo check runs the live app: run it through varlock, or use --recorded offline.");
     process.exitCode = 2;
   } else {
-    const r = await runDemoCheck({ live: args.includes("--live") });
-    console.log(r.ok ? `Demo check passed: ${r.turns} turns.` : `Demo check failed: ${r.problems.filter((p) => p.fatal).length} problems.`);
+    const r = await runDemoCheck({ recorded });
+    const label = recorded ? ` (${RECORDED_LABEL})` : " (live)";
+    console.log(r.ok ? `Demo check passed${label}: ${r.turns} turns.` : `Demo check failed${label}: ${r.problems.filter((p) => p.fatal).length} problems.`);
     process.exitCode = r.ok ? 0 : 1;
   }
 }

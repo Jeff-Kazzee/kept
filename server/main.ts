@@ -1,14 +1,14 @@
 // Local server for the UI. Binds to 127.0.0.1 only. `pnpm dev` serves the
 // UI through Vite in middleware mode. `pnpm start` (--static) serves the
-// production build from dist/ui (see static.ts). Uses recorded model
-// responses unless APP_LIVE_MODEL=1 is set. Live calls go to the provider
-// chosen in the app's settings (0010): the user's Meta key, the server's
-// MODEL_API_KEY, or Sign in with ChatGPT.
+// production build from dist/ui (see static.ts). Every model call goes to
+// the provider chosen in the app's settings (0010): the user's Meta key,
+// the server's MODEL_API_KEY, or Sign in with ChatGPT. There is no recorded
+// mode (J12): with no provider ready, the chat and every model step answer
+// a fixed sentence that links to Settings, and nothing is replayed.
 //
 // Environment:
 //   APP_PORT           port, default 5180
 //   APP_DB             event log file, default data/app.sqlite in the package
-//   APP_LIVE_MODEL     set to 1 for the live model
 //   MODEL_API_KEY      the server's Meta key, used when the user set none
 //   APP_ALLOWED_HOSTS  more host names, comma-separated, for a private
 //                      proxy such as Tailscale serve (see hosts.ts)
@@ -23,8 +23,6 @@ import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
-import type { ModelClient } from "../src/model/client.ts";
-import { RecordedModelClient } from "../src/model/recorded.ts";
 import { ChatGptAuth } from "../src/model/providers/chatgpt-auth.ts";
 import { createProviderClient } from "../src/model/providers/factory.ts";
 import { SecretsStore, appSecretsPath } from "../src/model/providers/secrets.ts";
@@ -36,8 +34,6 @@ import { timezoneSettings } from "../src/settings/events.ts";
 import { CHAT_PATH, createChat, sseFrame } from "./chat.ts";
 import { CaseAgent } from "../src/agent/agent.ts";
 import { defaultMessageId } from "../src/agent/tools.ts";
-import { RecordedChatClient, fixtureMessageIds } from "../src/agent/recorded.ts";
-import type { ToolModelClient } from "../src/model/responses.ts";
 import { APP_HEADER, requestSourceProblem } from "./guard.ts";
 import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
 import { API_SECURITY_HEADERS, createStaticHandler } from "./static.ts";
@@ -53,7 +49,6 @@ import { GOOGLE_CALLBACK_PATH, createGoogleRoutes } from "./google.ts";
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.APP_PORT ?? 5180);
 const MAX_BODY = 64 * 1024;
-const live = process.env.APP_LIVE_MODEL === "1";
 const serveBuild = process.argv.includes("--static");
 
 let extraHosts: string[];
@@ -70,17 +65,9 @@ const secrets = new SecretsStore(appSecretsPath());
 const chatgptAuth = new ChatGptAuth({ store: secrets, port: PORT });
 const serverMetaKey = process.env.MODEL_API_KEY || null;
 
-let client: ModelClient;
-let chatClient: ToolModelClient;
-if (live) {
-  // Every model call goes to the provider chosen in settings, and only to it.
-  const providers = createProviderClient({ store: secrets, auth: chatgptAuth, serverMetaKey });
-  client = providers;
-  chatClient = providers;
-} else {
-  client = RecordedModelClient.fromDirectory();
-  chatClient = RecordedChatClient.fromDirectory();
-}
+// Every model call goes to the provider chosen in settings, and only to it.
+const client = createProviderClient({ store: secrets, auth: chatgptAuth, serverMetaKey });
+const ready = () => client.ready();
 
 const dbPath = appDbPath();
 mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -114,12 +101,12 @@ const intake = new IntakeService(store, client);
 const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name, externalCalendar: () => googleEvents.snapshot() });
 const reply = new ReplyService(store, kase, client);
 const records = new RecordsService(store, intake, kase);
-const api = createApi(intake, kase, { mode: live ? "live" : "recorded", settings: auth.source }, reply, { store, records, google });
-// The case agent (0007). In recorded mode a pasted fixture message keeps
-// its fixture id, so its extraction recording replays.
+const api = createApi(intake, kase, { settings: auth.source, ready }, reply, { store, records, google });
+// The case agent (0007).
 const chat = createChat(
-  new CaseAgent(store, { intake, kase, reply, records, google }, chatClient, {
-    messageIdFor: live ? defaultMessageId : fixtureMessageIds(defaultMessageId),
+  new CaseAgent(store, { intake, kase, reply, records, google }, client, {
+    messageIdFor: defaultMessageId,
+    ready,
     // Codes only: no key, headers or message text.
     onCallError: (e) =>
       console.error(`Chat model call ${e.call} (${e.kind}) failed: HTTP ${e.status ?? "none"}, type ${e.type ?? "none"}, code ${e.code ?? "none"}.`),
@@ -279,8 +266,8 @@ server.on("request", async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? `live, ${client.label}` : "recorded responses"})`);
-  if (live) console.log("The model provider is chosen in the app's settings. ChatGPT sign-in finishes only in a browser on this computer, or through an SSH tunnel to this port.");
+  console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${client.ready() ? client.label : "none ready, add one in Settings"})`);
+  console.log("The model provider is chosen in the app's settings. ChatGPT sign-in finishes only in a browser on this computer, or through an SSH tunnel to this port.");
   if (extraHosts.length > 0) console.log(`Also answers to: ${extraHosts.join(", ")}`);
   if (clientFromEnv()) {
     console.log(`Google redirect URIs for the OAuth client: ${googleRoutes.redirectUris().join(" ")}`);

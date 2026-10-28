@@ -47,7 +47,6 @@ async function start() {
     ...process.env,
     APP_PORT: String(port),
     APP_DB: path.join(dir, "app.sqlite"),
-    APP_LIVE_MODEL: "",
     MODEL_API_KEY: "",
     GOOGLE_CLIENT_ID: "made-up.apps.googleusercontent.com",
     GOOGLE_CLIENT_SECRET: SECRET,

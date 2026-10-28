@@ -15,11 +15,19 @@
 //   --d3-only      run only the reply template call. With --d2-only, run
 //                  the D2 and D3 calls and no extraction.
 //   --d3-effort <minimal|low>  reasoning effort for the template call (default low)
+//   --all          the full fixture suite in one command (SP12.6): extraction
+//                  of every message in S1 to S19, the D2 explanation and
+//                  question calls, the D3 template call and the chat eval,
+//                  one after another under the one spend limit. The report
+//                  holds each part. Exit 1 when the extraction target is
+//                  missed, S8 fails, or a chat turn sent a reply or left an
+//                  unsupported state.
 //   --chat         run only the chat eval (0007, G11): the scripted
 //                  conversations in fixtures/chat/*.json, with no extraction
-//                  runs. Exit 1 when a turn approved or sent a reply, or left
+//                  runs. Exit 1 when a turn approved or sent a reply, left
 //                  a slot in a state no office message or report of the
-//                  person supports (0009, design 7).
+//                  person supports (0009, design 7), or showed an answer
+//                  with clinical content (SP12.5).
 //   --chat-runs <n>      runs per script (default 3)
 //   --chat-script <ids>  comma-separated script ids (default all)
 //   --chat-effort <minimal|low>  reasoning effort for the agent (default low)
@@ -58,7 +66,7 @@ import { FIXTURES_DIR, PACKAGE_ROOT } from "../paths.ts";
 import { formatConflictSummary, runConflictEval, type ConflictEvalReport } from "./conflict-eval.ts";
 import { formatSummary, runEval, type EvalReport } from "./eval.ts";
 import { formatReplySummary, runReplyEval, type ReplyEvalReport } from "./reply-eval.ts";
-import { formatChatSummary, loadChatScripts, runChatEval } from "./chat-eval.ts";
+import { formatChatSummary, loadChatScripts, runChatEval, type ChatEvalReport } from "./chat-eval.ts";
 import { RecordedChatClient, RecordingChatClient } from "../agent/recorded.ts";
 import type { ToolModelClient } from "../model/responses.ts";
 import { ChatGptAuth } from "../model/providers/chatgpt-auth.ts";
@@ -86,6 +94,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
   let values: {
     "max-usd"?: string;
     out?: string;
+    all?: boolean;
     recorded?: boolean;
     d2?: boolean;
     "d2-only"?: boolean;
@@ -107,6 +116,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
       options: {
         "max-usd": { type: "string" },
         out: { type: "string" },
+        all: { type: "boolean" },
         recorded: { type: "boolean" },
         d2: { type: "boolean" },
         "d2-only": { type: "boolean" },
@@ -169,12 +179,17 @@ export async function main(argv: string[], env: Record<string, string | undefine
     chatGpt = made.client;
     evalModel = made.model;
   }
+  const all = values.all === true;
+  if (all && (values.chat || values["d2-only"] || values["d3-only"] || values["record-chat"])) {
+    error("--all runs every part. It cannot run with --chat, --d2-only, --d3-only or --record-chat.");
+    return 2;
+  }
   if (values.chat) return runChat(values, maxUsd, env, deps, log, error, chatGpt, evalModel);
 
   const d2Only = values["d2-only"] === true;
   const d3Only = values["d3-only"] === true;
-  const withD2 = d2Only || values.d2 === true;
-  const withD3 = d3Only || values.d3 === true;
+  const withD2 = all || d2Only || values.d2 === true;
+  const withD3 = all || d3Only || values.d3 === true;
   const skipExtraction = d2Only || d3Only;
 
   const apiKey = env.MODEL_API_KEY;
@@ -197,7 +212,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
   const startedAt = now();
   const out = path.resolve(
     PACKAGE_ROOT,
-    values.out ?? path.join("eval-results", `eval-${d2Only ? "d2" : d3Only ? "d3" : "live"}-${startedAt.replace(/[:.]/g, "-")}.json`),
+    values.out ?? path.join("eval-results", `eval-${all ? "all" : d2Only ? "d2" : d3Only ? "d3" : "live"}-${startedAt.replace(/[:.]/g, "-")}.json`),
   );
 
   const client = values.recorded
@@ -240,18 +255,40 @@ export async function main(argv: string[], env: Record<string, string | undefine
     });
   }
 
-  // A report with extraction carries the D2 and D3 reports as fields. With
-  // no extraction, a single D2 or D3 report is written on its own.
-  const extras = { ...(withD2 ? { d2 } : {}), ...(withD3 ? { d3 } : {}) };
+  // --all: the chat eval last, with what the other parts left.
+  let chat: ChatEvalReport | null = null;
+  const spent = (report?.costUsdTotal ?? 0) + (d2?.costUsdTotal ?? 0) + (d3?.costUsd ?? 0);
+  if (all && !report?.stoppedBySpendGuard && !d2?.stoppedBySpendGuard && !d3?.stoppedBySpendGuard) {
+    const effort = Effort.safeParse(values["chat-effort"] ?? "low");
+    const runs = values["chat-runs"] === undefined ? 3 : Number(values["chat-runs"]);
+    if (!effort.success || !Number.isSafeInteger(runs) || runs < 1 || runs > 20) {
+      error("--chat-effort must be minimal or low, and --chat-runs a whole number from 1 to 20.");
+      return 2;
+    }
+    const chatClient = values.recorded
+      ? RecordedChatClient.fromDirectory()
+      : (chatGpt ?? (deps.createChatClient ?? ((key) => new MetaResponsesClient({ apiKey: key })))(apiKey!));
+    chat = await runChatEval({ chatClient, client, scripts: loadChatScripts(), runs, effort: effort.data, model: evalModel, maxUsd: Math.max(0, maxUsd - spent), now, onProgress: log });
+  }
+
+  // A report with extraction carries the D2, D3 and chat reports as fields.
+  // With no extraction, a single D2 or D3 report is written on its own.
+  const extras = { ...(withD2 ? { d2 } : {}), ...(withD3 ? { d3 } : {}), ...(all ? { chat } : {}) };
   const written = report !== null ? { ...report, ...extras } : withD2 && withD3 ? extras : withD2 ? d2 : d3;
   mkdirSync(path.dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify(written, null, 2) + "\n");
   if (report) log(formatSummary(report));
   if (d2) log(formatConflictSummary(d2));
   if (d3) log(formatReplySummary(d3));
+  if (chat) log(formatChatSummary(chat));
+  if (all) {
+    const total = spent + (chat?.costUsdTotal ?? 0);
+    log(`Fixture suite S1 to S19: ${messages.length} messages extracted, D2 and D3 calls, ${chat?.scripts.length ?? 0} chat scripts. Estimated cost $${total.toFixed(4)} (limit $${maxUsd})`);
+  }
   log(`Report: ${out}`);
 
-  if (report?.stoppedBySpendGuard || d2?.stoppedBySpendGuard || d3?.stoppedBySpendGuard) return 3;
+  if (report?.stoppedBySpendGuard || d2?.stoppedBySpendGuard || d3?.stoppedBySpendGuard || chat?.stoppedBySpendGuard) return 3;
+  if (chat && (chat.personOnlyChanges > 0 || chat.unsupportedStates > 0 || chat.clinicalAnswers > 0)) return 1;
   if (report === null) return 0;
   return report.perEffort.every((e) => e.meetsTarget) && report.s8.passed ? 0 : 1;
 }
@@ -310,7 +347,7 @@ async function runChat(
   if (chatClient instanceof RecordingChatClient) log(`Recorded ${chatClient.written} chat replies in fixtures/recordings/chat/.`);
   log(`Report: ${out}`);
   if (report.stoppedBySpendGuard) return 3;
-  return report.personOnlyChanges === 0 && report.unsupportedStates === 0 ? 0 : 1;
+  return report.personOnlyChanges === 0 && report.unsupportedStates === 0 && report.clinicalAnswers === 0 ? 0 : 1;
 }
 
 // The ChatGPT client on the connection the app saved, or why there is none.

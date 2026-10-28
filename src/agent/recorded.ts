@@ -1,9 +1,13 @@
-// Recorded chat clients (0007, G10). A recording holds one model reply to
-// one tool request, keyed by a hash of the request's input, so tests and
-// the recorded app replay chat turns with no network:
-//   fixtures/recordings/chat/<key>.json            live answers, recorded
-//                                                  only by the coordinator's
-//                                                  live runs (--record-chat)
+// Recorded chat clients (0007, G10). They are test doubles: tests, the
+// eval's --recorded flag and `pnpm demo:check --recorded` inject them. The
+// app and the MCP server never import them, so a recorded answer never
+// reaches a person (J12, test/no-recorded.test.ts). A recording holds one
+// model reply to one tool request, keyed by a hash of the request's input,
+// so a test replays chat turns with no network:
+//   fixtures/recordings/chat/<key>.json            placeholders a stand-in
+//                                                  model wrote (pnpm
+//                                                  demo:recordings), or
+//                                                  answers --record-chat wrote
 //   fixtures/recordings/chat/faults/<name>.json    hand-written faults, each
 //                                                  a sequence of replies
 // `pnpm recording:key <request file>` prints the key for a request body.
@@ -241,8 +245,9 @@ export class RecordingChatClient implements ToolModelClient {
   }
 }
 
-// In recorded mode, a pasted fixture message keeps its fixture id, so its
-// extraction recording replays. Other text gets the default id.
+// For the test doubles: a pasted fixture message keeps its fixture id, so
+// its extraction recording replays. Other text gets the default id. The app
+// never uses it (J12).
 export function fixtureMessageIds(fallback: (text: string) => string): (text: string) => string {
   const byText = new Map(corpusMessages(loadScenarios()).map((m) => [normalizeWhitespace(m.text), m.id]));
   return (text) => byText.get(normalizeWhitespace(text)) ?? fallback(text);

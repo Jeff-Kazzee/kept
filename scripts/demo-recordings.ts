@@ -1,14 +1,13 @@
-// Hand-written placeholder recordings of the demo story (SP12.3), so the
-// recorded app, `pnpm demo:check` and the tests answer "Try the demo" with
-// no key before the coordinator's live recording exists. A stand-in model
+// Hand-written recordings of the demo story, test doubles only (J12): the
+// tests and `pnpm demo:check --recorded` play the demo path offline with
+// them. The app never reads them. A stand-in model
 // (test/script-model.ts) plays the chat script fixtures/chat/demo-story.json
 // through the chat eval, with recorded extraction, and each of its replies
 // is written to fixtures/recordings/chat/<key>.json with source
 // "hand-written". Live recordings are never touched.
 //
 //   pnpm demo:recordings          replace the placeholders
-//   pnpm demo:recordings --clear  remove the placeholders only, before a
-//                                 live recording with --record-chat
+//   pnpm demo:recordings --clear  remove the placeholders only
 import { readFileSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { CHAT_RECORDINGS_DIR, ChatRecording, RecordingChatClient } from "../src/agent/recorded.ts";
@@ -16,7 +15,7 @@ import { formatChatSummary, loadChatScripts, runChatEval } from "../src/eval/cha
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { scriptModel } from "../test/script-model.ts";
 
-export const PLACEHOLDER_NOTE = "Placeholder for the demo story, written by a stand-in model, not a model. A live recording replaces it.";
+export const PLACEHOLDER_NOTE = "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.";
 const WRITTEN_AT = "2026-10-28T12:00:00.000Z";
 
 // Removes the keyed recordings that are placeholders. Returns how many.

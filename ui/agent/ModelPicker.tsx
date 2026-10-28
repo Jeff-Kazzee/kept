@@ -22,25 +22,25 @@ export function modelLabel(s: Settings): string | null {
 }
 
 // The short form a phone shows: "Meta · Spark 1.3".
-export const shortModelLabel = (label: string) => label.replace(/\bMuse /, "").replace(/ \((scripted|recorded)\)$/, "");
+export const shortModelLabel = (label: string) => label.replace(/\bMuse /, "").replace(/ \(scripted\)$/, "");
 
 // True when the provider is set but has lost what it needs: a key, or the
 // ChatGPT sign-in. The server never switches provider by itself (0010).
 export const providerNeedsSetup = (s: Settings) => (s.provider === "meta" && !s.meta.keySet) || (s.provider === "chatgpt" && !s.chatgpt.signedIn);
 
-// `fallback` names what answers when the build has no settings route or no
-// provider is set, such as "Recorded responses".
+// `fallback` names what the composer says when the settings cannot be read
+// or no provider is set, such as "No model set".
 export function ModelPicker({ fallback, scripted = false }: { fallback: string; scripted?: boolean }) {
-  const { settings, settingsAvailable, backend, reload, openSettings, report, mode } = useAgent();
+  const { settings, settingsAvailable, backend, reload, openSettings, report } = useAgent();
   const menu = useMenu();
   const id = useId();
   const [busy, setBusy] = useState(false);
   const ready = settingsAvailable;
   const chosen = ready ? modelLabel(settings) : null;
-  // The scripted chat and recorded responses answer whatever is picked,
-  // and say so. A provider that lost its key or sign-in needs setup.
+  // The scripted chat answers whatever is picked, and says so. A provider
+  // that lost its key or sign-in needs setup.
   const setup = ready && providerNeedsSetup(settings);
-  const label = chosen ? (setup ? `${chosen} (needs setup)` : scripted ? `${chosen} (scripted)` : mode === "recorded" ? `${chosen} (recorded)` : chosen) : fallback;
+  const label = chosen ? (setup ? `${chosen} (needs setup)` : scripted ? `${chosen} (scripted)` : chosen) : fallback;
   const pick = async (model: string) => {
     setBusy(true);
     try {

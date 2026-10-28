@@ -24,8 +24,8 @@ export type ImportRequest = { text: string };
 type Fixture = FixtureScenario["messages"][number];
 
 // A synthetic demo message whose text the sheet holds exactly. It keeps the
-// fixture's id, so its recorded extraction applies, as the chat does for a
-// pasted fixture message in recorded mode (0007).
+// fixture's id, so the demo's messages keep their names (m1 to m4) in the
+// case. Extraction is live like every model step (J12).
 export function fixtureFor(text: string, fixtures: Fixture[]): Fixture | null {
   const t = text.trim();
   return t === "" ? null : (fixtures.find((m) => m.text.trim() === t) ?? null);

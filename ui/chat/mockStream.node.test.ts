@@ -20,7 +20,7 @@ function setup() {
   const svc = intake(store);
   const client = RecordedModelClient.fromDirectory();
   const kase = new CaseService(store, svc, client);
-  const handle = asFreshPage(createApi(svc, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, svc, kase)), kase);
+  const handle = asFreshPage(createApi(svc, kase, {}, new ReplyService(store, kase, client), agentAccess(store, svc, kase)), kase);
   const call = async (method: string, path: string, body?: unknown) => {
     const res = await handle({ method, path, body });
     if (res.status !== 200) throw new Error(`${method} ${path}: ${res.status} ${JSON.stringify(res.body)}`);

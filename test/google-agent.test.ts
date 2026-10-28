@@ -115,7 +115,7 @@ describe("sprint 11: the in-app agent with Gmail and Google Calendar", () => {
     expect(event).toMatchObject({ status: "confirmed", summary: "Appointment", start: { dateTime: "2026-11-12T17:30:00.000Z", timeZone: "America/Denver" } });
 
     // The person undoes the calendar write in the app.
-    const api = createApi(app.intake, app.kase, { mode: "recorded" }, app.reply, { store: app.store, records: app.records, google });
+    const api = createApi(app.intake, app.kase, {}, app.reply, { store: app.store, records: app.records, google });
     const activity = (await api({ method: "GET", path: "/api/activity", body: undefined })).body as { activityVersion: number; entries: Array<{ id: string; kind: string; undone: boolean; summary: string }> };
     const res = await api({ method: "POST", path: `/api/activity/${added[0]!.id}/undo`, body: { expectedVersion: activity.activityVersion }, generation: app.kase.generation() });
     expect(res.status).toBe(200);

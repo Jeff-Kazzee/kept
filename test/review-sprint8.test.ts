@@ -371,7 +371,7 @@ describe("review round 2", () => {
     const r = await say(agentFor(app, model), app, "What waits for me?");
     expect(r.of("card").map((c) => c.card)).toContainEqual({ kind: "own_report", messageId: "s5-report" });
     expect(turnOutputs(model.calls[1]!.body.input)[0]!.output.own_report_questions).toEqual(["s5-report"]);
-    const api = createApi(app.intake, app.kase, { mode: "recorded" }, app.reply, { store: app.store, records: app.records });
+    const api = createApi(app.intake, app.kase, {}, app.reply, { store: app.store, records: app.records });
     const generation = app.kase.generation();
     expect(await api({ method: "POST", path: "/api/messages/s5-report/own-report", body: { expectedVersion: 1, answer: "maybe" }, generation })).toMatchObject({ status: 400 });
     expect(await api({ method: "POST", path: "/api/messages/s5-report/own-report", body: { expectedVersion: 0, answer: "yes" }, generation })).toMatchObject({ status: 409 });

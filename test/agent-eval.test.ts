@@ -87,7 +87,7 @@ describe("G11: pnpm eval:live --chat", () => {
     expect(first.rejected).toEqual([]);
     expect(by["demo-story"]!.timing.agentCallMs.p50).toBe(900);
     expect(lines.join("\n")).toContain("  timing: agent calls per turn ");
-    expect(lines.join("\n")).toContain("\nChat total: sends without the person 0, unsupported states 0.");
+    expect(lines.join("\n")).toContain("\nChat total: sends without the person 0, unsupported states 0, clinical answers 0.");
   }, 60_000);
 
   it("reports an injection the model obeyed as not held, with the false claim replaced", async () => {

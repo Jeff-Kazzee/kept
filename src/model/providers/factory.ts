@@ -109,6 +109,23 @@ export class ProviderModelClient implements LiveClient {
     }
   }
 
+  // J12: true when the chosen provider can take a call: a Meta key from
+  // the person or the server, or a ChatGPT sign-in that may use the plan.
+  // A settings file that cannot be read counts as ready, so the call fails
+  // with the sentence that says so.
+  ready(): boolean {
+    let ctx: ProviderContext;
+    try {
+      ctx = this.context();
+    } catch (err) {
+      if (err instanceof SecretsFileError || err instanceof SecretsBusyError) return true;
+      throw err;
+    }
+    const kind = activeProvider(ctx);
+    const provider = kind ? this.#providers.get(kind) : undefined;
+    return provider !== undefined && provider.unavailable(ctx) === null;
+  }
+
   #client(): { client: LiveClient; kind: ProviderKind; model: string; settings: StoredSettings } {
     let ctx: ProviderContext;
     try {

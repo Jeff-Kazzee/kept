@@ -8,7 +8,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createChat, sseFrame, type ChatSink } from "../server/chat.ts";
 import { MAX_CHAT_CHARS } from "../src/agent/agent.ts";
-import { MODEL_UNAVAILABLE_TEXT, WITHHELD_USER_TEXT, type ChatEvent } from "../src/agent/types.ts";
+import { WITHHELD_USER_TEXT, type ChatEvent } from "../src/agent/types.ts";
+import { NO_PROVIDER_TEXT } from "../src/model/providers/messages.ts";
 import { SCOPE_DECLINE } from "../src/domain/scope.ts";
 import { fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
@@ -70,7 +71,7 @@ describe("server/chat.ts", () => {
   });
 });
 
-// The real app process on a temporary database, in recorded mode.
+// The real app process on a temporary database, with no provider ready.
 const children: ChildProcess[] = [];
 const dirs: string[] = [];
 afterEach(() => {
@@ -107,7 +108,7 @@ async function startServer() {
   const dir = mkdtempSync(path.join(tmpdir(), "agent-http-"));
   dirs.push(dir);
   const port = 20000 + Math.floor(Math.random() * 20000);
-  const env = { ...process.env, APP_PORT: String(port), APP_DB: path.join(dir, "app.sqlite"), APP_LIVE_MODEL: "", MODEL_API_KEY: "" };
+  const env = { ...process.env, APP_PORT: String(port), APP_DB: path.join(dir, "app.sqlite"), MODEL_API_KEY: "" };
   const child = spawn(process.execPath, [fromPackage("server/main.ts")], { env, stdio: ["ignore", "pipe", "pipe"] });
   children.push(child);
   let stderr = "";
@@ -153,12 +154,13 @@ describe("the chat routes on the real server", () => {
     expect(events.find((e) => e.event === "turn.error")!.data).toMatchObject({ code: "out_of_scope", message: SCOPE_DECLINE });
     expect(events.at(-1)!.data).toMatchObject({ chatVersion: 2 });
 
-    // Recorded mode has no recording for this request: model_unavailable.
-    const unrecorded = parseSse((await call(port, "POST", "/api/chat", withSession(), { text: "Hello there", expectedVersion: 2 })).text);
-    expect(unrecorded.find((e) => e.event === "turn.error")!.data).toMatchObject({ code: "model_unavailable" });
-
-    // E2: the server log names the failed call with codes only.
-    expect(stderr()).toContain("Chat model call 1 (loop) failed: HTTP none, type none, code none.");
+    // J12: no provider is ready, so the turn is refused before it starts
+    // with the setup sentence. Nothing is replayed or saved, and no model
+    // call is made.
+    const notReady = parseSse((await call(port, "POST", "/api/chat", withSession(), { text: "Hello there", expectedVersion: 2 })).text);
+    expect(notReady.map((e) => [e.event, (e.data as { code?: string }).code])).toEqual([["turn.error", "provider_not_ready"]]);
+    expect(notReady[0]!.data).toMatchObject({ message: NO_PROVIDER_TEXT });
+    expect(stderr()).not.toContain("Chat model call");
     expect(stderr()).not.toContain("Hello there");
 
     // A stale version is refused in the stream.
@@ -166,12 +168,10 @@ describe("the chat routes on the real server", () => {
     expect(stale.map((e) => [e.event, (e.data as { code?: string }).code])).toEqual([["turn.error", "stale_edit"]]);
 
     const chat = JSON.parse((await call(port, "GET", "/api/chat", withSession())).text);
-    expect(chat.chatVersion).toBe(4);
+    expect(chat.chatVersion).toBe(2);
     expect(chat.messages.map((m: { role: string; text: string }) => [m.role, m.text])).toEqual([
       ["user", WITHHELD_USER_TEXT],
       ["assistant", SCOPE_DECLINE],
-      ["user", "Hello there"],
-      ["assistant", MODEL_UNAVAILABLE_TEXT],
     ]);
     expect(chat.messages[1].declined).toBe(true);
   }, 60_000);

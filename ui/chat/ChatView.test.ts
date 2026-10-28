@@ -135,6 +135,25 @@ describe("chat view", () => {
     expect(turnErrorText({ code: "model_unavailable", message: "The model did not answer." })).toBe("The model did not answer. Nothing was saved.");
     expect(turnErrorText({ code: "server_error", message: "" })).toBe("The app could not finish that answer. Nothing was saved.");
     expect(turnErrorText({ code: "ungrounded", message: "Check your schedule for the current state." })).toBe("Check your schedule for the current state.");
+    // J12: with no provider ready the turn shows the server's setup
+    // sentence once, with a link to Settings.
+    const NO_PROVIDER_TEXT = "The assistant needs a Meta Model API key or Sign in with ChatGPT. Add one in Settings. Nothing in your case changed.";
+    const setup = render({
+      status: "ready",
+      chatVersion: 0,
+      messages: [],
+      pending: { turnId: "t1", userMessageId: "u1", userText: "What is confirmed?", createdAt: at, text: "", tools: [], cards: [], chips: [], status: "ended", error: { code: "provider_not_ready", message: NO_PROVIDER_TEXT }, unsaved: true },
+    });
+    expect(setup).toContain(`<p>${NO_PROVIDER_TEXT}</p>`);
+    expect(setup).toContain("Open Settings</button>");
+    expect(turnErrorText({ code: "provider_not_ready", message: NO_PROVIDER_TEXT })).toBe(NO_PROVIDER_TEXT);
+    expect(failed).not.toContain("Open Settings");
+  });
+
+  it("J12: the demo offer says the messages are made up and the assistant is live", () => {
+    const html = render({ status: "ready", chatVersion: 0, messages: [], pending: null });
+    expect(html).toContain("four made-up messages from Lantern Hill Clinic and a made-up calendar. The assistant is live");
+    expect(html).not.toMatch(/recorded/i);
   });
 
   it("a pending decline shows its streamed text once, with the way to add it as an office message", () => {
@@ -297,17 +316,16 @@ describe("chat view", () => {
     const html = render(
       { status: "ready", chatVersion: 2, pending: null, messages: [{ id: "c2", actions: [], role: "assistant", text: "Done.", createdAt: at, cards: [], chips: [] }], toolsByMessage: { c2: [{ callId: "x", label: "Reading your schedule", ok: true }] } },
       {},
-      { settings, settingsAvailable: true, mode: "live" },
+      { settings, settingsAvailable: true },
     );
     expect(html).toContain('<summary class="small">Worked through 1 step</summary>');
     expect(html).toContain('<span class="model-long">Meta · Muse Spark 1.3</span>');
     // A phone shows the short form.
     expect(html).toContain('<span class="model-short" aria-hidden="true">Meta · Spark 1.3</span>');
-    // With recorded responses the label says so, and a provider that lost
-    // its key says it needs setup (sprint 10 never switches it).
-    const recorded = render({ status: "ready", chatVersion: 0, messages: [], pending: null }, {}, { settings, settingsAvailable: true, mode: "recorded" });
-    expect(recorded).toContain('<span class="model-long">Meta · Muse Spark 1.3 (recorded)</span>');
-    const lost = render({ status: "ready", chatVersion: 0, messages: [], pending: null }, {}, { settings: { ...settings, meta: { keySet: false, source: null } }, settingsAvailable: true, mode: "live" });
+    // J12: there is no recorded label. A provider that lost its key says it
+    // needs setup (sprint 10 never switches it).
+    expect(html).not.toContain("(recorded)");
+    const lost = render({ status: "ready", chatVersion: 0, messages: [], pending: null }, {}, { settings: { ...settings, meta: { keySet: false, source: null } }, settingsAvailable: true });
     expect(lost).toContain('<span class="model-long">Meta · Muse Spark 1.3 (needs setup)</span>');
     expect(html).toContain("Muse Wonder<small>Higher cost</small>");
     expect(html).toMatch(/aria-pressed="true"[^>]*>.*Muse Spark 1\.3<small>Lower cost<\/small>/);

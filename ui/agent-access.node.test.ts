@@ -44,7 +44,7 @@ async function caseState(clock = () => "2026-11-06T17:00:00.000Z") {
   const actions = new CaseActions(store, { intake: svc, kase, reply, records });
   await acceptMessages(svc, ["m2"]);
   actions.addNote(MCP, THU, "Bring parking pass <b>now</b>", 0);
-  const api = createApi(svc, kase, { mode: "recorded" }, reply, { store, records });
+  const api = createApi(svc, kase, {}, reply, { store, records });
   const state = async () => (await api({ method: "GET", path: "/api/state", body: undefined })).body as AppState;
   return { store, svc, actions, state };
 }

@@ -35,8 +35,7 @@ export type McpDeps = {
   limiter: RateLimiter;
   now?: () => string;
   // The message id for a message the agent imports. By default a hash of
-  // its text. In recorded mode a fixture message keeps its fixture id, so
-  // its extraction recording replays, as in the app.
+  // its text. Tests pass fixture ids, so a recorded test double replays.
   messageIdFor?: (text: string) => string;
 };
 

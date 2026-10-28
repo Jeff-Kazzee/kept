@@ -140,7 +140,7 @@ describe("G10: recorded chat turns", () => {
     expect(out.trim()).toBe(chatRecordingKey(request));
   });
 
-  it("in recorded mode a pasted fixture message keeps its fixture id, so its extraction replays", () => {
+  it("with the test doubles a pasted fixture message keeps its fixture id, so its extraction replays", () => {
     const ids = fixtureMessageIds(defaultMessageId);
     expect(ids(fixtureMessage("m1").text)).toBe("m1");
     expect(ids(`  ${fixtureMessage("m3").text.replace(/ /g, "\n")} `)).toBe("m3");

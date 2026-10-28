@@ -50,6 +50,9 @@ export const CHAT_ERROR_CODES = [
   "ungrounded",
   "invalid_request",
   "server_error",
+  // J12: no provider is ready. The turn is refused before it starts, and
+  // the page links to Settings.
+  "provider_not_ready",
 ] as const;
 export type ChatErrorCode = (typeof CHAT_ERROR_CODES)[number];
 

@@ -30,7 +30,7 @@ const meta: SettingsView = {
 describe("settings", () => {
   it("lists Meta first as the default and ChatGPT under its own line, with what each receives", () => {
     expect(PROVIDERS.map((p) => p.id)).toEqual(["meta", "chatgpt"]);
-    const html = withAgent({ settings: { ...DEFAULT_SETTINGS, settingsVersion: 1 }, settingsAvailable: true }, createElement(SettingsPanel, { mode: "recorded", modelClient: "recorded", version: 1, erasePending: false, run }));
+    const html = withAgent({ settings: { ...DEFAULT_SETTINGS, settingsVersion: 1 }, settingsAvailable: true }, createElement(SettingsPanel, { modelClient: "meta-responses", version: 1, erasePending: false, run }));
     const metaAt = html.indexOf("Meta Model API");
     const altAt = html.indexOf("Or use your ChatGPT plan");
     expect(metaAt).toBeGreaterThan(-1);
@@ -49,7 +49,7 @@ describe("settings", () => {
   });
 
   it("with a key saved, says so without the key, offers the models with their cost, and shows the zone with its source", () => {
-    const html = withAgent({ settings: meta, settingsAvailable: true }, createElement(SettingsPanel, { mode: "recorded", modelClient: "recorded", version: 1, erasePending: false, run }));
+    const html = withAgent({ settings: meta, settingsAvailable: true }, createElement(SettingsPanel, { modelClient: "meta-responses", version: 1, erasePending: false, run }));
     expect(html).toContain("Your key is saved on the server.");
     expect(html).toContain(">Remove the key</button>");
     expect(html).toContain('<option value="muse-spark-1.3" selected="">Muse Spark 1.3 (lower cost)</option>');
@@ -63,7 +63,7 @@ describe("settings", () => {
 
   it("sprint 10: a provider that lost its key stays the provider and says it needs setup, and the model notice shows under the choice", () => {
     const lost = { ...meta, meta: { keySet: false, source: null }, modelNotice: "Muse Wonder 1.0 could not use tools in the last call. Pick another model." } as SettingsView;
-    const html = withAgent({ settings: lost, settingsAvailable: true }, createElement(SettingsPanel, { mode: "recorded", modelClient: "recorded", version: 1, erasePending: false, run }));
+    const html = withAgent({ settings: lost, settingsAvailable: true }, createElement(SettingsPanel, { modelClient: "meta-responses", version: 1, erasePending: false, run }));
     expect(html).toContain('<span class="pill pill-pending">Needs setup</span>');
     expect(html).toContain("Meta is still the provider, but it has no key. Add a key, or pick another provider.");
     expect(html).not.toContain(">In use</span>");

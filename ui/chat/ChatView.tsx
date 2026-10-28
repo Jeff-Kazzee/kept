@@ -39,7 +39,7 @@ export type ChatViewProps = {
   onLoadCalendar: (file: File) => Promise<void>;
   onLoadDemo: () => Promise<FixtureScenario["messages"][number] | null>;
   fixtures: FixtureScenario["messages"];
-  // What answers when no provider is set, such as "Recorded responses".
+  // What the composer says when no provider is set, such as "No model set".
   modelLabel?: string | null;
 };
 
@@ -190,7 +190,7 @@ export function ChatView(props: ChatViewProps) {
             onAddOfficeMessage={() => {
               openImport(draft);
             }}
-            model={<ModelPicker fallback={modelLabel ?? "Recorded responses"} scripted={scripted} />}
+            model={<ModelPicker fallback={modelLabel ?? "No model set"} scripted={scripted} />}
             onStop={onStop}
           />
           <p className="composer-hint">Enter sends. Shift+Enter adds a line. The assistant acts on your case, and every action has Undo.</p>
@@ -251,7 +251,10 @@ function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean
           <div className="demo-offer">
             <div className="stack-xs">
               <strong>New here?</strong>
-              <span className="small muted">Try the demo: four synthetic messages from Lantern Hill Clinic and a calendar.</span>
+              <span className="small muted">
+                Try the demo: four made-up messages from Lantern Hill Clinic and a made-up calendar. The assistant is live: it reads them with the model you set up in
+                Settings.
+              </span>
             </div>
             <button type="button" className="btn btn-primary" onClick={onDemo}>
               <Icon name="sparkle" size="sm" /> Try the demo
@@ -493,12 +496,23 @@ function PendingItem({
             <Icon name="alert" />
             <div className="stack-sm">
               <p>{turnErrorText(err)}</p>
+              {err.code === "provider_not_ready" && <SettingsLink />}
               {offerImport && <ImportOffer onImport={onImport} />}
             </div>
           </div>
         )}
       </article>
     </>
+  );
+}
+
+// J12: the setup sentence links to Settings.
+export function SettingsLink() {
+  const { openSettings } = useAgent();
+  return (
+    <button type="button" className="btn btn-sm" onClick={openSettings}>
+      <Icon name="settings" size="sm" /> Open Settings
+    </button>
   );
 }
 
@@ -600,6 +614,8 @@ export function turnErrorText(err: { code: string; message: string }): string {
   // A stopped turn may still be saved by the server, so it does not say
   // that nothing was.
   if (err.code === "stopped") return base;
+  // J12: the setup sentence already says nothing changed.
+  if (err.code === "provider_not_ready" && base !== "") return base;
   if (base !== "") return err.code === "ungrounded" || base.includes("Nothing was saved") ? base : `${base} Nothing was saved.`;
   switch (err.code) {
     case "case_deleted":

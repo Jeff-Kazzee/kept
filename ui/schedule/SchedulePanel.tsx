@@ -120,7 +120,7 @@ export function SchedulePanel({
         {tab === "schedule" && <ScheduleTab state={state} run={run} highlight={highlight} />}
         {tab === "checklist" && <ChecklistPanel items={state.case.checklist} />}
         {tab === "activity" && <ActivityTab history={state.history} />}
-        {tab === "settings" && <SettingsPanel mode={state.mode} modelClient={state.modelClient} version={state.caseVersion} erasePending={state.erasePending} run={run} />}
+        {tab === "settings" && <SettingsPanel modelClient={state.modelClient} version={state.caseVersion} erasePending={state.erasePending} run={run} />}
       </div>
     </>
   );

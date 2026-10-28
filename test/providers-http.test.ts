@@ -40,7 +40,7 @@ async function startServer() {
   const dir = mkdtempSync(path.join(tmpdir(), "providers-http-"));
   dirs.push(dir);
   const port = 20000 + Math.floor(Math.random() * 20000);
-  const env = { ...process.env, APP_PORT: String(port), APP_DB: path.join(dir, "app.sqlite"), APP_LIVE_MODEL: "", MODEL_API_KEY: "" };
+  const env = { ...process.env, APP_PORT: String(port), APP_DB: path.join(dir, "app.sqlite"), MODEL_API_KEY: "" };
   const child = spawn(process.execPath, [fromPackage("server/main.ts")], { env, stdio: ["ignore", "pipe", "pipe"] });
   children.push(child);
   let output = "";

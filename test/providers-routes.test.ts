@@ -38,7 +38,7 @@ function setup(serverMetaKey: string | null = null) {
   const client = RecordedModelClient.fromDirectory();
   const svc = intake(events);
   const kase = new CaseService(events, svc, client);
-  const api = asFreshPage(createApi(svc, kase, { mode: "recorded", settings: routes.source }, new ReplyService(events, kase, client), agentAccess(events, svc, kase)), kase);
+  const api = asFreshPage(createApi(svc, kase, { settings: routes.source }, new ReplyService(events, kase, client), agentAccess(events, svc, kase)), kase);
   // As server/main.ts dispatches: the auth routes first, then the API.
   const call = async (method: string, path: string, body?: unknown) => (await routes.handle({ method, path, body })) ?? (await api({ method, path, body }));
   cleanups.push(() => events.close());

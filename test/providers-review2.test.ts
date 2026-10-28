@@ -132,7 +132,7 @@ describe("review round 2, finding 10: a busy settings database is a retryable 50
     const client = RecordedModelClient.fromDirectory();
     const svc = intake(events);
     const kase = new CaseService(events, svc, client);
-    const api = createApi(svc, kase, { mode: "recorded", settings: s.routes.source }, new ReplyService(events, kase, client), agentAccess(events, svc, kase));
+    const api = createApi(svc, kase, { settings: s.routes.source }, new ReplyService(events, kase, client), agentAccess(events, svc, kase));
     expect(await api({ method: "GET", path: "/api/settings", body: undefined })).toEqual(SETTINGS_BUSY);
   });
 

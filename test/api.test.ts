@@ -28,7 +28,7 @@ function setup() {
   const client = RecordedModelClient.fromDirectory();
   const service = new IntakeService(store, client);
   const kase = new CaseService(store, service, client, { userName: "Dana Reyes" });
-  return asFreshPage(createApi(service, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, service, kase)), kase);
+  return asFreshPage(createApi(service, kase, {}, new ReplyService(store, kase, client), agentAccess(store, service, kase)), kase);
 }
 
 describe("local API", () => {
@@ -53,10 +53,10 @@ describe("local API", () => {
     const extracted = await api({ method: "POST", path: "/api/messages/m1/extract", body: { effort: "low", expectedVersion: 1 } });
     expect(extracted.status).toBe(200);
     const state = (await api({ method: "GET", path: "/api/state", body: undefined })).body as {
-      mode: string;
       evidence: Array<{ id: string; status: string; version: number }>;
     };
-    expect(state.mode).toBe("recorded");
+    // J12: the app has no recorded mode to report.
+    expect(state).not.toHaveProperty("mode");
     expect(state.evidence.map((e) => e.status)).toEqual(["pending", "pending"]);
     const id = state.evidence[0]!.id;
     const accepted = await api({ method: "POST", path: `/api/evidence/${id}/accept`, body: { expectedVersion: 1 } });
@@ -229,9 +229,9 @@ describe("dev server", () => {
       req.end(JSON.stringify(body));
     });
 
-  it("binds to 127.0.0.1 in recorded mode and refuses other host names", async () => {
+  it("binds to 127.0.0.1, says no model is ready without a key, and refuses other host names", async () => {
     const port = 20000 + Math.floor(Math.random() * 20000);
-    const env = { ...process.env, APP_PORT: String(port), APP_DB: path.join(dir, "dev.sqlite"), APP_LIVE_MODEL: "", MODEL_API_KEY: "" };
+    const env = { ...process.env, APP_PORT: String(port), APP_DB: path.join(dir, "dev.sqlite"), MODEL_API_KEY: "" };
     child = spawn(process.execPath, [fromPackage("server/main.ts")], { env, stdio: ["ignore", "pipe", "pipe"] });
     const line = await new Promise<string>((resolve, reject) => {
       let out = "";
@@ -242,7 +242,9 @@ describe("dev server", () => {
       child!.on("exit", (code) => reject(new Error(`server exited ${code}`)));
       setTimeout(() => reject(new Error(`server did not start: ${out}`)), 15_000);
     });
-    expect(line).toContain(`http://127.0.0.1:${port} (model: recorded responses)`);
+    // J12: no recorded mode. With no key the server says none is ready.
+    expect(line).toContain(`http://127.0.0.1:${port} (model: none ready, add one in Settings)`);
+    expect(line).not.toMatch(/recorded/i);
     expect(line).not.toMatch(/pairing/i);
     expect(await get(port, `127.0.0.1:${port}`)).toBe(200);
     expect(await get(port, `attacker.example:${port}`)).toBe(403);

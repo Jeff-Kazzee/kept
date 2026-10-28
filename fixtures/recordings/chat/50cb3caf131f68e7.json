@@ -1,7 +1,7 @@
 {
   "key": "50cb3caf131f68e7",
   "source": "hand-written",
-  "note": "Placeholder for the demo story, written by a stand-in model, not a model. A live recording replaces it.",
+  "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
   "effort": "low",
   "recorded_at": "2026-10-28T12:00:00.000Z",

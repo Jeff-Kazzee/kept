@@ -24,7 +24,7 @@ function api(store = new EventStore(":memory:", () => "2026-11-06T17:00:00.000Z"
   const client = RecordedModelClient.fromDirectory();
   const svc = intake(store);
   const kase = new CaseService(store, svc, client);
-  const handle = asFreshPage(createApi(svc, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, svc, kase)), kase);
+  const handle = asFreshPage(createApi(svc, kase, {}, new ReplyService(store, kase, client), agentAccess(store, svc, kase)), kase);
   return { store, kase, handle };
 }
 

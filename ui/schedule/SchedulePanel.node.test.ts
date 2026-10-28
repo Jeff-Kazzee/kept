@@ -20,7 +20,7 @@ describe("waiting for you", () => {
     const client = RecordedModelClient.fromDirectory();
     const kase = new CaseService(store, svc, client, { userName: "Dana Reyes" });
     const reply = new ReplyService(store, kase, client);
-    const api = createApi(svc, kase, { mode: "recorded" }, reply, agentAccess(store, svc, kase));
+    const api = createApi(svc, kase, {}, reply, agentAccess(store, svc, kase));
     await acceptMessages(svc, ["m1", "m2", "m3"]);
     const asked = await kase.askNext(kase.view().questionsVersion);
     expect(asked.question).not.toBeNull();
@@ -42,7 +42,7 @@ describe("waiting for you", () => {
     const svc = intake(store);
     const client = RecordedModelClient.fromDirectory();
     const kase = new CaseService(store, svc, client, { userName: "Dana Reyes" });
-    const api = createApi(svc, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, svc, kase));
+    const api = createApi(svc, kase, {}, new ReplyService(store, kase, client), agentAccess(store, svc, kase));
     await acceptMessages(svc, ["m1", "m2", "m3"]);
     const state = (await api({ method: "GET", path: "/api/state", body: undefined })).body as AppState;
     expect(state.case.question).toBeNull();

@@ -26,7 +26,11 @@ import { slotElementId } from "./schedule/Agenda.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
 import { LAPTOP, chipRef, findChip, useMedia, type ChipRef } from "./layout.ts";
 
-type Toast = { id: number; kind: "error" | "info"; text: string };
+// `settings`: the toast links to Settings, for the setup sentence (J12).
+type Toast = { id: number; kind: "error" | "info"; text: string; settings?: boolean };
+
+// J12: the server refused a model step because no provider is ready.
+const needsSetup = (e: unknown) => e instanceof ApiError && e.body.error === "provider_not_ready";
 
 // The scripted chat is a development tool. It makes real case writes, so
 // only a development build has it (or a check build made with
@@ -49,9 +53,9 @@ export function App() {
   const toastId = useRef(0);
   const sentZone = useRef(false);
 
-  const toast = useCallback((kind: Toast["kind"], text: string) => {
+  const toast = useCallback((kind: Toast["kind"], text: string, settings = false) => {
     const id = ++toastId.current;
-    setToasts((t) => [...t.slice(-2), { id, kind, text }]);
+    setToasts((t) => [...t.slice(-2), { id, kind, text, ...(settings ? { settings } : {}) }]);
     if (kind === "info") setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 5000);
   }, []);
 
@@ -123,7 +127,7 @@ export function App() {
       try {
         await action();
       } catch (e) {
-        toast("error", errorSentence(e));
+        toast("error", errorSentence(e), needsSetup(e));
       }
       await refresh();
     },
@@ -219,7 +223,7 @@ function Shell({
   state: AppState;
   run: Run;
   refresh: () => Promise<void>;
-  toast: (kind: Toast["kind"], text: string) => void;
+  toast: (kind: Toast["kind"], text: string, settings?: boolean) => void;
   toasts: Toast[];
   setToasts: (f: (t: Toast[]) => Toast[]) => void;
   scripted: boolean;
@@ -348,7 +352,7 @@ function Shell({
   // What the composer's indicator says when no provider is picked.
   // What the composer's indicator says when no provider is picked, or when
   // the settings cannot be read.
-  const modelLabel = scripted ? "Scripted demo, no model" : settings ? "No model set" : state.mode === "live" ? "Live model" : "Recorded responses";
+  const modelLabel = scripted ? "Scripted demo, no model" : settings ? "No model set" : "Model settings unavailable";
 
   const agent: AgentState = {
     backend,
@@ -360,9 +364,8 @@ function Shell({
     blocked,
     // Undo waits while a turn streams or another undo runs (finding 4).
     undoBusy: streaming || undoing,
-    report: (e) => toast("error", errorSentence(e)),
+    report: (e) => toast("error", errorSentence(e), needsSetup(e)),
     notify: (text) => toast("info", text),
-    mode: state.mode,
     reload: refresh,
     openSettings: () => openPanel("settings"),
   };
@@ -462,6 +465,18 @@ function Shell({
             <div key={t.id} className={`toast toast-${t.kind}`} role={t.kind === "error" ? "alert" : "status"}>
               <Icon name={t.kind === "error" ? "alert" : "info"} />
               <p>{t.text}</p>
+              {t.settings && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    setToasts((all) => all.filter((x) => x.id !== t.id));
+                    openPanel("settings");
+                  }}
+                >
+                  Open Settings
+                </button>
+              )}
               <button type="button" className="btn btn-ghost btn-icon" aria-label="Dismiss" onClick={() => setToasts((all) => all.filter((x) => x.id !== t.id))}>
                 <Icon name="close" size="sm" />
               </button>

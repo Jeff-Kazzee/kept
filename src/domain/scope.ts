@@ -52,6 +52,38 @@ const TERMS = [
   "injections?",
   "pain(?:s|ful)?",
   "mental health",
+  // SP12.5: symptoms named without a word above.
+  "(?:head|stomach|tooth|back|ear)aches?",
+  "aches?",
+  "fevers?",
+  "nause\\w*",
+  "migraines?",
+  "dizz\\w*",
+  "blood pressure",
+  // SP12.5: the commonest of these words in Spanish, French, German,
+  // Italian and Portuguese, read without accents.
+  "medicament\\w*",
+  "medikament\\w*",
+  "farmac\\w*",
+  "sintom\\w*",
+  "symptome\\w*",
+  "tratamient\\w*",
+  "traitements?",
+  "behandlung\\w*",
+  "dolor(?:es)?",
+  "douleurs?",
+  "schmerz\\w*",
+  "enfermedad(?:es)?",
+  "maladies?",
+  "krankheit\\w*",
+  "malattia",
+  "doenca",
+  "embaraz\\w*",
+  "schwanger\\w*",
+  "analisis de sangre",
+  "resultados?",
+  "resultats?",
+  "ergebnisse?",
 ];
 
 const CLINICAL = new RegExp(`\\b(?:${TERMS.join("|")})\\b`, "i");
@@ -113,12 +145,27 @@ export function mixesScripts(text: string): boolean {
   return (text.match(WORD) ?? []).some((w) => LATIN_LETTER.test(w) && NON_LATIN_LETTER.test(w));
 }
 
+// SP12.5: words written apart to get past the list. A run of three or more
+// single letters with one space, dot, hyphen, underscore, star or middle
+// dot between each ("l a b", "m.e.d.s") is read as one word, and those
+// marks inside a word ("medi-cation", "do.se") are read as nothing.
+const SPACED = /(?<!\p{L})\p{L}(?:[ .\-_*·]\p{L}){2,}(?!\p{L})/gu;
+const INSIDE = /(?<=\p{L})[.\-_*·]+(?=\p{L})/gu;
+
+export function despaced(text: string): string {
+  return text
+    .replace(SPACED, (run) => run.replace(/[ .\-_*·]/g, ""))
+    .replace(INSIDE, "")
+    .replace(/\s+/g, " ");
+}
+
 export function hasClinicalContent(text: string): boolean {
   const normalized = normalizeForScope(text);
   if (mixesScripts(normalized)) return true;
   // Accents are matched as their base letters too, so "sýmptoms" matches.
   const unaccented = normalized.normalize("NFKD").replace(/\p{M}/gu, "");
-  return CLINICAL.test(normalized) || CLINICAL.test(unaccented) || dietAdvice(normalized) || dietAdvice(unaccented);
+  const joined = despaced(unaccented);
+  return CLINICAL.test(normalized) || CLINICAL.test(unaccented) || CLINICAL.test(joined) || dietAdvice(normalized) || dietAdvice(unaccented);
 }
 
 // S11: the fixed decline for text the user types that asks for clinical

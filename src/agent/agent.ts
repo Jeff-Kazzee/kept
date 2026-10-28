@@ -28,6 +28,7 @@ import { DEFAULT_EXTRACTION_EFFORT, type Effort } from "../domain/claim.ts";
 import { OutOfScopeError, SCOPE_DECLINE, hasClinicalContent } from "../domain/scope.ts";
 import { InvalidRequestError } from "../intake/service.ts";
 import { ModelCallError } from "../model/client.ts";
+import { NO_PROVIDER_TEXT } from "../model/providers/messages.ts";
 import { MODEL, ZERO_USAGE, type TokenUsage } from "../model/request.ts";
 import { buildToolRequest, functionCalls, outputText, type InputItem, type OutputItem, type ToolModelClient } from "../model/responses.ts";
 import type { SlotView } from "../slots/types.ts";
@@ -96,7 +97,17 @@ const ERROR_MESSAGES: Record<ChatErrorCode, string> = {
   ungrounded: UNGROUNDED_TEXT,
   invalid_request: "That message could not be sent. Nothing was saved.",
   server_error: "The server could not complete the request. Nothing in your case changed.",
+  provider_not_ready: NO_PROVIDER_TEXT,
 };
+
+// J12: the chosen provider cannot take a call. The turn is refused before
+// the person's message is saved.
+export class ProviderNotReadyError extends Error {
+  override name = "ProviderNotReadyError";
+  constructor() {
+    super(NO_PROVIDER_TEXT);
+  }
+}
 
 export type AgentOptions = {
   model?: string;
@@ -111,6 +122,9 @@ export type AgentOptions = {
   rethrow?: (err: unknown) => boolean;
   // Told about each failed model call, with codes only, for the server log.
   onCallError?: (info: CallErrorInfo) => void;
+  // J12: whether the chosen provider can take a call. A turn that needs
+  // the model is refused with provider_not_ready when it cannot.
+  ready?: () => boolean;
 };
 
 export type CallErrorInfo = { turnId: string; call: number; kind: "loop" | "retry"; status: number | null; type: string | null; code: string | null };
@@ -172,6 +186,7 @@ export class CaseAgent {
   readonly #limits: AgentLimits;
   readonly #rethrow: (err: unknown) => boolean;
   readonly #onCallError: (info: CallErrorInfo) => void;
+  readonly #ready: () => boolean;
   #busy = false;
 
   constructor(store: EventStore, services: ToolServices, client: ToolModelClient, options: AgentOptions = {}) {
@@ -188,6 +203,7 @@ export class CaseAgent {
     this.#limits = { ...DEFAULT_LIMITS, ...options.limits };
     this.#rethrow = options.rethrow ?? (() => false);
     this.#onCallError = options.onCallError ?? (() => {});
+    this.#ready = options.ready ?? (() => true);
   }
 
   get modelLabel(): string {
@@ -272,6 +288,9 @@ export class CaseAgent {
       return;
     }
 
+    // J12: with no provider ready the turn answers the fixed setup
+    // sentence, and nothing is saved.
+    if (!this.#ready()) throw new ProviderNotReadyError();
     this.#append(input.expectedVersion, [{ type: "chat_user_message", data: { message_id: userId, turn_id: turnId, text, withheld: false } }]);
     emit({ event: "turn.started", data: { turnId, userMessageId: userId } });
     // Finding 11: what the case held when the turn started, apart from the
@@ -606,6 +625,7 @@ export function errorCode(err: unknown): ChatErrorCode {
   if (err instanceof OutOfScopeError) return "out_of_scope";
   if (err instanceof InvalidRequestError) return "invalid_request";
   if (err instanceof ModelCallError) return "model_unavailable";
+  if (err instanceof ProviderNotReadyError) return "provider_not_ready";
   return "server_error";
 }
 

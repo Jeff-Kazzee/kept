@@ -68,7 +68,7 @@ function services(store: EventStore) {
 // carries the generation of the page's latest read.
 function appOn(store: EventStore) {
   const svc = services(store);
-  const handle = createApi(svc.intake, svc.kase, { mode: "recorded" }, svc.reply, svc);
+  const handle = createApi(svc.intake, svc.kase, {}, svc.reply, svc);
   let generation: number | undefined;
   // `gen` null sends no generation, as a page that never read the case.
   const raw = async (method: string, p: string, body?: unknown, gen: number | null = generation ?? null): Promise<ApiResponse> =>
@@ -88,7 +88,7 @@ function appOn(store: EventStore) {
 
 type App = ReturnType<typeof appOn>;
 
-// An MCP server process on the same file, in recorded mode.
+// An MCP server on the same file, with the recorded test doubles.
 function mcpOn(file: string): McpDeps {
   const svc = services(new EventStore(file));
   return { store: svc.store, services: svc, limiter: new RateLimiter(), messageIdFor: fixtureMessageIds(defaultMessageId), now: () => "2026-11-06T17:00:00.000Z" };

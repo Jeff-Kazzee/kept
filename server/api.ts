@@ -18,6 +18,7 @@ import { timezoneSettings } from "../src/settings/events.ts";
 import { CaseDeletedError, CompactionError, StaleEditError, StoreBusyError, type EventStore } from "../src/store/event-log.ts";
 import { settingsRoutes, type ProviderSource, type Route } from "./settings.ts";
 import { SecretsBusyError, SecretsFileError } from "../src/model/providers/secrets.ts";
+import { NO_PROVIDER_TEXT } from "../src/model/providers/messages.ts";
 import { GoogleError } from "../src/google/http.ts";
 import { GoogleBusyError } from "../src/google/intents.ts";
 import { SETTINGS_BUSY_TEXT, SETTINGS_UNREADABLE_TEXT } from "./auth.ts";
@@ -62,7 +63,18 @@ const ApproveBody = z
 const UndoBody = z.object({ expectedVersion: Version, version: Version }).strict();
 
 // `settings`: the provider part of the settings (sprint 10, server/auth.ts).
-export type ApiOptions = { mode: "recorded" | "live"; settings?: ProviderSource };
+// `ready`: whether the chosen provider can take a call (J12). Without it
+// every model step runs.
+export type ApiOptions = { settings?: ProviderSource; ready?: () => boolean };
+
+// J12: the routes that call the model. With no provider ready each answers
+// 422 provider_not_ready with the fixed sentence, and writes nothing.
+const MODEL_ROUTES: readonly RegExp[] = [
+  /^\/api\/messages\/([^/]+)\/extract$/,
+  /^\/api\/conflicts\/([^/]+)\/explain$/,
+  /^\/api\/questions\/next$/,
+  /^\/api\/reply\/suggest$/,
+];
 
 // The store and the records service, which the MCP server also uses, and
 // the Google connection (0012), whose calendar entries undo at Google.
@@ -79,7 +91,6 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       // poll again instead of being missed.
       const live = kase.liveVersion();
       return {
-        mode: options.mode,
         modelClient: service.modelLabel,
         messages: service.messages(),
         evidence: service.evidence(),
@@ -203,6 +214,9 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
           status: 400,
           body: { error: "generation_required", message: "This request does not say which case it was made for. Reload the page and try again. Nothing was saved." },
         };
+      }
+      if (options.ready && MODEL_ROUTES.some((r) => r.source === pattern.source) && !options.ready()) {
+        return { status: 422, body: { error: "provider_not_ready", message: NO_PROVIDER_TEXT } };
       }
       try {
         // One command on the case: every write it makes checks the case

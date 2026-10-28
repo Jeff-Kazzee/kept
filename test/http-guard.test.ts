@@ -52,7 +52,7 @@ async function seededFile() {
 
 // The real app process, started once it says where it listens.
 async function startServer(file: string, port = 20000 + Math.floor(Math.random() * 20000)) {
-  const env = { ...process.env, APP_PORT: String(port), APP_DB: file, APP_LIVE_MODEL: "", MODEL_API_KEY: "" };
+  const env = { ...process.env, APP_PORT: String(port), APP_DB: file, MODEL_API_KEY: "" };
   const child = spawn(process.execPath, [fromPackage("server/main.ts")], { env, stdio: ["ignore", "pipe", "pipe"] });
   children.push(child);
   const out = await new Promise<string>((resolve, reject) => {
@@ -80,7 +80,7 @@ function allRoutes() {
   const client = RecordedModelClient.fromDirectory();
   const svc = intake(store);
   const kase = new CaseService(store, svc, client);
-  const api = createApi(svc, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, svc, kase));
+  const api = createApi(svc, kase, {}, new ReplyService(store, kase, client), agentAccess(store, svc, kase));
   store.close();
   return api.routes.map(({ method, pattern }) => ({ method, path: pattern.source.replace(/^\^/, "").replace(/\$$/, "").replaceAll("\\/", "/").replaceAll("([^/]+)", "x") }));
 }

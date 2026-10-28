@@ -43,7 +43,7 @@ function start(file: string) {
   const client = RecordedModelClient.fromDirectory();
   const intake = new IntakeService(store, client);
   const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
-  const handle = asFreshPage(createApi(intake, kase, { mode: "recorded" }, new ReplyService(store, kase, client), agentAccess(store, intake, kase)), kase);
+  const handle = asFreshPage(createApi(intake, kase, {}, new ReplyService(store, kase, client), agentAccess(store, intake, kase)), kase);
   const call = async (method: string, p: string, body?: unknown) => {
     const res = await handle({ method, path: p, body });
     if (res.status !== 200) throw new Error(`${method} ${p}: ${res.status} ${JSON.stringify(res.body)}`);
