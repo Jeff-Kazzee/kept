@@ -170,7 +170,7 @@ describe("the demo beat over MCP: the agent works the case, and the person undoe
 
     const schedule = structured(await callTool(agent, "get_schedule", {}));
     const mon = schedule.appointments.find((a: { slot_key: string }) => a.slot_key === MON);
-    expect(mon).toMatchObject({ state: "offered", state_meaning: "The office offered this time. You have not accepted it." });
+    expect(mon).toMatchObject({ state: "offered", state_meaning: "The office offered this time. It is not booked until you ask for it and the office confirms." });
     expect(schedule.time_zone).toMatchObject({ name: "America/Denver", set_by: "agent" });
 
     const archived = structured(await callTool(agent, "archive_appointment", { slot_key: TUE, expected_version: 0 }));

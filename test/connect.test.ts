@@ -75,7 +75,7 @@ describe("the connect test without ssh", () => {
     const got = await client.callTool({ name: "get_appointment", arguments: { slot_key: MON } });
     expect(got.isError ?? false).toBe(false);
     expect(got.structuredContent).toMatchObject({
-      appointment: { slot_key: MON, state: "offered", state_meaning: "The office offered this time. You have not accepted it.", record_version: 0 },
+      appointment: { slot_key: MON, state: "offered", state_meaning: "The office offered this time. It is not booked until you ask for it and the office confirms.", record_version: 0 },
     });
     const noted = await client.callTool({ name: "add_note", arguments: { slot_key: MON, text: "Ask about parking.", expected_version: 0 } });
     expect(noted.isError ?? false).toBe(false);

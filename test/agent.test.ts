@@ -2,6 +2,7 @@
 // its text, with scripted model replies and no network.
 import { describe, expect, it } from "vitest";
 import { AGENT_TOOL_NAMES, AGENT_TOOLS } from "../src/agent/tools.ts";
+import { GOOGLE_TOOL_NAMES } from "../src/google/tools.ts";
 import { DRAFT_OPEN_NOTICE, UNGROUNDED_TEXT, WITHHELD_USER_TEXT } from "../src/agent/types.ts";
 import { readFixtureText } from "../src/fixtures/load.ts";
 import { MODEL } from "../src/model/request.ts";
@@ -60,7 +61,8 @@ describe("G1: the model request", () => {
       tool_choice: "auto",
     });
     expect(first!.model).not.toMatch(/contributor/);
-    expect(first!.tools.map((t) => t.name)).toEqual(AGENT_TOOL_NAMES);
+    // SP12.2: without Google the Google tools are not offered.
+    expect(first!.tools.map((t) => t.name)).toEqual(AGENT_TOOL_NAMES.filter((n) => !(GOOGLE_TOOL_NAMES as readonly string[]).includes(n)));
     // Turn two of the same turn carries the reasoning item, the call and its output.
     const types = second!.input.map((i) => (i as { type?: string }).type ?? (i as { role: string }).role);
     expect(types).toEqual(["user", "reasoning", "function_call", "function_call_output"]);

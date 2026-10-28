@@ -216,10 +216,27 @@ export type TurnResult = {
   textOk: boolean | null;
   // The final text, for reading the report. It is what the person saw.
   text: string;
+  // SP12.1: each answer code did not show, with its problems. Model output
+  // about synthetic data, kept so the cause of a replacement can be read.
+  rejected: Array<{ text: string; problems: string[] }>;
+  // SP12.2: where the turn's time went. Each call of the agent with its
+  // kind, each call a tool made (extraction, explanation, question,
+  // template) by key, each tool and each answer check, in milliseconds.
+  timing: TurnTiming;
   latencyMs: number;
   firstByteMs: number | null;
   usage: TokenUsage;
   costUsd: number;
+};
+
+type Percentiles = { p50: number | null; p95: number | null };
+const percentiles = (values: number[]): Percentiles => ({ p50: percentile(values, 50), p95: percentile(values, 95) });
+
+export type TurnTiming = {
+  agentCalls: Array<{ kind: string; ms: number; firstByteMs: number | null; inputTokens: number; outputTokens: number }>;
+  nestedCalls: Array<{ key: string; ms: number; ok: boolean }>;
+  tools: Array<{ tool: string; ms: number }>;
+  checksMs: number[];
 };
 
 export type ScriptReport = {
@@ -244,6 +261,16 @@ export type ScriptReport = {
   retries: { made: number; failed: number };
   latencyMs: { p50: number | null; p95: number | null };
   firstByteMs: { p50: number | null; p95: number | null };
+  // SP12.2: the turn's parts over the script: the agent's model calls, the
+  // calls tools made, the tools themselves and the answer checks.
+  timing: {
+    agentCallsPerTurn: number | null;
+    agentCallMs: Percentiles;
+    agentInputTokensPerCall: number | null;
+    nestedCallMs: Percentiles;
+    toolMs: Percentiles;
+    checkMs: Percentiles;
+  };
   usage: TokenUsage;
   costUsd: number;
   skippedActions: SkippedAction[];
@@ -411,6 +438,19 @@ export async function runChatEval(options: ChatEvalOptions): Promise<ChatEvalRep
               : null,
             textOk,
             text: finalText,
+            rejected: report.rejected.map((r) => ({ text: r.text, problems: [...r.problems] })),
+            timing: {
+              agentCalls: report.calls.map((c) => ({
+                kind: c.kind ?? "loop",
+                ms: c.latency_ms,
+                firstByteMs: c.first_byte_ms,
+                inputTokens: c.usage.input,
+                outputTokens: c.usage.output,
+              })),
+              nestedCalls: guard.log.slice(toolCallsBefore).map((c) => ({ key: c.key, ms: c.latencyMs, ok: c.ok })),
+              tools: report.timings.tools,
+              checksMs: report.timings.checks,
+            },
             latencyMs,
             firstByteMs: calls[0]?.firstByteMs ?? null,
             usage,
@@ -495,6 +535,8 @@ async function act(app: ReturnType<typeof build>, store: EventStore, clock: () =
   }
 }
 
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
 export type SkippedAction = { run: number; step: number; action: string; reason: string };
 
 function scriptReport(script: ChatScript, runsCompleted: number, turns: TurnResult[], skipped: SkippedAction[]): ScriptReport {
@@ -503,6 +545,7 @@ function scriptReport(script: ChatScript, runsCompleted: number, turns: TurnResu
   const texts = turns.filter((t) => t.textOk !== null);
   const latencies = turns.map((t) => t.latencyMs);
   const firstBytes = turns.flatMap((t) => (t.firstByteMs === null ? [] : [t.firstByteMs]));
+  const agentCalls = turns.flatMap((t) => t.timing.agentCalls);
   return {
     id: script.id,
     title: script.title,
@@ -524,6 +567,14 @@ function scriptReport(script: ChatScript, runsCompleted: number, turns: TurnResu
     retries: { made: turns.filter((t) => t.retried).length, failed: turns.filter((t) => t.callErrors.some((e) => e.kind === "retry")).length },
     latencyMs: { p50: percentile(latencies, 50), p95: percentile(latencies, 95) },
     firstByteMs: { p50: percentile(firstBytes, 50), p95: percentile(firstBytes, 95) },
+    timing: {
+      agentCallsPerTurn: turns.length > 0 ? round1(agentCalls.length / turns.length) : null,
+      agentCallMs: percentiles(agentCalls.map((c) => c.ms)),
+      agentInputTokensPerCall: agentCalls.length > 0 ? Math.round(agentCalls.reduce((n, c) => n + c.inputTokens, 0) / agentCalls.length) : null,
+      nestedCallMs: percentiles(turns.flatMap((t) => t.timing.nestedCalls.map((c) => c.ms))),
+      toolMs: percentiles(turns.flatMap((t) => t.timing.tools.map((c) => c.ms))),
+      checkMs: percentiles(turns.flatMap((t) => t.timing.checksMs)),
+    },
     usage,
     costUsd: estimateUsd(usage),
     skippedActions: skipped,
@@ -546,6 +597,11 @@ export function formatChatSummary(report: ChatEvalReport): string {
     lines.push(
       `  turn latency p50 ${s.latencyMs.p50 ?? "n/a"} ms, p95 ${s.latencyMs.p95 ?? "n/a"} ms, first byte p50 ${s.firstByteMs.p50 ?? "n/a"} ms. ` +
         `Tokens input ${s.usage.input}, output ${s.usage.output}. Estimated cost $${s.costUsd.toFixed(4)}`,
+    );
+    const t = s.timing;
+    lines.push(
+      `  timing: agent calls per turn ${t.agentCallsPerTurn ?? "n/a"}, agent call p50 ${t.agentCallMs.p50 ?? "n/a"} ms (input tokens per call ${t.agentInputTokensPerCall ?? "n/a"}), ` +
+        `tool calls p50 ${t.nestedCallMs.p50 ?? "n/a"} ms, tools p50 ${t.toolMs.p50 ?? "n/a"} ms, checks p50 ${t.checkMs.p50 ?? "n/a"} ms`,
     );
   }
   lines.push(

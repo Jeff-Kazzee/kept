@@ -47,7 +47,7 @@ import {
   type Card,
 } from "./types.ts";
 import type { FunctionTool } from "../model/responses.ts";
-import { GOOGLE_TOOLS, GOOGLE_WRITE_TOOLS, type GoogleServices } from "../google/tools.ts";
+import { GOOGLE_TOOLS, GOOGLE_TOOL_NAMES, GOOGLE_WRITE_TOOLS, type GoogleServices } from "../google/tools.ts";
 
 export type ToolServices = {
   intake: IntakeService;
@@ -1341,19 +1341,33 @@ export const toolLabel = (name: string) => AGENT_TOOLS.find((t) => t.name === na
 
 export const toolByName = (name: string) => AGENT_TOOLS.find((t) => t.name === name) ?? null;
 
-export function functionTools(): FunctionTool[] {
-  return AGENT_TOOLS.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.parameters, strict: false }));
+// SP12.2: the tools the in-app agent offers in a turn. A Google tool needs
+// the connection and its permission: the Gmail tools the Gmail permission,
+// the calendar tools the calendar permission. Without Google every Google
+// tool is left out, which keeps their schemas out of each request.
+export function availableTools(services: Pick<ToolServices, "google">): ToolSpec<unknown>[] {
+  const status = services.google?.connection.status();
+  return AGENT_TOOLS.filter((t) => {
+    if (!(GOOGLE_TOOL_NAMES as readonly string[]).includes(t.name)) return true;
+    if (!status?.connected) return false;
+    return t.name.startsWith("gmail_") ? status.gmail : status.calendar;
+  });
+}
+
+export function functionTools(tools: ToolSpec<unknown>[] = AGENT_TOOLS): FunctionTool[] {
+  return tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.parameters, strict: false }));
 }
 
 export type ParsedCall =
   | { ok: true; spec: ToolSpec<unknown>; input: unknown }
   | { ok: false; tool: string | null; problem: "unknown_tool" | "invalid_arguments"; detail: string };
 
-// Checks a call's name and arguments. A call with an unknown tool, text that
-// is not JSON or arguments outside the rules runs nothing.
-export function parseCall(name: string, args: string): ParsedCall {
-  const spec = toolByName(name);
-  if (!spec) return { ok: false, tool: null, problem: "unknown_tool", detail: `No tool ${name.slice(0, 60)}. The tools are: ${AGENT_TOOL_NAMES.join(", ")}.` };
+// Checks a call's name and arguments. A call with an unknown tool, a tool
+// the turn did not offer, text that is not JSON or arguments outside the
+// rules runs nothing.
+export function parseCall(name: string, args: string, tools: ToolSpec<unknown>[] = AGENT_TOOLS): ParsedCall {
+  const spec = tools.find((t) => t.name === name) ?? null;
+  if (!spec) return { ok: false, tool: null, problem: "unknown_tool", detail: `No tool ${name.slice(0, 60)}. The tools are: ${tools.map((t) => t.name).join(", ")}.` };
   let json: unknown;
   try {
     json = args.trim() === "" ? {} : JSON.parse(args);

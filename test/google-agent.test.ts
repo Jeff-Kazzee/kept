@@ -10,10 +10,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mcpContext, toolByName as mcpTool } from "../mcp/tools.ts";
 import { createApi } from "../server/api.ts";
 import { GoogleCalendar } from "../src/google/calendar.ts";
-import { GoogleConnection } from "../src/google/connection.ts";
+import { GoogleConnection, type GoogleStatus } from "../src/google/connection.ts";
 import { GoogleCalendarEvents } from "../src/google/events.ts";
 import { Gmail } from "../src/google/gmail.ts";
-import type { GoogleServices } from "../src/google/tools.ts";
+import { GOOGLE_TOOL_NAMES, type GoogleServices } from "../src/google/tools.ts";
+import { availableTools } from "../src/agent/tools.ts";
 import { SecretsStore } from "../src/model/providers/secrets.ts";
 import { RecordedModelClient, type Recording } from "../src/model/recorded.ts";
 import { EventStore } from "../src/store/event-log.ts";
@@ -45,12 +46,12 @@ afterEach(() => {
 });
 
 // The case services with a connected Google account and one clinic email.
-async function connected() {
+async function connected(features = { gmail: true, calendar: true }) {
   const dir = mkdtempSync(path.join(tmpdir(), "google-agent-"));
   dirs.push(dir);
   const fake = new FakeGoogle();
   const connection = new GoogleConnection({ client: FAKE_CLIENT, store: new SecretsStore(path.join(dir, "app-secrets.sqlite")), fetch: fake.fetch, now: () => fake.now });
-  const flow = connection.startConnect({ expectedVersion: 0, features: { gmail: true, calendar: true }, calendarId: "primary", redirectUri: "http://127.0.0.1:5192/auth/google/callback" });
+  const flow = connection.startConnect({ expectedVersion: 0, features, calendarId: "primary", redirectUri: "http://127.0.0.1:5192/auth/google/callback" });
   const back = fake.consent(flow.authorizeUrl);
   await connection.finishConnect({ state: back.searchParams.get("state"), code: back.searchParams.get("code"), error: null, cookie: flow.cookie });
   fake.messages.set(
@@ -150,13 +151,33 @@ describe("sprint 11: the in-app agent with Gmail and Google Calendar", () => {
     expect(fake.calls.some((c) => c.url.pathname.startsWith("/calendar/") && c.method !== "GET")).toBe(false);
   });
 
-  it("without the Google services the tools answer google_not_configured and write nothing", async () => {
-    const { app } = await connected();
+  it("SP12.2: without the Google services no Google tool is offered, and a call to one runs nothing", async () => {
+    const { app, fake } = await connected();
     const { google: _g, ...plain } = app;
     const model = sequence(reply(fnCall("gmail_search", { days: null, senders: null })), reply(message("Google is not set up in this app.")));
     const r = await say(agentFor(plain, model), plain, "Search my Gmail.");
-    expect(r.report.tools.map((t) => [t.tool, t.code])).toEqual([["gmail_search", "google_not_configured"]]);
+    expect(model.calls[0]!.body.tools.map((t) => t.name).filter((n) => (GOOGLE_TOOL_NAMES as readonly string[]).includes(n))).toEqual([]);
+    expect(r.report.tools.map((t) => [t.tool, t.code])).toEqual([["unknown", "unknown_tool"]]);
     expect(r.of("action")).toEqual([]);
+    expect(fake.calls.filter((c) => c.url.pathname.startsWith("/gmail/"))).toEqual([]);
+  });
+
+  it("SP12.2: offers the Gmail tools only with the Gmail permission, and the calendar tools only with the calendar permission", async () => {
+    const google = (n: string[]) => n.filter((x) => (GOOGLE_TOOL_NAMES as readonly string[]).includes(x));
+    const offered = async (features: { gmail: boolean; calendar: boolean }) => google(availableTools((await connected(features)).app).map((t) => t.name));
+    expect(await offered({ gmail: true, calendar: true })).toEqual([...GOOGLE_TOOL_NAMES]);
+    expect(await offered({ gmail: true, calendar: false })).toEqual(["gmail_search", "gmail_import"]);
+    expect(await offered({ gmail: false, calendar: true })).toEqual(["calendar_list", "calendar_sync_slot", "calendar_remove_slot"]);
+    // A connection that needs reconnecting, or an app with no OAuth client,
+    // offers none.
+    const status = (s: Partial<GoogleStatus>) => ({ google: { connection: { status: () => ({ connected: true, gmail: true, calendar: true, ...s }) } } }) as unknown as Parameters<typeof availableTools>[0];
+    expect(google(availableTools(status({ connected: false })).map((t) => t.name))).toEqual([]);
+    expect(google(availableTools(status({})).map((t) => t.name))).toEqual([...GOOGLE_TOOL_NAMES]);
+    // The model request carries only the offered tools.
+    const { app } = await connected({ gmail: true, calendar: false });
+    const model = sequence(reply(message("I can search your Gmail.")));
+    await say(agentFor(app, model), app, "Hi");
+    expect(google(model.calls[0]!.body.tools.map((t) => t.name))).toEqual(["gmail_search", "gmail_import"]);
   });
 
   it("over MCP an external agent gets the same tools, logged as mcp, and the shared undo tool reverses the write at Google", async () => {

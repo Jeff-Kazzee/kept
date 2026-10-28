@@ -161,7 +161,15 @@ function ownReview(clause: string, done: ReadonlySet<string> = new Set()): boole
 }
 
 // A colon splits a clause only before a space, so "10:30" stays whole.
-const clauses = (s: string) => s.split(/[,;]|:\s|\b(?:and|but|while|whereas|so|although|though)\b/).map((c) => c.trim()).filter(Boolean);
+// SP12.1: an answer word at the start, set off by a dash ("No — Monday is
+// offered"), is a clause of its own, so its "no" does not negate the rest.
+const ANSWER_WORD = /^((?:no|nope|not yet|not quite|yes|yeah|yep)\b)\s*[—–-]+\s*/;
+const clauses = (s: string) =>
+  s
+    .replace(ANSWER_WORD, "$1, ")
+    .split(/[,;]|:\s|\b(?:and|but|while|whereas|so|although|though)\b/)
+    .map((c) => c.trim())
+    .filter(Boolean);
 
 // The slots among the facts that the mentions name.
 function slotsNamed(mentions: Mention[], facts: Fact[]): Fact[] {

@@ -74,12 +74,14 @@ export function stateLabel(state: SlotState, source: string): string {
 
 // What a state means for the user, in words code chooses. The MCP server
 // returns it so an agent need not guess, for example, that a requested
-// slot is not booked yet.
+// slot is not booked yet. SP12.1: the in-app agent repeats these words, so
+// they use only state words the answer check reads ("accepted" and
+// "settled" are words it cannot map, and fail closed).
 const STATE_MEANINGS: Record<SlotState, string> = {
-  offered: "The office offered this time. You have not accepted it.",
+  offered: "The office offered this time. It is not booked until you ask for it and the office confirms.",
   requested: "You asked the office for this time. The office has not confirmed it yet.",
   confirmed: "This time is confirmed.",
-  change_proposed: "This time is confirmed, but a change to it is proposed and not settled.",
+  change_proposed: "This time is confirmed, and the office proposed a change to it.",
   canceled: "This time is canceled.",
   declined: "You declined this time.",
 };
