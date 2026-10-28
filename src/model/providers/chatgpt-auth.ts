@@ -20,10 +20,11 @@
 // 5. The tokens, saved with the issued client id in the secrets file.
 //
 // Refresh happens before expiry and once on a 401 from the Responses API.
-// Refresh, sign-in completion and sign-out each hold the secrets file's
-// lock (secrets.ts) from their read to their write, so they never overlap,
-// in this process or across processes. A refresh stores its result only if
-// the session it refreshed is still the stored one. A refresh the token
+// Refresh and sign-out hold the session lease (secrets.ts) while they call
+// OpenAI, so they never overlap, in this process or across processes.
+// Sign-in completion is one compare-and-swap transaction. A refresh stores
+// its result only if it still holds the lease and the session it refreshed
+// is still the stored one. A refresh the token
 // endpoint refuses for good signs the user out. A network failure keeps
 // the tokens.
 //
@@ -32,7 +33,7 @@
 // carries the PKCE challenge, never the verifier, and no id_token_hint.
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { IdentityError, OpenAiIdentity, type FetchLike, type VerifiedIdentity } from "./oidc.ts";
-import type { ChatGptModel, ChatGptSession, SecretsStore, StoredSettings } from "./secrets.ts";
+import type { ChatGptModel, ChatGptSession, Lease, SecretsStore, StoredSettings } from "./secrets.ts";
 
 export const RESOURCE = "https://api.openai.com/v1";
 export const MODELS_URL = `${RESOURCE}/models`;
@@ -48,6 +49,8 @@ export const ATTEMPT_TTL_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 5;
 // Refresh this long before the access token expires.
 export const REFRESH_MARGIN_MS = 2 * 60_000;
+// The lease refresh and sign-out hold (secrets.ts).
+export const SESSION_LEASE = "chatgpt_session";
 
 // Refresh error codes that mean the refresh token cannot be used again
 // (errors-and-recovery, Refresh errors).
@@ -219,22 +222,30 @@ export class ChatGptAuth {
     const planUsage = session.scopes.includes(PLAN_USAGE_SCOPE);
     const models = planUsage ? await this.listModels(session.accessToken).catch(() => null) : null;
 
-    return this.#store.withLock(async () => {
-      const current = this.#store.read().chatgpt;
-      // Another registration finished first: keep it, refuse this one.
-      if (current.clientId !== null && current.clientId !== clientId) return { ok: false, code: "client_mismatch" } as const;
-      if (current.account && current.account.subject !== identity.subject) return { ok: false, code: "account_mismatch" } as const;
-      this.#store.update(
-        (s) => ({
+    // One transaction checks and writes, so of two registrations finishing
+    // at once, in any process, exactly one is saved.
+    let result: CallbackResult = { ok: true, planUsage };
+    this.#store.update(
+      (s) => {
+        // Another registration finished first: keep it, refuse this one.
+        if (s.chatgpt.clientId !== null && s.chatgpt.clientId !== clientId) {
+          result = { ok: false, code: "client_mismatch" };
+          return null;
+        }
+        if (s.chatgpt.account && s.chatgpt.account.subject !== identity.subject) {
+          result = { ok: false, code: "account_mismatch" };
+          return null;
+        }
+        return {
           ...s,
           // Signing in chooses ChatGPT only when no provider was chosen yet.
           provider: s.provider ?? "chatgpt",
           chatgpt: { ...s.chatgpt, clientId, account: { ...identity }, session, models: models ?? s.chatgpt.models },
-        }),
-        { bump: true },
-      );
-      return { ok: true, planUsage } as const;
-    });
+        };
+      },
+      { bump: true },
+    );
+    return result;
   }
 
   // The token set from a token response, or null when it is incomplete.
@@ -311,12 +322,21 @@ export class ChatGptAuth {
     return this.#refreshing;
   }
 
-  #doRefresh(stale: string): Promise<string> {
-    return this.#store.withLock(() => this.#refreshLocked(stale));
+  // A usable token another holder stored, or undefined.
+  #fresh(stale: string): string | undefined {
+    const session = this.#store.read().chatgpt.session;
+    if (!session || session.accessToken === stale || session.expiresAt - REFRESH_MARGIN_MS <= this.#now()) return undefined;
+    return session.scopes.includes(PLAN_USAGE_SCOPE) ? session.accessToken : undefined;
   }
 
-  async #refreshLocked(stale: string): Promise<string> {
-    // Read again under the lock: another process, such as the eval, may
+  // Holds the session lease. A process that finds another's live lease
+  // waits and reads again, and uses that holder's refresh when it lands.
+  #doRefresh(stale: string): Promise<string> {
+    return this.#store.withLease(SESSION_LEASE, (lease) => this.#refreshHeld(stale, lease), { skip: () => this.#fresh(stale) });
+  }
+
+  async #refreshHeld(stale: string, lease: Lease): Promise<string> {
+    // Read again holding the lease: another process, such as the eval, may
     // have refreshed already.
     const { chatgpt } = this.#store.read();
     const session = chatgpt.session;
@@ -326,7 +346,7 @@ export class ChatGptAuth {
       return session.accessToken;
     }
     if (!session.refreshToken) {
-      this.#endSession();
+      this.#endSession(session);
       throw new ChatGptAuthError("session_ended");
     }
     const result = await this.#token({
@@ -338,7 +358,7 @@ export class ChatGptAuth {
     if (!result.ok) {
       const terminal = (result.status === 400 || result.status === 401) && result.code !== null && TERMINAL_REFRESH_CODES.has(result.code);
       if (terminal) {
-        this.#endSession();
+        this.#endSession(session);
         throw new ChatGptAuthError("session_ended");
       }
       throw new ChatGptAuthError("unavailable");
@@ -350,62 +370,76 @@ export class ChatGptAuth {
       try {
         const identity = await this.#identity.verifyIdToken(result.json.id_token, { clientId: chatgpt.clientId, nonce: null });
         if (chatgpt.account && identity.subject !== chatgpt.account.subject) {
-          this.#endSession();
+          this.#endSession(session);
           throw new ChatGptAuthError("session_ended");
         }
       } catch (err) {
         if (err instanceof ChatGptAuthError) throw err;
         if (err instanceof IdentityError && err.kind === "unavailable") throw new ChatGptAuthError("unavailable");
-        this.#endSession();
+        this.#endSession(session);
         throw new ChatGptAuthError("session_ended");
       }
     }
     // The access token, expiry, scopes and rotated refresh token together,
-    // and only over the session this refresh started from.
+    // in one transaction that checks the lease is still this holder's and
+    // the stored session is still the one refreshed. A refresh without plan
+    // usage counts as a visible change.
+    const planUsage = next.scopes.includes(PLAN_USAGE_SCOPE);
     let stored = false;
     this.#store.update(
-      (s) => {
+      (s, tx) => {
         const now = s.chatgpt.session;
-        if (!now || now.id !== session.id || now.refreshToken !== session.refreshToken) return s;
+        if (!tx.holds(lease) || !now || now.id !== session.id || now.refreshToken !== session.refreshToken) return null;
         stored = true;
         return { ...s, chatgpt: { ...s.chatgpt, session: next } };
       },
-      { bump: false },
+      { bump: !planUsage },
     );
     if (!stored) {
-      // The session was signed out or replaced meanwhile. The new refresh
-      // token is not kept, so it is revoked.
+      // The lease ran out or the session was signed out or replaced. The
+      // new refresh token is not kept, so it is revoked.
       if (next.refreshToken) await this.#revoke(next.refreshToken, chatgpt.clientId);
+      const other = this.#fresh(stale);
+      if (other !== undefined) return other;
       throw new ChatGptAuthError("signed_out");
     }
     // A refresh can grant fewer scopes. Without plan usage the token is not
     // used for this call either.
-    if (!next.scopes.includes(PLAN_USAGE_SCOPE)) {
-      this.#store.update((s) => s, { bump: true });
-      throw new ChatGptAuthError("plan_usage_off");
-    }
+    if (!planUsage) throw new ChatGptAuthError("plan_usage_off");
     return next.accessToken;
   }
 
   // Clears the tokens and keeps the registration: the host id, the issued
-  // client id and the account, for a later sign-in.
-  #endSession(): void {
-    this.#store.update((s) => ({ ...s, chatgpt: { ...s.chatgpt, session: null } }), { bump: true });
+  // client id and the account, for a later sign-in. Only if `session` is
+  // still the stored one, so a newer sign-in is never cleared.
+  #endSession(session: ChatGptSession): boolean {
+    let cleared = false;
+    this.#store.update(
+      (s) => {
+        const now = s.chatgpt.session;
+        if (!now || now.id !== session.id || now.refreshToken !== session.refreshToken) return null;
+        cleared = true;
+        return { ...s, chatgpt: { ...s.chatgpt, session: null } };
+      },
+      { bump: true },
+    );
+    return cleared;
   }
 
   // Signs out: revokes the refresh token, then clears the tokens. Returns
-  // whether OpenAI confirmed the revocation. Holds the lock, so a refresh
-  // in flight finishes first and its new refresh token is the one revoked.
-  // `onlyIf`, checked under the lock first, can refuse it: nothing is
-  // revoked or cleared, and `refused` is true.
-  signOut(options: { onlyIf?: () => boolean } = {}): Promise<{ revoked: boolean; refused: boolean }> {
-    return this.#store.withLock(async () => {
-      if (options.onlyIf && !options.onlyIf()) return { revoked: false, refused: true };
-      const { chatgpt } = this.#store.read();
+  // whether OpenAI confirmed the revocation. Holds the session lease, so a
+  // refresh in flight finishes first and its new refresh token is the one
+  // revoked. `onlyIf`, checked on the settings first, can refuse it:
+  // nothing is revoked or cleared, and `refused` is true.
+  signOut(options: { onlyIf?: (settings: StoredSettings) => boolean } = {}): Promise<{ revoked: boolean; refused: boolean }> {
+    return this.#store.withLease(SESSION_LEASE, async () => {
+      const settings = this.#store.read();
+      if (options.onlyIf && !options.onlyIf(settings)) return { revoked: false, refused: true };
+      const { chatgpt } = settings;
       const session = chatgpt.session;
       if (!session) return { revoked: true, refused: false };
       const revoked = session.refreshToken && chatgpt.clientId ? await this.#revoke(session.refreshToken, chatgpt.clientId) : false;
-      this.#endSession();
+      this.#endSession(session);
       return { revoked, refused: false };
     });
   }

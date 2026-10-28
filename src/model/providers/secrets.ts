@@ -1,45 +1,35 @@
 // The app's provider settings and secrets (0010, design item 2): the
-// chosen provider, the user's Meta key and the ChatGPT connection. One JSON
-// file beside the event log, outside it, so Delete case leaves it alone.
+// chosen provider, the user's Meta key, the model choices and the ChatGPT
+// connection. Their own SQLite file beside the event log, outside it, so
+// Delete case leaves them alone (0010 P31).
 //
 // - Mode 600, owned by the user that runs the app. A file with wider
-//   permissions is narrowed to 600 when read.
-// - Written atomically: a new file with a random name is written, flushed
-//   and renamed over the old one, so a crash leaves the old file or the new
-//   one, never half of one.
-// - Never followed through a symbolic link. Reads open with O_NOFOLLOW, and
-//   a rename replaces a link itself, never its target.
-// - Read from disk on every use, so the app and `pnpm eval:live` see each
-//   other's token refreshes.
-// - `withLock` serializes the steps that read, call OpenAI and write the
-//   ChatGPT session (refresh, sign-in completion, sign-out), within this
-//   process through a queue and between processes through a lock file made
-//   with O_EXCL beside the secrets file. A lock file older than
-//   LOCK_STALE_MS is taken over, as its holder has stopped.
+//   permissions is narrowed to 600 when opened, and SQLite gives its WAL
+//   and shared-memory files the same mode. A symbolic link in place of the
+//   file is refused, checked before and after the open.
+// - Every write is one BEGIN IMMEDIATE transaction that reads the row,
+//   applies the change and writes it, so a check on the settings version
+//   or the session id and the write that depends on it are one
+//   compare-and-swap, within this process and across processes such as
+//   the app and `pnpm eval:live`. WAL and a busy timeout let readers and
+//   writers wait briefly instead of failing.
+// - The steps that call OpenAI between their read and their write (a token
+//   refresh, a sign-out) hold a lease row instead of a lock: a process
+//   claims it for LEASE_MS, renews it every LEASE_RENEW_MS while it works,
+//   and releases it after. A lease past its expiry, whose holder stopped,
+//   can be claimed by another process. A write that needs the lease checks,
+//   in its own transaction, that the lease is still held.
 //
 // Nothing here logs, and no error message holds a value from the file.
 import { randomUUID } from "node:crypto";
-import {
-  closeSync,
-  constants,
-  fchmodSync,
-  fstatSync,
-  fsyncSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeSync,
-} from "node:fs";
-import { setTimeout as delay } from "node:timers/promises";
+import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { appDbPath } from "../../paths.ts";
 
-export const SECRETS_FILE_NAME = "app-secrets.json";
+export const SECRETS_FILE_NAME = "app-secrets.sqlite";
 
 // The secrets file sits in the event log's folder: data/ by default.
 export function appSecretsPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -52,8 +42,9 @@ export type ProviderKind = z.infer<typeof ProviderKind>;
 const ChatGptSession = z
   .object({
     // Made at sign-in and kept through refreshes. A refresh stores its
-    // result only while the same session is still stored.
-    id: z.string().min(1),
+    // result only while the same session is still stored. A session saved
+    // without one is read as it is and given one on the next write.
+    id: z.string().min(1).optional(),
     accessToken: z.string().min(1),
     refreshToken: z.string().min(1).nullable(),
     // Unix milliseconds.
@@ -126,196 +117,238 @@ export class SecretsFileError extends Error {
   override name = "SecretsFileError";
 }
 
-// A lock older than this is taken over. Longer than any step it guards:
-// the token request times out after 30 seconds.
-export const LOCK_STALE_MS = 60_000;
-// How long a step waits for the lock before it gives up.
-export const LOCK_WAIT_MS = 75_000;
-
-export class SecretsLockError extends Error {
-  override name = "SecretsLockError";
+// Another process kept the settings busy past the wait. Nothing was
+// written. Trying again later is safe.
+export class SecretsBusyError extends Error {
+  override name = "SecretsBusyError";
   constructor() {
-    super("The app's settings file stayed locked by another process.");
+    super("The app's settings file stayed busy in another process.");
   }
 }
 
-// One queue per file in this process, shared by every store on that file.
-const queues = new Map<string, Promise<unknown>>();
+// How long a lease lasts without renewal, how often its holder renews it,
+// and how long a step waits for another holder's lease.
+export const LEASE_MS = 30_000;
+export const LEASE_RENEW_MS = 10_000;
+export const LEASE_WAIT_MS = 75_000;
+// How long a transaction waits for another process's write.
+export const BUSY_TIMEOUT_MS = 5_000;
+
+export type Lease = { readonly name: string; readonly holder: string };
+
+// What a change can ask inside its transaction.
+export type Transaction = { holds(lease: Lease): boolean };
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  version INTEGER NOT NULL,
+  data TEXT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS lease (
+  name TEXT PRIMARY KEY,
+  holder TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+) STRICT;`;
+
+const isBusy = (err: unknown) => {
+  const code = (err as { errcode?: unknown } | null)?.errcode;
+  return typeof code === "number" && (code & 0xff) === 5;
+};
+
+// A session with no id gets one, so a refresh can tell it apart.
+function withSessionId(settings: StoredSettings): StoredSettings {
+  const session = settings.chatgpt.session;
+  if (!session || session.id) return settings;
+  return { ...settings, chatgpt: { ...settings.chatgpt, session: { ...session, id: randomUUID() } } };
+}
 
 export class SecretsStore {
   readonly file: string;
   readonly #now: () => number;
+  #db: DatabaseSync | null = null;
 
   constructor(file: string, options: { now?: () => number } = {}) {
     this.file = file;
     this.#now = options.now ?? Date.now;
   }
 
-  get lockFile(): string {
-    return `${this.file}.lock`;
+  // Checks the path, then opens the database. A missing file is made
+  // empty with mode 600 first, so SQLite never makes it with a wider one.
+  #open(): DatabaseSync {
+    if (this.#db) return this.#db;
+    const dir = path.dirname(this.file);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    this.#checkPath(true);
+    let db: DatabaseSync;
+    try {
+      db = new DatabaseSync(this.file, { timeout: BUSY_TIMEOUT_MS });
+    } catch (err) {
+      throw new SecretsFileError(`The app's settings file could not be opened (${(err as { code?: string }).code ?? "unknown"}): ${this.file}`);
+    }
+    try {
+      // The link check again, after the open, for a swap in between.
+      this.#checkPath(false);
+      db.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS};`);
+      db.exec(SCHEMA);
+    } catch (err) {
+      db.close();
+      if (err instanceof SecretsFileError) throw err;
+      if (isBusy(err)) throw new SecretsBusyError();
+      throw new SecretsFileError(`The app's settings file is not a settings database: ${this.file}`);
+    }
+    this.#db = db;
+    return db;
   }
 
-  // Runs `fn` holding the lock: first this process's queue, then the lock
-  // file. Not reentrant: `fn` must not call withLock.
-  withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const previous = queues.get(this.file) ?? Promise.resolve();
-    const run = previous.catch(() => {}).then(async () => {
-      const token = await this.#acquire();
+  #checkPath(create: boolean): void {
+    let st: ReturnType<typeof lstatSync>;
+    try {
+      st = lstatSync(this.file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT" || !create) throw new SecretsFileError(`The app's settings file could not be checked: ${this.file}`);
       try {
-        return await fn();
-      } finally {
-        this.#release(token);
+        closeSync(openSync(this.file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw new SecretsFileError(`The app's settings file could not be made: ${this.file}`);
       }
-    });
-    const tail = run.catch(() => {});
-    queues.set(this.file, tail);
-    void tail.then(() => {
-      if (queues.get(this.file) === tail) queues.delete(this.file);
-    });
-    return run;
+      return this.#checkPath(false);
+    }
+    if (st.isSymbolicLink()) throw new SecretsFileError(`The app's settings file is a symbolic link. Remove it: ${this.file}`);
+    if (!st.isFile()) throw new SecretsFileError(`The app's settings file is not a regular file: ${this.file}`);
+    if (typeof process.getuid === "function" && st.uid !== process.getuid()) {
+      throw new SecretsFileError(`The app's settings file belongs to another user: ${this.file}`);
+    }
+    if ((st.mode & 0o077) !== 0) chmodSync(this.file, 0o600);
   }
 
-  async #acquire(): Promise<string> {
-    mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    const token = randomUUID();
-    const started = Date.now();
-    for (;;) {
-      try {
-        const fd = openSync(this.lockFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-        try {
-          writeSync(fd, `${token} ${process.pid} ${this.#now()}\n`);
-        } finally {
-          closeSync(fd);
-        }
-        return token;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      }
-      this.#takeOverStale();
-      if (Date.now() - started > LOCK_WAIT_MS) throw new SecretsLockError();
-      await delay(25);
-    }
+  close(): void {
+    this.#db?.close();
+    this.#db = null;
   }
 
-  // Moves a stale lock aside under a new name, then checks that what moved
-  // is the stale lock that was read. If another process put a fresh lock
-  // there in between, the fresh one is put back.
-  #takeOverStale(): void {
-    let held: { token: string; at: number };
+  #parse(row: { data: string } | undefined): StoredSettings {
+    if (!row) return structuredClone(EMPTY_SETTINGS);
+    let json: unknown;
     try {
-      const st = lstatSync(this.lockFile);
-      const [tok, , at] = readFileSync(this.lockFile, "utf8").trim().split(" ");
-      held = { token: tok ?? "", at: Number(at) || st.mtimeMs };
+      json = JSON.parse(row.data);
     } catch {
-      return;
+      throw new SecretsFileError(`The app's settings file holds settings that are not valid JSON: ${this.file}`);
     }
-    if (this.#now() - held.at < LOCK_STALE_MS) return;
-    const aside = `${this.lockFile}.${randomUUID()}.stale`;
-    try {
-      renameSync(this.lockFile, aside);
-    } catch {
-      return;
-    }
-    try {
-      const moved = readFileSync(aside, "utf8").trim().split(" ")[0];
-      if (moved !== held.token) {
-        try {
-          linkSync(aside, this.lockFile);
-        } catch {
-          // A newer lock is in place already.
-        }
-      }
-    } finally {
-      rmSync(aside, { force: true });
-    }
-  }
-
-  #release(token: string): void {
-    try {
-      if (readFileSync(this.lockFile, "utf8").split(" ")[0] === token) rmSync(this.lockFile, { force: true });
-    } catch {
-      // Already gone, or taken over after going stale.
-    }
+    const parsed = StoredSettings.safeParse(json);
+    // The issue paths only, never the values.
+    if (!parsed.success) throw new SecretsFileError(`The app's settings file has an unexpected shape at ${parsed.error.issues.map((i) => i.path.join(".") || "(root)").join(", ")}.`);
+    return parsed.data;
   }
 
   read(): StoredSettings {
-    let fd: number;
+    const db = this.#open();
     try {
-      fd = openSync(this.file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      return this.#parse(db.prepare("SELECT data FROM settings WHERE id = 1").get() as { data: string } | undefined);
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") return structuredClone(EMPTY_SETTINGS);
-      if (code === "ELOOP") throw new SecretsFileError(`The app's settings file is a symbolic link. Remove it: ${this.file}`);
-      throw new SecretsFileError(`The app's settings file could not be opened (${code ?? "unknown"}).`);
+      if (isBusy(err)) throw new SecretsBusyError();
+      throw err;
+    }
+  }
+
+  // One transaction: reads the settings, applies `change` and writes the
+  // result. `bump` adds one to the settings version, for a change the
+  // settings page can see. A change that returns null writes nothing, and
+  // the current settings are returned.
+  update(change: (current: StoredSettings, tx: Transaction) => StoredSettings | null, options: { bump: boolean }): StoredSettings {
+    return this.#transaction((db) => {
+      const current = this.#parse(db.prepare("SELECT data FROM settings WHERE id = 1").get() as { data: string } | undefined);
+      const tx: Transaction = { holds: (lease) => this.#holds(db, lease) };
+      const next = change(current, tx);
+      if (next === null) return current;
+      const written = withSessionId(StoredSettings.parse(options.bump ? { ...next, version: next.version + 1 } : next));
+      db.prepare("INSERT INTO settings (id, version, data) VALUES (1, ?, ?) ON CONFLICT (id) DO UPDATE SET version = excluded.version, data = excluded.data").run(
+        written.version,
+        JSON.stringify(written),
+      );
+      return written;
+    });
+  }
+
+  #transaction<T>(fn: (db: DatabaseSync) => T): T {
+    const db = this.#open();
+    try {
+      db.exec("BEGIN IMMEDIATE");
+    } catch (err) {
+      if (isBusy(err)) throw new SecretsBusyError();
+      throw err;
     }
     try {
-      const stat = fstatSync(fd);
-      if (!stat.isFile()) throw new SecretsFileError(`The app's settings file is not a regular file: ${this.file}`);
-      if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
-        throw new SecretsFileError(`The app's settings file belongs to another user: ${this.file}`);
-      }
-      if ((stat.mode & 0o077) !== 0) fchmodSync(fd, 0o600);
-      const text = readFileSync(fd, "utf8");
-      let json: unknown;
+      const result = fn(db);
+      db.exec("COMMIT");
+      return result;
+    } catch (err) {
       try {
-        json = JSON.parse(text);
+        db.exec("ROLLBACK");
       } catch {
-        throw new SecretsFileError(`The app's settings file is not valid JSON: ${this.file}`);
+        // Already rolled back.
       }
-      const parsed = StoredSettings.safeParse(json);
-      // The issue paths only, never the values.
-      if (!parsed.success) throw new SecretsFileError(`The app's settings file has an unexpected shape at ${parsed.error.issues.map((i) => i.path.join(".") || "(root)").join(", ")}.`);
-      return parsed.data;
-    } finally {
-      closeSync(fd);
+      if (isBusy(err)) throw new SecretsBusyError();
+      throw err;
     }
   }
 
-  // Reads, applies `change` and writes the result. `bump` adds one to the
-  // settings version, for a change the settings page can see. A change that
-  // returns null writes nothing, and the current settings are returned.
-  update(change: (current: StoredSettings) => StoredSettings | null, options: { bump: boolean }): StoredSettings {
-    const current = this.read();
-    const next = change(current);
-    if (next === null) return current;
-    const written = StoredSettings.parse(options.bump ? { ...next, version: next.version + 1 } : next);
-    this.#write(written);
-    return written;
+  #holds(db: DatabaseSync, lease: Lease): boolean {
+    const row = db.prepare("SELECT holder, expires_at FROM lease WHERE name = ?").get(lease.name) as { holder: string; expires_at: number } | undefined;
+    return row !== undefined && row.holder === lease.holder && row.expires_at > this.#now();
   }
 
-  #write(settings: StoredSettings): void {
-    const dir = path.dirname(this.file);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const temp = path.join(dir, `.${path.basename(this.file)}.${randomUUID()}.tmp`);
-    const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  // Claims the lease if it is free, expired or already this holder's.
+  #claim(lease: Lease): boolean {
+    return this.#transaction((db) => {
+      const row = db.prepare("SELECT holder, expires_at FROM lease WHERE name = ?").get(lease.name) as { holder: string; expires_at: number } | undefined;
+      const now = this.#now();
+      if (row && row.holder !== lease.holder && row.expires_at > now) return false;
+      db.prepare("INSERT INTO lease (name, holder, expires_at) VALUES (?, ?, ?) ON CONFLICT (name) DO UPDATE SET holder = excluded.holder, expires_at = excluded.expires_at").run(
+        lease.name,
+        lease.holder,
+        now + LEASE_MS,
+      );
+      return true;
+    });
+  }
+
+  #renew(lease: Lease): void {
     try {
-      // The umask may have narrowed it further, never widened it. Set it
-      // exactly.
-      fchmodSync(fd, 0o600);
-      writeSync(fd, JSON.stringify(settings, null, 2) + "\n");
-      fsyncSync(fd);
-    } catch (err) {
-      closeSync(fd);
-      rmSync(temp, { force: true });
-      throw err;
-    }
-    closeSync(fd);
-    try {
-      renameSync(temp, this.file);
-    } catch (err) {
-      rmSync(temp, { force: true });
-      throw err;
-    }
-    // Flush the rename itself.
-    try {
-      const dfd = openSync(dir, constants.O_RDONLY);
-      try {
-        fsyncSync(dfd);
-      } finally {
-        closeSync(dfd);
-      }
+      this.#transaction((db) => db.prepare("UPDATE lease SET expires_at = ? WHERE name = ? AND holder = ?").run(this.#now() + LEASE_MS, lease.name, lease.holder));
     } catch {
-      // Some file systems do not allow fsync on a folder.
+      // The next renewal or the write's own lease check covers a miss.
+    }
+  }
+
+  #release(lease: Lease): void {
+    try {
+      this.#transaction((db) => db.prepare("DELETE FROM lease WHERE name = ? AND holder = ?").run(lease.name, lease.holder));
+    } catch {
+      // It expires on its own.
+    }
+  }
+
+  // Runs `fn` holding the named lease, renewed while it runs. While another
+  // holder has a live lease, `skip` is asked after each wait: a value it
+  // returns is used instead of claiming the lease, as when the other
+  // holder already did the work.
+  async withLease<T>(name: string, fn: (lease: Lease) => Promise<T>, options: { skip?: () => T | undefined } = {}): Promise<T> {
+    const lease: Lease = { name, holder: `${process.pid}:${randomUUID()}` };
+    const started = Date.now();
+    while (!this.#claim(lease)) {
+      const skipped = options.skip?.();
+      if (skipped !== undefined) return skipped;
+      if (Date.now() - started > LEASE_WAIT_MS) throw new SecretsBusyError();
+      await delay(25);
+    }
+    const timer = setInterval(() => this.#renew(lease), LEASE_RENEW_MS);
+    timer.unref();
+    try {
+      return await fn(lease);
+    } finally {
+      clearInterval(timer);
+      this.#release(lease);
     }
   }
 }
