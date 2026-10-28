@@ -29,10 +29,16 @@ const allowed = (id: string) => {
   }
 };
 
+// The connection's listed models with any contributor model removed. The
+// one list both the picker and the call's model come from.
+function listedChatGptModels(settings: StoredSettings): ModelOption[] {
+  return settings.chatgpt.models.filter((m) => allowed(m.slug)).map((m) => ({ id: m.slug, label: m.displayName, costHint: null }));
+}
+
 // The models the user may pick for a provider.
 export function modelOptions(settings: StoredSettings, provider: ProviderKind): ModelOption[] {
   if (provider === "meta") return META_MODELS.filter((m) => allowed(m.id));
-  const listed = settings.chatgpt.models.filter((m) => allowed(m.slug)).map((m) => ({ id: m.slug, label: m.displayName, costHint: null }));
+  const listed = listedChatGptModels(settings);
   return listed.length > 0 ? listed : [{ id: DEFAULT_CHATGPT_MODEL, label: DEFAULT_CHATGPT_MODEL, costHint: null }];
 }
 
@@ -44,13 +50,15 @@ export function metaModel(settings: StoredSettings): string {
 // The model for ChatGPT calls: the user's choice if the connection lists
 // it, else the code default if listed, else the first listed model. With no
 // listing, the user's choice or the code default.
+// A contributor model is never returned, listed or chosen.
 export function chatGptModel(settings: StoredSettings): string {
-  const { models, model } = settings.chatgpt;
-  if (models.length === 0) return model ?? DEFAULT_CHATGPT_MODEL;
-  const listed = (slug: string | null) => slug !== null && models.some((m) => m.slug === slug);
+  const { model } = settings.chatgpt;
+  const models = listedChatGptModels(settings);
+  if (models.length === 0) return model !== null && allowed(model) ? model : DEFAULT_CHATGPT_MODEL;
+  const listed = (id: string | null) => id !== null && models.some((m) => m.id === id);
   if (listed(model)) return model!;
   if (listed(DEFAULT_CHATGPT_MODEL)) return DEFAULT_CHATGPT_MODEL;
-  return models[0]!.slug;
+  return models[0]!.id;
 }
 
 export function currentModel(settings: StoredSettings, provider: ProviderKind): string {
