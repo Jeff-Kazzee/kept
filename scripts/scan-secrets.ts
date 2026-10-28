@@ -38,7 +38,10 @@
 // - a provider secret in the shape the app's settings file stores it: a
 //   JSON field named accessToken, refreshToken, access_token,
 //   refresh_token or id_token whose value is 20 or more token characters,
-//   or a "meta": { "key": ... } field with a value of 8 or more.
+//   or a "meta": { "key": ... } field with a value of 8 or more, on one
+//   line or with "key" on the line after "meta": {. Every .json file up to
+//   8 MB, on disk or in history, is also read as JSON for those fields, so
+//   a renamed copy of the settings file is found whatever its layout.
 // - a file or folder name that is the app's settings file
 //   (app-secrets.json, or its temporary .app-secrets.json.<id>.tmp) or a
 //   local env file (.env.local, .env.<name>.local), in the working tree or
@@ -85,7 +88,7 @@ const MIXED = (v: string) => /[A-Z]/.test(v) && /[a-z]/.test(v) && /\d/.test(v);
 
 // Provider secrets as the settings file writes them (0010). Read as latin1,
 // so each character is one byte and a match index is a byte offset.
-const FIELD_SECRET = /"(?:accessToken|refreshToken|access_token|refresh_token|id_token)"\s*:\s*"([A-Za-z0-9._~+\/=-]{20,})"|"meta"\s*:\s*\{\s*"key"\s*:\s*"([\x21\x23-\x5b\x5d-\x7e]{8,})"/g;
+const FIELD_SECRET = /"(?:accessToken|refreshToken|access_token|refresh_token|id_token)"\s*:\s*"([A-Za-z0-9._~+\/=-]{20,})"|"meta"\s*:\s*\{\s*"key"\s*:\s*"([\x21\x23-\x3b\x3d\x3f-\x5b\x5d-\x7e]{8,})"/g;
 
 function fieldSecrets(line: string, start: number, out: Range[]): void {
   for (const m of line.matchAll(FIELD_SECRET)) {
@@ -93,6 +96,48 @@ function fieldSecrets(line: string, start: number, out: Range[]): void {
     const at = start + m.index + m[0].lastIndexOf(value);
     out.push([at, at + value.length]);
   }
+}
+
+// The Meta key as the settings file writes it, pretty-printed: "meta": {
+// at the end of one line and "key": "..." at the start of the next. Bounded
+// to those two lines.
+const META_OPEN = /"meta"\s*:\s*\{\s*$/;
+const KEY_LINE = /^\s*"key"\s*:\s*"([\x21\x23-\x3b\x3d\x3f-\x5b\x5d-\x7e]{8,})"/;
+
+const TOKEN_FIELDS = new Set(["accessToken", "refreshToken", "access_token", "refresh_token", "id_token"]);
+const TOKEN_VALUE = /^[A-Za-z0-9._~+/=-]{20,}$/;
+// Printable, with no quote, backslash or angle brackets, so a placeholder
+// such as <META_KEY> is not a key.
+const KEY_VALUE = /^[\x21\x23-\x3b\x3d\x3f-\x5b\x5d-\x7e]{8,}$/;
+// A .json file up to this size is also read as JSON, so a token or key is
+// found however the file is laid out.
+export const JSON_SCAN_BYTES = 8 << 20;
+export const isJsonPath = (name: string) => /\.json$/i.test(name);
+
+// The paths of secret fields in a JSON text, such as "meta.key" or
+// "chatgpt.session.refreshToken". Text that is not JSON gives none.
+export function jsonSecretFields(text: string): string[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  const walk = (v: unknown, at: string, depth: number): void => {
+    if (depth > 64 || v === null || typeof v !== "object") return;
+    for (const [k, child] of Object.entries(v as Record<string, unknown>)) {
+      const here = at === "" ? k : `${at}.${k}`;
+      if (TOKEN_FIELDS.has(k) && typeof child === "string" && TOKEN_VALUE.test(child)) out.push(here);
+      if (k === "meta" && child && typeof child === "object") {
+        const key = (child as Record<string, unknown>).key;
+        if (typeof key === "string" && KEY_VALUE.test(key)) out.push(`${here}.key`);
+      }
+      walk(child, here, depth + 1);
+    }
+  };
+  walk(value, "", 0);
+  return out;
 }
 
 // The app's settings file and local env files must never be tracked.
@@ -119,6 +164,9 @@ export function lineSecrets(b: Buffer, start = 0, end = b.length): Range[] {
 export const lineHasSecret = (b: Buffer, start = 0, end = b.length) => lineSecrets(b, start, end).length > 0;
 export const hasSecret = (line: string) => lineHasSecret(Buffer.from(line, "utf8"));
 
+// What is kept of the line before, for the two-line key match.
+const TAIL_BYTES = 128;
+
 // A line longer than this is scanned in segments.
 const SEGMENT_BYTES = 1 << 20;
 // Each segment starts with the last bytes of the one before, more than a
@@ -133,6 +181,9 @@ export class LineScanner {
   readonly #hit: (line: number) => void;
   #line = 1;
   #carry: Buffer = Buffer.alloc(0);
+  // The end of the line before, for the two-line key match.
+  #previous: Buffer | null = null;
+  #headChecked = false;
 
   constructor(hit: (line: number) => void) {
     this.#hit = hit;
@@ -161,12 +212,21 @@ export class LineScanner {
 
   #check(b: Buffer, start: number, end: number): void {
     if (lineHasSecret(b, start, end)) this.#hit(this.#line);
+    // The Meta key split over two lines, "meta": { and then "key": "...".
+    if (!this.#headChecked) {
+      if (this.#previous && META_OPEN.test(this.#previous.toString("latin1")) && KEY_LINE.test(b.toString("latin1", start, Math.min(end, start + 4096)))) {
+        this.#hit(this.#line);
+      }
+      this.#headChecked = true;
+    }
   }
 
   #finishLine(b: Buffer, start: number, nl: number): void {
     const end = nl > start && b[nl - 1] === 13 ? nl - 1 : nl;
     this.#check(b, start, end);
+    this.#previous = Buffer.from(b.subarray(Math.max(start, end - TAIL_BYTES), end));
     this.#line++;
+    this.#headChecked = false;
   }
 }
 
@@ -257,10 +317,14 @@ function scanWorkingTree(repo: string, hit: Hit, note: (text: string) => void): 
         continue;
       }
       const buffer = Buffer.alloc(READ_BYTES);
+      const json = isJsonPath(file) && fstatSync(fd).size <= JSON_SCAN_BYTES ? ([] as Buffer[]) : null;
       for (let n = readSync(fd, buffer, 0, READ_BYTES, null); n > 0; n = readSync(fd, buffer, 0, READ_BYTES, null)) {
-        scanner.push(Buffer.from(buffer.subarray(0, n)));
+        const chunk = Buffer.from(buffer.subarray(0, n));
+        scanner.push(chunk);
+        json?.push(chunk);
       }
       scanner.end();
+      if (json) for (const field of jsonSecretFields(Buffer.concat(json).toString("utf8"))) hit(`${name} (JSON field ${redact(field)})`);
     } finally {
       closeSync(fd);
     }
@@ -353,7 +417,7 @@ async function scanObjects(repo: string, refs: string[], hit: Hit): Promise<{ co
 
   let commits = 0;
   let objects = 0;
-  type Body = { id: string; type: string; remaining: number; scanner: LineScanner | null; tree: Buffer[] };
+  type Body = { id: string; type: string; remaining: number; scanner: LineScanner | null; tree: Buffer[]; json?: string };
   let state: "header" | "body" | "newline" = "header";
   let body: Body | null = null;
   let pending: Buffer = Buffer.alloc(0);
@@ -361,7 +425,8 @@ async function scanObjects(repo: string, refs: string[], hit: Hit): Promise<{ co
   const open = (id: string, type: string, size: number): Body => {
     if (type === "blob") {
       const name = redact(paths.get(id) ?? "(path unknown)");
-      return { id, type, remaining: size, scanner: new LineScanner(lineHits((line) => `blob ${id.slice(0, 12)} ${name}:${line}`, hit)), tree: [] };
+      const json = isJsonPath(paths.get(id) ?? "") && size <= JSON_SCAN_BYTES ? `blob ${id.slice(0, 12)} ${name}` : undefined;
+      return { id, type, remaining: size, scanner: new LineScanner(lineHits((line) => `blob ${id.slice(0, 12)} ${name}:${line}`, hit)), tree: [], json };
     }
     if (type === "tree") return { id, type, remaining: size, scanner: null, tree: [] };
     if (type === "commit" || type === "tag") {
@@ -373,6 +438,7 @@ async function scanObjects(repo: string, refs: string[], hit: Hit): Promise<{ co
     objects++;
     if (b.type === "tree") return scanTreeObject(b.id, Buffer.concat(b.tree), raw, paths, hit);
     b.scanner!.end();
+    if (b.json !== undefined) for (const field of jsonSecretFields(Buffer.concat(b.tree).toString("utf8"))) hit(`${b.json} (JSON field ${redact(field)})`);
     if (b.type === "commit") {
       commits++;
       // The commit's root tree has the root path.
@@ -404,7 +470,7 @@ async function scanObjects(repo: string, refs: string[], hit: Hit): Promise<{ co
         const part = data.subarray(pos, pos + take);
         // Trees are parsed whole. A commit is kept whole too, small as it
         // is, to read the root tree it names.
-        if (body!.type === "tree" || body!.type === "commit") body!.tree.push(Buffer.from(part));
+        if (body!.type === "tree" || body!.type === "commit" || body!.json !== undefined) body!.tree.push(Buffer.from(part));
         if (body!.type !== "tree" && take > 0) body!.scanner!.push(part);
         pos += take;
         body!.remaining -= take;
