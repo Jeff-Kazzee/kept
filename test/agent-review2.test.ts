@@ -29,7 +29,7 @@ const SAME_SHAPE = ["model", "store", "stream", "reasoning", "include", "instruc
 describe("E2: the answer retry is a request the live API accepts", () => {
   it("contract: the retry body is the answering call's body plus one problem-code message, with the same tools, tool choice and include", async () => {
     const app = await demoCase();
-    const failed = "You are confirmed for Monday 11/16 at 3:00 PM.";
+    const failed = "Your visit is Monday 11/16 at 3:00 PM.";
     const model = sequence(reply(fnCall("get_schedule", {})), reply(message(failed)), reply(message("Monday 11/16 1:00 PM is offered.")));
     const r = await say(agentFor(app, model), app, "Am I booked Monday?");
     expect(r.report.outcome).toBe("answered");

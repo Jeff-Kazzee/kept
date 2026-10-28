@@ -191,7 +191,7 @@ describe("G3: import_message takes only text the person pasted", () => {
     const m1 = fixtureMessage("m1");
     const model = sequence(
       reply(fnCall("import_message", { text: m1.text, channel: "sms", from: m1.from, received_at: m1.received_at })),
-      reply(message("I found two offered times: Tuesday 11/10 2:00 PM and Thursday 11/12 10:30 AM. Review them on the card.")),
+      reply(message("I found two times: Tuesday 11/10 2:00 PM and Thursday 11/12 10:30 AM. Review them on the card.")),
     );
     const before = fingerprint(app);
     const r = await say(agentFor(app, model), app, pasted("m1"));
@@ -252,7 +252,12 @@ describe("G4: grounding", () => {
       reply(message("You are confirmed for Wednesday 11/18.")),
     );
     const r = await say(agentFor(app, model), app, "Am I booked Monday?");
-    expect(r.report.problems).toEqual([["ungrounded"], ["ungrounded"]]);
+    // The time is invented, and no slot on the schedule has it, so "confirmed"
+    // about it also fails (review round 2, finding 4).
+    expect(r.report.problems).toEqual([
+      ["ungrounded", "state_mismatch"],
+      ["ungrounded", "state_mismatch"],
+    ]);
     expect(r.of("turn.error")).toEqual([{ turnId: r.report.turnId, code: "ungrounded", message: UNGROUNDED_TEXT }]);
     expect(r.text).toBe(UNGROUNDED_TEXT);
     expect(r.of("facts")[0]!.chips.map((c) => c.slotKey)).toEqual(app.kase.view().slots.map((s) => s.key));
@@ -268,7 +273,7 @@ describe("G4: grounding", () => {
     expect(retry.tool_choice).toBe("auto");
     expect(retry.tools).toEqual(answered.tools);
     expect(retry.input.slice(0, -1)).toEqual(answered.input);
-    expect(JSON.stringify(retry.input.at(-1))).toContain("(ungrounded)");
+    expect(JSON.stringify(retry.input.at(-1))).toContain("(ungrounded, state_mismatch)");
     expect(JSON.stringify(retry.input)).not.toContain("3:00 PM");
   });
 

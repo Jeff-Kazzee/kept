@@ -99,9 +99,18 @@ describe("SP2.2 source label beside each state", () => {
     // When the office's message agrees, its claim sets the state.
     p = project(ev("y", "confirm", MON.date, MON.time, T2, agent), ev("z", "confirm", MON.date, MON.time, T3));
     expect(p.slots.map((s) => [s.stateLabel, s.stateEvidenceId, s.unconfirmedEvidenceIds])).toEqual([["Confirmed · office message", "z", ["y"]]]);
-    // An offer it reported still shows as offered, with its label.
+    // Review round 2, finding 7: an offer it reported waits too, as does
+    // every other claim type.
     p = project(ev("o", "offer", MON.date, MON.time, T2, agent));
-    expect(p.slots.map((s) => s.stateLabel)).toEqual(["Offered · reported through an external agent"]);
+    expect(p.slots).toEqual([]);
+    expect(p.unconfirmedEvidenceIds).toEqual(["o"]);
+    // Finding 9: a date-only report shows on a slot only when that slot is
+    // the one slot on its date.
+    p = project(ev("a", "offer", THU.date, THU.time, T1), ev("b", "offer", THU.date, "15:00", T1), ev("d", "cancel", THU.date, null, T2, agent));
+    expect(p.slots.map((s) => s.unconfirmedEvidenceIds)).toEqual([[], []]);
+    expect(p.unconfirmedEvidenceIds).toEqual(["d"]);
+    p = project(ev("a", "offer", THU.date, THU.time, T1), ev("d", "cancel", THU.date, null, T2, agent));
+    expect(p.slots.map((s) => s.unconfirmedEvidenceIds)).toEqual([["d"]]);
   });
 
   it("formats slot labels in plain words", () => {

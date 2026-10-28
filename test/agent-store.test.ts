@@ -148,15 +148,23 @@ describe("G9: the chat stream", () => {
     const app = services(new ScopedOnly(":memory:", CLOCK));
     await app.kase.inCase(() => acceptMessages(app.intake, ["m1", "m2", "m3"]));
     const m4 = fixtureMessage("m4");
+    const conflict = app.kase.view().conflicts[0]!.id;
     const model = sequence(
       reply(fnCall("import_message", { text: m4.text, channel: "sms", from: m4.from, received_at: m4.received_at })),
-      reply(fnCall("explain_conflict", { conflict_id: app.kase.view().conflicts[0]!.id })),
+      reply(fnCall("accept_claim", { claims: [{ evidence_id: "m4-e1", expected_version: 1 }] })),
+      reply(message("Review the claims on the card.")),
+      reply(fnCall("explain_conflict", { conflict_id: conflict })),
       reply(fnCall("ask_next_question", {})),
-      reply(message("Review the claims, then answer the question on the card.")),
+      reply(message("Answer the question on the card.")),
     );
-    const r = await say(agentFor(app, model), app, pasted("m4"));
+    const agent = agentFor(app, model);
+    const r = await say(agent, app, pasted("m4"));
     expect(r.report.outcome).toBe("answered");
     expect(r.report.tools.every((t) => t.ok)).toBe(true);
+    // Explaining and asking write, so they come in a turn of the person's
+    // own words (0009, D2').
+    const r2 = await say(agent, app, "Why do they disagree?");
+    expect(r2.report.tools.map((t) => t.tool)).toEqual(["explain_conflict", "ask_next_question"]);
     expect((await say(agentFor(app, sequence()), app, "What are my lab results?")).report.outcome).toBe("declined");
   });
 

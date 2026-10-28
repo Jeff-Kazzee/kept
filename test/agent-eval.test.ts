@@ -179,13 +179,15 @@ describe("G11: pnpm eval:live --chat", () => {
     view = app.reply.approve(view.reply.draft!.id, view.reply.draft!.fields.map((f) => f.name), view.reply.version);
     expect(personOnlyState(app)).not.toBe(before);
     expect(unsupportedSlots(app)).toEqual([]);
-    // A state that rests on an agent's evidence is flagged. (A hold or a
-    // cancel an agent reports is kept aside by the projection, 0009 D1, so
-    // an offer shows the check.)
-    app.store.append("evidence:x-1", 0, [
+    // A state that rests on an agent's evidence is flagged. An agent's own
+    // reports are kept aside by the projection (0009, D1), so a report an
+    // old grant made shows the check.
+    app.store.append("evidence:p-1-1", 0, [
       {
-        type: "answer_recorded",
+        type: "agent_report_confirmed",
         data: {
+          proposal_id: "p-1",
+          grant_id: "g-1",
           claim: {
             claim_type: "offer",
             slot: { date: "2026-11-20", time: "09:00", location: null },
@@ -195,13 +197,8 @@ describe("G11: pnpm eval:live --chat", () => {
             evidence_time: "2026-11-06T17:00:00.000Z",
             event_time: null,
             request_item: null,
-            agent_name: "the assistant",
+            agent_name: "Phone helper",
           },
-          question_id: "q9",
-          conflict_id: "c9",
-          choice_id: "x",
-          clarifies: null,
-          after: "2026-11-06T17:00:00.000Z",
         },
       },
     ]);

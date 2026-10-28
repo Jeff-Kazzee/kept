@@ -455,6 +455,12 @@ describe("review round 2, B3: every public write of the case services runs as on
     await step("IntakeService", "reject", () => app.intake.reject(manual.id, manual.version));
     app.intake.importMessage({ id: "pasted-2", channel: "sms", from: "Clinic", received_at: "2026-11-05T09:00:00-07:00", text: "Hello." });
     await step("IntakeService", "withdrawMessage", () => app.intake.withdrawMessage("pasted-2"));
+    app.intake.importMessage(
+      { id: "own-1", channel: "unknown", from: "Unknown sender", received_at: "2026-11-05T09:00:00-07:00", text: "I called them." },
+      { suggested: [], note: "x", ownReport: true },
+    );
+    await step("IntakeService", "decideOwnReport", () => app.intake.decideOwnReport("own-1", "yes", 1));
+    await step("IntakeService", "undoOwnReport", () => app.intake.undoOwnReport("own-1"));
 
     await step("CaseService", "loadCalendar", () => app.kase.loadCalendar("dana.ics", readFixtureText("calendar/dana.ics"), 0));
     const conflict = app.kase.view().conflicts[0]!;
@@ -508,6 +514,8 @@ describe("review round 2, B3: every public write of the case services runs as on
     await act("enterManually", () =>
       a.enterManually(you, pasted.id, pasted.version, { claim_type: "office_request", date: null, time: null, location: null, quote: null, request_item: "the form" }),
     );
+    const own = a.importMessage(you, { id: "own-2", channel: "unknown", from: "Unknown sender", received_at: "2026-11-05T09:00:00-07:00", text: "I called them." }, { suggested: [], note: "x", ownReport: true });
+    await act("recordOwnReport", () => a.recordOwnReport(you, "own-2", "no", own.version));
     const typed = app.intake.reviewQueue()[0]!;
     await act("rejectClaim", () => a.rejectClaim(you, typed.id, typed.version));
     await act("loadCalendar", () => a.loadCalendar(you, "dana.ics", readFixtureText("calendar/dana.ics"), 0));

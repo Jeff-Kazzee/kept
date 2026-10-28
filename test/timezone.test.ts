@@ -117,7 +117,7 @@ describe("a smaller story in Asia/Tokyo and Europe/London", () => {
       // No stated send time, so the message is received when it was pasted.
       reply(fnCall("import_message", { text: m1.text, channel: "sms", from: null, received_at: null })),
       reply(fnCall("get_schedule", {})),
-      reply(message("Today is Friday 11/6, and the office offered Tuesday 11/10 2:00 PM.")),
+      reply(message("Today is Friday 11/6. The message names Tuesday 11/10 2:00 PM.")),
     );
     const agent = agentFor(app, model);
     const r = await say(agent, app, pasted("m1"));
