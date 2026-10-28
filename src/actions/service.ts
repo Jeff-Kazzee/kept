@@ -28,7 +28,18 @@ import { StaleEditError, type EventStore, type StoredEvent } from "../store/even
 import { randomUUID } from "node:crypto";
 import type { CalendarUndo, SyncOutcome, WritePlan } from "../google/calendar.ts";
 import { GoogleError, type GoogleErrorCode } from "../google/http.ts";
-import { GOOGLE_INTENTS_STREAM, GoogleBusyError, OWNER, RUNNING, openIntents, reconcilable, type GoogleIntent } from "../google/intents.ts";
+import {
+  GOOGLE_INTENTS_STREAM,
+  GoogleBusyError,
+  OWNER,
+  RUNNING,
+  intentAccount,
+  intentClosure,
+  openIntents,
+  reconcilable,
+  type GoogleIntent,
+  type IntentCloseReason,
+} from "../google/intents.ts";
 import { undoGoogleActivity, type GoogleActivityKind, type GoogleServices } from "../google/tools.ts";
 
 // `google` is the built-in Google connection (0012), when the app has one.
@@ -239,8 +250,35 @@ export class CaseActions {
     this.#store.appendSystem(GOOGLE_INTENTS_STREAM, [{ type: "google_intent_opened", data: intent }]);
   }
 
-  #closeIntent(intentId: string, outcome: "logged" | "abandoned", entryId: string | null): void {
-    this.#store.appendSystem(GOOGLE_INTENTS_STREAM, [{ type: "google_intent_closed", data: { intent_id: intentId, outcome, entry_id: entryId } }]);
+  #closeIntent(intentId: string, outcome: "logged" | "abandoned", entryId: string | null, reason?: IntentCloseReason): void {
+    this.#store.appendSystem(GOOGLE_INTENTS_STREAM, [{ type: "google_intent_closed", data: { intent_id: intentId, outcome, entry_id: entryId, ...(reason ? { reason } : {}) } }]);
+  }
+
+  #isOpen(intentId: string): boolean {
+    return this.#openIntents().some((i) => i.intent_id === intentId);
+  }
+
+  // The entry an activity id names, as the public entry.
+  #entryById(id: string | null): ActivityEntry | null {
+    if (id === null) return null;
+    return this.activity().entries.find((e) => e.id === id) ?? null;
+  }
+
+  // Closes every open Google intent with no entry, as when the person
+  // disconnects Google or connects another account or calendar (review
+  // round 4, item 3). Their writes, if any reached Google, belong to the
+  // old connection.
+  closeGoogleIntents(reason: "disconnected" | "account_changed"): number {
+    let closed = 0;
+    this.#store.inCase(() =>
+      this.#store.transaction(() => {
+        for (const i of this.#openIntents()) {
+          this.#closeIntent(i.intent_id, "abandoned", null, reason);
+          closed += 1;
+        }
+      }),
+    );
+    return closed;
   }
 
   #googleEntry(by: By, d: { kind: GoogleActivityKind; summary: string; slotKey: string; undo: CalendarUndo | null; whyNot?: string }): ActivityEntry {
@@ -283,14 +321,24 @@ export class CaseActions {
         throw err;
       }
       let entry: ActivityEntry | null = null;
+      let mine = false;
       this.#store.inCase(() =>
         this.#store.transaction(() => {
+          // Review round 4, item 2: the entry is written only while the
+          // intent is still open. A reconcile in another process that closed
+          // it first wrote the entry already, or closed it for a disconnect
+          // or another account. Either way nothing is written here.
+          if (!this.#isOpen(intentId)) {
+            entry = this.#entryById(intentClosure(this.#store.readStream(GOOGLE_INTENTS_STREAM), intentId)?.entry_id ?? null);
+            return;
+          }
           const d = entryFor(outcome);
           entry = d ? this.#googleEntry(by, { ...d, slotKey: plan.slotKey, undo: outcome.undo }) : null;
+          mine = entry !== null;
           this.#closeIntent(intentId, entry ? "logged" : "abandoned", entry ? (entry as ActivityEntry).id : null);
         }),
       );
-      if (entry) by.onEntry?.(entry);
+      if (entry && mine) by.onEntry?.(entry);
       return { outcome, entry };
     } finally {
       RUNNING.delete(intentId);
@@ -307,9 +355,23 @@ export class CaseActions {
     const google = this.#google;
     if (!google) return [];
     const written: ActivityEntry[] = [];
+    const current = google.calendar.accountKey();
     for (const intent of this.#openIntents()) {
-      // An intent still running here, or one another process may still be
-      // running, is left alone.
+      if (RUNNING.has(intent.intent_id)) continue;
+      // Review round 4, item 3: an intent of another account or calendar,
+      // or one left when Google is no longer connected, is closed with no
+      // entry. Its write is not this connection's to record.
+      const record = intent.kind === "undo" ? projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === intent.entry_id) : undefined;
+      const account = intentAccount(intent, record?.undo?.kind === "google_calendar" ? record.undo.undo.account : null);
+      if (account !== current) {
+        this.#store.inCase(() =>
+          this.#store.transaction(() => {
+            if (this.#isOpen(intent.intent_id)) this.#closeIntent(intent.intent_id, "abandoned", null, current === null ? "disconnected" : "account_changed");
+          }),
+        );
+        continue;
+      }
+      // An intent another process may still be running is left alone.
       if (!reconcilable(intent, intent.openedAt)) continue;
       const actor: By = { actor: intent.actor, onEntry: by.onEntry };
       try {
@@ -318,7 +380,7 @@ export class CaseActions {
           this.#store.inCase(() =>
             this.#store.transaction(() => {
               if (!this.#openIntents().some((i) => i.intent_id === intent.intent_id)) return;
-              if (seen.state === "not_applied") return this.#closeIntent(intent.intent_id, "abandoned", null);
+              if (seen.state === "not_applied") return this.#closeIntent(intent.intent_id, "abandoned", null, "not_applied");
               const entry = this.#googleEntry(actor, {
                 kind: intent.entry_kind,
                 summary: intent.summary,
@@ -331,14 +393,13 @@ export class CaseActions {
             }),
           );
         } else {
-          const record = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === intent.entry_id);
           const spec = record?.undo?.kind === "google_calendar" ? record.undo.undo : null;
           const state = spec ? await google.calendar.undoState(spec) : "diverged";
           this.#store.inCase(() =>
             this.#store.transaction(() => {
               if (!this.#openIntents().some((i) => i.intent_id === intent.intent_id)) return;
               const now = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === intent.entry_id);
-              if (state !== "reversed" || !now || now.undoneAt !== null) return this.#closeIntent(intent.intent_id, "abandoned", null);
+              if (state !== "reversed" || !now || now.undoneAt !== null) return this.#closeIntent(intent.intent_id, "abandoned", null, state === "not_reversed" ? "not_applied" : "diverged");
               const entry = this.#undoneEntry(actor, now, "The Google Calendar change was reversed.");
               this.#closeIntent(intent.intent_id, "logged", entry.id);
               written.push(entry);
@@ -682,6 +743,12 @@ export class CaseActions {
     // A retried undo finishes its own open intent (review round 3,
     // finding 1).
     if (!this.#google) throw new UndoBlockedError("Google is not set up in this app, so the calendar change cannot be undone here.");
+    // Review round 4, item 4: intents left open are finished first, so a
+    // stale one does not keep the appointment busy. That may finish this
+    // very undo, left open by an earlier try: its entry is then the answer.
+    const reconciled = await this.reconcileGoogle(by);
+    const reversal = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.reverses === entryId);
+    if (reversal && reconciled.some((e) => e.id === reversal.id)) return reconciled.find((e) => e.id === reversal.id)!;
     const open = this.#openIntents().find((i) => i.kind === "undo" && i.entry_id === entryId) ?? null;
     if (open && !reconcilable(open, open.openedAt)) throw new GoogleBusyError(`A Google Calendar change for ${keyLabel(slotKey)} is still in progress. Try again in a moment.`);
     const retry = open;
@@ -715,8 +782,19 @@ export class CaseActions {
       throw new UndoBlockedError(done.message);
     }
     let undone: ActivityEntry | null = null;
+    let mine = false;
     this.#store.inCase(() =>
       this.#store.transaction(() => {
+        // Review round 4, items 2 and 5: the entry is written only while the
+        // intent is still open. A reconcile that finished this undo first
+        // wrote its entry, which is the answer, with no error. An intent
+        // closed for a disconnect or another account writes nothing.
+        if (!this.#isOpen(intentId)) {
+          const closure = intentClosure(this.#store.readStream(GOOGLE_INTENTS_STREAM), intentId);
+          undone = closure?.outcome === "logged" ? this.#entryById(closure.entry_id) : null;
+          if (!undone) throw new UndoBlockedError("The Google connection changed while the undo ran, so the app did not record it. Check the event in Google Calendar.");
+          return;
+        }
         const now = projectActivity(this.#store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === entryId)!;
         // Review round 3, finding 3: the checks again, inside the commit.
         // Already undone, or a later Google entry for the appointment, aborts.
@@ -731,10 +809,11 @@ export class CaseActions {
           throw new UndoBlockedError(now.undoneAt !== null ? "This was already undone." : blocker!);
         }
         undone = this.#undoneEntry(by, now, done.message);
+        mine = true;
         this.#closeIntent(intentId, "logged", (undone as ActivityEntry).id);
       }),
     );
-    by.onEntry?.(undone!);
+    if (mine) by.onEntry?.(undone!);
     return undone!;
   }
 

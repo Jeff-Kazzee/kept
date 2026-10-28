@@ -41,6 +41,7 @@ import type { ToolModelClient } from "../src/model/responses.ts";
 import { APP_HEADER, requestSourceProblem } from "./guard.ts";
 import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
 import { API_SECURITY_HEADERS, createStaticHandler } from "./static.ts";
+import { CaseActions } from "../src/actions/service.ts";
 import { GoogleCalendar } from "../src/google/calendar.ts";
 import { GoogleConnection, clientFromEnv } from "../src/google/connection.ts";
 import { GoogleCalendarEvents } from "../src/google/events.ts";
@@ -126,6 +127,8 @@ const chat = createChat(
 );
 
 const allowed = appHosts(PORT, extraHosts);
+// Closes the open Google intents when the connection changes.
+const googleActions = new CaseActions(store, { intake, kase, reply, records, google });
 const googleRoutes = createGoogleRoutes({
   connection: googleConnection,
   generation: () => kase.generation(),
@@ -134,6 +137,7 @@ const googleRoutes = createGoogleRoutes({
   onCallbackError: (code) => console.error(`Google connect failed: ${code}.`),
   events: googleEvents,
   caseDates: () => ({ dates: kase.view().slots.map((s) => s.date), today: localDate(new Date().toISOString(), kase.timeZone()) }),
+  onConnectionChange: (reason) => googleActions.closeGoogleIntents(reason),
 });
 const appOrigins = allowed.origins;
 

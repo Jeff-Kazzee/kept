@@ -34,8 +34,10 @@ export type GoogleIntent =
 // This process, and the intents it is running now. An intent of this
 // process that is not running was left open by a failed store write, and
 // can be reconciled at once. One of another process may still be running
-// there, so it is reconciled only after STALE_INTENT_MS, well past the
-// time limits of its Google calls.
+// there, so it is reconciled only after STALE_INTENT_MS. That is a
+// heuristic only (review round 4, item 5): the guarantee is that a commit
+// writes its entry only while its intent is still open, so a reconcile
+// that ran first leaves it nothing to write twice.
 export const OWNER = `${process.pid}:${randomUUID()}`;
 export const RUNNING = new Set<string>();
 export const STALE_INTENT_MS = 2 * 60_000;
@@ -47,8 +49,30 @@ export function reconcilable(intent: GoogleIntent, openedAt: string, now: number
 
 export type GoogleIntentEvent =
   | { type: "google_intent_opened"; data: GoogleIntent }
-  // `outcome` "logged" wrote an entry, "abandoned" wrote nothing.
-  | { type: "google_intent_closed"; data: { intent_id: string; outcome: "logged" | "abandoned"; entry_id: string | null } };
+  // `outcome` "logged" wrote an entry, "abandoned" wrote nothing. `reason`
+  // says why an intent was closed without its own commit, such as a
+  // disconnect or another account (review round 4, item 3).
+  | { type: "google_intent_closed"; data: { intent_id: string; outcome: "logged" | "abandoned"; entry_id: string | null; reason?: IntentCloseReason } };
+
+export type IntentCloseReason = "not_applied" | "diverged" | "disconnected" | "account_changed";
+
+export type IntentClosure = { outcome: "logged" | "abandoned"; entry_id: string | null; reason: IntentCloseReason | null };
+
+// How an intent was closed, or null while it is open or unknown.
+export function intentClosure(events: StoredEvent[], intentId: string): IntentClosure | null {
+  let closed: IntentClosure | null = null;
+  for (const e of events) {
+    if (e.streamId !== GOOGLE_INTENTS_STREAM || e.type !== "google_intent_closed") continue;
+    const d = e.data as Extract<GoogleIntentEvent, { type: "google_intent_closed" }>["data"];
+    if (d.intent_id === intentId && closed === null) closed = { outcome: d.outcome, entry_id: d.entry_id, reason: d.reason ?? null };
+  }
+  return closed;
+}
+
+// The account and calendar an intent was made for (`sub|calendarId`).
+export function intentAccount(intent: GoogleIntent, undoAccount: string | null): string | null {
+  return intent.kind === "write" ? intent.plan.account : undoAccount;
+}
 
 // The intents still open, oldest first, with when each was opened.
 export function openIntents(events: StoredEvent[]): Array<GoogleIntent & { openedAt: string }> {

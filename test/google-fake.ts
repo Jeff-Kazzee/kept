@@ -49,6 +49,9 @@ export class FakeGoogle {
   refreshGate: Promise<void> | null = null;
   // A refresh answer rotates the refresh token and names this scope.
   refreshRotates: { scope: string } | null = null;
+  // Runs after a calendar write is done at Google and before its answer
+  // comes back, once.
+  afterCalendarWrite: (() => Promise<void>) | null = null;
   // Runs before a calendar write is answered, once.
   beforeCalendarWrite: (() => Promise<void>) | null = null;
   // A list of events in a window waits for this before it answers.
@@ -282,7 +285,13 @@ export class FakeGoogle {
       await hook();
     }
     if (url.origin === "https://www.googleapis.com" && url.pathname.startsWith("/calendar/v3/")) {
-      return this.#authorized(headers, CALENDAR_SCOPE) ?? this.#calendar(method, url, headers, body);
+      const answer = this.#authorized(headers, CALENDAR_SCOPE) ?? this.#calendar(method, url, headers, body);
+      if (this.afterCalendarWrite && method !== "GET") {
+        const hook = this.afterCalendarWrite;
+        this.afterCalendarWrite = null;
+        await hook();
+      }
+      return answer;
     }
     return json(404, null);
   };

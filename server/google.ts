@@ -104,6 +104,9 @@ export type GoogleRoutesOptions = {
   // their window starts from: the case's appointments and today.
   events?: GoogleCalendarEvents;
   caseDates?: () => { dates: string[]; today: string };
+  // Called after a disconnect, and after a connect that names another
+  // account or calendar, to close the open Google intents (CaseActions).
+  onConnectionChange?: (reason: "disconnected" | "account_changed") => void;
 };
 
 export function createGoogleRoutes(options: GoogleRoutesOptions) {
@@ -143,16 +146,16 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
             body: { error: "redirect_unavailable", message: "Google can return only to this app on 127.0.0.1, localhost or an HTTPS address in APP_ALLOWED_HOSTS. Open the app at one of those and try again." },
           };
         }
-        // Review round 3, finding 6: the clash checks drop the current
-        // events as a connect starts, so another account's events never
-        // stay.
-        options.events?.clear();
         const { authorizeUrl, cookie } = connection.startConnect({
           expectedVersion: body.expectedVersion,
           features: { gmail: body.gmail, calendar: body.calendar },
           calendarId: body.calendarId ?? DEFAULT_CALENDAR_ID,
           redirectUri,
         });
+        // Review round 3, finding 6: the clash checks drop the current
+        // events as a connect starts, so another account's events never
+        // stay. Only once the connect started (review round 4, item 6).
+        options.events?.clear();
         return { status: 200, body: { authorizeUrl }, setCookie: flowCookie(port, cookie, redirectUri.startsWith("https://"), FLOW_TTL_MS / 1000) };
       },
     },
@@ -162,6 +165,9 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
         const { expectedVersion } = DisconnectBody.parse(req.body);
         const { revoked } = await connection.disconnect(expectedVersion);
         options.events?.clear();
+        // Review round 4, item 3: open Google intents end with the
+        // connection they were made for.
+        options.onConnectionChange?.("disconnected");
         return { status: 200, body: { ...connection.status(), revoked } };
       },
     },
@@ -209,7 +215,9 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
       const clear = [flowCookie(port, "", true, 0), flowCookie(port, "", false, 0)];
       const cookie = (secure: boolean) => cookieOf(cookieHeader, flowCookieName(port, secure));
       try {
+        const before = connection.accountKey();
         await connection.finishConnect({ state: q.get("state"), code: q.get("code"), error: q.get("error"), cookie });
+        if (connection.accountKey() !== before) options.onConnectionChange?.("account_changed");
         // The clash checks read the new calendar. A failure here leaves them
         // as they were, and the connect still stands.
         await refreshEvents().catch(() => {});

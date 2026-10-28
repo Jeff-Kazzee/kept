@@ -18,6 +18,7 @@ import { SecretsStore } from "../src/model/providers/secrets.ts";
 import { ACTIVITY_STREAM, projectActivity } from "../src/activity/events.ts";
 import { setTimezone } from "../src/settings/settings.ts";
 import { mcpContext } from "../mcp/tools.ts";
+import { GOOGLE_INTENTS_STREAM, RUNNING, openIntents } from "../src/google/intents.ts";
 import { toolByName } from "../src/agent/tools.ts";
 import { claimsAction } from "../src/agent/grounding.ts";
 import { ReplyService } from "../src/reply/service.ts";
@@ -1546,6 +1547,134 @@ describe("review round 3", () => {
     expect(claimsAction("I added Thursday 11/12 10:30 AM to your Google Calendar.", new Set(["calendar_event_added"]))).toBe(false);
     expect(claimsAction("I updated your Google Calendar event.", new Set(["calendar_event_updated"]))).toBe(false);
     expect(claimsAction("I added the message.", new Set(["gmail_message_imported"]))).toBe(false);
+  });
+});
+
+describe("review round 4", () => {
+  const SLOT = "2026-11-12T10:30";
+  const live = (s: Setup) => primary(s).filter((e) => e.status !== "cancelled");
+  const open = (c: ReturnType<typeof caseContext>) => openIntents(c.store.readStream(GOOGLE_INTENTS_STREAM));
+  const closures = (c: ReturnType<typeof caseContext>) =>
+    c.store.readStream(GOOGLE_INTENTS_STREAM).filter((e) => e.type === "google_intent_closed").map((e) => e.data as { outcome: string; reason?: string });
+
+  async function confirmed() {
+    const s = setup();
+    await connect(s);
+    const store = new FlakyStore();
+    addClinicEmail(s);
+    const c = caseContext(s, [recording("gmail-18f0a1", [CONFIRM])], store);
+    await c.run("gmail_import", { message_id: "18f0a1" });
+    const e = c.intake.evidence()[0]!;
+    c.intake.accept(e.id, e.version);
+    return { s, c, store };
+  }
+
+  // The next write request is lost before it reaches Google.
+  const loseNextWrite = (s: Setup) => {
+    s.fake.beforeCalendarWrite = async () => {
+      throw new TypeError("fetch failed");
+    };
+  };
+
+  // Another process reconciles while this one waits after Google answered:
+  // the intent is no longer this process's running one.
+  const otherProcessReconciles = (c: ReturnType<typeof caseContext>) => async () => {
+    RUNNING.clear();
+    await c.ctx.actions.reconcileGoogle({ actor: "mcp" });
+  };
+
+  it("item 2: a write reconciled by another process while this one waited is logged once", async () => {
+    const { s, c } = await confirmed();
+    s.fake.afterCalendarWrite = otherProcessReconciles(c);
+    const r = await c.run("calendar_sync_slot", { slot_key: SLOT });
+    expect(r.output.action).toBe("created");
+    expect(c.entries.filter((e) => e.kind === "calendar_event_added")).toHaveLength(1);
+    expect(live(s)).toHaveLength(1);
+    expect(open(c)).toEqual([]);
+  });
+
+  it("item 5: an undo another process finished while this one waited ends without an error, logged once", async () => {
+    const { s, c } = await confirmed();
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    const added = c.entries.at(-1)!;
+    s.fake.afterCalendarWrite = otherProcessReconciles(c);
+    const undone = await c.ctx.actions.undoEntry({ actor: "you" }, added.id, c.ctx.actions.activityVersion());
+    expect(undone).toMatchObject({ kind: "undo" });
+    expect(c.entries.filter((e) => e.reverses === added.id)).toHaveLength(1);
+    expect(live(s)).toHaveLength(0);
+  });
+
+  it("item 3: a disconnect closes the open intents with no entry, and the appointment is not busy after", async () => {
+    const { s, c, store } = await confirmed();
+    store.failActivity = 1;
+    await expect(c.run("calendar_sync_slot", { slot_key: SLOT })).rejects.toBeInstanceOf(StoreBusyError);
+    expect(open(c)).toHaveLength(1);
+    const r = createGoogleRoutes({ connection: s.connection, generation: () => c.kase.generation(), port: 5192, extraHosts: [], onConnectionChange: (why) => c.ctx.actions.closeGoogleIntents(why) });
+    expect((await r.api({ method: "POST", path: "/api/google/disconnect", body: { expectedVersion: 1 }, generation: c.kase.generation(), host: "127.0.0.1:5192", secure: false })).status).toBe(200);
+    expect(open(c)).toEqual([]);
+    expect(closures(c).at(-1)).toMatchObject({ outcome: "abandoned", reason: "disconnected" });
+    expect(c.entries.map((e) => e.kind)).toEqual(["gmail_message_imported"]);
+    // Connected again: the appointment is not busy.
+    await connect(s);
+    expect((await c.run("calendar_sync_slot", { slot_key: SLOT })).code).not.toBe("google_busy");
+  });
+
+  it("item 3: reconcile closes an intent of another account with no entry, even if its write never happened", async () => {
+    const { s, c } = await confirmed();
+    // A write that never reached Google, left open.
+    loseNextWrite(s);
+    expect((await c.run("calendar_sync_slot", { slot_key: SLOT })).code).toBe("google_unavailable");
+    expect(open(c)).toHaveLength(1);
+    s.fake.account = { sub: "2000002", email: "b.demo@example.com" };
+    await connect(s);
+    await c.ctx.actions.reconcileGoogle(c.ctx.by);
+    expect(open(c)).toEqual([]);
+    expect(closures(c).at(-1)).toMatchObject({ outcome: "abandoned", reason: "account_changed" });
+    expect(c.entries.map((e) => e.kind)).toEqual(["gmail_message_imported"]);
+  });
+
+  it("item 3: with Google disconnected, reconcile closes the intent instead of keeping the appointment busy", async () => {
+    const { s, c } = await confirmed();
+    loseNextWrite(s);
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    expect(open(c)).toHaveLength(1);
+    await s.connection.disconnect(1);
+    await c.ctx.actions.reconcileGoogle(c.ctx.by);
+    expect(open(c)).toEqual([]);
+    expect(closures(c).at(-1)).toMatchObject({ reason: "disconnected" });
+  });
+
+  it("item 4: Undo reconciles a stale write intent first instead of answering google_busy", async () => {
+    const { s, c } = await confirmed();
+    await c.run("calendar_sync_slot", { slot_key: SLOT });
+    const added = c.entries.at(-1)!;
+    // A later write of the slot that was lost on the way, left open.
+    loseNextWrite(s);
+    await c.run("calendar_remove_slot", { slot_key: SLOT });
+    expect(open(c)).toHaveLength(1);
+    const undone = await c.ctx.actions.undoEntry({ actor: "you" }, added.id, c.ctx.actions.activityVersion());
+    expect(undone).toMatchObject({ kind: "undo" });
+    expect(open(c)).toEqual([]);
+    expect(live(s)).toHaveLength(0);
+  });
+
+  it("item 6: a connect that fails to start leaves the clash events", async () => {
+    const s = setup();
+    await connect(s);
+    const c = await confirmedCase(s);
+    s.fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
+    await c.ctx.google.events!.refresh(["2026-11-12"], "2026-11-06");
+    const r = createGoogleRoutes({ connection: s.connection, generation: () => c.kase.generation(), port: 5192, extraHosts: [], events: c.ctx.google.events });
+    const stale = await r.api({ method: "POST", path: "/api/google/connect", body: { expectedVersion: 9 }, generation: c.kase.generation(), host: "127.0.0.1:5192", secure: false });
+    expect(stale.status).toBe(409);
+    expect(c.ctx.google.events!.snapshot()!.events).toHaveLength(1);
+  });
+
+  it("item 7: 'I put the event back' after an undo is not a false claim, and 'I put it on your calendar' still needs an add", () => {
+    expect(claimsAction("I put the event back on your Google Calendar.", new Set(["undo"]))).toBe(false);
+    expect(claimsAction("I put the event back on your Google Calendar.", new Set())).toBe(true);
+    expect(claimsAction("I put Thursday on your Google Calendar.", new Set(["calendar_event_added"]))).toBe(false);
+    expect(claimsAction("I put Thursday on your Google Calendar.", new Set(["note_added"]))).toBe(true);
   });
 });
 
