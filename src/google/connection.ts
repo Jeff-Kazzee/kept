@@ -4,6 +4,7 @@
 // refresh that Google refuses with invalid_grant marks the connection as
 // needing a reconnect. Nothing here logs, and no token leaves this module
 // except in the Authorization header of a call to Google.
+import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { GoogleError, callGoogle, type FetchLike, type GoogleResponse } from "./http.ts";
 import {
@@ -44,10 +45,11 @@ const Stored = z
   .object({
     version: z.number().int().nonnegative(),
     connection: Connection.nullable(),
-    // Calendar events this app created: account and calendar, then event id
-    // to slot key. Kept after a disconnect, so after a reconnect the app
-    // still knows its own events and edits no other.
-    createdEvents: z.record(z.string(), z.record(z.string(), z.string())),
+    // A random secret per account and calendar, from which the app derives
+    // the id of each event it creates (calendar.ts). Kept after a
+    // disconnect, so after a reconnect the app still finds its own events
+    // and edits no other.
+    eventSecrets: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)),
   })
   .strict();
 type Stored = z.infer<typeof Stored>;
@@ -86,8 +88,10 @@ export class GoogleConnection {
   readonly #fetch: FetchLike;
   readonly #now: () => number;
   readonly #flows: PendingFlows;
-  #access: { token: string; expiresAt: number } | null = null;
-  #refreshing: Promise<string> | null = null;
+  // The access token and the refresh in progress, each tagged with the
+  // identity of the connection it belongs to (review round 1, finding 1).
+  #access: { token: string; expiresAt: number; identity: string } | null = null;
+  #refreshing: { identity: string; promise: Promise<string> } | null = null;
 
   constructor(options: ConnectionOptions) {
     this.#client = options.client;
@@ -103,7 +107,7 @@ export class GoogleConnection {
   }
 
   #read(): Stored {
-    return this.#file.read() ?? { version: 0, connection: null, createdEvents: {} };
+    return this.#file.read() ?? { version: 0, connection: null, eventSecrets: {} };
   }
 
   #write(next: Stored) {
@@ -140,7 +144,14 @@ export class GoogleConnection {
     const client = this.#requireClient();
     this.#checkVersion(input.expectedVersion);
     const { verifier, challenge } = pkcePair();
-    const flow = { verifier, nonce: newNonce(), redirectUri: input.redirectUri, features: input.features, calendarId: input.calendarId };
+    const flow = {
+      verifier,
+      nonce: newNonce(),
+      redirectUri: input.redirectUri,
+      features: input.features,
+      calendarId: input.calendarId,
+      version: input.expectedVersion,
+    };
     const { state, cookie } = this.#flows.start(flow);
     return { authorizeUrl: authorizeUrl(client, flow, state, challenge), cookie };
   }
@@ -152,6 +163,9 @@ export class GoogleConnection {
     const client = this.#requireClient();
     const flow = this.#flows.take(input.state, input.cookie);
     if (!flow) throw new OAuthError("invalid_state");
+    // A flow started before a connect or a disconnect cannot finish after
+    // it (review round 1, finding 2).
+    if (flow.version !== this.#read().version) throw new OAuthError("stale_flow");
     if (input.error !== null) throw new OAuthError(input.error === "access_denied" ? "access_denied" : "google_error");
     if (!input.code || input.code.length > 2048) throw new OAuthError("no_code");
     let answer;
@@ -180,6 +194,13 @@ export class GoogleConnection {
     if (!answer.refresh_token) return drop("no_refresh_token");
 
     const before = this.#read();
+    // A connect or a disconnect finished while Google answered. The new
+    // grant is revoked, unless the connection now stored is the same
+    // account, whose grant the revoke would end too.
+    if (before.version !== flow.version) {
+      if (before.connection?.sub === account.sub) throw new OAuthError("stale_flow");
+      return drop("stale_flow");
+    }
     // A different account's grant is revoked. The same account's old token
     // is not, because revoking it would revoke the new grant too.
     if (before.connection && before.connection.sub !== account.sub) await revokeToken(this.#fetch, before.connection.refreshToken);
@@ -196,7 +217,7 @@ export class GoogleConnection {
         connectedAt: new Date(this.#now()).toISOString(),
       },
     });
-    this.#access = { token: answer.access_token, expiresAt: this.#now() + answer.expires_in * 1000 };
+    this.#access = { token: answer.access_token, expiresAt: this.#now() + answer.expires_in * 1000, identity: identityOf(account.sub, answer.refresh_token) };
   }
 
   // POST /api/google/disconnect. Revokes the grant at Google and deletes the
@@ -205,6 +226,8 @@ export class GoogleConnection {
     this.#checkVersion(expectedVersion);
     const before = this.#read();
     this.#access = null;
+    // A Google sign-in still open in a browser cannot connect again.
+    this.#flows.clear();
     if (!before.connection) return { revoked: false };
     this.#write({ ...before, version: before.version + 1, connection: null });
     return { revoked: await revokeToken(this.#fetch, before.connection.refreshToken) };
@@ -219,39 +242,53 @@ export class GoogleConnection {
     return c;
   }
 
-  #markReconnect() {
-    this.#access = null;
+  // Marks the connection as needing a reconnect, only if it is still the
+  // one whose refresh failed.
+  #markReconnect(identity: string) {
     const s = this.#read();
-    if (s.connection && !s.connection.needsReconnect) this.#write({ ...s, version: s.version + 1, connection: { ...s.connection, needsReconnect: true } });
+    if (!s.connection || identityOf(s.connection.sub, s.connection.refreshToken) !== identity) return;
+    if (this.#access?.identity === identity) this.#access = null;
+    if (!s.connection.needsReconnect) this.#write({ ...s, version: s.version + 1, connection: { ...s.connection, needsReconnect: true } });
   }
 
   async #token(c: Connection, force = false): Promise<string> {
-    if (!force && this.#access && this.#access.expiresAt - REFRESH_EARLY_MS > this.#now()) return this.#access.token;
-    // One refresh at a time.
-    this.#refreshing ??= (async () => {
+    const identity = identityOf(c.sub, c.refreshToken);
+    const cached = this.#access;
+    if (!force && cached && cached.identity === identity && cached.expiresAt - REFRESH_EARLY_MS > this.#now()) return cached.token;
+    // One refresh at a time per connection. A refresh for a connection that
+    // was replaced meanwhile is not reused.
+    if (this.#refreshing?.identity === identity) return this.#refreshing.promise;
+    const entry: { identity: string; promise: Promise<string> } = { identity, promise: Promise.resolve("") };
+    entry.promise = (async () => {
       try {
         const answer = await refreshAccess(this.#fetch, this.#client!, c.refreshToken);
-        this.#access = { token: answer.access_token, expiresAt: this.#now() + answer.expires_in * 1000 };
+        // Commit only if the stored connection is still the one this
+        // refresh started for (review round 1, finding 1). Otherwise the
+        // answer is used for this one call and dropped.
         const s = this.#read();
-        if (s.connection && (answer.refresh_token || answer.scope)) {
+        if (!s.connection || identityOf(s.connection.sub, s.connection.refreshToken) !== identity) return answer.access_token;
+        const rotated = answer.refresh_token ?? s.connection.refreshToken;
+        if (answer.refresh_token || answer.scope) {
           this.#write({
             ...s,
             connection: {
               ...s.connection,
-              ...(answer.refresh_token ? { refreshToken: answer.refresh_token } : {}),
+              refreshToken: rotated,
               ...(answer.scope ? { scopes: answer.scope.split(/\s+/).filter(Boolean).slice(0, 20) } : {}),
             },
           });
         }
+        this.#access = { token: answer.access_token, expiresAt: this.#now() + answer.expires_in * 1000, identity: identityOf(c.sub, rotated) };
         return answer.access_token;
       } catch (err) {
-        if (err instanceof GoogleError && err.code === "google_reconnect_needed") this.#markReconnect();
+        if (err instanceof GoogleError && err.code === "google_reconnect_needed") this.#markReconnect(identity);
         throw err;
       } finally {
-        this.#refreshing = null;
+        if (this.#refreshing === entry) this.#refreshing = null;
       }
     })();
-    return this.#refreshing;
+    this.#refreshing = entry;
+    return entry.promise;
   }
 
   // A call to a Google API that needs `feature`. A 401 refreshes the token
@@ -265,36 +302,33 @@ export class GoogleConnection {
     if (res.status === 401) {
       res = await send(await this.#token(c, true));
       if (res.status === 401) {
-        this.#markReconnect();
+        this.#markReconnect(identityOf(c.sub, c.refreshToken));
         throw new GoogleError("google_reconnect_needed", 401);
       }
     }
     return res;
   }
 
-  // The calendar the person chose, and the key under which the app keeps
-  // the events it created there.
-  calendar(): { calendarId: string; key: string } {
+  // The calendar the person chose, the key of the account and calendar,
+  // and the secret the app derives its event ids from. The secret is made
+  // on first use and kept after a disconnect.
+  calendar(): { calendarId: string; key: string; secret: string } {
     const c = this.#connection("calendar");
-    return { calendarId: c.calendarId, key: `${c.sub}|${c.calendarId}` };
-  }
-
-  // The slot key of an event this app created, or null.
-  createdSlot(key: string, eventId: string): string | null {
-    return this.#read().createdEvents[key]?.[eventId] ?? null;
-  }
-
-  rememberEvent(key: string, eventId: string, slotKey: string) {
+    const key = `${c.sub}|${c.calendarId}`;
     const s = this.#read();
-    this.#write({ ...s, createdEvents: { ...s.createdEvents, [key]: { ...s.createdEvents[key], [eventId]: slotKey } } });
+    let secret = s.eventSecrets[key];
+    if (!secret) {
+      secret = randomBytes(32).toString("hex");
+      this.#write({ ...s, eventSecrets: { ...s.eventSecrets, [key]: secret } });
+    }
+    return { calendarId: c.calendarId, key, secret };
   }
+}
 
-  forgetEvent(key: string, eventId: string) {
-    const s = this.#read();
-    const events = { ...s.createdEvents[key] };
-    delete events[eventId];
-    this.#write({ ...s, createdEvents: { ...s.createdEvents, [key]: events } });
-  }
+// The account and the refresh token a cached token or a refresh belongs
+// to. A hash, so the token itself is not kept twice.
+function identityOf(sub: string, refreshToken: string): string {
+  return `${sub}|${createHash("sha256").update(refreshToken).digest("hex")}`;
 }
 
 export function clientFromEnv(env: NodeJS.ProcessEnv = process.env): OAuthClient | null {

@@ -43,6 +43,14 @@ export class FakeGoogle {
   apiStatus: number | null = null; // the next API call answers this
   reject401Once = false;
   unreachable = false;
+  // The next insert is stored at Google, then the answer is lost.
+  insertCommitsThenFails = false;
+  // A refresh waits for this before it answers.
+  refreshGate: Promise<void> | null = null;
+  // A refresh answer rotates the refresh token and names this scope.
+  refreshRotates: { scope: string } | null = null;
+  // The account the next consent signs in as.
+  account = { ...FAKE_ACCOUNT };
 
   #next(prefix: string) {
     this.#n += 1;
@@ -78,8 +86,8 @@ export class FakeGoogle {
     const id = {
       iss: "https://accounts.google.com",
       aud: FAKE_CLIENT.clientId,
-      sub: FAKE_ACCOUNT.sub,
-      email: FAKE_ACCOUNT.email,
+      sub: this.account.sub,
+      email: this.account.email,
       email_verified: true,
       iat: Math.floor(this.now / 1000),
       exp: Math.floor(this.now / 1000) + 3600,
@@ -96,7 +104,7 @@ export class FakeGoogle {
     };
   }
 
-  #token(form: URLSearchParams): Response {
+  async #token(form: URLSearchParams): Promise<Response> {
     if (form.get("client_id") !== FAKE_CLIENT.clientId || form.get("client_secret") !== FAKE_CLIENT.clientSecret) return json(401, { error: "invalid_client" });
     if (form.get("grant_type") === "authorization_code") {
       const code = this.codes.get(form.get("code") ?? "");
@@ -109,10 +117,17 @@ export class FakeGoogle {
       return json(200, this.#tokens(code.scope, code.nonce));
     }
     if (form.get("grant_type") === "refresh_token") {
+      if (this.refreshGate) await this.refreshGate;
       if (this.refreshFails === "server") return json(503, null);
       const grant = this.grants.get(form.get("refresh_token") ?? "");
       if (!grant || grant.revoked || this.refreshFails === "invalid_grant") return json(400, { error: "invalid_grant" });
       const at = this.#next("fake-access");
+      if (this.refreshRotates) {
+        const rotated = this.#next("fake-refresh");
+        this.grants.set(rotated, { scope: this.refreshRotates.scope, revoked: false });
+        this.access.set(at, { scope: this.refreshRotates.scope, expiresAt: this.now + 3600_000, refresh: rotated });
+        return json(200, { access_token: at, expires_in: 3599, token_type: "Bearer", scope: this.refreshRotates.scope, refresh_token: rotated });
+      }
       this.access.set(at, { scope: grant.scope, expiresAt: this.now + 3600_000, refresh: form.get("refresh_token")! });
       return json(200, { access_token: at, expires_in: 3599, token_type: "Bearer", scope: grant.scope });
     }
@@ -180,9 +195,19 @@ export class FakeGoogle {
       return json(200, { kind: "calendar#events", timeZone: "America/Denver", items });
     }
     if (!eventId && method === "POST") {
-      const e = { ...JSON.parse(body), id: this.#next("event"), etag: "", status: JSON.parse(body).status ?? "confirmed" } as FakeEvent;
+      const sent = JSON.parse(body) as Record<string, unknown>;
+      // Google's rule for a client-chosen id: 5 to 1024 characters, a to v
+      // and 0 to 9. A taken id, deleted events included, is 409.
+      if (sent.id !== undefined && !/^[a-v0-9]{5,1024}$/.test(String(sent.id))) return json(400, { error: { code: 400, errors: [{ reason: "invalid" }] } });
+      const id = (sent.id as string | undefined) ?? this.#next("event");
+      if (cal.has(id)) return json(409, { error: { code: 409, errors: [{ reason: "duplicate" }] } });
+      const e = { ...sent, id, etag: "", status: (sent.status as string | undefined) ?? "confirmed" } as FakeEvent;
       bump(e);
       cal.set(e.id, e);
+      if (this.insertCommitsThenFails) {
+        this.insertCommitsThenFails = false;
+        throw new TypeError("fetch failed");
+      }
       return json(200, e);
     }
     const e = eventId ? cal.get(eventId) : undefined;
@@ -210,7 +235,7 @@ export class FakeGoogle {
 
   // A Calendar event someone else made, for the "only its own events" tests.
   addForeignEvent(calendarId: string, event: Record<string, unknown>): FakeEvent {
-    const e = { status: "confirmed", ...event, id: this.#next("foreign"), etag: "" } as FakeEvent;
+    const e = { status: "confirmed", ...event, id: (event.id as string | undefined) ?? this.#next("foreign"), etag: "" } as FakeEvent;
     e.etag = `"${this.#next("etag")}"`;
     this.calendars.get(calendarId)!.set(e.id, e);
     return e;

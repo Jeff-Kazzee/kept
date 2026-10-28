@@ -50,27 +50,60 @@ export class GoogleError extends Error {
 
 export const DEFAULT_TIMEOUT_MS = 15_000;
 // A Gmail message in full format is the largest answer the app reads.
-const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+// The body as text, or null when it is larger than `max` bytes. The body is
+// read as a stream and counted, and reading stops and cancels the stream
+// as soon as the count passes `max`, so a large answer is never held whole
+// (review round 1, finding 4).
+async function readCapped(res: Response, max: number): Promise<string | null> {
+  if (!res.body) return "";
+  const declared = Number(res.headers.get("content-length") ?? NaN);
+  if (Number.isFinite(declared) && declared > max) {
+    await res.body.cancel().catch(() => {});
+    return null;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 export type GoogleResponse = { status: number; body: unknown; etag: string | null };
 
 // One call. Returns the status and the JSON body, or null for an empty
 // body. A network failure, a time-out or an answer that is too large or not
 // JSON is a GoogleError.
-export async function callGoogle(fetchImpl: FetchLike, url: string, init: RequestInit, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<GoogleResponse> {
+export async function callGoogle(
+  fetchImpl: FetchLike,
+  url: string,
+  init: RequestInit,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  maxBytes = MAX_RESPONSE_BYTES,
+): Promise<GoogleResponse> {
   let res: Response;
   try {
     res = await fetchImpl(url, { ...init, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   } catch {
     throw new GoogleError("google_unavailable");
   }
-  let text: string;
+  let text: string | null;
   try {
-    text = await res.text();
+    text = await readCapped(res, maxBytes);
   } catch {
     throw new GoogleError("google_unavailable", res.status);
   }
-  if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) throw new GoogleError("google_invalid_response", res.status);
+  if (text === null) throw new GoogleError("google_invalid_response", res.status);
   let body: unknown = null;
   if (text.trim() !== "") {
     try {

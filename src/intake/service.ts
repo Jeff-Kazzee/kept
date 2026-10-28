@@ -52,7 +52,13 @@ const asEvent = (e: MessageEvent | EvidenceEvent) => ({ type: e.type, data: e.da
 // then reported through that agent, not by the person (0009, D1).
 // `ownReport` is set when the assistant added text that may be the
 // person's own report: the person is asked, and its claims wait (D1').
-export type ImportSource = { suggested: Array<"channel" | "from" | "received_at">; note: string; agentName?: string; ownReport?: boolean };
+export type ImportSource = {
+  suggested: Array<"channel" | "from" | "received_at">;
+  note: string;
+  agentName?: string;
+  ownReport?: boolean;
+  importedFrom?: "gmail";
+};
 
 // An extracted claim carries its message's source: its source type, the
 // note on suggested fields and the reporting agent.
@@ -127,6 +133,8 @@ export class IntakeService {
   // recorded, so no model call can follow.
   // `source` marks the fields the case agent suggested (0007, E1). Its
   // note is copied onto every claim extracted from the message.
+  // `source.importedFrom` marks a message the app read from Gmail
+  // (sprint 11).
   importMessage(input: Message, source?: ImportSource): MessageView {
     return this.#store.inCase(() => this.#importMessage(input, source));
   }
@@ -142,6 +150,7 @@ export class IntakeService {
         ...(source && source.suggested.length > 0 ? { source_suggested: source.suggested, source_note: source.note } : {}),
         ...(source?.agentName ? { agent_name: source.agentName } : {}),
         ...(source?.ownReport ? { own_report: "offered" as const } : {}),
+        ...(source?.importedFrom ? { imported_from: source.importedFrom } : {}),
       },
     };
     // A message added again after an undo withdrew it starts anew on its

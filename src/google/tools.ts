@@ -23,7 +23,7 @@ import { AppointmentId } from "../records/inputs.ts";
 import { slotLabel } from "../slots/labels.ts";
 import type { SlotView } from "../slots/types.ts";
 import { StaleEditError } from "../store/event-log.ts";
-import { MAX_WINDOW_DAYS, caseWallClock, type CalendarUndo, type GoogleCalendar, type SyncOutcome } from "./calendar.ts";
+import { MAX_WINDOW_DAYS, caseWallClock, type CalendarUndo, type GoogleCalendar, type SyncAction, type SyncOutcome } from "./calendar.ts";
 import type { GoogleConnection } from "./connection.ts";
 import { DEFAULT_DAYS, GMAIL_SOURCE, GmailMessageId, MAX_DAYS, MAX_IMPORT_CHARS, SenderAddress, gmailMessageId, toImport, type Gmail } from "./gmail.ts";
 import { GoogleError } from "./http.ts";
@@ -31,11 +31,24 @@ import { GoogleError } from "./http.ts";
 export const GOOGLE_TOOL_NAMES = ["gmail_search", "gmail_import", "calendar_list", "calendar_sync_slot", "calendar_remove_slot"] as const;
 export type GoogleToolName = (typeof GOOGLE_TOOL_NAMES)[number];
 
+// The activity kinds sprint 9's activity list shows (its U15). Only a call
+// that changed something has a kind. Reads, no-ops and failed calls have
+// none.
+export const GOOGLE_ACTIVITY_KINDS = ["calendar_event_added", "calendar_event_updated", "calendar_event_removed", "gmail_message_imported"] as const;
+export type GoogleActivityKind = (typeof GOOGLE_ACTIVITY_KINDS)[number];
+
+const KIND_OF_ACTION: Partial<Record<SyncAction, GoogleActivityKind>> = {
+  created: "calendar_event_added",
+  updated: "calendar_event_updated",
+  deleted: "calendar_event_removed",
+};
+
 // One activity entry. Every word is written by code: no message text, no
 // event title, no token. `undo` is set for every calendar write and is data
 // only, so the log can store it as JSON.
 export type GoogleActivityEntry = {
   tool: GoogleToolName | "calendar_undo";
+  kind: GoogleActivityKind | null;
   ok: boolean;
   // "ok", or the error code.
   code: string;
@@ -100,8 +113,12 @@ const result = (output: Record<string, unknown>, extra: Extra = {}): GoogleToolR
 const failure = (error: string, message: string): GoogleToolResult => result({ error, message }, { ok: false, code: error });
 
 // Records the call and returns its result with the activity id.
-function logged(ctx: GoogleToolContext, entry: Omit<GoogleActivityEntry, "ok" | "code">, r: GoogleToolResult): GoogleToolResult {
-  const { activityId } = ctx.activity.record({ ...entry, ok: r.ok, code: r.code });
+function logged(
+  ctx: GoogleToolContext,
+  entry: Omit<GoogleActivityEntry, "ok" | "code" | "kind"> & { kind?: GoogleActivityKind | null },
+  r: GoogleToolResult,
+): GoogleToolResult {
+  const { activityId } = ctx.activity.record({ ...entry, kind: r.ok ? (entry.kind ?? null) : null, ok: r.ok, code: r.code });
   return { ...r, output: { ...r.output, activity_id: activityId } };
 }
 
@@ -192,7 +209,7 @@ async function calendarWrite(ctx: GoogleToolContext, name: "calendar_sync_slot" 
       facts: slot ? [{ date: slot.date, time: slot.time, state: slot.state }] : [],
     },
   );
-  return logged(ctx, { ...base, summary, undo: outcome.undo }, r);
+  return logged(ctx, { ...base, summary, undo: outcome.undo, kind: KIND_OF_ACTION[outcome.action] ?? null }, r);
 }
 
 const WindowArg = z
@@ -283,12 +300,13 @@ export const GOOGLE_TOOLS: GoogleToolSpec<unknown>[] = [
       let status = "already_imported";
       try {
         if (message === null) {
-          const m = await ctx.google.gmail.get(input.message_id);
-          if (m.text === "") return fail("empty_message", "The email has no text the app can read. Nothing was imported.");
-          const shaped = toImport(m);
+          // The import shape first, so a subject-only email counts as text
+          // (review round 1, finding 9).
+          const shaped = toImport(await ctx.google.gmail.get(input.message_id));
+          if (shaped.message.text.trim() === "") return fail("empty_message", "The email has no subject or text the app can read. Nothing was imported.");
           if (shaped.message.text.length > MAX_IMPORT_CHARS) return fail("too_long", "The email is longer than the app imports. Nothing was imported.");
           try {
-            message = intake.importMessage(shaped.message);
+            message = intake.importMessage(shaped.message, { suggested: [], note: "", importedFrom: "gmail" });
           } catch (err) {
             // Imported at the same moment by another call.
             if (!(err instanceof StaleEditError)) throw err;
@@ -315,7 +333,7 @@ export const GOOGLE_TOOLS: GoogleToolSpec<unknown>[] = [
           : "That Gmail message was already imported. Its claims are on the card.";
       return logged(
         ctx,
-        { ...base, summary },
+        { ...base, summary, kind: status === "imported" ? "gmail_message_imported" : null },
         result(
           {
             message_id: id,
@@ -423,9 +441,11 @@ export async function undoGoogleActivity(
   const label = keyLabel(undo.slotKey);
   let ok = true;
   let code = "ok";
+  let kind: GoogleActivityKind | null = null;
   let message: string;
   try {
     const done = await ctx.google.calendar.undo(undo);
+    kind = KIND_OF_ACTION[done.action] ?? null;
     message =
       done.action === "none"
         ? `The Google Calendar event for ${label} was already gone.`
@@ -440,6 +460,6 @@ export async function undoGoogleActivity(
     code = err.code;
     message = `Could not undo the Google Calendar change for ${label}: ${err.message}`;
   }
-  const { activityId } = ctx.activity.record({ tool: "calendar_undo", ok, code, summary: message, slotKey: undo.slotKey, messageId: null, undo: null });
+  const { activityId } = ctx.activity.record({ tool: "calendar_undo", kind, ok, code, summary: message, slotKey: undo.slotKey, messageId: null, undo: null });
   return { ok, code, message, activityId };
 }

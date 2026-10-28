@@ -80,8 +80,46 @@ const RawMessage = z.object({
   id: z.string(),
   threadId: z.string().optional(),
   internalDate: z.string().regex(/^\d{1,16}$/).optional(),
-  payload: z.custom<Part>((v) => v !== null && typeof v === "object"),
+  payload: z.unknown(),
 });
+
+// Limits on the part tree (review round 1, finding 8). Real mail nests a
+// few levels and has a few parts.
+export const MAX_PART_DEPTH = 20;
+export const MAX_PARTS = 200;
+const MAX_HEADERS = 500;
+const BASE64URL = /^[A-Za-z0-9_-]*={0,2}$/;
+
+const invalid = () => new GoogleError("google_invalid_response");
+const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+
+// The part tree as the app reads it: only string fields of the expected
+// names, headers with a string name and value, base64url body data, and
+// child parts within the depth and count limits. Anything else is left
+// out, and a tree past the limits or not made of objects is refused.
+function normalizePart(raw: unknown, depth: number, count: { n: number }): Part {
+  count.n += 1;
+  if (depth > MAX_PART_DEPTH || count.n > MAX_PARTS) throw invalid();
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw invalid();
+  const r = raw as Record<string, unknown>;
+  const headers = Array.isArray(r.headers)
+    ? r.headers.slice(0, MAX_HEADERS).flatMap((h) => {
+        const name = h && typeof h === "object" ? str((h as Record<string, unknown>).name) : undefined;
+        const value = h && typeof h === "object" ? str((h as Record<string, unknown>).value) : undefined;
+        return name !== undefined && value !== undefined ? [{ name, value }] : [];
+      })
+    : [];
+  const b = r.body && typeof r.body === "object" && !Array.isArray(r.body) ? (r.body as Record<string, unknown>) : {};
+  const data = str(b.data);
+  if (r.parts !== undefined && !Array.isArray(r.parts)) throw invalid();
+  return {
+    mimeType: str(r.mimeType),
+    filename: str(r.filename),
+    headers,
+    body: { data: data !== undefined && BASE64URL.test(data) ? data : undefined, attachmentId: str(b.attachmentId) },
+    parts: ((r.parts as unknown[] | undefined) ?? []).map((p) => normalizePart(p, depth + 1, count)),
+  };
+}
 
 // RFC 2047 encoded words, such as =?UTF-8?B?...?= in a From or Subject
 // header.
@@ -180,18 +218,26 @@ function sentTime(payload: Part, internalDate: string | undefined): string {
   return new Date(ms).toISOString();
 }
 
+// Any failure while reading the message, such as a charset the decoder
+// does not know or a tree past the limits, is google_invalid_response.
 export function parseMessage(raw: unknown): GmailMessage {
   const parsed = RawMessage.safeParse(raw);
-  if (!parsed.success || !GmailMessageId.safeParse(parsed.data.id).success) throw new GoogleError("google_invalid_response");
-  const { id, threadId, internalDate, payload } = parsed.data;
-  return {
-    id,
-    threadId: threadId ?? id,
-    from: oneLine(header(payload, "from") ?? "", 200),
-    subject: oneLine(header(payload, "subject") ?? "", 300),
-    sentAt: sentTime(payload, internalDate),
-    text: plainText(payload),
-  };
+  if (!parsed.success || !GmailMessageId.safeParse(parsed.data.id).success) throw invalid();
+  const { id, threadId, internalDate } = parsed.data;
+  try {
+    const payload = normalizePart(parsed.data.payload, 0, { n: 0 });
+    return {
+      id,
+      threadId: threadId ?? id,
+      from: oneLine(header(payload, "from") ?? "", 200),
+      subject: oneLine(header(payload, "subject") ?? "", 300),
+      sentAt: sentTime(payload, internalDate),
+      text: plainText(payload),
+    };
+  } catch (err) {
+    if (err instanceof GoogleError) throw err;
+    throw invalid();
+  }
 }
 
 // The longest body the app imports, the same limit as a pasted message.
@@ -202,9 +248,10 @@ export const gmailMessageId = (id: string) => `gmail-${id}`;
 // A Gmail message as the import shape of a pasted message. The sender and
 // the sent time come from the message's headers, so neither is marked as
 // suggested. The subject heads the text, as a person would paste it, so a
-// date given only in the subject can be quoted.
+// date given only in the subject can be quoted. The text is empty only
+// when the email has neither a subject nor a body.
 export function toImport(m: GmailMessage): { source: typeof GMAIL_SOURCE; message: Message } {
-  const text = m.subject ? `Subject: ${m.subject}\n\n${m.text}` : m.text;
+  const text = [m.subject ? `Subject: ${m.subject}` : "", m.text].filter((t) => t.trim() !== "").join("\n\n");
   return {
     source: GMAIL_SOURCE,
     message: { id: gmailMessageId(m.id), channel: "email", from: m.from || "Unknown sender", received_at: m.sentAt, text },

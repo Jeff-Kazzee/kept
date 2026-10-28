@@ -19,7 +19,13 @@ import { GoogleError } from "../src/google/http.ts";
 import { FLOW_TTL_MS, OAuthError } from "../src/google/oauth.ts";
 
 export const GOOGLE_CALLBACK_PATH = "/auth/google/callback";
-export const FLOW_COOKIE = "appt_google_flow";
+// The flow cookie's name carries the app's port, so two apps on one host
+// do not share it, and over HTTPS it has the __Host- prefix, so only this
+// host, over HTTPS, at Path=/ can set it (review round 1, finding 7).
+// Cookies are not separated by port, so a page on another port of the same
+// host can still set the plain name. The state the server keeps is the
+// second factor: a cookie alone finishes no flow.
+export const flowCookieName = (port: number, secure: boolean) => `${secure ? "__Host-" : ""}appt_google_flow_${port}`;
 
 export type GoogleRouteRequest = {
   method: string;
@@ -67,8 +73,10 @@ function cookieOf(header: string | undefined, name: string): string | null {
   return null;
 }
 
-const flowCookie = (value: string, secure: boolean, maxAge: number) =>
-  `${FLOW_COOKIE}=${value}; Path=/auth/google; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+const flowCookie = (port: number, value: string, secure: boolean, maxAge: number) =>
+  secure
+    ? `${flowCookieName(port, true)}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}; Secure`
+    : `${flowCookieName(port, false)}=${value}; Path=/auth/google; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
 
 const STATUS_OF: Partial<Record<GoogleError["code"], number>> = {
   google_not_configured: 503,
@@ -120,7 +128,7 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
           calendarId: body.calendarId ?? DEFAULT_CALENDAR_ID,
           redirectUri,
         });
-        return { status: 200, body: { authorizeUrl }, setCookie: flowCookie(cookie, redirectUri.startsWith("https://"), FLOW_TTL_MS / 1000) };
+        return { status: 200, body: { authorizeUrl }, setCookie: flowCookie(port, cookie, redirectUri.startsWith("https://"), FLOW_TTL_MS / 1000) };
       },
     },
     "/api/google/disconnect": {
@@ -160,12 +168,14 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
     },
 
     // GET /auth/google/callback. Returns where to send the browser and the
-    // cookie that clears the flow cookie.
-    async callback(url: URL, cookieHeader: string | undefined, secure: boolean): Promise<{ location: string; setCookie: string }> {
+    // cookies that clear the flow cookie. The __Host- cookie is read first,
+    // so over HTTPS a plain cookie set from another port is not used.
+    async callback(url: URL, cookieHeader: string | undefined): Promise<{ location: string; setCookie: string[] }> {
       const q = url.searchParams;
-      const clear = flowCookie("", secure, 0);
+      const clear = [flowCookie(port, "", true, 0), flowCookie(port, "", false, 0)];
+      const cookie = cookieOf(cookieHeader, flowCookieName(port, true)) ?? cookieOf(cookieHeader, flowCookieName(port, false));
       try {
-        await connection.finishConnect({ state: q.get("state"), code: q.get("code"), error: q.get("error"), cookie: cookieOf(cookieHeader, FLOW_COOKIE) });
+        await connection.finishConnect({ state: q.get("state"), code: q.get("code"), error: q.get("error"), cookie });
         return { location: "/?connected=google", setCookie: clear };
       } catch (err) {
         const code = err instanceof OAuthError ? err.code : err instanceof GoogleError ? err.code : "server_error";

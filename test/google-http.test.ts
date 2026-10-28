@@ -97,7 +97,7 @@ describe("Google routes in the server", () => {
     expect(url.searchParams.get("redirect_uri")).toBe(`http://127.0.0.1:${app.port}/auth/google/callback`);
     expect(url.searchParams.get("client_id")).toBe("made-up.apps.googleusercontent.com");
     expect(connect.body.authorizeUrl).not.toContain(SECRET);
-    expect(String(connect.headers["set-cookie"])).toMatch(/^appt_google_flow=[A-Za-z0-9_-]+; Path=\/auth\/google; HttpOnly; SameSite=Lax/);
+    expect(String(connect.headers["set-cookie"])).toMatch(new RegExp(`^appt_google_flow_${app.port}=[A-Za-z0-9_-]+; Path=/auth/google; HttpOnly; SameSite=Lax`));
 
     // A callback with a state this browser did not start goes back to the
     // page with an error code, and clears the flow cookie.

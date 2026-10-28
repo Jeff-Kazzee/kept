@@ -5,8 +5,13 @@
 // renamed over the old one, so a crash leaves the old file or the new one,
 // never half of one. A file whose mode lets others read it is set back to
 // 600 when read.
+//
+// Reads never follow a symbolic link (review round 1, finding 3): the path
+// is checked with lstat, opened with O_NOFOLLOW, and the open descriptor is
+// checked again with fstat, so a link swapped in between is refused too.
+// The file must be a regular file owned by the server's user.
 import { randomBytes } from "node:crypto";
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import path from "node:path";
 import type { z } from "zod";
 
@@ -27,14 +32,33 @@ export class SecretFile<T> {
   // valid is an error with a fixed message, so its contents never reach a
   // log.
   read(): T | null {
+    const name = path.basename(this.path);
+    let fd: number;
+    try {
+      const st = lstatSync(this.path);
+      if (!st.isFile()) throw new SecretFileError(`${name} is not a regular file, so the app does not read it.`);
+      // O_NONBLOCK keeps a FIFO swapped in after the lstat from holding the
+      // open. It changes nothing for a regular file.
+      fd = openSync(this.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    } catch (err) {
+      if (err instanceof SecretFileError) throw err;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return null;
+      if (code === "ELOOP") throw new SecretFileError(`${name} is not a regular file, so the app does not read it.`);
+      throw new SecretFileError(`Could not read ${name}.`);
+    }
     let text: string;
     try {
-      const mode = statSync(this.path).mode & 0o777;
-      if ((mode & 0o077) !== 0) chmodSync(this.path, 0o600);
-      text = readFileSync(this.path, "utf8");
+      const st = fstatSync(fd);
+      if (!st.isFile()) throw new SecretFileError(`${name} is not a regular file, so the app does not read it.`);
+      if (typeof process.getuid === "function" && st.uid !== process.getuid()) throw new SecretFileError(`${name} is not owned by the server's user.`);
+      if ((st.mode & 0o077) !== 0) fchmodSync(fd, 0o600);
+      text = readFileSync(fd, "utf8");
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw new SecretFileError(`Could not read ${path.basename(this.path)}.`);
+      if (err instanceof SecretFileError) throw err;
+      throw new SecretFileError(`Could not read ${name}.`);
+    } finally {
+      closeSync(fd);
     }
     let json: unknown;
     try {

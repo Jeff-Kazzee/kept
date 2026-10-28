@@ -4,26 +4,31 @@
 // proposed, confirmed when confirmed, deleted when canceled, declined or
 // only offered.
 //
-// The app only edits events it created. Every event it creates carries a
-// private extended property with the slot key, and its id is kept in the
-// connection file (connection.ts). An event counts as the app's only when
-// both match, so an event the person or another app made, even one that
-// copies the property, is never changed. Every update and delete sends the
-// event's ETag in If-Match, so a change made at Google since the app read
-// the event wins and the app reports it (Google answers 412).
+// The app only edits events it created. It gives each event an id it
+// derives from the slot key with a secret kept in the connection file
+// (connection.ts), and a private extended property with the slot key. An
+// event counts as the app's only when both match, so an event the person or
+// another app made, even one that copies the property, is never changed.
+// Every update and delete sends the event's ETag in If-Match, so a change
+// made at Google since the app read the event wins and the app reports it
+// (Google answers 412).
+//
+// The id makes a create idempotent (review round 1, finding 5). The app
+// looks its event up by id. A second create of the same slot, or a retry
+// after a create that reached Google but timed out, gets 409 from Google,
+// and the app reads the event that is there instead of making another.
 //
 // Every write returns an undo record. Undo reverses the write at Google:
 // it deletes an event the app created, puts back the fields an update
-// changed, or creates the event again after a delete (Google gives it a new
-// id).
+// changed, or puts a deleted event back under the same id.
 //
 // Endpoints (Calendar API v3 reference, read on 2026-10-28):
 //   GET    calendars/{id}/events?timeMin&timeMax&singleEvents&orderBy&timeZone
-//   GET    calendars/{id}/events?privateExtendedProperty=name=value
 //   GET    calendars/{id}/events/{eventId}
-//   POST   calendars/{id}/events
+//   POST   calendars/{id}/events                with a client id, 409 if taken
 //   PATCH  calendars/{id}/events/{eventId}       If-Match: etag
 //   DELETE calendars/{id}/events/{eventId}       If-Match: etag, empty answer
+import { createHmac } from "node:crypto";
 import { z } from "zod";
 import type { IcsEvent, IcsTime } from "../domain/ics.ts";
 import { ASSUMED_SLOT_MINUTES, CASE_TIME_ZONE, wallClockToUtc } from "../slots/clash.ts";
@@ -48,6 +53,29 @@ export type EventFields = {
   start: GoogleTime;
   end: GoogleTime;
 };
+
+// Google accepts a client-chosen event id of 5 to 1024 characters from
+// a to v and 0 to 9 (base32hex). The id is "appt" and the base32hex of an
+// HMAC of the slot key under the calendar's secret, 56 characters.
+const BASE32HEX = "0123456789abcdefghijklmnopqrstuv";
+
+export function eventIdFor(secret: string, slotKey: string): string {
+  const bytes = createHmac("sha256", Buffer.from(secret, "hex")).update(slotKey).digest();
+  let bits = 0;
+  let value = 0;
+  let out = "appt";
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += BASE32HEX[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+    value &= (1 << bits) - 1;
+  }
+  if (bits > 0) out += BASE32HEX[(value << (5 - bits)) & 31];
+  return out;
+}
 
 export type CalendarEvent = {
   id: string;
@@ -238,7 +266,7 @@ export class GoogleCalendar {
   // the case time zone, at most MAX_WINDOW_DAYS days. Recurring events are
   // expanded. Canceled events are left out.
   async list(window: { from: string; to: string }): Promise<CalendarEvent[]> {
-    const { calendarId, key } = this.#conn.calendar();
+    const { calendarId, secret } = this.#conn.calendar();
     const tz = this.#timeZone();
     const url = new URL(this.#events(calendarId));
     url.searchParams.set("timeMin", new Date(wallClockToUtc(window.from, "00:00", tz)).toISOString());
@@ -265,7 +293,7 @@ export class GoogleCalendar {
           start,
           end: icsTime(e.data.end),
           allDay: start.time === null,
-          slotKey: this.#ownSlot(key, e.data),
+          slotKey: this.#ownSlot(secret, e.data),
         });
       }
       if (!parsed.data.nextPageToken) break;
@@ -274,49 +302,56 @@ export class GoogleCalendar {
     return out;
   }
 
-  // The slot key when the app created this event, otherwise null.
-  #ownSlot(key: string, e: RawEvent): string | null {
+  // The slot key when the app created this event, otherwise null: the
+  // private property names a slot and the id is the one the app derives
+  // for that slot.
+  #ownSlot(secret: string, e: RawEvent): string | null {
     const props = e.extendedProperties?.private;
-    const slotKey = this.#conn.createdSlot(key, e.id);
-    return slotKey !== null && props?.[APP_PROPERTY] === "1" && props[SLOT_PROPERTY] === slotKey ? slotKey : null;
+    const slotKey = props?.[APP_PROPERTY] === "1" ? props[SLOT_PROPERTY] : undefined;
+    return slotKey !== undefined && e.id === eventIdFor(secret, slotKey) ? slotKey : null;
   }
 
+  // The event with this id, deleted ones included, or null.
   async #get(calendarId: string, eventId: string): Promise<RawEvent | null> {
     const res = await this.#call(`${this.#events(calendarId)}/${encodeURIComponent(eventId)}`);
     if (res.status === 404 || res.status === 410) return null;
     if (res.status !== 200) throw apiError(res.status, res.body);
     const e = RawEvent.safeParse(res.body);
     if (!e.success) throw new GoogleError("google_invalid_response");
-    return e.data.status === "cancelled" ? null : e.data;
+    return e.data;
   }
 
-  // The app's event for a slot, if there is one.
-  async #find(calendarId: string, key: string, slotKey: string): Promise<RawEvent | null> {
-    const url = new URL(this.#events(calendarId));
-    url.searchParams.set("privateExtendedProperty", `${SLOT_PROPERTY}=${slotKey}`);
-    url.searchParams.set("maxResults", "10");
-    const res = await this.#call(url.toString());
-    if (res.status !== 200) throw apiError(res.status, res.body);
-    const parsed = z.object({ items: z.array(z.unknown()).optional() }).safeParse(res.body);
-    if (!parsed.success) throw new GoogleError("google_invalid_response");
-    for (const item of parsed.data.items ?? []) {
-      const e = RawEvent.safeParse(item);
-      if (e.success && e.data.status !== "cancelled" && this.#ownSlot(key, e.data) === slotKey) return e.data;
-    }
-    return null;
+  // The app's event for a slot, looked up by its id (review round 1,
+  // finding 6). Null when there is none or it was deleted. An event at that
+  // id that is not the app's is an error, never edited.
+  async #find(calendarId: string, secret: string, slotKey: string): Promise<RawEvent | null> {
+    const e = await this.#get(calendarId, eventIdFor(secret, slotKey));
+    if (!e || e.status === "cancelled") return null;
+    if (this.#ownSlot(secret, e) !== slotKey) throw new GoogleError("google_not_app_event");
+    return e;
   }
 
-  async #insert(calendarId: string, key: string, slotKey: string, fields: EventFields): Promise<RawEvent> {
+  // Creates the slot's event under its id. When Google already has that id
+  // (409), the event there is read: a deleted one is put back with these
+  // fields, and a live one is returned as it is, with `existed`.
+  async #insert(calendarId: string, secret: string, slotKey: string, fields: EventFields): Promise<{ event: RawEvent; existed: boolean }> {
+    const id = eventIdFor(secret, slotKey);
     const res = await this.#call(this.#events(calendarId), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(withProperties(fields, slotKey)),
+      body: JSON.stringify({ id, ...withProperties(fields, slotKey) }),
     });
+    if (res.status === 409) {
+      const there = await this.#get(calendarId, id);
+      if (!there) throw new GoogleError("google_changed");
+      if (this.#ownSlot(secret, there) !== slotKey) throw new GoogleError("google_not_app_event");
+      if (there.status !== "cancelled") return { event: there, existed: true };
+      return { event: await this.#patch(calendarId, there, there.etag, fields), existed: false };
+    }
     if (res.status !== 200) throw apiError(res.status, res.body);
     const e = RawEvent.safeParse(res.body);
-    if (!e.success) throw new GoogleError("google_invalid_response");
-    this.#conn.rememberEvent(key, e.data.id, slotKey);
-    return e.data;
+    if (!e.success || e.data.id !== id) throw new GoogleError("google_invalid_response");
+    return { event: e.data, existed: false };
   }
 
   async #patch(calendarId: string, e: RawEvent, etag: string | undefined, fields: EventFields): Promise<RawEvent> {
@@ -331,36 +366,39 @@ export class GoogleCalendar {
     return out.data;
   }
 
-  async #delete(calendarId: string, key: string, eventId: string, etag: string | undefined): Promise<void> {
+  async #delete(calendarId: string, eventId: string, etag: string | undefined): Promise<void> {
     const res = await this.#call(`${this.#events(calendarId)}/${encodeURIComponent(eventId)}`, {
       method: "DELETE",
       headers: etag ? { "If-Match": etag } : {},
     });
     if (res.status !== 204 && res.status !== 200 && res.status !== 410) throw apiError(res.status, res.body);
-    this.#conn.forgetEvent(key, eventId);
   }
 
   // Brings the slot's event in line with the slot. `slot` is null when the
   // case has no such slot any more.
   async sync(slotKey: string, slot: SlotView | null): Promise<SyncOutcome> {
-    const { calendarId, key } = this.#conn.calendar();
+    const { calendarId, key, secret } = this.#conn.calendar();
     const want = desiredEvent(slot, this.#timeZone());
-    const have = await this.#find(calendarId, key, slotKey);
+    let have = await this.#find(calendarId, secret, slotKey);
     const base = { kind: "google_calendar" as const, account: key, calendarId, slotKey };
     if (!have && !want) return { action: "none", slotKey, status: null, eventId: null, undo: null };
     if (!have && want) {
-      const created = await this.#insert(calendarId, key, slotKey, want);
-      return {
-        action: "created",
-        slotKey,
-        status: want.status,
-        eventId: created.id,
-        undo: { ...base, action: "created", eventId: created.id, etagAfter: created.etag ?? null, before: null },
-      };
+      const { event, existed } = await this.#insert(calendarId, secret, slotKey, want);
+      if (!existed) {
+        return {
+          action: "created",
+          slotKey,
+          status: want.status,
+          eventId: event.id,
+          undo: { ...base, action: "created", eventId: event.id, etagAfter: event.etag ?? null, before: null },
+        };
+      }
+      // Another sync, or a create that timed out, made it first.
+      have = event;
     }
     const before = fieldsOf(have!);
     if (!want) {
-      await this.#delete(calendarId, key, have!.id, have!.etag);
+      await this.#delete(calendarId, have!.id, have!.etag);
       return { action: "deleted", slotKey, status: null, eventId: have!.id, undo: { ...base, action: "deleted", eventId: have!.id, etagAfter: null, before } };
     }
     if (sameFields(before, want)) return { action: "unchanged", slotKey, status: want.status, eventId: have!.id, undo: null };
@@ -380,29 +418,30 @@ export class GoogleCalendar {
   }
 
   // Reverses one write. Refuses when the connection now points at another
-  // account or calendar, when the event is no longer the app's, or when it
+  // account or calendar, when the event is not the app's, or when it
   // changed at Google since the write (google_changed).
   async undo(u: CalendarUndo): Promise<{ action: SyncAction; eventId: string | null }> {
-    const { calendarId, key } = this.#conn.calendar();
-    if (u.account !== key || u.calendarId !== calendarId) throw new GoogleError("google_not_app_event");
+    const { calendarId, key, secret } = this.#conn.calendar();
+    if (u.account !== key || u.calendarId !== calendarId || u.eventId !== eventIdFor(secret, u.slotKey)) throw new GoogleError("google_not_app_event");
     if (u.action === "deleted") {
       if (!u.before) throw new GoogleError("google_invalid_response");
       // The slot got a new event since the delete, so putting the old one
-      // back would make two.
-      if (await this.#find(calendarId, key, u.slotKey)) throw new GoogleError("google_changed");
-      const created = await this.#insert(calendarId, key, u.slotKey, u.before);
-      return { action: "created", eventId: created.id };
+      // back would replace it.
+      if (await this.#find(calendarId, secret, u.slotKey)) throw new GoogleError("google_changed");
+      const { event, existed } = await this.#insert(calendarId, secret, u.slotKey, u.before);
+      if (existed) throw new GoogleError("google_changed");
+      return { action: "created", eventId: event.id };
     }
     const current = await this.#get(calendarId, u.eventId);
-    if (!current) {
+    if (!current || current.status === "cancelled") {
       // Already gone at Google. Nothing to reverse for a create.
       if (u.action === "created") return { action: "none", eventId: null };
       throw new GoogleError("google_not_found");
     }
-    if (this.#ownSlot(key, current) !== u.slotKey) throw new GoogleError("google_not_app_event");
+    if (this.#ownSlot(secret, current) !== u.slotKey) throw new GoogleError("google_not_app_event");
     if (u.etagAfter === null || current.etag !== u.etagAfter) throw new GoogleError("google_changed");
     if (u.action === "created") {
-      await this.#delete(calendarId, key, u.eventId, u.etagAfter);
+      await this.#delete(calendarId, u.eventId, u.etagAfter);
       return { action: "deleted", eventId: u.eventId };
     }
     if (!u.before) throw new GoogleError("google_invalid_response");

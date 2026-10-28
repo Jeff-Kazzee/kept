@@ -55,6 +55,9 @@ export type Flow = {
   redirectUri: string;
   features: Features;
   calendarId: string;
+  // The connection version when the flow started. The callback refuses the
+  // flow when the version moved.
+  version: number;
 };
 
 type Pending = Flow & { cookieHash: Buffer; expiresAt: number };
@@ -95,6 +98,10 @@ export class PendingFlows {
     if (!cookie || !timingSafeEqual(sha256(cookie), pending.cookieHash)) return null;
     const { cookieHash: _c, expiresAt: _e, ...flow } = pending;
     return flow;
+  }
+
+  clear() {
+    this.#flows.clear();
   }
 
   #sweep() {

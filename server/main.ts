@@ -188,8 +188,7 @@ server.on("request", async (req, res) => {
   }
   if (url.pathname === GOOGLE_CALLBACK_PATH) {
     if (req.method !== "GET") return send(res, 405, { error: "method_not_allowed" });
-    const secure = req.headers["x-forwarded-proto"] === "https";
-    const { location, setCookie } = await google.callback(url, req.headers.cookie, secure);
+    const { location, setCookie } = await google.callback(url, req.headers.cookie);
     res.writeHead(303, { ...API_SECURITY_HEADERS, Location: location, "Set-Cookie": setCookie, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
     return res.end();
   }

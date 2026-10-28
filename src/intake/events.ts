@@ -34,6 +34,9 @@ export type MessageEvent =
         // Set when the assistant added text that may be the person's own
         // report. Its claims wait until the person says (0009, D1').
         own_report?: "offered";
+        // Set when the app read the message from the person's Gmail
+        // (sprint 11). Absent for a paste.
+        imported_from?: "gmail";
       };
     }
   | {
@@ -124,6 +127,9 @@ export type MessageView = {
   // "offered" while the person has not said whether the message is their
   // own report. Its claims wait for that answer (0009, D1').
   ownReport: OwnReport;
+  // "gmail" when the app read the message from the person's Gmail. Absent
+  // for a paste.
+  importedFrom?: "gmail";
   status: "imported" | ExtractionOutcome;
   attempts: Array<Extract<MessageEvent, { type: "extraction_attempted" }>["data"]>;
   rejections: Array<Extract<MessageEvent, { type: "claim_rejected" }>["data"]>;
@@ -170,6 +176,7 @@ export function projectMessages(events: StoredEvent[]): Map<string, MessageView>
         sourceNote: event.data.source_note ?? null,
         agentName: event.data.agent_name ?? null,
         ownReport: event.data.own_report ?? null,
+        ...(event.data.imported_from ? { importedFrom: event.data.imported_from } : {}),
         status: "imported",
         attempts: [],
         rejections: [],
