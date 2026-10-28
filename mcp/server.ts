@@ -11,7 +11,8 @@
 // can undo in the app.
 import { createHash } from "node:crypto";
 import { ProtocolError, ProtocolErrorCode, Server } from "@modelcontextprotocol/server";
-import type { ToolServices } from "../src/agent/tools.ts";
+import { MODEL_TOOLS, type ToolServices } from "../src/agent/tools.ts";
+import { NO_PROVIDER_TEXT } from "../src/model/providers/messages.ts";
 import { UNKNOWN_TOOL, type AccessEvent, type AccessResult } from "../src/records/events.ts";
 import { AppointmentId } from "../src/records/inputs.ts";
 import { CaseDeletedError, StaleEditError, StoreBusyError, type EventStore } from "../src/store/event-log.ts";
@@ -37,6 +38,10 @@ export type McpDeps = {
   // The message id for a message the agent imports. By default a hash of
   // its text. Tests pass fixture ids, so a recorded test double replays.
   messageIdFor?: (text: string) => string;
+  // Whether the chosen provider can take a call (J12). A tool that needs
+  // the model is refused with provider_not_ready when it cannot, before it
+  // writes anything. Without it every tool runs.
+  ready?: () => boolean;
 };
 
 type ToolError = { error: string; message: string };
@@ -128,6 +133,13 @@ async function runCall(deps: McpDeps, name: string, args: unknown, generation: n
     const issue = parsed.error.issues[0]!;
     const where = issue.path.length > 0 ? ` (${issue.path.map(String).join(".")})` : "";
     return errorResult({ error: "invalid_input", message: `Invalid input${where}: ${issue.message}` });
+  }
+
+  // Review round 1, finding 2: a tool that needs the model, with no
+  // provider ready, writes nothing. The refusal is logged like any other.
+  if (MODEL_TOOLS.has(tool.name) && deps.ready && !deps.ready()) {
+    if (!logAccess(deps, generation, entry("refused"))) return errorResult(CASE_DELETED);
+    return errorResult({ error: "provider_not_ready", message: NO_PROVIDER_TEXT });
   }
 
   let result: CallResult;

@@ -23,7 +23,10 @@ export type OutputProblem =
   | "template_not_valid_for_state"
   | "missing_field"
   | "field_mismatch"
-  | "slot_not_in_note";
+  | "slot_not_in_note"
+  // The note's date or time fits more than one listed slot (review round
+  // 1, finding 6).
+  | "ambiguous_slot";
 
 export function checkCitations(cited: string[], caseIds: ReadonlySet<string>, conflictIds: ReadonlySet<string>): OutputProblem[] {
   const problems = new Set<OutputProblem>();

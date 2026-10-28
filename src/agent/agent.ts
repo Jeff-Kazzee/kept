@@ -291,6 +291,12 @@ export class CaseAgent {
     // J12: with no provider ready the turn answers the fixed setup
     // sentence, and nothing is saved.
     if (!this.#ready()) throw new ProviderNotReadyError();
+    // SP12.2: the tools this case can use, read once, before the person's
+    // message is saved (review round 1, finding 3), so every call of the
+    // turn offers the same ones. The Google tools need the connection and
+    // its permission.
+    const offered = availableTools(this.#services);
+    const tools = functionTools(offered);
     this.#append(input.expectedVersion, [{ type: "chat_user_message", data: { message_id: userId, turn_id: turnId, text, withheld: false } }]);
     emit({ event: "turn.started", data: { turnId, userMessageId: userId } });
     // Finding 11: what the case held when the turn started, apart from the
@@ -350,11 +356,6 @@ export class CaseAgent {
       if (meter.exhausted) throw new TurnStop("stopped", TOKEN_LIMIT_TEXT, null);
     };
 
-    // SP12.2: the tools this case can use, read once so every call of the
-    // turn offers the same ones. The Google tools need the connection and
-    // its permission.
-    const offered = availableTools(this.#services);
-    const tools = functionTools(offered);
     // Every call has the same shape: the tools, tool_choice auto and the
     // encrypted reasoning, as the live API accepted on the first turn.
     const call = async (input: InputItem[], kind: "loop" | "retry"): Promise<OutputItem[]> => {

@@ -81,9 +81,14 @@ const TERMS = [
   "embaraz\\w*",
   "schwanger\\w*",
   "analisis de sangre",
-  "resultados?",
-  "resultats?",
-  "ergebnisse?",
+  // Results words only with clinical context, as "lab results" and "your
+  // results" in English (review round 1, finding 5).
+  "(?:mis|tus|sus) resultados",
+  "resultados? (?:de|del) (?:laboratorio|analisis|la prueba|las pruebas|examen(?:es)?|sangre)",
+  "(?:mes|tes|vos) resultats",
+  "resultats? (?:d['’]analyses?|de laboratoire|du test|des tests|sanguins?|d['’]examens?)",
+  "(?:labor|test|blut|befund)ergebniss?e?",
+  "(?:meine|ihre|deine) ergebniss?e?",
 ];
 
 const CLINICAL = new RegExp(`\\b(?:${TERMS.join("|")})\\b`, "i");
@@ -159,13 +164,57 @@ export function despaced(text: string): string {
     .replace(/\s+/g, " ");
 }
 
+// Review round 1, finding 4: a clinical word written in chunks of two or
+// more letters ("symp toms", "medi cation", "can cer"). Two or three
+// neighbouring chunks, apart only by the marks above, are joined and read
+// against whole clinical words. Whole words, not stems, so "the rapper"
+// and "can certainly" stay ordinary words. A chunk of one letter is left
+// to the run of single letters above, so "Joe's can" stays as it is.
+const WHOLE_WORDS = new Set(
+  (
+    "symptom symptoms medication medications medicine medicines medical treatment treatments therapy therapies therapist therapists " +
+    "diagnosis diagnoses diagnose diagnosed prognosis prescription prescriptions prescribe prescribed pharmacy pharmacist drug drugs " +
+    "pill pills dose doses dosage dosages blood biopsy biopsies cancer cancers cancerous tumor tumors tumour tumours chemo chemotherapy " +
+    "radiation scan scans xray xrays mri ultrasound ultrasounds screening screenings surgery surgeries surgeon surgical illness " +
+    "illnesses sickness disease diseases disorder disorders condition conditions infection infections allergy allergies allergic " +
+    "pregnant pregnancy vaccine vaccines vaccination injection injections pain painful painkiller painkillers headache headaches " +
+    "fever fevers nausea migraine migraines dizzy dizziness fasting diet medicamento medicamentos medicament medicaments medikament " +
+    "medikamente sintoma sintomas symptome symptomes tratamiento tratamientos traitement traitements behandlung dolor dolores douleur " +
+    "douleurs schmerz schmerzen enfermedad maladie krankheit embarazo embarazada schwanger"
+  ).split(" "),
+);
+const CHUNK_GAP = /^[ .\-_*·]+$/;
+
+export function joinsClinicalWord(text: string): boolean {
+  const words = [...text.toLowerCase().matchAll(/\p{L}+/gu)].map((m) => ({ w: m[0], start: m.index!, end: m.index! + m[0].length }));
+  for (let i = 0; i < words.length; i++) {
+    let joined = words[i]!.w;
+    if (joined.length < 2) continue;
+    for (let j = i + 1; j < Math.min(words.length, i + 3); j++) {
+      const next = words[j]!;
+      if (next.w.length < 2 || !CHUNK_GAP.test(text.slice(words[j - 1]!.end, next.start))) break;
+      joined += next.w;
+      if (WHOLE_WORDS.has(joined)) return true;
+    }
+  }
+  return false;
+}
+
 export function hasClinicalContent(text: string): boolean {
   const normalized = normalizeForScope(text);
   if (mixesScripts(normalized)) return true;
   // Accents are matched as their base letters too, so "sýmptoms" matches.
   const unaccented = normalized.normalize("NFKD").replace(/\p{M}/gu, "");
   const joined = despaced(unaccented);
-  return CLINICAL.test(normalized) || CLINICAL.test(unaccented) || CLINICAL.test(joined) || dietAdvice(normalized) || dietAdvice(unaccented);
+  return (
+    CLINICAL.test(normalized) ||
+    CLINICAL.test(unaccented) ||
+    CLINICAL.test(joined) ||
+    dietAdvice(normalized) ||
+    dietAdvice(unaccented) ||
+    dietAdvice(joined) ||
+    joinsClinicalWord(unaccented)
+  );
 }
 
 // S11: the fixed decline for text the user types that asks for clinical

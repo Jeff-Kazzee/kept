@@ -19,11 +19,11 @@
 //                               process with the recorded test doubles. Its
 //                               output says "recorded, not a product run".
 //
-// The live app gets the key and no Google client. It is stopped by the
-// process id it was started with, after checking that the process runs
-// from this package.
+// The live app gets the key and no Google client. It is stopped through
+// its child process handle, only while its command line, start time and
+// working directory still match what was recorded when it started.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readlinkSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readlinkSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -52,7 +52,8 @@ export type DemoCheckOptions = { recorded?: boolean; log?: Line; env?: NodeJS.Pr
 export const RECORDED_LABEL = "recorded, not a product run";
 
 // One request, as the page sends it, and the answer's status and body.
-type Transport = { call(method: string, path: string, body: unknown, generation: number): Promise<{ status: number; text: string }>; close(): Promise<void> };
+// close() says whether the app was stopped.
+type Transport = { call(method: string, path: string, body: unknown, generation: number): Promise<{ status: number; text: string }>; close(): Promise<boolean> };
 export type DemoCheckResult = { ok: boolean; problems: Problem[]; turns: number };
 
 const freePort = () =>
@@ -95,23 +96,44 @@ function waitForStart(child: ChildProcess, timeoutMs: number): Promise<void> {
   });
 }
 
-// Stops the app by its process id, after checking that the process with
-// that id runs from this package.
-async function stop(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.pid === undefined) return;
-  const cwd = (() => {
-    try {
-      return readlinkSync(`/proc/${child.pid}/cwd`);
-    } catch {
-      return null;
-    }
-  })();
-  if (cwd !== null && path.resolve(cwd) !== path.resolve(PACKAGE_ROOT)) throw new Error(`Process ${child.pid} does not run from this package. Not stopped.`);
+// Review round 1, finding 7: what identifies a process, read from /proc:
+// its command line, its start time (field 22 of /proc/<pid>/stat, in clock
+// ticks since boot) and its working directory. Null when any of them cannot
+// be read, such as for a process that is gone.
+export type ProcessIdentity = { cmdline: string; start: string; cwd: string };
+
+export function processIdentity(pid: number): ProcessIdentity | null {
+  try {
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ").trim();
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    // The command name in field 2 may hold spaces and parentheses, so the
+    // fields are counted after its last closing parenthesis, from field 3.
+    const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[22 - 3];
+    const cwd = readlinkSync(`/proc/${pid}/cwd`);
+    return cmdline !== "" && start ? { cmdline, start, cwd } : null;
+  } catch {
+    return null;
+  }
+}
+
+const sameProcess = (a: ProcessIdentity | null, b: ProcessIdentity | null) =>
+  a !== null && b !== null && a.cmdline === b.cmdline && a.start === b.start && a.cwd === b.cwd;
+
+// Stops a child this script started, through its handle, and only while
+// the process behind it is still the one recorded when it started. Any
+// doubt sends no signal. True when the child is stopped.
+export async function stopChild(child: ChildProcess, recorded: ProcessIdentity | null): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  if (child.pid === undefined || !sameProcess(recorded, processIdentity(child.pid))) return false;
+  const pid = child.pid;
   const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
   child.kill("SIGTERM");
-  const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  const timer = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null && sameProcess(recorded, processIdentity(pid))) child.kill("SIGKILL");
+  }, 10_000);
   await exited;
   clearTimeout(timer);
+  return true;
 }
 
 // The events of a chat turn from its event stream.
@@ -136,10 +158,21 @@ async function liveApp(dir: string, options: DemoCheckOptions, log: Line): Promi
   });
   let stderr = "";
   child.stderr?.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
+  // Who the child is, recorded as soon as it runs, for stopChild.
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", () => resolve());
+    child.once("error", reject);
+  });
+  const identity = child.pid === undefined ? null : processIdentity(child.pid);
+  const stop = async () => {
+    const stopped = await stopChild(child, identity);
+    if (!stopped) log(`App process ${child.pid} could not be confirmed as the one started here, so it was not stopped.`);
+    return stopped;
+  };
   try {
     await waitForStart(child, options.startTimeoutMs ?? 60_000);
   } catch (err) {
-    await stop(child);
+    await stop();
     throw err;
   }
   log(`App started on port ${port} with a temporary database, process ${child.pid}.`);
@@ -153,8 +186,9 @@ async function liveApp(dir: string, options: DemoCheckOptions, log: Line): Promi
       return { status: res.status, text: await res.text() };
     },
     async close() {
-      await stop(child);
+      const stopped = await stop();
       if (stderr.trim() !== "") log(`App errors:\n${stderr.trim()}`);
+      return stopped;
     },
   };
 }
@@ -195,6 +229,7 @@ function recordedApp(dir: string): Transport {
     },
     async close() {
       store.close();
+      return true;
     },
   };
 }
@@ -305,9 +340,14 @@ export async function runDemoCheck(options: DemoCheckOptions = {}): Promise<Demo
     end(items.some((t: string) => /insurance card/i.test(t)), `the checklist holds ${items.length} items, with the insurance card`);
     end(s.case.reply.sent.length === 1, `${s.case.reply.sent.length} reply sent, only the person's approval`);
   } finally {
-    await app?.close();
-    rmSync(dir, { recursive: true, force: true });
-    log("App stopped and its temporary database removed.");
+    const stopped = app === null ? true : await app.close();
+    if (stopped) {
+      rmSync(dir, { recursive: true, force: true });
+      log("App stopped and its temporary database removed.");
+    } else {
+      problems.push({ step: 0, text: "the app was not stopped", fatal: true });
+      log(`The app was not stopped, so its temporary database stays in ${dir}.`);
+    }
   }
   return { ok: problems.every((p) => !p.fatal), problems, turns };
 }

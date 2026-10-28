@@ -201,8 +201,47 @@ eval shows them now.
   the test doubles keep fixture ids. The import sheet still gives the demo
   messages their fixture ids, as before.
 
+## Review round 1 (Muse Wonder, `aebb38a..cd91699`)
+
+Each fix has a test in `test/review-sprint12.test.ts` that failed before
+it.
+
+- R1. ChatGPT readiness is read from the stored connection without the
+  network: signed in, plan usage granted, and an access token still valid
+  or a refresh token to renew it (`ChatGptAuth.unavailable`). A signed-out
+  ChatGPT, or one without plan usage, now refuses the chat turn before it
+  starts and the model routes with 422, as Meta without a key does.
+- R2. The MCP server takes the same `ready()`. `import_message`,
+  `gmail_import`, `explain_conflict` and `ask_next_question` (the tools
+  that call the model, `MODEL_TOOLS`) are refused with
+  `provider_not_ready` and `NO_PROVIDER_TEXT` before they write anything.
+  The refusal goes to the MCP access log as `refused`, like every other
+  refusal (0009, A15). Nothing else is written.
+- R3. The chat turn reads the tools it offers before it saves the person's
+  message. A Google status that cannot be read, such as an unreadable
+  secrets database, means no Google tools in this turn.
+- R4. The scope check also reads a clinical word written in chunks of two
+  or more letters ("symp toms", "medi cation", "can cer"). Two or three
+  neighbouring chunks, apart only by a space or the marks of F15, are
+  joined and read against a list of whole clinical words, not stems, so
+  "the rapper", "can certainly" and "Joe's can" pass. The diet check reads
+  the despaced text too, so "f a s t i n g" is declined.
+- R5. "resultados", "résultats" and "Ergebnisse" alone pass. They are
+  declined only with clinical context, as in English: "mis resultados",
+  "resultados de laboratorio", "mes résultats", "résultats d'analyse",
+  "Laborergebnisse", "meine Ergebnisse".
+- R6. A reply pick is refused with `ambiguous_slot` when every date or
+  time in the note that fits the picked slot also fits another listed
+  slot, such as "Confirmed, 10:30" with two offers at 10:30. After the
+  retry the person picks by hand. A note that gives two times for one day
+  is ambiguous too, since code does not read "not".
+- R7. `pnpm demo:check` records the app's command line, start time
+  (`/proc/<pid>/stat` field 22) and working directory as soon as it runs,
+  and stops it only through its child process handle while all three
+  still match. When any cannot be confirmed it sends no signal, keeps the
+  temporary database and fails the check.
+
 ## Questions for Jeff
 
-- Development builds still have the scripted chat behind `?mockchat=1`,
-  labeled "Scripted demo reply, not a model". The production build leaves
-  it out. Should it go too under J12?
+- Answered by the coordinator: the scripted chat behind `?mockchat=1`
+  stays a development tool. The production build leaves it out.

@@ -499,6 +499,23 @@ export class ChatGptAuth {
   }
 
   // What the settings page shows. No token, id or key.
+  // Review round 1, finding 1: whether a call could go out on the stored
+  // connection, read without the network. Signed in, with plan usage
+  // granted, and an access token still valid or a refresh token to renew
+  // it. The kind names what is missing, as the client's own errors do.
+  static unavailable(settings: StoredSettings, now: number): "signed_out" | "plan_usage_off" | "session_ended" | null {
+    const { session, account, clientId } = settings.chatgpt;
+    if (!session || !account || !clientId) return "signed_out";
+    if (!session.scopes.includes(PLAN_USAGE_SCOPE)) return "plan_usage_off";
+    if (now >= session.expiresAt && !session.refreshToken) return "session_ended";
+    return null;
+  }
+
+  // The clock this connection reads, for the readiness check.
+  now(): number {
+    return this.#now();
+  }
+
   static view(settings: StoredSettings): { signedIn: boolean; name: string | null; email: string | null; planUsage: boolean } {
     const { session, account } = settings.chatgpt;
     const signedIn = session !== null && account !== null;

@@ -14,7 +14,16 @@ import { MetaResponsesClient, ModelCallError, type ModelCall, type ModelClient, 
 import type { ToolCall, ToolModelClient, ToolReply } from "../responses.ts";
 import { ChatGptAuth } from "./chatgpt-auth.ts";
 import { ChatGptResponsesClient } from "./chatgpt-client.ts";
-import { META_KEY_MISSING_TEXT, NO_PROVIDER_TEXT, SETTINGS_BUSY_TEXT, SETTINGS_FILE_TEXT, providerError } from "./messages.ts";
+import {
+  CHATGPT_SESSION_ENDED_TEXT,
+  CHATGPT_SIGNED_OUT_TEXT,
+  META_KEY_MISSING_TEXT,
+  NO_PROVIDER_TEXT,
+  PLAN_USAGE_OFF_TEXT,
+  SETTINGS_BUSY_TEXT,
+  SETTINGS_FILE_TEXT,
+  providerError,
+} from "./messages.ts";
 import { capabilityProblem, chatGptModel, currentModel, metaModel, modelOptions, modelProblemText } from "./models.ts";
 import type { FetchLike } from "./oidc.ts";
 import { SecretsBusyError, SecretsFileError, type ProviderKind, type SecretsStore, type StoredSettings } from "./secrets.ts";
@@ -78,9 +87,14 @@ export function chatGptProvider(options: { auth: ChatGptAuth; store: SecretsStor
   });
   return {
     kind: "chatgpt",
-    // The client itself says when the user is signed out or plan usage is
-    // off, after reading the stored tokens.
-    unavailable: () => null,
+    // Review round 1, finding 1: read from the stored connection, so a
+    // signed-out ChatGPT, one without plan usage, or one whose expired token
+    // cannot be renewed is not ready. The client still says so after a
+    // refresh fails.
+    unavailable: (ctx) => {
+      const kind = ChatGptAuth.unavailable(ctx.settings, options.auth.now());
+      return kind === "signed_out" ? CHATGPT_SIGNED_OUT_TEXT : kind === "plan_usage_off" ? PLAN_USAGE_OFF_TEXT : kind === "session_ended" ? CHATGPT_SESSION_ENDED_TEXT : null;
+    },
     client: () => client,
   };
 }

@@ -58,7 +58,8 @@ const intake = new IntakeService(store, client);
 const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name, externalCalendar: () => googleEvents.snapshot() });
 const reply = new ReplyService(store, kase, client);
 const records = new RecordsService(store, intake, kase);
-const deps = { store, services: { intake, kase, reply, records, google }, limiter: new RateLimiter() };
+// J12: a tool that needs the model is refused while no provider is ready.
+const deps = { store, services: { intake, kase, reply, records, google }, limiter: new RateLimiter(), ready: () => client.ready() };
 
 const handle = serveStdio(() => createMcpServer(deps), {
   onerror: (err) => console.error(`MCP server error: ${err.message}`),

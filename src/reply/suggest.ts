@@ -114,6 +114,18 @@ export function slotInNote(note: string | null, date: string, time: string | nul
   return mentions.length === 0 || mentions.some((m) => mentionFits(m, date, time));
 }
 
+// Review round 1, finding 6: the note must point to the picked slot alone.
+// When every date or time in the note that fits the picked slot also fits
+// another listed slot, such as "Confirmed, 10:30" with two offers at
+// 10:30, code cannot tell which one the person means, so the pick is
+// refused and the person picks by hand.
+export function ambiguousInNote(note: string | null, slot: { key: string; date: string; time: string | null }, ctx: ReplyContext): boolean {
+  const fitting = parseMentions(note ?? "").filter((m) => mentionFits(m, slot.date, slot.time));
+  if (fitting.length === 0) return false;
+  const others = replySlots(ctx).filter((s) => s.key !== slot.key);
+  return fitting.every((m) => others.some((s) => mentionFits(m, s.date, s.time)));
+}
+
 export function checkReply(output: ReplyOutput, ctx: ReplyContext, note: string | null): OutputProblem[] {
   // A no-fit answer is a valid answer. The user picks by hand.
   if (output.template === null || output.slot_id === null) return [];
@@ -130,6 +142,7 @@ export function checkReply(output: ReplyOutput, ctx: ReplyContext, note: string 
     (f.location !== null && (code.location == null || !sameText(f.location, code.location)));
   if (mismatch) problems.push("field_mismatch");
   if (!slotInNote(note, slot.date, slot.time)) problems.push("slot_not_in_note");
+  else if (ambiguousInNote(note, slot, ctx)) problems.push("ambiguous_slot");
   return problems;
 }
 

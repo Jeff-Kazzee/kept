@@ -1341,12 +1341,24 @@ export const toolLabel = (name: string) => AGENT_TOOLS.find((t) => t.name === na
 
 export const toolByName = (name: string) => AGENT_TOOLS.find((t) => t.name === name) ?? null;
 
+// The tools that call the model: extraction for an import, the
+// explanation and the next question. With no provider ready they are
+// refused before they write anything (J12, review round 1, finding 2).
+export const MODEL_TOOLS: ReadonlySet<string> = new Set(["import_message", "gmail_import", "explain_conflict", "ask_next_question"]);
+
 // SP12.2: the tools the in-app agent offers in a turn. A Google tool needs
 // the connection and its permission: the Gmail tools the Gmail permission,
 // the calendar tools the calendar permission. Without Google every Google
 // tool is left out, which keeps their schemas out of each request.
+// Review round 1, finding 3: a Google status that cannot be read, such as
+// an unreadable secrets database, means no Google tools in this turn.
 export function availableTools(services: Pick<ToolServices, "google">): ToolSpec<unknown>[] {
-  const status = services.google?.connection.status();
+  let status: ReturnType<GoogleServices["connection"]["status"]> | undefined;
+  try {
+    status = services.google?.connection.status();
+  } catch {
+    status = undefined;
+  }
   return AGENT_TOOLS.filter((t) => {
     if (!(GOOGLE_TOOL_NAMES as readonly string[]).includes(t.name)) return true;
     if (!status?.connected) return false;
