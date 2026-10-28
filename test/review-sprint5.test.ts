@@ -15,11 +15,11 @@ import { caseHistory } from "../src/case/history.ts";
 import { CaseService } from "../src/case/service.ts";
 import { OutOfScopeError } from "../src/domain/scope.ts";
 import { readFixtureText } from "../src/fixtures/load.ts";
-import { GrantStore } from "../src/grants/grants.ts";
+import { CaseActions } from "../src/actions/service.ts";
 import type { ModelCall, ModelClient } from "../src/model/client.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { PACKAGE_ROOT } from "../src/paths.ts";
-import { USER, proposalStream } from "../src/records/events.ts";
+import { USER, actorFor } from "../src/records/events.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { CaseDeletedError, EventStore, type StoreOptions, type StoredEvent } from "../src/store/event-log.ts";
@@ -64,14 +64,9 @@ function gated() {
 function services(store: EventStore, client: ModelClient = RecordedModelClient.fromDirectory()) {
   const svc = intake(store);
   const kase = new CaseService(store, svc, client, { userName: "Dana Reyes" });
-  return {
-    store,
-    intake: svc,
-    kase,
-    reply: new ReplyService(store, kase, client),
-    records: new RecordsService(store, svc, kase),
-    grants: new GrantStore(store),
-  };
+  const reply = new ReplyService(store, kase, client);
+  const records = new RecordsService(store, svc, kase);
+  return { store, intake: svc, kase, reply, records, actions: new CaseActions(store, { intake: svc, kase, reply, records }) };
 }
 
 async function connect(deps: McpDeps) {
@@ -110,16 +105,16 @@ async function crossProcess(options: StoreOptions = {}) {
   const app = services(new EventStore(file, CLOCK));
   cleanups.push(() => app.store.close());
   await acceptMessages(app.intake, ["m1", "m2", "m3"]);
-  const { token } = app.grants.create("Laptop assistant", "propose");
   const mcpStore = new DeleteBeforeWrite(file, CLOCK, options);
   cleanups.push(() => mcpStore.close());
   const mcp = services(mcpStore);
   mcpStore.deleteNow = () => app.kase.deleteCase(app.kase.caseVersion(), "DELETE");
-  const client = await connect({ records: mcp.records, grants: mcp.grants, token, limiter: new RateLimiter(mcpStore) });
+  const client = await connect({ store: mcpStore, services: mcp, limiter: new RateLimiter() });
   return { dir, app, mcp, mcpStore, client };
 }
 
-const caseEvents = (store: EventStore) => store.readAll().filter((e) => !e.streamId.startsWith("grant:"));
+// Settings are kept on Delete case. Everything else is case data.
+const caseEvents = (store: EventStore) => store.readAll().filter((e) => e.streamId !== "settings");
 
 describe("finding 1: a write that started before Delete case never lands in the empty case", () => {
   it("explain, askNext and suggest waiting on the model fail with CaseDeletedError and write nothing", async () => {
@@ -150,33 +145,34 @@ describe("finding 1: a write that started before Delete case never lands in the 
 
   it("an MCP add_note at expected_version 0 fails when the delete commits between its read and its write", async () => {
     const { client, app, mcpStore } = await crossProcess();
-    // Step 1 is transaction 1. The note's append is transaction 2.
-    mcpStore.at = 2;
-    const err = errorOf(await client.callTool({ name: "add_note", arguments: { appointment_id: THU, text: `Parking ${MARKER}`, expected_version: 0 } }));
+    // The note and its activity entry are transaction 1.
+    mcpStore.at = 1;
+    const err = errorOf(await client.callTool({ name: "add_note", arguments: { slot_key: THU, text: `Parking ${MARKER}`, expected_version: 0 } }));
     expect(err).toMatchObject({ error: "not_found", message: expect.stringMatching(/deleted the case during this call\. Nothing was saved/) });
     expect(caseEvents(app.store)).toEqual([]);
     expect(app.records.record(THU)).toMatchObject({ version: 0, notes: [] });
   });
 
-  it("an MCP propose_change of kind user_report or new_appointment fails the same way", async () => {
-    const changes = [
-      { kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: `Dana confirmed Monday ${MARKER}` },
-      { kind: "new_appointment", date: "2026-11-20", time: "09:00", status: "offered", statement: `A new time ${MARKER}` },
+  it("an MCP accept_claim or set_timezone fails the same way", async () => {
+    const calls = [
+      { name: "accept_claim", arguments: { claims: [{ evidence_id: "m3-e3", expected_version: 2 }] } },
+      { name: "set_timezone", arguments: { timezone: "Asia/Tokyo", expected_version: 0 } },
     ];
-    for (const change of changes) {
+    for (const call of calls) {
       const { client, app, mcpStore } = await crossProcess();
-      mcpStore.at = 2;
-      const err = errorOf(await client.callTool({ name: "propose_change", arguments: { change } }));
-      expect(err.error, change.kind).toBe("not_found");
-      expect(caseEvents(app.store), change.kind).toEqual([]);
-      expect(app.records.proposals()).toEqual([]);
+      // The action and its activity entry are transaction 1.
+      mcpStore.at = 1;
+      const r = await client.callTool(call);
+      expect(r.isError, call.name).toBe(true);
+      expect(JSON.parse((r.content as Array<{ text: string }>)[0]!.text).error, call.name).toBe("not_found");
+      expect(caseEvents(app.store), call.name).toEqual([]);
     }
   });
 
   it("a page opened before Delete case cannot write into the empty case through the API", async () => {
     const store = new EventStore(":memory:", CLOCK);
     const app = services(store);
-    const api = createApi(app.intake, app.kase, { mode: "recorded" }, app.reply, app);
+    const api = createApi(app.intake, app.kase, { mode: "recorded" }, app.reply, { store, records: app.records });
     const before = (await api({ method: "GET", path: "/api/state", body: undefined })).body as { generation: number; caseVersion: number };
     expect(before.generation).toBe(0);
     await api({ method: "POST", path: "/api/case/delete", body: { expectedVersion: before.caseVersion, confirmation: "DELETE" }, generation: 0 });
@@ -202,11 +198,11 @@ describe("finding 1: a write that started before Delete case never lands in the 
 });
 
 describe("finding 2: no access log entry from before Delete case reaches the empty case", () => {
-  it("a read that passed step 1 before the delete returns no data and logs nothing", async () => {
+  it("a read whose case is deleted before its log entry returns no data and logs nothing", async () => {
     const { client, app, mcpStore } = await crossProcess();
-    // A read tool writes only in step 1 and step 3.
-    mcpStore.at = 2;
-    const err = errorOf(await client.callTool({ name: "list_appointments", arguments: {} }));
+    // A read tool writes only its access log entry.
+    mcpStore.at = 1;
+    const err = errorOf(await client.callTool({ name: "get_schedule", arguments: {} }));
     expect(err.error).toBe("not_found");
     expect(JSON.stringify(err)).not.toContain(THU);
     expect(app.records.accessLog()).toEqual([]);
@@ -216,12 +212,15 @@ describe("finding 2: no access log entry from before Delete case reaches the emp
   it("a busy call's waiting entry is dropped, not written, once the case is deleted", async () => {
     const { client, app } = await crossProcess({ busyTimeoutMs: 20, lockRetryMs: [] });
     app.store.unsafeExecForTest("BEGIN IMMEDIATE");
-    expect(errorOf(await client.callTool({ name: "list_appointments", arguments: {} })).error).toBe("busy");
+    // A write waits for the lock and gives up. A read answers, and its log
+    // entry waits.
+    expect(errorOf(await client.callTool({ name: "add_note", arguments: { slot_key: THU, text: "x", expected_version: 0 } })).error).toBe("busy");
+    expect((await client.callTool({ name: "get_schedule", arguments: {} })).isError ?? false).toBe(false);
     app.store.unsafeExecForTest("COMMIT");
     app.kase.deleteCase(app.kase.caseVersion(), "DELETE");
-    const after = await client.callTool({ name: "list_appointments", arguments: {} });
-    expect(after.structuredContent).toEqual({ appointments: [] });
-    expect(app.records.accessLog().map((e) => [e.tool, e.result])).toEqual([["list_appointments", "ok"]]);
+    const after = await client.callTool({ name: "get_schedule", arguments: {} });
+    expect((after.structuredContent as { appointments: unknown[] }).appointments).toEqual([]);
+    expect(app.records.accessLog().map((e) => [e.tool, e.result])).toEqual([["get_schedule", "ok"]]);
   });
 });
 
@@ -261,14 +260,11 @@ describe("finding 3: a Delete case that stops before compaction is finished at t
 
   it("the MCP server finishes it at start, before it serves", async () => {
     const { dir, file } = await crashed();
-    const seed = new EventStore(file);
-    const { token } = new GrantStore(seed).create("Laptop assistant", "read");
-    seed.close();
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.join(PACKAGE_ROOT, "mcp/main.ts")],
       cwd: PACKAGE_ROOT,
-      env: { ...getDefaultEnvironment(), APP_DB: file, APPT_GRANT_TOKEN: token },
+      env: { ...getDefaultEnvironment(), APP_DB: file },
       stderr: "pipe",
     });
     let stderr = "";
@@ -276,7 +272,7 @@ describe("finding 3: a Delete case that stops before compaction is finished at t
     const client = new Client({ name: "test-agent", version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
     await client.connect(transport);
     cleanups.push(() => client.close());
-    expect((await client.callTool({ name: "list_appointments", arguments: {} })).structuredContent).toEqual({ appointments: [] });
+    expect(((await client.callTool({ name: "get_schedule", arguments: {} })).structuredContent as { appointments: unknown[] }).appointments).toEqual([]);
     expect(filesWith(dir, MARKER)).toEqual([]);
     const check = new EventStore(file);
     cleanups.push(() => check.close());
@@ -309,31 +305,6 @@ describe("finding 4: history labels carry no free text", () => {
   });
 });
 
-describe("finding 5: a stored proposal is checked again when the user confirms it", () => {
-  it("refuses a clinical proposal stored before the check existed, and writes nothing", async () => {
-    const app = services(new EventStore(":memory:", CLOCK));
-    await acceptMessages(app.intake, ["m2"]);
-    const { grant } = app.grants.create("Laptop assistant", "propose");
-    // Written straight to the store, as a sprint 4 build would have.
-    app.store.append(proposalStream("p-old"), 0, [
-      {
-        type: "change_proposed",
-        data: {
-          grant_id: grant.id,
-          grant_name: grant.name,
-          change: { kind: "user_report", claim_type: "office_request", date: null, time: null, location: null, request_item: "Stop the medication", statement: "The office called." },
-          record_version: null,
-        },
-      },
-    ]);
-    const count = app.store.readAll().length;
-    expect(() => app.records.confirmProposal("p-old", 1)).toThrow(OutOfScopeError);
-    expect(app.store.readAll()).toHaveLength(count);
-    expect(app.records.proposal("p-old").status).toBe("pending");
-    expect(app.kase.view().checklist.map((i) => i.text)).toEqual(["Bring new insurance card", "Arrive 15 minutes early"]);
-  });
-});
-
 describe("finding 6: the checklist merges requests that differ only in punctuation", () => {
   it("strips marks, quotes and brackets at either end", () => {
     const AT = "2026-11-01T10:00:00.000Z";
@@ -357,7 +328,7 @@ describe("review round 2, B1: every write states its case generation", () => {
   it("refuses a write with no generation or a malformed one, and writes nothing", async () => {
     const store = new EventStore(":memory:", CLOCK);
     const app = services(store);
-    const api = createApi(app.intake, app.kase, { mode: "recorded" }, app.reply, app);
+    const api = createApi(app.intake, app.kase, { mode: "recorded" }, app.reply, { store, records: app.records });
     const calendar = { name: "dana.ics", text: readFixtureText("calendar/dana.ics"), expectedVersion: 0 };
     for (const generation of [undefined, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
       expect(await api({ method: "POST", path: "/api/calendar", body: calendar, generation }), String(generation)).toMatchObject({
@@ -440,19 +411,19 @@ describe("review round 2, B3: every public write of the case services runs as on
 
   // Reads, and the scope and transaction primitives the MCP server uses.
   const NOT_WRITES: Record<string, string[]> = {
-    IntakeService: ["modelLabel", "message", "evidenceItem", "messages", "evidence", "reviewQueue", "acceptedEvidence"],
-    CaseService: ["view", "history", "caseVersion", "replyState", "generation", "inCase", "erasePending", "archivedKeys", "liveVersion"],
+    IntakeService: ["modelLabel", "message", "evidenceItem", "messages", "evidence", "reviewQueue", "acceptedEvidence", "verificationProblem"],
+    CaseService: ["view", "history", "caseVersion", "replyState", "generation", "inCase", "erasePending", "archivedKeys", "liveVersion", "timeZone", "zoned", "questions"],
     ReplyService: [],
-    RecordsService: ["transaction", "withWriteGuard", "caseGeneration", "inCase", "record", "appointments", "appointment", "openQuestions", "proposals", "proposal", "reviewQueue", "accessLog"],
+    RecordsService: ["transaction", "caseGeneration", "inCase", "record", "appointments", "appointment", "openQuestions", "accessLog"],
+    CaseActions: ["activity", "activityVersion"],
   };
-  const classes = { IntakeService, CaseService, ReplyService, RecordsService };
+  const classes = { IntakeService, CaseService, ReplyService, RecordsService, CaseActions };
   const publicMethods = (cls: { prototype: object }) => Object.getOwnPropertyNames(cls.prototype).filter((n) => n !== "constructor");
 
   it("exercises each one under a store that refuses unscoped writes", async () => {
     const store = new ScopedOnly(":memory:", CLOCK);
     const app = services(store);
-    const { grant } = app.grants.create("Laptop assistant", "propose");
-    const agent = { kind: "agent" as const, grant_id: grant.id, grant_name: grant.name };
+    const agent = actorFor("mcp");
     store.strict = true;
 
     const called = new Map<string, Set<string>>(Object.keys(classes).map((k) => [k, new Set<string>()]));
@@ -472,6 +443,8 @@ describe("review round 2, B3: every public write of the case services runs as on
       await step("IntakeService", "extract", () => app.intake.extract(id, { effort: "minimal", expectedVersion: m.version }));
       await acceptAll();
     }
+    await step("IntakeService", "undoDecision", () => app.intake.undoDecision("m3-e3"));
+    await acceptAll();
     await step("IntakeService", "importMessage", () =>
       app.intake.importMessage({ id: "pasted-1", channel: "email", from: "Front Desk", received_at: "2026-11-05T09:00:00-07:00", text: "Please bring the form." }),
     );
@@ -480,18 +453,30 @@ describe("review round 2, B3: every public write of the case services runs as on
     );
     const manual = app.intake.reviewQueue()[0]!;
     await step("IntakeService", "reject", () => app.intake.reject(manual.id, manual.version));
+    app.intake.importMessage({ id: "pasted-2", channel: "sms", from: "Clinic", received_at: "2026-11-05T09:00:00-07:00", text: "Hello." });
+    await step("IntakeService", "withdrawMessage", () => app.intake.withdrawMessage("pasted-2"));
 
     await step("CaseService", "loadCalendar", () => app.kase.loadCalendar("dana.ics", readFixtureText("calendar/dana.ics"), 0));
     const conflict = app.kase.view().conflicts[0]!;
     await step("CaseService", "explain", () => app.kase.explain(conflict.id, conflict.version));
     await step("CaseService", "askNext", () => app.kase.askNext(app.kase.view().questionsVersion));
+    await step("CaseService", "withdrawQuestion", () => app.kase.withdrawQuestion(app.kase.view().question!.id));
+    await step("CaseService", "askNext", () => app.kase.askNext(app.kase.view().questionsVersion));
     let view = app.kase.view();
     const monday = view.question!.choices.find((c) => c.label.includes("Monday"))!;
+    await step("CaseService", "answer", () => app.kase.answer(view.question!.id, monday.id, view.questionsVersion, view.reply.version));
+    const answered = app.kase.questions().find((q) => q.status === "answered")!;
+    await step("CaseService", "undoAnswer", () => app.kase.undoAnswer(answered.id, answered.answer!.evidenceIds, []));
+    await step("ReplyService", "undoStart", () => app.reply.undoStart(app.kase.view().reply.draft!.id));
+    view = app.kase.view();
     await step("CaseService", "answer", () => app.kase.answer(view.question!.id, monday.id, view.questionsVersion, view.reply.version));
     view = app.kase.view();
     await step("ReplyService", "edit", () => app.reply.edit(view.reply.draft!.id, "Monday works for me.", view.reply.version));
     view = app.kase.view();
-    await step("ReplyService", "discard", () => app.reply.discard(view.reply.draft!.id, view.reply.version));
+    const draftId = view.reply.draft!.id;
+    await step("ReplyService", "discard", () => app.reply.discard(draftId, view.reply.version));
+    await step("ReplyService", "undoDiscard", () => app.reply.undoDiscard(draftId));
+    await step("ReplyService", "discard", () => app.reply.discard(draftId, app.kase.view().reply.version));
     await step("ReplyService", "suggest", () => app.reply.suggest("I want Monday.", app.kase.view().reply.version));
     await step("ReplyService", "start", () => app.reply.start("accept_offer", "2026-11-16T13:00", app.kase.view().reply.version));
     view = app.kase.view();
@@ -501,17 +486,54 @@ describe("review round 2, B3: every public write of the case services runs as on
     await step("RecordsService", "setTags", () => app.records.setTags(THU, ["moved"], 1, agent));
     await step("RecordsService", "archive", () => app.records.archive(THU, 2));
     await step("RecordsService", "undo", () => app.records.undo(THU, 3, 3));
-    const report = { kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: "Dana confirmed Monday by phone." };
-    let p = app.records.proposals()[0];
-    await step("RecordsService", "propose", () => (p = app.records.propose(report, grant)));
-    await step("RecordsService", "confirmProposal", () => app.records.confirmProposal(p!.id, p!.version));
-    await step("RecordsService", "propose", () => (p = app.records.propose({ ...report, statement: "Dana said it again." }, grant)));
-    await step("RecordsService", "rejectProposal", () => app.records.rejectProposal(p!.id, p!.version));
-    await step("RecordsService", "logAccess", () =>
-      app.records.logAccess({ grant_id: grant.id, grant_name: grant.name, tool: "list_appointments", result: "ok", appointment_id: null }),
-    );
+    await step("RecordsService", "archive", () => app.records.archive(THU, 4, agent));
+    await step("RecordsService", "unarchive", () => app.records.unarchive(THU, 5, agent));
+    await step("RecordsService", "logAccess", () => app.records.logAccess({ actor: "mcp", tool: "get_schedule", result: "ok", appointment_id: null }));
     await step("CaseService", "deleteCase", () => app.kase.deleteCase(app.kase.caseVersion(), "DELETE"));
     expect(caseEvents(store)).toEqual([]);
+
+    // The case actions, as the API, the chat and the MCP server call them.
+    const a = app.actions;
+    const you = { actor: "you" as const };
+    const bot = { actor: "agent" as const };
+    const act = (name: string, run: () => unknown) => step("CaseActions", name, run);
+    await act("setTimezone", () => a.setTimezone(bot, "America/Denver", store.streamVersion("settings")));
+    for (const id of ["m2", "m3"]) {
+      const m = a.importMessage(bot, fixtureMessage(id));
+      called.get("CaseActions")!.add("importMessage");
+      await act("extract", () => a.extract(bot, id, { effort: "minimal", expectedVersion: m.version }));
+      for (const e of app.intake.reviewQueue()) await act("acceptClaim", () => a.acceptClaim(bot, e.id, e.version));
+    }
+    const pasted = a.importMessage(you, { id: "pasted-3", channel: "email", from: "Front Desk", received_at: "2026-11-05T09:00:00-07:00", text: "Please bring the form." });
+    await act("enterManually", () =>
+      a.enterManually(you, pasted.id, pasted.version, { claim_type: "office_request", date: null, time: null, location: null, quote: null, request_item: "the form" }),
+    );
+    const typed = app.intake.reviewQueue()[0]!;
+    await act("rejectClaim", () => a.rejectClaim(you, typed.id, typed.version));
+    await act("loadCalendar", () => a.loadCalendar(you, "dana.ics", readFixtureText("calendar/dana.ics"), 0));
+    const c2 = app.kase.view().conflicts[0]!;
+    await act("explain", () => a.explain(bot, c2.id, c2.version));
+    await act("askNext", () => a.askNext(bot, app.kase.view().questionsVersion));
+    view = app.kase.view();
+    const mon2 = view.question!.choices.find((c) => c.label.includes("Monday"))!;
+    await act("answerQuestion", () => a.answerQuestion(bot, view.question!.id, mon2.id, view.questionsVersion, view.reply.version));
+    view = app.kase.view();
+    await act("editDraft", () => a.editDraft(you, view.reply.draft!.id, "Monday works for me.", view.reply.version));
+    view = app.kase.view();
+    await act("discardDraft", () => a.discardDraft(bot, view.reply.draft!.id, view.reply.version));
+    await act("suggestReply", () => a.suggestReply(you, "I want Monday.", app.kase.view().reply.version));
+    if (app.kase.view().reply.draft) await a.discardDraft(you, app.kase.view().reply.draft!.id, app.kase.view().reply.version);
+    await act("startReply", () => a.startReply(bot, "accept_offer", "2026-11-16T13:00", app.kase.view().reply.version));
+    view = app.kase.view();
+    await act("approveDraft", () => a.approveDraft(you, view.reply.draft!.id, view.reply.draft!.fields.map((f) => f.name), view.reply.version));
+    await act("addNote", () => a.addNote(bot, THU, "Parking is on Elm Street.", 0));
+    await act("setTags", () => a.setTags(bot, THU, ["moved"], 1));
+    await act("archive", () => a.archive(bot, THU, 2));
+    await act("unarchive", () => a.unarchive(bot, THU, 3));
+    await act("undoRecordEvent", () => a.undoRecordEvent(you, THU, 1, 4));
+    const latest = a.activity();
+    await act("undo", () => a.undo(you, latest.entries.find((e) => e.kind === "tags_set")!.id, latest.activityVersion));
+    app.kase.deleteCase(app.kase.caseVersion(), "DELETE");
 
     // Every public method is a read or a write this test exercised, so a
     // new write fails here until it is added and shown to run in scope.

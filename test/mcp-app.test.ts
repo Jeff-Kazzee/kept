@@ -1,7 +1,8 @@
-// D5 part 2 (sprint 6): the app side of agent access. The app and an MCP
-// server open one database file as two processes do, each with its own
-// EventStore. The app talks to the local API as the page does. Tokens are
-// made at test time and never written to a file.
+// The app side of agent access (sprint 6, and 0009 for sprint 8). The app
+// and an MCP server open one database file as two processes do, each with
+// its own EventStore. The app talks to the local API as the page does. An
+// external agent acts with no grant, every action is in the activity log
+// with actor "mcp", and the person undoes it from the app.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,16 +10,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { RateLimiter } from "../mcp/rate-limit.ts";
 import { callTool, type McpDeps } from "../mcp/server.ts";
 import { createApi, type ApiResponse } from "../server/api.ts";
+import type { ActivityView } from "../src/activity/types.ts";
+import { fixtureMessageIds } from "../src/agent/recorded.ts";
+import { defaultMessageId } from "../src/agent/tools.ts";
 import { CaseService } from "../src/case/service.ts";
 import type { CaseView } from "../src/case/types.ts";
 import { loadCaseProfile, readFixtureText } from "../src/fixtures/load.ts";
-import { GrantStore, TOKEN_PATTERN, hashToken, type GrantView } from "../src/grants/grants.ts";
 import type { EvidenceView } from "../src/intake/events.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
-import type { ProposalView, RecordView } from "../src/records/events.ts";
+import type { RecordView } from "../src/records/events.ts";
 import { RecordsService } from "../src/records/service.ts";
-import { describeChange } from "../src/records/types.ts";
 import { buildDraft } from "../src/reply/draft.ts";
 import { REPLY_STREAM, draftEvents } from "../src/reply/events.ts";
 import { ReplyService } from "../src/reply/service.ts";
@@ -27,6 +29,7 @@ import { fixtureMessage } from "./helpers.ts";
 
 const THU = "2026-11-12T10:30";
 const MON = "2026-11-16T13:00";
+const TUE = "2026-11-10T14:00";
 
 type State = {
   evidence: EvidenceView[];
@@ -35,8 +38,7 @@ type State = {
   generation: number;
   history: Array<{ label: string }>;
   records: RecordView[];
-  proposals: ProposalView[];
-  grants: Array<GrantView & { lastUsedAt: string | null }>;
+  activity: ActivityView;
   live: { generation: number; seq: number };
 };
 
@@ -59,7 +61,7 @@ function services(store: EventStore) {
   const client = RecordedModelClient.fromDirectory();
   const intake = new IntakeService(store, client);
   const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
-  return { store, intake, kase, reply: new ReplyService(store, kase, client), records: new RecordsService(store, intake, kase), grants: new GrantStore(store) };
+  return { store, intake, kase, reply: new ReplyService(store, kase, client), records: new RecordsService(store, intake, kase) };
 }
 
 // The app process: its API, called as the page calls it. Every write
@@ -86,10 +88,10 @@ function appOn(store: EventStore) {
 
 type App = ReturnType<typeof appOn>;
 
-// An MCP server process on the same file, with the token from its config.
-function mcpOn(file: string, token: string): McpDeps {
+// An MCP server process on the same file, in recorded mode.
+function mcpOn(file: string): McpDeps {
   const svc = services(new EventStore(file));
-  return { records: svc.records, grants: svc.grants, token, limiter: new RateLimiter(svc.store) };
+  return { store: svc.store, services: svc, limiter: new RateLimiter(), messageIdFor: fixtureMessageIds(defaultMessageId), now: () => "2026-11-06T17:00:00.000Z" };
 }
 
 async function addAndAccept(app: App, id: string) {
@@ -101,23 +103,13 @@ async function addAndAccept(app: App, id: string) {
   }
 }
 
-// The demo story up to the question: m1 to m3 and the calendar.
+// The demo story up to the question: m1 to m3 and the calendar, which sets
+// the demo's zone.
 async function demoToQuestion(app: App) {
   for (const id of ["m1", "m2", "m3"]) await addAndAccept(app, id);
   await app.call("POST", "/api/calendar", { name: "dana.ics", text: readFixtureText("calendar/dana.ics"), expectedVersion: 0 });
   const s = await app.state();
   return (await app.call("POST", "/api/questions/next", { expectedVersion: s.case.questionsVersion })) as CaseView;
-}
-
-// The demo story to the approved Monday reply.
-async function demoToApprovedMonday(app: App) {
-  const asked = await demoToQuestion(app);
-  const monday = asked.question!.choices.find((c) => c.label === "Request Monday 11/16 1:00 PM")!;
-  await app.call("POST", `/api/questions/${asked.question!.id}/answer`, { expectedVersion: asked.questionsVersion, choiceId: monday.id, replyVersion: asked.reply.version });
-  const s = await app.state();
-  const draft = s.case.reply.draft!;
-  await app.call("POST", `/api/reply/drafts/${draft.id}/approve`, { expectedVersion: s.case.reply.version, confirmedFields: draft.fields.map((f) => f.name) });
-  return app.state();
 }
 
 const labels = (s: State) => Object.fromEntries(s.case.slots.map((x) => [x.key, x.stateLabel]));
@@ -130,96 +122,21 @@ const toolError = (r: Awaited<ReturnType<typeof callTool>>) => {
   return JSON.parse(r.content[0]!.text) as { error: string; message: string };
 };
 
-describe("SP6.1 and G-a: the grant screen's routes", () => {
-  it("creates a grant with a name and tier, returns the token once, and lists it without the token or its hash", async () => {
-    const app = appOn(new EventStore(tempFile()));
-    await app.state();
-    const created = (await app.call("POST", "/api/grants", { name: "Laptop assistant", tier: "annotate" })) as { grant: GrantView; token: string };
-    expect(created.token).toMatch(TOKEN_PATTERN);
-    expect(created.grant).toMatchObject({ name: "Laptop assistant", tier: "annotate", status: "active" });
-    const s = await app.state();
-    expect(s.grants).toEqual([expect.objectContaining({ id: created.grant.id, name: "Laptop assistant", tier: "annotate", status: "active", lastUsedAt: null })]);
-    const text = JSON.stringify(s);
-    expect(text).not.toContain(created.token);
-    expect(text).not.toContain(hashToken(created.token));
-    // The history leaves grants out.
-    expect(s.history).toEqual([]);
-
-    // A name must be 1 to 60 allowed characters and not taken by an active grant.
-    expect((await app.raw("POST", "/api/grants", { name: "", tier: "read" })).status).toBe(422);
-    expect((await app.raw("POST", "/api/grants", { name: "x".repeat(61), tier: "read" })).status).toBe(422);
-    expect((await app.raw("POST", "/api/grants", { name: "laptop ASSISTANT", tier: "read" })).status).toBe(422);
-    expect((await app.raw("POST", "/api/grants", { name: "Agent", tier: "admin" })).status).toBe(422);
-    // Like every write, it needs the case generation.
-    expect((await app.raw("POST", "/api/grants", { name: "Agent", tier: "read" }, null)).status).toBe(400);
-    expect((await app.state()).grants).toHaveLength(1);
-  });
-
-  it("revokes with the expected version, and the agent's next call fails with no restart", async () => {
-    const file = tempFile();
-    const app = appOn(new EventStore(file));
-    await addAndAccept(app, "m2");
-    const { grant, token } = (await app.call("POST", "/api/grants", { name: "Laptop assistant", tier: "read" })) as { grant: GrantView; token: string };
-    const mcp = mcpOn(file, token);
-    structured(await callTool(mcp, "list_appointments", {}));
-    let s = await app.state();
-    expect(s.grants[0]!.lastUsedAt).not.toBeNull();
-
-    const stale = await app.raw("POST", `/api/grants/${grant.id}/revoke`, { expectedVersion: 0 });
-    expect(stale.status).toBe(409);
-    expect((await app.state()).grants[0]!.status).toBe("active");
-    await app.call("POST", `/api/grants/${grant.id}/revoke`, { expectedVersion: grant.version });
-    expect(toolError(await callTool(mcp, "list_appointments", {}))).toMatchObject({ error: "permission_denied" });
-    s = await app.state();
-    expect(s.grants[0]).toMatchObject({ status: "revoked" });
-    expect(s.history.map((h) => h.label).slice(-2)).toEqual([
-      "Agent call by Laptop assistant: list_appointments · ok",
-      "Agent call by Laptop assistant: list_appointments · permission denied",
-    ]);
-  });
-
-  it("grants survive Delete case, and their last use starts again", async () => {
-    const file = tempFile();
-    const app = appOn(new EventStore(file));
-    await addAndAccept(app, "m2");
-    const { token } = (await app.call("POST", "/api/grants", { name: "Laptop assistant", tier: "read" })) as { token: string };
-    structured(await callTool(mcpOn(file, token), "list_appointments", {}));
-    const before = await app.state();
-    await app.call("POST", "/api/case/delete", { expectedVersion: before.caseVersion, confirmation: "DELETE" });
-    const after = await app.state();
-    expect(after.grants).toEqual([expect.objectContaining({ name: "Laptop assistant", status: "active", lastUsedAt: null })]);
-  });
-});
-
 describe("SP6.3 and G-d: live refresh", () => {
-  it("a note written over MCP moves the version the page polls, and the next read shows it", async () => {
+  it("a note written over MCP moves the version the page polls, and the next read shows it with its activity entry", async () => {
     const file = tempFile();
     const app = appOn(new EventStore(file));
-    const s0 = await demoToApprovedMonday(app);
-    const { token } = (await app.call("POST", "/api/grants", { name: "Laptop assistant", tier: "annotate" })) as { token: string };
-    const polled = await app.call("GET", "/api/case/version");
-    expect(polled).toEqual((await app.state()).live);
-    expect(s0.live.seq).toBeLessThan(polled.seq);
-
-    // The agent's process, on the same file. No restart of either one.
-    const mcp = mcpOn(file, token);
-    const read = structured(await callTool(mcp, "get_appointment", { appointment_id: MON }));
-    const afterRead = await app.call("GET", "/api/case/version");
-    expect(afterRead.seq).toBeGreaterThan(polled.seq);
-    structured(await callTool(mcp, "add_note", { appointment_id: MON, text: "Bring parking pass", expected_version: read.appointment.version }));
-    const afterNote = await app.call("GET", "/api/case/version");
-    expect(afterNote.seq).toBeGreaterThan(afterRead.seq);
-    expect(afterNote.generation).toBe(polled.generation);
-
+    await addAndAccept(app, "m2");
+    const agent = mcpOn(file);
+    const before = (await app.call("GET", "/api/case/version")) as { generation: number; seq: number };
+    const r = structured(await callTool(agent, "add_note", { slot_key: THU, text: "Parking is on Elm Street.", expected_version: 0 }));
+    expect(r.activity).toMatchObject({ undoable: true });
+    const after = (await app.call("GET", "/api/case/version")) as { generation: number; seq: number };
+    expect(after.generation).toBe(before.generation);
+    expect(after.seq).toBeGreaterThan(before.seq);
     const s = await app.state();
-    expect(s.live).toEqual(afterNote);
-    expect(s.records.find((r) => r.id === MON)!.notes).toEqual([
-      expect.objectContaining({ text: "Bring parking pass", by: expect.objectContaining({ kind: "agent", grant_name: "Laptop assistant" }) }),
-    ]);
-    // A note changes no state.
-    expect(labels(s)).toEqual(labels(s0));
-    // A poll with no change returns the same version.
-    expect(await app.call("GET", "/api/case/version")).toEqual(afterNote);
+    expect(s.records.find((x) => x.id === THU)!.notes.map((n) => n.text)).toEqual(["Parking is on Elm Street."]);
+    expect(s.activity.entries[0]).toMatchObject({ actor: "mcp", kind: "note_added", target: { type: "note", id: `${THU}#n1` } });
   });
 
   it("a Delete case moves the generation the page polls", async () => {
@@ -227,101 +144,95 @@ describe("SP6.3 and G-d: live refresh", () => {
     await addAndAccept(app, "m2");
     const s = await app.state();
     await app.call("POST", "/api/case/delete", { expectedVersion: s.caseVersion, confirmation: "DELETE" });
-    expect((await app.call("GET", "/api/case/version")).generation).toBe(s.generation + 1);
+    expect(((await app.call("GET", "/api/case/version")) as { generation: number }).generation).toBe(s.generation + 1);
   });
 });
 
-describe("the demo beat: the agent reads, annotates and proposes, and the app shows it", () => {
-  it("Monday is requested and not confirmed, the note shows in the app, Thursday stays confirmed, and a proposal waits for review", async () => {
+describe("the demo beat over MCP: the agent works the case, and the person undoes and approves", () => {
+  it("imports and accepts m3, reads that Monday is offered, archives Tuesday, and the person sees and undoes it", async () => {
     const file = tempFile();
     const app = appOn(new EventStore(file));
-    await demoToApprovedMonday(app);
-    const annotate = (await app.call("POST", "/api/grants", { name: "Laptop assistant", tier: "annotate" })) as { token: string };
-    const propose = (await app.call("POST", "/api/grants", { name: "Phone helper", tier: "propose" })) as { grant: GrantView; token: string };
-    const agent = mcpOn(file, annotate.token);
+    for (const id of ["m1", "m2"]) await addAndAccept(app, id);
+    await app.call("POST", "/api/calendar", { name: "dana.ics", text: readFixtureText("calendar/dana.ics"), expectedVersion: 0 });
+    const agent = mcpOn(file);
 
-    // "Am I booked for Monday?"
-    const listed = structured(await callTool(agent, "list_appointments", {}));
-    const monday = listed.appointments.find((a: { appointment_id: string }) => a.appointment_id === MON);
-    expect(monday).toMatchObject({
-      state: "requested",
-      state_label: "Requested · reported by you",
-      state_meaning: "You asked the office for this time. The office has not confirmed it yet.",
-    });
-    // "Add a note to bring my parking pass."
-    structured(await callTool(agent, "add_note", { appointment_id: MON, text: "Bring parking pass", expected_version: monday.version }));
+    // The agent adds the office's text and accepts its claims.
+    const imported = structured(await callTool(agent, "import_message", { text: fixtureMessage("m3").text, channel: "sms", from: "Lantern Hill Clinic", received_at: fixtureMessage("m3").received_at }));
+    expect(imported).toMatchObject({ message_id: "m3", source: { source_type: "office_message", suggested: ["channel", "from", "received_at"] } });
+    const accepted = structured(
+      await callTool(agent, "accept_claim", { claims: imported.claims.map((c: { evidence_id: string; version: number }) => ({ evidence_id: c.evidence_id, expected_version: c.version })) }),
+    );
+    expect(accepted).toMatchObject({ decided: 3, refused: 0 });
     let s = await app.state();
-    expect(s.records.find((r) => r.id === MON)!.notes.map((n) => n.text)).toEqual(["Bring parking pass"]);
-    expect(labels(s)[THU]).toBe("Confirmed · office message, change proposed");
-    expect(labels(s)[MON]).toBe("Requested · reported by you");
+    expect(labels(s)).toMatchObject({ [THU]: "Confirmed · office message, change proposed", [MON]: "Offered · office message" });
+    // The person sees where the message came from.
+    expect(s.evidence.find((e) => e.id === "m3-e3")!.claim.source_note).toBe("Added by an external agent");
 
-    // The propose grant reports the office confirmed Monday by phone. It
-    // waits in the review queue and changes nothing.
-    const proposer = mcpOn(file, propose.token);
-    const proposed = structured(
-      await callTool(proposer, "propose_change", {
-        change: { kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: "Dana says the office confirmed Monday by phone." },
-      }),
-    );
-    s = await app.state();
-    const pending = s.proposals.filter((p) => p.status === "pending");
-    expect(pending).toEqual([expect.objectContaining({ id: proposed.proposal_id, grantName: "Phone helper" })]);
-    expect(describeChange(pending[0]!.change)).toBe("The office confirmed Monday 11/16 1:00 PM.");
-    expect(labels(s)[MON]).toBe("Requested · reported by you");
+    const schedule = structured(await callTool(agent, "get_schedule", {}));
+    const mon = schedule.appointments.find((a: { slot_key: string }) => a.slot_key === MON);
+    expect(mon).toMatchObject({ state: "offered", state_meaning: "The office offered this time. You have not accepted it." });
+    expect(schedule.time_zone).toMatchObject({ name: "America/Denver", set_by: "agent" });
 
-    // G-e: confirming states the proposal's version and the generation. A
-    // stale version writes nothing.
-    const stale = await app.raw("POST", `/api/proposals/${proposed.proposal_id}/confirm`, { expectedVersion: 0 });
-    expect(stale.status).toBe(409);
-    expect((await app.raw("POST", `/api/proposals/${proposed.proposal_id}/confirm`, { expectedVersion: 1 }, null)).status).toBe(400);
-    expect(labels(await app.state())[MON]).toBe("Requested · reported by you");
-    await app.call("POST", `/api/proposals/${proposed.proposal_id}/confirm`, { expectedVersion: pending[0]!.version });
+    const archived = structured(await callTool(agent, "archive_appointment", { slot_key: TUE, expected_version: 0 }));
+    expect(archived).toMatchObject({ archived: true, record_version: 1 });
     s = await app.state();
-    // Rule 3 (S4): a confirmation of the replacement does not release
-    // Thursday, because no evidence says Thursday moved. Both stay held and
-    // the app asks which one stands.
-    expect(labels(s)[MON]).toBe("Confirmed · reported by you through Phone helper, change proposed");
-    expect(labels(s)[THU]).toBe("Confirmed · office message, change proposed");
-    expect(s.case.conflicts.map((c) => [c.kind, c.slotKeys])).toContainEqual(["both_held", [THU, MON]]);
-    expect(s.proposals[0]).toMatchObject({ status: "confirmed" });
-    expect(s.history.map((h) => h.label)).toContain(
-      `You confirmed a report from Phone helper as claim ${proposed.proposal_id}-1: confirmation for Monday 11/16 1:00 PM`,
-    );
-    // The agent cannot confirm: no tool for it exists, under any tier.
-    await expect(callTool(proposer, "confirm_proposal", { proposal_id: proposed.proposal_id })).rejects.toThrow("Unknown tool.");
+    expect(s.activity.entries.slice(0, 5).map((e) => [e.actor, e.kind, e.undoable])).toEqual([
+      ["mcp", "appointment_archived", true],
+      ["mcp", "claim_accepted", true],
+      ["mcp", "claim_accepted", true],
+      ["mcp", "claim_accepted", true],
+      ["mcp", "message_imported", true],
+    ]);
+
+    // A page that read an older activity version is refused, then the
+    // person undoes the archive.
+    const entry = s.activity.entries[0]!;
+    expect(await app.raw("POST", `/api/activity/${entry.id}/undo`, { expectedVersion: s.activity.activityVersion - 1 })).toMatchObject({ status: 409, body: { error: "stale_edit" } });
+    const view = (await app.call("POST", `/api/activity/${entry.id}/undo`, { expectedVersion: s.activity.activityVersion })) as CaseView;
+    expect(view.slots.map((x) => x.key)).toContain(TUE);
+    s = await app.state();
+    expect(s.records.find((x) => x.id === TUE)!.archived).toBe(false);
+    expect(s.activity.entries[0]).toMatchObject({ actor: "you", kind: "undo", undoable: false, summary: "Undid: Archived Tuesday 11/10 2:00 PM." });
+    expect(s.activity.entries[1]).toMatchObject({ id: entry.id, undone: true, undoable: false });
+    // Undoing it twice says why not.
+    expect(await app.raw("POST", `/api/activity/${entry.id}/undo`, { expectedVersion: s.activity.activityVersion })).toMatchObject({
+      status: 409,
+      body: { error: "undo_blocked", message: "This was already undone." },
+    });
   });
 
-  it("G-e: rejecting a proposal states its version and changes no state", async () => {
+  it("refuses to undo an agent's accepted fact once a reply that depends on it is approved, with a plain reason", async () => {
     const file = tempFile();
     const app = appOn(new EventStore(file));
-    await addAndAccept(app, "m2");
-    const { token } = (await app.call("POST", "/api/grants", { name: "Phone helper", tier: "propose" })) as { token: string };
-    const r = structured(
-      await callTool(mcpOn(file, token), "propose_change", {
-        change: { kind: "user_report", claim_type: "cancel", date: "2026-11-12", time: "10:30", statement: "Dana canceled Thursday." },
-      }),
-    );
-    const before = await app.state();
-    expect((await app.raw("POST", `/api/proposals/${r.proposal_id}/reject`, { expectedVersion: 2 })).status).toBe(409);
-    await app.call("POST", `/api/proposals/${r.proposal_id}/reject`, { expectedVersion: 1 });
-    const after = await app.state();
-    expect(after.proposals[0]).toMatchObject({ status: "rejected" });
-    expect(labels(after)).toEqual(labels(before));
-    expect((await app.raw("POST", `/api/proposals/${r.proposal_id}/confirm`, { expectedVersion: 2 })).status).toBe(422);
-  });
+    for (const id of ["m1", "m2"]) await addAndAccept(app, id);
+    const agent = mcpOn(file);
+    const imported = structured(await callTool(agent, "import_message", { text: fixtureMessage("m3").text, channel: "sms", from: null, received_at: null }));
+    structured(await callTool(agent, "accept_claim", { claims: imported.claims.map((c: { evidence_id: string; version: number }) => ({ evidence_id: c.evidence_id, expected_version: c.version })) }));
 
-  it("G-e: confirming a proposed archive states the record version the user saw", async () => {
-    const file = tempFile();
-    const app = appOn(new EventStore(file));
-    await addAndAccept(app, "m2");
-    const { token } = (await app.call("POST", "/api/grants", { name: "Phone helper", tier: "propose" })) as { token: string };
-    const mcp = mcpOn(file, token);
-    const r = structured(await callTool(mcp, "propose_change", { change: { kind: "archive", appointment_id: THU, expected_version: 0, statement: "Dana no longer needs Thursday." } }));
-    // Confirming an archive needs the record version.
-    expect((await app.raw("POST", `/api/proposals/${r.proposal_id}/confirm`, { expectedVersion: 1 })).status).toBe(422);
-    expect((await app.raw("POST", `/api/proposals/${r.proposal_id}/confirm`, { expectedVersion: 1, recordVersion: 3 })).status).toBe(409);
-    await app.call("POST", `/api/proposals/${r.proposal_id}/confirm`, { expectedVersion: 1, recordVersion: 0 });
-    expect((await app.state()).records.find((x) => x.id === THU)).toMatchObject({ archived: true });
+    // The agent opens the reply, and only the person approves it.
+    let s = await app.state();
+    const started = structured(await callTool(agent, "start_reply", { template: "accept_offer", slot_key: MON, expected_version: s.case.reply.version }));
+    expect(toolError(await callTool(agent, "approve_reply", { draft_id: started.draft_id }).catch((e: Error) => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "protocol", message: e.message }) }] })))).toMatchObject({ error: "protocol" });
+    s = await app.state();
+    const draft = s.case.reply.draft!;
+    await app.call("POST", `/api/reply/drafts/${draft.id}/approve`, { expectedVersion: s.case.reply.version, confirmedFields: draft.fields.map((f) => f.name) });
+    s = await app.state();
+    expect(labels(s)[MON]).toBe("Requested · reported by you");
+
+    // Undoing the agent's acceptance of the Monday offer is refused.
+    const mondayOffer = s.activity.entries.find((e) => e.kind === "claim_accepted" && e.target?.id === "m3-e3")!;
+    const refused = await app.raw("POST", `/api/activity/${mondayOffer.id}/undo`, { expectedVersion: s.activity.activityVersion });
+    expect(refused).toMatchObject({
+      status: 409,
+      body: { error: "undo_blocked", message: "A reply for Monday 11/16 1:00 PM was approved after this and depends on it. A sent reply cannot be unsent, so this cannot be undone." },
+    });
+    // The Tuesday offer from m1 does not depend on it, and the person's own
+    // acceptance of it undoes.
+    const tuesdayOffer = s.activity.entries.find((e) => e.kind === "claim_accepted" && e.target?.id === "m1-e1")!;
+    await app.call("POST", `/api/activity/${tuesdayOffer.id}/undo`, { expectedVersion: s.activity.activityVersion });
+    s = await app.state();
+    expect(s.evidence.find((e) => e.id === "m1-e1")!.status).toBe("pending");
+    expect(labels(s)[TUE]).toBeUndefined();
   });
 });
 
@@ -359,6 +270,10 @@ describe("G-f: archive in the app", () => {
     expect(s.case.question?.id).toBe(asked.question!.id);
     expect(s.case.reply.options.some((o) => o.slotKey === THU)).toBe(true);
     expect(s.history.map((h) => h.label).slice(-2)).toEqual([`${THU} archived by you`, `Undo on ${THU} by you: reversed version 1`]);
+    expect(s.activity.entries.slice(0, 2).map((e) => [e.actor, e.kind])).toEqual([
+      ["you", "record_change_undone"],
+      ["you", "appointment_archived"],
+    ]);
     // A stale archive writes nothing.
     expect((await app.raw("POST", `/api/records/${THU}/archive`, { expectedVersion: 1 })).status).toBe(409);
   });
@@ -367,15 +282,14 @@ describe("G-f: archive in the app", () => {
     const file = tempFile();
     const app = appOn(new EventStore(file));
     const asked = await demoToQuestion(app);
-    const { token } = (await app.call("POST", "/api/grants", { name: "Laptop assistant", tier: "read" })) as { token: string };
-    const agent = mcpOn(file, token);
+    const agent = mcpOn(file);
     let r = structured(await callTool(agent, "list_open_questions", {}));
     expect(r.conflicts.map((c: { appointment_ids: string[] }) => c.appointment_ids)).toEqual([expect.arrayContaining([THU])]);
     expect(r.question).toMatchObject({ question_id: asked.question!.id });
 
     await app.call("POST", `/api/records/${THU}/archive`, { expectedVersion: 0 });
     r = structured(await callTool(agent, "list_open_questions", {}));
-    expect(r).toEqual({ conflicts: [], question: null });
+    expect(r).toMatchObject({ conflicts: [], question: null });
 
     await app.call("POST", `/api/records/${THU}/undo`, { expectedVersion: 1, version: 1 });
     r = structured(await callTool(agent, "list_open_questions", {}));
@@ -410,7 +324,9 @@ describe("G-f: archive in the app", () => {
 
     armed = true;
     const approve = await app.raw("POST", `/api/reply/drafts/${draft.id}/approve`, { expectedVersion: s.case.reply.version, confirmedFields: draft.fields.map((f) => f.name) });
-    expect(approve).toMatchObject({ status: 422, body: { message: `Appointment ${MON} is archived. Undo the archive first.` } });
+    // The approval and its checks run in one transaction, so the archive
+    // that committed first stops it.
+    expect(approve).toMatchObject({ status: 422, body: { message: expect.stringContaining("slot_archived") } });
     s = await app.state();
     expect(s.case.reply.sent).toEqual([]);
     expect(labels(s)).toEqual(before);
@@ -429,18 +345,39 @@ describe("G-f: archive in the app", () => {
 
 describe("review round 2, B6: a stored draft's field sources and labels", () => {
   const MON_KEY = MON;
+  // A place correction an old grant reported and the person confirmed,
+  // written as a sprint 6 build wrote it.
+  const agentPlace = (store: EventStore, id: string, key: string, location: string) => {
+    const [date, time] = key.split("T");
+    store.append(`evidence:${id}-1`, 0, [
+      {
+        type: "agent_report_confirmed",
+        data: {
+          proposal_id: id,
+          grant_id: "g-1",
+          claim: {
+            claim_type: "clarify",
+            slot: { date: date!, time: time ?? null, location },
+            quote: "Dana says the place is this one.",
+            source_type: "reported_by_user_via_agent",
+            sender_kind: "person",
+            evidence_time: "2026-11-06T17:00:00.000Z",
+            event_time: null,
+            request_item: null,
+            agent_name: "Phone helper",
+          },
+        },
+      },
+    ]);
+  };
 
   it("a draft stored before sources carried labels shows the current labels and is stale until made again", async () => {
     const file = tempFile();
     const app = appOn(new EventStore(file));
     await demoToQuestion(app);
-    const { token } = (await app.call("POST", "/api/grants", { name: "Phone helper", tier: "propose" })) as { token: string };
-    const r = structured(
-      await callTool(mcpOn(file, token), "propose_change", {
-        change: { kind: "detail_edit", appointment_id: MON_KEY, expected_version: 0, location: "Suite 9, 400 Elm Street", statement: "Dana says Monday is in Suite 9." },
-      }),
-    );
-    await app.call("POST", `/api/proposals/${r.proposal_id}/confirm`, { expectedVersion: 1, recordVersion: 0 });
+    // A place an old grant reported, which the person confirmed before
+    // sprint 8.
+    agentPlace(app.store, "p-1", MON_KEY, "Suite 9, 400 Elm Street");
     // The failing case: a draft written by the sprint 5 code, whose fields
     // carry no agent name and no label.
     const { context, log } = app.kase.replyState();
@@ -487,13 +424,8 @@ describe("review round 2, B6: a stored draft's field sources and labels", () => 
     await app.call("POST", "/api/reply/drafts", { expectedVersion: s.case.reply.version, template: "ask_still_stands", slotKey: THU });
     s = await app.state();
     expect(s.case.reply.draft).toMatchObject({ valid: true });
-    const { token } = (await app.call("POST", "/api/grants", { name: "Phone helper", tier: "propose" })) as { token: string };
-    const r = structured(
-      await callTool(mcpOn(file, token), "propose_change", {
-        change: { kind: "detail_edit", appointment_id: THU, expected_version: 0, location: thu.location!, statement: "Dana says the place is the same." },
-      }),
-    );
-    await app.call("POST", `/api/proposals/${r.proposal_id}/confirm`, { expectedVersion: 1, recordVersion: 0 });
+    agentPlace(app.store, "p-1", THU, thu.location!);
+    const r = { proposal_id: "p-1" };
     s = await app.state();
     // The value did not change, but the sources did.
     expect(s.case.slots.find((x) => x.key === THU)!.location).toBe(thu.location);

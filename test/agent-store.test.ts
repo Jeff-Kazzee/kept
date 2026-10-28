@@ -4,10 +4,10 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { caseIso } from "../src/agent/events.ts";
+import { zonedIso } from "../src/domain/zone.ts";
 import type { ToolCall, ToolModelClient, ToolReply } from "../src/model/responses.ts";
 import { EventStore } from "../src/store/event-log.ts";
-import { acceptMessages } from "./helpers.ts";
+import { acceptMessages, useZone } from "./helpers.ts";
 import { CLOCK, agentFor, fixtureMessage, fnCall, message, pasted, reasoning, reply, say, sequence, services } from "./agent-helpers.ts";
 
 const dirs: string[] = [];
@@ -99,7 +99,8 @@ describe("G9: the chat stream", () => {
     const r = await say(agent, app, pasted("m4"));
     expect(r.events.map((e) => e.event)).toEqual(["turn.started", "tool.started", "turn.error"]);
     expect(r.of("turn.error")[0]!.code).toBe("case_deleted");
-    expect(app.store.readAll()).toEqual([]);
+    // Only the settings, which Delete case keeps.
+    expect(app.store.readAll().filter((e) => e.streamId !== "settings")).toEqual([]);
     expect(agent.chat()).toEqual({ chatVersion: 0, messages: [] });
   });
 
@@ -112,7 +113,8 @@ describe("G9: the chat stream", () => {
     const r = await say(agent, app, "Hi", { generation: old });
     expect(r.of("turn.error")[0]!.code).toBe("case_deleted");
     expect(model.calls).toHaveLength(0);
-    expect(app.store.readAll()).toEqual([]);
+    // Only the settings, which Delete case keeps.
+    expect(app.store.readAll().filter((e) => e.streamId !== "settings")).toEqual([]);
   });
 
   it("refuses a second turn while one runs with busy, and writes nothing for it", async () => {
@@ -158,10 +160,24 @@ describe("G9: the chat stream", () => {
     expect((await say(agentFor(app, sequence()), app, "What are my lab results?")).report.outcome).toBe("declined");
   });
 
-  it("writes createdAt with the America/Denver offset across the 2026-11-01 change", () => {
-    expect(caseIso("2026-10-31T15:00:00.000Z")).toBe("2026-10-31T09:00:00.000-06:00");
-    expect(caseIso("2026-11-01T07:59:59.000Z")).toBe("2026-11-01T01:59:59.000-06:00");
-    expect(caseIso("2026-11-01T08:00:00.000Z")).toBe("2026-11-01T01:00:00.000-07:00");
-    expect(caseIso("2026-11-05T17:00:00.123Z")).toBe("2026-11-05T10:00:00.123-07:00");
+  it("writes createdAt with the case zone's offset across its daylight change", () => {
+    const denver = (iso: string) => zonedIso(iso, "America/Denver");
+    expect(denver("2026-10-31T15:00:00.000Z")).toBe("2026-10-31T09:00:00.000-06:00");
+    expect(denver("2026-11-01T07:59:59.000Z")).toBe("2026-11-01T01:59:59.000-06:00");
+    expect(denver("2026-11-01T08:00:00.000Z")).toBe("2026-11-01T01:00:00.000-07:00");
+    expect(denver("2026-11-05T17:00:00.123Z")).toBe("2026-11-05T10:00:00.123-07:00");
+    // London leaves summer time on 2026-10-25 at 01:00 UTC. Tokyo has none.
+    expect(zonedIso("2026-10-25T00:59:59.000Z", "Europe/London")).toBe("2026-10-25T01:59:59.000+01:00");
+    expect(zonedIso("2026-10-25T01:00:00.000Z", "Europe/London")).toBe("2026-10-25T01:00:00.000+00:00");
+    expect(zonedIso("2026-11-05T17:00:00.000Z", "Asia/Tokyo")).toBe("2026-11-06T02:00:00.000+09:00");
+  });
+
+  it("shows the chat's times in the zone set now, so a change of zone moves them", async () => {
+    const app = services(new EventStore(":memory:", CLOCK));
+    const agent = agentFor(app, sequence(reply(message("Hi."))));
+    await say(agent, app, "Hello");
+    expect(agent.chat().messages[0]!.createdAt).toBe("2026-11-05T10:00:00.000-07:00");
+    useZone(app.store, "Asia/Tokyo");
+    expect(agent.chat().messages[0]!.createdAt).toBe("2026-11-06T02:00:00.000+09:00");
   });
 });

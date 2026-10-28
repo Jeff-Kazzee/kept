@@ -6,7 +6,7 @@ import { RecordedChatClient, fixtureMessageIds, type ChatReply } from "../src/ag
 import { defaultMessageId } from "../src/agent/tools.ts";
 import type { ChatEvent } from "../src/agent/types.ts";
 import { CaseService } from "../src/case/service.ts";
-import { userOnlyState } from "../src/eval/chat-eval.ts";
+import { personOnlyState } from "../src/eval/chat-eval.ts";
 import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
@@ -15,15 +15,23 @@ import { meterAdd, meterCheck } from "../src/model/meter.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import type { EventStore } from "../src/store/event-log.ts";
-import { fixtureMessage } from "./helpers.ts";
+import { DEMO_ZONE, fixtureMessage, useZone } from "./helpers.ts";
 
 export const CLOCK = () => "2026-11-05T17:00:00.000Z";
 
-export function services(store: EventStore, now: () => string = CLOCK, client: RecordedModelClient = RecordedModelClient.fromDirectory()) {
+// The demo's messages and calendar are in America/Denver, so the case uses
+// that zone unless a test names another, as "Load the demo" sets it.
+export function services(
+  store: EventStore,
+  now: () => string = CLOCK,
+  client: RecordedModelClient = RecordedModelClient.fromDirectory(),
+  zone: string | null = DEMO_ZONE,
+) {
+  if (zone !== null) useZone(store, zone);
   const intake = new IntakeService(store, client, { now });
   const kase = new CaseService(store, intake, client, { now, userName: loadCaseProfile().user_name });
   const reply = new ReplyService(store, kase, client, { now });
-  const records = new RecordsService(store, intake, kase, { newId: (() => { let n = 0; return () => `p-${++n}`; })() });
+  const records = new RecordsService(store, intake, kase);
   return { store, intake, kase, reply, records };
 }
 
@@ -143,8 +151,22 @@ export class RuleModel implements ToolModelClient {
   }
 }
 
-// Everything only the person may change. The eval uses the same check.
-export const fingerprint = userOnlyState;
+// What only the person may do: approve and send a reply. The eval uses the
+// same check.
+export const personOnly = personOnlyState;
+
+// Slot states, review decisions, answers, sends and archives: what changes
+// when anyone, the agent included, acts on the case.
+export function fingerprint(app: App): string {
+  const view = app.kase.view();
+  return JSON.stringify({
+    slots: view.slots.map((s) => [s.key, s.state, s.stateLabel, s.location]),
+    decided: app.intake.evidence().filter((e) => e.status !== "pending").map((e) => [e.id, e.status]),
+    answered: view.conflicts.filter((c) => c.answer).map((c) => c.id),
+    sent: view.reply.sent.map((s) => s.draftId),
+    archived: [...app.kase.archivedKeys()],
+  });
+}
 
 export const pasted = (id: string, lead = "Got this from the clinic:") => `${lead}\n\n${fixtureMessage(id).text}`;
 export { fixtureMessage };

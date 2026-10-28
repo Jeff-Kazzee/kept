@@ -1,5 +1,6 @@
-// SP4.1 to SP4.3 and SP4.10 at the domain level: notes, tags, archive and
-// undo on appointment records, and agent proposals that wait for the user.
+// SP4.1 to SP4.3 at the domain level: notes, tags, archive and undo on
+// appointment records, by the person or an agent (0009). Old cases with
+// grants and agent proposals still project.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,17 +8,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CaseService } from "../src/case/service.ts";
 import { InvalidRequestError, NotFoundError } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
-import { USER, type Actor } from "../src/records/events.ts";
+import { USER, actorFor, actorName, type Actor } from "../src/records/events.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { EventStore, StaleEditError, type Describe } from "../src/store/event-log.ts";
 import { acceptMessages, intake } from "./helpers.ts";
 
 const THU = "2026-11-12T10:30";
 const MON = "2026-11-16T13:00";
-const AGENT: Actor = { kind: "agent", grant_id: "g-1", grant_name: "Laptop assistant" };
-const GRANT = { id: "g-1", name: "Laptop assistant" };
+const AGENT: Actor = actorFor("mcp");
 
-// After every fixture message, as a real proposal would be.
+// After every fixture message.
 const CLOCK = () => "2026-11-06T17:00:00.000Z";
 
 async function setup(ids: string[]) {
@@ -25,8 +25,7 @@ async function setup(ids: string[]) {
   const service = intake(store);
   await acceptMessages(service, ids);
   const kase = new CaseService(store, service, RecordedModelClient.fromDirectory());
-  let n = 0;
-  const records = new RecordsService(store, service, kase, { newId: () => `p-${++n}` });
+  const records = new RecordsService(store, service, kase);
   return { store, intake: service, kase, records };
 }
 
@@ -142,111 +141,76 @@ describe("SP4.3 S17 archive and undo", () => {
   });
 });
 
-describe("SP4.10 proposals wait for the user (rule 8)", () => {
-  it("S16: a reported phone confirmation changes nothing until the user confirms it", async () => {
-    const { records, kase, intake: service, store } = await setup(["m2", "m3"]);
-    const before = labels(kase);
-    expect(before[MON]).toBe("Offered · office message");
-    const evidenceBefore = service.evidence().length;
-
-    const p = records.propose(
-      { kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: "The office called. Monday at 1 PM is confirmed." },
-      GRANT,
-    );
-    expect(p).toMatchObject({ id: "p-1", status: "pending", grantName: "Laptop assistant", version: 1 });
-    expect(records.reviewQueue().proposals.map((x) => x.id)).toEqual(["p-1"]);
-    expect(labels(kase)).toEqual(before);
-    expect(service.evidence()).toHaveLength(evidenceBefore);
-
-    const confirmed = records.confirmProposal("p-1", 1);
-    expect(confirmed).toMatchObject({ status: "confirmed", evidenceIds: ["p-1-1"] });
-    expect(records.reviewQueue().proposals).toEqual([]);
-    const ev = service.evidenceItem("p-1-1");
-    expect(ev).toMatchObject({
-      origin: "agent",
-      status: "accepted",
-      claim: { source_type: "reported_by_user_via_agent", agent_name: "Laptop assistant", claim_type: "confirm", quote: "The office called. Monday at 1 PM is confirmed." },
-    });
-    expect(labels(kase)[MON]).toBe("Confirmed · reported by you through Laptop assistant");
-    expect(() => records.confirmProposal("p-1", 2)).toThrow(/already confirmed/);
-    expect(stale(() => records.confirmProposal("p-1", 1)).currentVersion).toBe(2);
-    expect(store.readStream("proposal:p-1").map((e) => e.type)).toEqual(["change_proposed", "proposal_confirmed"]);
-  });
-
-  it("takes the agent name from the grant, not from the input", async () => {
-    const { records } = await setup(["m2"]);
-    expect(() =>
-      records.propose({ kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: "x", agent_name: "Someone else" }, GRANT),
-    ).toThrow(InvalidRequestError);
-  });
-
-  it("a rejected proposal changes nothing", async () => {
-    const { records, kase } = await setup(["m2", "m3"]);
-    const before = labels(kase);
-    records.propose({ kind: "user_report", claim_type: "cancel", date: "2026-11-12", time: "10:30", statement: "Cancel Thursday." }, GRANT);
-    expect(records.rejectProposal("p-1", 1)).toMatchObject({ status: "rejected" });
-    expect(labels(kase)).toEqual(before);
-    expect(() => records.confirmProposal("p-1", 2)).toThrow(/already rejected/);
-  });
-
-  it("a new appointment and a corrected place apply only on confirm", async () => {
-    const { records, kase } = await setup(["m2"]);
-    expect(() =>
-      records.propose({ kind: "new_appointment", date: "2026-11-12", time: "10:30", status: "confirmed", statement: "x" }, GRANT),
-    ).toThrow(/already exists/);
-    records.propose({ kind: "new_appointment", date: "2026-11-20", time: "08:00", location: "Elm Street office", status: "offered", statement: "They offered Friday the 20th." }, GRANT);
-    records.propose({ kind: "detail_edit", appointment_id: THU, expected_version: 0, location: "Lantern Hill Clinic, 400 Elm Street, Suite 3", statement: "Suite 3, not 2." }, GRANT);
-    expect(kase.view().slots.map((s) => s.key)).toEqual([THU]);
-    records.confirmProposal("p-1", 1);
-    records.confirmProposal("p-2", 1, { recordVersion: 0 });
-    const slots = kase.view().slots;
-    expect(slots.map((s) => [s.key, s.stateLabel])).toEqual([
-      [THU, "Confirmed · office message"],
-      ["2026-11-20T08:00", "Offered · reported by you through Laptop assistant"],
+describe("access log stream", () => {
+  it("appends system events without an expected version, and reads entries from before sprint 8", async () => {
+    const { records, store } = await setup(["m2"]);
+    store.appendSystem("access_log", [
+      { type: "tool_called", data: { grant_id: "g-1", grant_name: "Laptop assistant", tool: "list_appointments", result: "permission_denied", appointment_id: null } },
     ]);
-    expect(slots[0]!.location).toBe("Lantern Hill Clinic, 400 Elm Street, Suite 3");
-  });
-
-  it("checks proposals with the app's rules", async () => {
-    const { records } = await setup(["m2"]);
-    const bad = [
-      { kind: "user_report", claim_type: "confirm", date: "2026-11-31", time: "13:00", statement: "x" },
-      { kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "1 PM", statement: "x" },
-      { kind: "user_report", claim_type: "office_request", date: null, statement: "x" },
-      { kind: "user_report", claim_type: "confirm", date: null, statement: "x" },
-      { kind: "user_report", claim_type: "clarify", date: "2026-11-16", statement: "x" },
-      { kind: "user_report", claim_type: "confirm", date: "2026-11-16", statement: "x".repeat(501) },
-      { kind: "set_state", appointment_id: THU, state: "canceled", statement: "x" },
-      { kind: "archive", appointment_id: THU, statement: "x" },
-    ];
-    for (const input of bad) expect(() => records.propose(input, GRANT), JSON.stringify(input)).toThrow(InvalidRequestError);
-    expect(records.proposals()).toEqual([]);
-  });
-
-  it("refuses an archive or edit proposal made on a stale record", async () => {
-    const { records } = await setup(["m2"]);
-    records.addNote(THU, "app note", 0, USER);
-    expect(stale(() => records.propose({ kind: "archive", appointment_id: THU, expected_version: 0, statement: "Old." }, GRANT)).currentVersion).toBe(1);
-    const p = records.propose({ kind: "archive", appointment_id: THU, expected_version: 1, statement: "Old." }, GRANT);
-    expect(() => records.confirmProposal(p.id, 1)).toThrow(/record version/);
-    records.addNote(THU, "another app note", 1, USER);
-    expect(stale(() => records.confirmProposal(p.id, 1, { recordVersion: 1 })).currentVersion).toBe(2);
-    expect(records.confirmProposal(p.id, 1, { recordVersion: 2 })).toMatchObject({ status: "confirmed", evidenceIds: [] });
-    expect(records.record(THU)).toMatchObject({ archived: true, version: 3 });
-    expect(records.record(THU).history.at(-1)).toMatchObject({ type: "record_archived", by: { kind: "user" } });
+    records.logAccess({ actor: "mcp", tool: "get_schedule", result: "ok", appointment_id: null });
+    records.logAccess({ actor: "mcp", tool: "add_note", result: "refused", appointment_id: THU });
+    expect(store.readStream("access_log").map((e) => e.version)).toEqual([1, 2, 3]);
+    expect(records.accessLog().map((e) => [e.actor ?? e.grant_name, e.tool, e.result])).toEqual([
+      ["Laptop assistant", "list_appointments", "permission_denied"],
+      ["mcp", "get_schedule", "ok"],
+      ["mcp", "add_note", "refused"],
+    ]);
   });
 });
 
-describe("access log stream", () => {
-  it("appends system events without an expected version", async () => {
-    const { records, store } = await setup(["m2"]);
-    records.logAccess({ grant_id: "g-1", grant_name: "Laptop assistant", tool: "list_appointments", result: "ok", appointment_id: null });
-    records.logAccess({ grant_id: null, grant_name: null, tool: "add_note", result: "permission_denied", appointment_id: THU });
-    expect(store.readStream("access_log").map((e) => e.version)).toEqual([1, 2]);
-    expect(records.accessLog().map((e) => [e.grant_name, e.tool, e.result])).toEqual([
-      ["Laptop assistant", "list_appointments", "ok"],
-      [null, "add_note", "permission_denied"],
+describe("agents in records", () => {
+  it("names the assistant and an external agent by code, and an old grant by its name", async () => {
+    const { records } = await setup(["m2"]);
+    records.addNote(THU, "from the chat", 0, actorFor("agent"));
+    records.addNote(THU, "over MCP", 1, actorFor("mcp"));
+    const old: Actor = { kind: "agent", grant_id: "g-1", grant_name: "Laptop assistant" };
+    records.addNote(THU, "from a grant", 2, old);
+    expect(records.record(THU).notes.map((n) => actorName(n.by))).toEqual(["the assistant", "an external agent", "Laptop assistant"]);
+    expect(actorName(USER)).toBe("you");
+  });
+
+  it("an agent archives and unarchives, and unarchive is the undo of the archive in effect", async () => {
+    const { records } = await setup(["m2"]);
+    records.archive(THU, 0, actorFor("agent"));
+    expect(() => records.unarchive(THU, 0, actorFor("agent"))).toThrow(StaleEditError);
+    const back = records.unarchive(THU, 1, actorFor("agent"));
+    expect(back).toMatchObject({ archived: false, version: 2 });
+    expect(back.history.map((h) => [h.type, h.undone, h.reverses])).toEqual([
+      ["record_archived", true, null],
+      ["event_undone", false, 1],
     ]);
+    expect(() => records.unarchive(THU, 2, actorFor("agent"))).toThrow(/not archived/);
+  });
+
+  it("old cases with grants, proposals and confirmed agent reports still project", async () => {
+    const { store, kase, intake: svc } = await setup(["m2"]);
+    store.append("grant:g-1", 0, [{ type: "grant_created", data: { name: "Phone helper", tier: "propose", token_sha256: "00" } }]);
+    store.append("proposal:p-1", 0, [
+      { type: "change_proposed", data: { grant_id: "g-1", grant_name: "Phone helper", change: { kind: "archive", appointment_id: THU, statement: "Old." }, record_version: 0 } },
+    ]);
+    store.append("evidence:p-2-1", 0, [
+      {
+        type: "agent_report_confirmed",
+        data: {
+          proposal_id: "p-2",
+          grant_id: "g-1",
+          claim: {
+            claim_type: "offer",
+            slot: { date: "2026-11-20", time: "09:00", location: null },
+            quote: "They also offered Friday the 20th.",
+            source_type: "reported_by_user_via_agent",
+            sender_kind: "person",
+            evidence_time: "2026-11-06T17:00:00.000Z",
+            event_time: null,
+            request_item: null,
+            agent_name: "Phone helper",
+          },
+        },
+      },
+    ]);
+    expect(labels(kase)).toMatchObject({ [THU]: "Confirmed · office message", "2026-11-20T09:00": "Offered · reported by you through Phone helper" });
+    expect(svc.evidenceItem("p-2-1").origin).toBe("agent");
+    expect(kase.history().some((h) => h.streamId.startsWith("grant:") || h.streamId.startsWith("proposal:"))).toBe(false);
   });
 });
 
@@ -256,22 +220,7 @@ describe("review round 1", () => {
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   });
 
-  it("finding 2: a place edit is confirmed only at the record version the user saw", async () => {
-    const { records, kase } = await setup(["m2"]);
-    records.addNote(THU, "app note", 0, USER);
-    const p = records.propose({ kind: "detail_edit", appointment_id: THU, expected_version: 1, location: "Suite 9", statement: "Suite 9." }, GRANT);
-    expect(p.recordVersion).toBe(1);
-    // The app adds a note before the user confirms.
-    records.addNote(THU, "another app note", 1, USER);
-    expect(() => records.confirmProposal(p.id, 1)).toThrow(/place edit needs the record version/);
-    expect(stale(() => records.confirmProposal(p.id, 1, { recordVersion: 1 })).currentVersion).toBe(2);
-    expect(records.proposal(p.id).status).toBe("pending");
-    expect(kase.view().slots[0]!.location).toBe("Lantern Hill Clinic, 400 Elm Street, Suite 2");
-    records.confirmProposal(p.id, 1, { recordVersion: 2 });
-    expect(kase.view().slots[0]!.location).toBe("Suite 9");
-  });
-
-  it("finding 2: no write from another process lands between the version check and the proposal write", async () => {
+  it("finding 2: no write from another process lands between the version check and an agent's archive", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "records-race-"));
     dirs.push(dir);
     const file = path.join(dir, "app.sqlite");
@@ -302,41 +251,14 @@ describe("review round 1", () => {
     const agentIntake = intake(agent);
     const agentRecords = new RecordsService(agent, agentIntake, new CaseService(agent, agentIntake, RecordedModelClient.fromDirectory()));
     try {
-      const p = agentRecords.propose({ kind: "archive", appointment_id: THU, expected_version: 0, statement: "Old." }, GRANT);
+      const r = agentRecords.archive(THU, 0, AGENT);
       expect(String(gapWrite)).toMatch(/locked|busy/i);
-      expect(p).toMatchObject({ status: "pending", recordVersion: 0 });
-      expect(appRecords.record(THU).version).toBe(0);
+      expect(r).toMatchObject({ archived: true, version: 1 });
+      expect(appRecords.record(THU).notes).toEqual([]);
     } finally {
       agent.close();
       app.close();
     }
-  });
-
-  it("finding 6: an agent report has no event time, so a later office message outranks it", async () => {
-    let now = "2026-11-06T12:00:00.000Z";
-    const store = new EventStore(":memory:", () => now);
-    const service = intake(store);
-    await acceptMessages(service, ["m2"]);
-    const kase = new CaseService(store, service, RecordedModelClient.fromDirectory());
-    const records = new RecordsService(store, service, kase, { newId: () => "p-1" });
-
-    // The failing case: an invented event time far in the future.
-    expect(() =>
-      records.propose(
-        { kind: "user_report", claim_type: "cancel", date: "2026-11-12", time: "10:30", event_time: "2030-01-01T00:00:00Z", statement: "Canceled." },
-        GRANT,
-      ),
-    ).toThrow(InvalidRequestError);
-
-    records.propose({ kind: "user_report", claim_type: "cancel", date: "2026-11-12", time: "10:30", statement: "Canceled." }, GRANT);
-    records.confirmProposal("p-1", 1);
-    expect(service.evidenceItem("p-1-1").claim).toMatchObject({ event_time: null, evidence_time: "2026-11-06T12:00:00.000Z" });
-    expect(labels(kase)[THU]).toBe("Canceled · reported by you through Laptop assistant");
-
-    // The office's reminder arrives four hours after the agent's report.
-    now = "2026-11-06T18:00:00.000Z";
-    await acceptMessages(service, ["s15-injection"]);
-    expect(labels(kase)[THU]).toBe("Confirmed · office message");
   });
 
   it("finding 7: only the latest tag change still in effect can be undone", async () => {

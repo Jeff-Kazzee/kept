@@ -5,13 +5,14 @@ import { IntakeService, InvalidRequestError } from "../src/intake/service.ts";
 import { RecordedModelClient, readRecording, type Recording } from "../src/model/recorded.ts";
 import { fromPackage } from "../src/paths.ts";
 import { EventStore, StaleEditError } from "../src/store/event-log.ts";
-import { acceptMessages, intake } from "./helpers.ts";
+import { acceptMessages, intake, useZone } from "./helpers.ts";
 
 const NOW = "2026-11-05T09:00:00.000Z";
 const fault = (name: string) => readRecording(fromPackage(`fixtures/recordings/faults/${name}.json`));
 
 async function setup(ids: string[], client = RecordedModelClient.withOverrides([], RecordedModelClient.fromDirectory()), base?: IntakeService) {
   const store = new EventStore();
+  useZone(store);
   const service = base ?? intake(store);
   await acceptMessages(service, ids);
   const kase = new CaseService(store, service, client, { now: () => NOW });

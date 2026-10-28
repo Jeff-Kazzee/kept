@@ -2,9 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { buildChecklist } from "../src/case/checklist.ts";
 import { CaseService } from "../src/case/service.ts";
-import { GrantStore } from "../src/grants/grants.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
-import { USER } from "../src/records/events.ts";
+import { USER, actorFor } from "../src/records/events.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
@@ -18,7 +17,7 @@ function services() {
   const client = RecordedModelClient.fromDirectory();
   const svc = intake(store);
   const kase = new CaseService(store, svc, client, { userName: "Dana Reyes" });
-  return { store, intake: svc, kase, reply: new ReplyService(store, kase, client), records: new RecordsService(store, svc, kase), grants: new GrantStore(store) };
+  return { store, intake: svc, kase, reply: new ReplyService(store, kase, client), records: new RecordsService(store, svc, kase) };
 }
 
 const request = (id: string, item: string, quote: string | null, options: Parameters<typeof ev>[5] = {}) =>
@@ -94,22 +93,35 @@ describe("SP5.3 checklist", () => {
     expect(app.kase.view().checklist.map((i) => i.text)).toEqual(["Bring new insurance card"]);
   });
 
-  it("shows a confirmed agent report through the grant's name", async () => {
+  it("shows a confirmed agent report from before sprint 8 through the grant's name", async () => {
     const app = services();
     await acceptMessages(app.intake, ["m2"]);
-    const { grant } = app.grants.create("Laptop assistant", "propose");
-    const p = app.records.propose(
-      { kind: "user_report", claim_type: "office_request", date: null, request_item: "Bring the parking pass", statement: "Dana says the office wants the parking pass." },
-      grant,
-    );
-    expect(app.kase.view().checklist.map((i) => i.text)).toEqual(["Bring new insurance card", "Arrive 15 minutes early"]);
-    app.records.confirmProposal(p.id, p.version);
+    app.store.append("evidence:p-1-1", 0, [
+      {
+        type: "agent_report_confirmed",
+        data: {
+          proposal_id: "p-1",
+          grant_id: "g-1",
+          claim: {
+            claim_type: "office_request",
+            slot: { date: null, time: null, location: null },
+            quote: "Dana says the office wants the parking pass.",
+            source_type: "reported_by_user_via_agent",
+            sender_kind: "person",
+            evidence_time: "2026-11-06T17:00:00.000Z",
+            event_time: null,
+            request_item: "Bring the parking pass",
+            agent_name: "Laptop assistant",
+          },
+        },
+      },
+    ]);
     expect(app.kase.view().checklist.at(-1)).toEqual({
       text: "Bring the parking pass",
       untrustedLabel: "Words from Laptop assistant. Untrusted text, shown as data.",
       sources: [
         {
-          evidenceId: `${p.id}-1`,
+          evidenceId: "p-1-1",
           quote: "Dana says the office wants the parking pass.",
           sourceLabel: "reported by you through Laptop assistant",
           sourceType: "reported_by_user_via_agent",
@@ -134,13 +146,12 @@ describe("SP5.5 case history", () => {
     app.records.addNote(THU, "Parking is on Elm Street.", 0, USER);
     app.records.archive(THU, 1);
     app.records.undo(THU, 2, 2);
-    const { grant, token: _token } = app.grants.create("Laptop assistant", "annotate");
-    app.records.setTags(THU, ["moved"], 3, { kind: "agent", grant_id: grant.id, grant_name: grant.name });
+    app.records.setTags(THU, ["moved"], 3, actorFor("mcp"));
 
     const history = app.kase.history();
     expect(history.map((h) => h.seq)).toEqual([...history.map((h) => h.seq)].sort((a, b) => a - b));
-    // Grants are app settings, not case events.
-    expect(history.some((h) => h.streamId.startsWith("grant:"))).toBe(false);
+    // Settings and the activity log are not in the case history.
+    expect(history.some((h) => h.streamId === "settings" || h.streamId === "activity")).toBe(false);
     const labels = history.map((h) => h.label);
     expect(labels.slice(0, 7)).toEqual([
       "Message m2 added (email)",
@@ -149,7 +160,7 @@ describe("SP5.5 case history", () => {
       "Claim m2-e1 extracted: confirmation for Thursday 11/12 10:30 AM",
       "Claim m2-e2 extracted: office request",
       "Claim m2-e3 extracted: office request",
-      "You accepted claim m2-e1",
+      "Claim m2-e1 accepted",
     ]);
     expect(labels.slice(-9)).toEqual([
       "Question q1 asked (model wording, passed the code checks)",
@@ -160,7 +171,7 @@ describe("SP5.5 case history", () => {
       "Note n1 added to 2026-11-12T10:30 by you",
       "2026-11-12T10:30 archived by you",
       "Undo on 2026-11-12T10:30 by you: reversed version 2",
-      "Tags on 2026-11-12T10:30 set by Laptop assistant (1 tag)",
+      "Tags on 2026-11-12T10:30 set by an external agent (1 tag)",
     ]);
     expect(history.find((h) => h.label === "2026-11-12T10:30 archived by you")!.undone).toBe(true);
     expect(history.filter((h) => h.undone)).toHaveLength(1);

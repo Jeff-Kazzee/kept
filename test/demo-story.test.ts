@@ -97,6 +97,12 @@ describe("demo story", () => {
       [MON]: "Offered · office message",
     });
     expect(s.case.slots.find((x) => x.key === FRI)!.clashes!.map((c) => c.summary)).toEqual(["Team meeting"]);
+    // Loading the demo calendar set the case to the demo's zone, as an
+    // action of the assistant that the person can undo (J5).
+    const settings = await app.call("GET", "/api/settings");
+    expect(settings).toMatchObject({ timezone: "America/Denver", timezoneSource: "agent", settingsVersion: 1 });
+    const activity = await app.call("GET", "/api/activity");
+    expect(activity.entries[0]).toMatchObject({ actor: "agent", kind: "timezone_set", undoable: true, summary: "Set the time zone to America/Denver." });
 
     // The explanation and the question. Dana picks Monday, which opens the
     // accept draft and changes no slot.
@@ -176,7 +182,7 @@ describe("demo story", () => {
     };
     expect(at("Draft d1 started: Accept an offered slot, Monday 11/16 1:00 PM")).toBeGreaterThan(at("Question q1 answered (choice request:2026-11-16T13:00)"));
     expect(at("Draft d1 approved. Simulated send. Claims recorded.")).toBeGreaterThan(at("Draft d1 started: Accept an offered slot, Monday 11/16 1:00 PM"));
-    expect(at("You accepted claim m4-e2")).toBe(history.length - 1);
+    expect(at("Claim m4-e2 accepted")).toBe(history.length - 1);
     expect(s.history.map((h) => h.seq)).toEqual([...s.history.map((h) => h.seq)].sort((a, b) => a - b));
 
     // Delete case, with the typed confirmation. The app is empty and the

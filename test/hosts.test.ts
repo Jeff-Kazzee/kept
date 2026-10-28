@@ -1,7 +1,7 @@
 // Sprint 7B, P3: APP_ALLOWED_HOSTS adds host names for a private proxy such
 // as Tailscale serve. An allowed host passes, any other is refused. The
-// server still binds 127.0.0.1, and a page reached over HTTPS gets a
-// session cookie marked Secure.
+// server still binds 127.0.0.1. Since sprint 8 there is no pairing or
+// session cookie (0009, J3).
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { request } from "node:http";
@@ -63,12 +63,11 @@ function start(env: Record<string, string>) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   children.push(child);
-  const ready = new Promise<{ code: string; out: string }>((resolve, reject) => {
+  const ready = new Promise<{ out: string }>((resolve, reject) => {
     let out = "";
     child.stdout!.on("data", (d: Buffer) => {
       out += d.toString();
-      const m = /Pairing code for this run: (\S+)\./.exec(out);
-      if (m) resolve({ code: m[1]!, out });
+      if (/Serving the (production build|UI through Vite)/.test(out)) resolve({ out });
     });
     child.stderr!.on("data", (d: Buffer) => (out += d.toString()));
     child.on("exit", (c) => reject(new Error(`server exited ${c}: ${out}`)));
@@ -78,33 +77,30 @@ function start(env: Record<string, string>) {
 }
 
 describe("the server with APP_ALLOWED_HOSTS", () => {
-  it("answers to the allowed host over the proxy, sets a Secure cookie for an HTTPS page, and refuses other hosts and origins", async () => {
+  it("answers to the allowed host over the proxy, sets no cookie, and refuses other hosts and origins", async () => {
     const app = start({ APP_ALLOWED_HOSTS: TAILNET });
-    const { code, out } = await app.ready;
+    const { out } = await app.ready;
     expect(out).toContain(`Also answers to: ${TAILNET}`);
     const page = { Host: TAILNET, Origin: `https://${TAILNET}`, "Content-Type": "application/json", "X-Appointments-App": "1", "X-Forwarded-Proto": "https" };
-    const paired = await call(app.port, "POST", "/api/pair", page, { code });
-    expect(paired.status).toBe(200);
-    expect(paired.setCookie[0]).toMatch(/; HttpOnly; SameSite=Strict; Path=\/; Secure$/);
-    const cookie = paired.setCookie[0]!.split(";")[0]!;
-    expect((await call(app.port, "GET", "/api/state", { Host: TAILNET, Cookie: cookie })).status).toBe(200);
-    expect((await call(app.port, "GET", "/api/case/version", { Host: `${TAILNET}:${app.port}`, Cookie: cookie })).status).toBe(200);
-    // Any other host is refused before the session is checked.
+    const state = await call(app.port, "GET", "/api/state", { Host: TAILNET });
+    expect(state.status).toBe(200);
+    expect(state.setCookie).toEqual([]);
+    expect((await call(app.port, "GET", "/api/case/version", { Host: `${TAILNET}:${app.port}` })).status).toBe(200);
+    // Any other host is refused.
     for (const host of ["evil.example", `evil.example:${app.port}`, `${TAILNET}.evil.example`]) {
-      expect(await call(app.port, "GET", "/api/state", { Host: host, Cookie: cookie })).toMatchObject({ status: 403, body: { error: "forbidden_host" } });
+      expect(await call(app.port, "GET", "/api/state", { Host: host })).toMatchObject({ status: 403, body: { error: "forbidden_host" } });
     }
     // A write from a page on another origin is refused.
     const M = { channel: "sms", from: "Clinic", received_at: "2026-11-05T09:00:00-07:00", text: "See you Monday." };
-    expect(await call(app.port, "POST", "/api/messages", { ...page, Origin: "https://evil.example", Cookie: cookie, "X-Case-Generation": "0" }, M)).toMatchObject({ status: 403, body: { error: "forbidden_source" } });
-    expect((await call(app.port, "POST", "/api/messages", { ...page, Cookie: cookie, "X-Case-Generation": "0" }, M)).status).toBe(200);
+    expect(await call(app.port, "POST", "/api/messages", { ...page, Origin: "https://evil.example", "X-Case-Generation": "0" }, M)).toMatchObject({ status: 403, body: { error: "forbidden_source" } });
+    expect((await call(app.port, "POST", "/api/messages", { ...page, "X-Case-Generation": "0" }, M)).status).toBe(200);
   }, 30_000);
 
-  it("on 127.0.0.1 over HTTP the cookie is not marked Secure", async () => {
+  it("on 127.0.0.1 a page from the tailnet name is refused when the name is not allowed", async () => {
     const app = start({});
-    const { code } = await app.ready;
-    const res = await call(app.port, "POST", "/api/pair", { Host: `127.0.0.1:${app.port}`, Origin: `http://127.0.0.1:${app.port}`, "Content-Type": "application/json", "X-Appointments-App": "1" }, { code });
-    expect(res.setCookie[0]).toMatch(/; Path=\/$/);
+    await app.ready;
     expect((await call(app.port, "GET", "/", { Host: TAILNET })).status).toBe(403);
+    expect((await call(app.port, "GET", "/api/state", { Host: `127.0.0.1:${app.port}` })).status).toBe(200);
   }, 30_000);
 
   it("stops at start when APP_ALLOWED_HOSTS has an entry that is not a host name", async () => {
@@ -123,23 +119,20 @@ describe("the server with APP_ALLOWED_HOSTS", () => {
 
   it("review 1, finding 4: every /api response says nosniff and has a CSP that allows nothing, the chat route included", async () => {
     const app = start({});
-    const { code } = await app.ready;
+    await app.ready;
     const host = `127.0.0.1:${app.port}`;
     const page = { Host: host, Origin: `http://${host}`, "Content-Type": "application/json", "X-Appointments-App": "1", "X-Case-Generation": "0" };
-    const cookie = (await call(app.port, "POST", "/api/pair", page, { code })).setCookie[0]!.split(";")[0]!;
     const responses = [
-      await call(app.port, "GET", "/api/state", { Host: host, Cookie: cookie }),
       await call(app.port, "GET", "/api/state", { Host: host }),
+      await call(app.port, "GET", "/api/pair", { Host: host }),
       await call(app.port, "GET", "/api/state", { Host: "evil.example" }),
-      await call(app.port, "POST", "/api/messages", { ...page, Cookie: cookie }, { channel: "sms", from: "Clinic", received_at: "2026-11-05T09:00:00-07:00", text: "See you Monday." }),
-      // The chat route. Before 7A merges it answers 404 JSON. After, its
-      // event stream must carry the same headers.
-      await call(app.port, "GET", "/api/chat", { Host: host, Cookie: cookie }),
-      await call(app.port, "POST", "/api/chat", { ...page, Cookie: cookie, Accept: "text/event-stream" }, { text: "What is confirmed?", expectedVersion: 0 }),
+      await call(app.port, "POST", "/api/messages", page, { channel: "sms", from: "Clinic", received_at: "2026-11-05T09:00:00-07:00", text: "See you Monday." }),
+      // The chat route: GET is JSON, POST is the event stream.
+      await call(app.port, "GET", "/api/chat", { Host: host }),
+      await call(app.port, "POST", "/api/chat", { ...page, Accept: "text/event-stream" }, { text: "What is confirmed?", expectedVersion: 0 }),
     ];
-    expect(responses.map((r) => r.status)).toEqual([200, 401, 403, 200, 200, 200]);
-    // 7A's chat: GET is JSON, POST is the event stream, and the headers do
-    // not change either.
+    expect(responses.map((r) => r.status)).toEqual([200, 404, 403, 200, 200, 200]);
+    // The headers do not change for either.
     expect(responses[4]!.headers["content-type"]).toBe("application/json");
     expect(responses[5]!.headers["content-type"]).toBe("text/event-stream");
     expect(String(responses[5]!.body)).toContain("event: turn.done");

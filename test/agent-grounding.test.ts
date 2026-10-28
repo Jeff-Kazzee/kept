@@ -121,7 +121,7 @@ describe("finding 3: states agree with the slots", () => {
     expect(statesAgree("Your claims were accepted.", grounds(FACTS, ["claim:accepted"]))).toBe(true);
     expect(statesAgree("Your reply was sent.", grounds(FACTS, ["claim:accepted"]))).toBe(false);
     expect(statesAgree("Your reply was sent.", grounds(FACTS, ["reply:sent"]))).toBe(true);
-    expect(statesAgree("The proposal was confirmed.", grounds(FACTS, []))).toBe(false);
+    expect(statesAgree("The draft was approved.", grounds(FACTS, []))).toBe(false);
     expect(statesAgree("None of the claims is accepted yet.", grounds(FACTS, []))).toBe(true);
     for (const t of [
       "I accepted every claim.",
@@ -135,8 +135,26 @@ describe("finding 3: states agree with the slots", () => {
     ]) {
       expect(claimsAction(t), t).toBe(true);
     }
-    for (const t of ["Thursday is canceled by the office.", "You accepted the claim.", "I can draft a reply.", "I cannot cancel appointments.", "I imported the message."]) {
+    for (const t of ["Thursday is canceled by the office.", "You accepted the claim.", "I can draft a reply.", "I cannot cancel appointments."]) {
       expect(claimsAction(t), t).toBe(false);
+    }
+  });
+
+  it("0009 design 5: a first-person claim must match an action of this turn, and approving, sending or canceling never does", () => {
+    const done = (...kinds: string[]) => new Set(kinds);
+    expect(claimsAction("I imported the message.")).toBe(true);
+    expect(claimsAction("I imported the message.", done("message_imported"))).toBe(false);
+    expect(claimsAction("I accepted every claim.", done("message_imported"))).toBe(true);
+    expect(claimsAction("I accepted every claim.", done("claim_accepted"))).toBe(false);
+    expect(claimsAction("I've rejected the offer.", done("claim_accepted"))).toBe(true);
+    expect(claimsAction("I answered the question.", done("question_answered"))).toBe(false);
+    expect(claimsAction("I archived Tuesday.", done("appointment_archived"))).toBe(false);
+    expect(claimsAction("I undid that.", done("undo"))).toBe(false);
+    expect(claimsAction("I updated your schedule.", done())).toBe(true);
+    expect(claimsAction("I updated your schedule.", done("claim_accepted"))).toBe(false);
+    const all = done("message_imported", "claim_accepted", "claim_rejected", "question_answered", "appointment_archived", "draft_started", "undo", "timezone_set");
+    for (const t of ["I sent the reply.", "I approved the draft.", "I confirmed Monday.", "I canceled Thursday.", "I booked Monday.", "I rescheduled it.", "I deleted the case."]) {
+      expect(claimsAction(t, all), t).toBe(true);
     }
   });
 });
@@ -179,13 +197,24 @@ describe("chips", () => {
   });
 });
 
-describe("calendar times in America/Denver", () => {
+describe("calendar times in the case's time zone", () => {
   it("converts UTC and other zones to Denver wall-clock time across the 2026-11-01 change", () => {
-    expect(caseLocal({ date: "2026-10-31", time: "15:00", tzid: null, utc: true })).toEqual({ date: "2026-10-31", time: "09:00" });
-    expect(caseLocal({ date: "2026-11-02", time: "15:00", tzid: null, utc: true })).toEqual({ date: "2026-11-02", time: "08:00" });
-    expect(caseLocal({ date: "2026-11-13", time: "09:00", tzid: "America/Denver", utc: false })).toEqual({ date: "2026-11-13", time: "09:00" });
-    expect(caseLocal({ date: "2026-11-13", time: "11:00", tzid: "America/New_York", utc: false })).toEqual({ date: "2026-11-13", time: "09:00" });
-    expect(caseLocal({ date: "2026-11-14", time: "05:30", tzid: null, utc: true })).toEqual({ date: "2026-11-13", time: "22:30" });
-    expect(caseLocal({ date: "2026-11-13", time: null, tzid: null, utc: false })).toEqual({ date: "2026-11-13", time: null });
+    const local = (t: Parameters<typeof caseLocal>[0]) => caseLocal(t, "America/Denver");
+    expect(local({ date: "2026-10-31", time: "15:00", tzid: null, utc: true })).toEqual({ date: "2026-10-31", time: "09:00" });
+    expect(local({ date: "2026-11-02", time: "15:00", tzid: null, utc: true })).toEqual({ date: "2026-11-02", time: "08:00" });
+    expect(local({ date: "2026-11-13", time: "09:00", tzid: "America/Denver", utc: false })).toEqual({ date: "2026-11-13", time: "09:00" });
+    expect(local({ date: "2026-11-13", time: "11:00", tzid: "America/New_York", utc: false })).toEqual({ date: "2026-11-13", time: "09:00" });
+    expect(local({ date: "2026-11-14", time: "05:30", tzid: null, utc: true })).toEqual({ date: "2026-11-13", time: "22:30" });
+    expect(local({ date: "2026-11-13", time: null, tzid: null, utc: false })).toEqual({ date: "2026-11-13", time: null });
+  });
+
+  it("reads the same events in Asia/Tokyo and Europe/London, across London's 2026-10-25 change", () => {
+    // 09:00 in Denver on 11/13 is 01:00 the next day in Tokyo.
+    expect(caseLocal({ date: "2026-11-13", time: "09:00", tzid: "America/Denver", utc: false }, "Asia/Tokyo")).toEqual({ date: "2026-11-14", time: "01:00" });
+    // A time with no zone is read in the case's zone.
+    expect(caseLocal({ date: "2026-11-13", time: "09:00", tzid: null, utc: false }, "Asia/Tokyo")).toEqual({ date: "2026-11-13", time: "09:00" });
+    // London is UTC+1 until 2026-10-25 01:00 UTC, then UTC+0.
+    expect(caseLocal({ date: "2026-10-24", time: "12:00", tzid: null, utc: true }, "Europe/London")).toEqual({ date: "2026-10-24", time: "13:00" });
+    expect(caseLocal({ date: "2026-10-26", time: "12:00", tzid: null, utc: true }, "Europe/London")).toEqual({ date: "2026-10-26", time: "12:00" });
   });
 });

@@ -8,8 +8,8 @@ import { IntakeService } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import type { AgentAccess, ApiRequest, ApiResponse } from "../server/api.ts";
 import type { CaseService } from "../src/case/service.ts";
-import { GrantStore } from "../src/grants/grants.ts";
 import { RecordsService } from "../src/records/service.ts";
+import { setTimezone } from "../src/settings/settings.ts";
 import type { EventStore } from "../src/store/event-log.ts";
 
 const corpus = corpusMessages(loadScenarios());
@@ -83,7 +83,15 @@ export function intake(store: ConstructorParameters<typeof IntakeService>[0], no
   return new IntakeService(store, RecordedModelClient.fromDirectory(), { now });
 }
 
-// The records service and grant store the API needs, on the same store.
+// The store and records service the API needs.
 export function agentAccess(store: EventStore, service: IntakeService, kase: CaseService): AgentAccess {
-  return { records: new RecordsService(store, service, kase), grants: new GrantStore(store) };
+  return { store, records: new RecordsService(store, service, kase) };
+}
+
+// The demo's clinic is in America/Denver. Tests of the demo story set the
+// case to it, as "Load the demo" does.
+export const DEMO_ZONE = "America/Denver";
+
+export function useZone(store: EventStore, zone: string = DEMO_ZONE): void {
+  store.inCase(() => setTimezone(store, zone, "agent", store.streamVersion("settings")));
 }

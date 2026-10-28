@@ -1,5 +1,5 @@
-// The case agent (0007): the tool loop, its tools and the checks on its
-// text, with scripted model replies and no network.
+// The case agent (0007, 0009): the tool loop, its tools and the checks on
+// its text, with scripted model replies and no network.
 import { describe, expect, it } from "vitest";
 import { AGENT_TOOL_NAMES, AGENT_TOOLS } from "../src/agent/tools.ts";
 import { DRAFT_OPEN_NOTICE, UNGROUNDED_TEXT, WITHHELD_USER_TEXT } from "../src/agent/types.ts";
@@ -7,6 +7,7 @@ import { readFixtureText } from "../src/fixtures/load.ts";
 import { MODEL } from "../src/model/request.ts";
 import { SCOPE_DECLINE } from "../src/domain/scope.ts";
 import { EventStore } from "../src/store/event-log.ts";
+import { unsupportedSlots } from "../src/eval/chat-eval.ts";
 import { acceptMessages } from "./helpers.ts";
 import {
   CLOCK,
@@ -15,6 +16,7 @@ import {
   currentUserText,
   fingerprint,
   fixtureMessage,
+  personOnly,
   fnCall,
   message,
   pasted,
@@ -88,22 +90,34 @@ describe("G1: the model request", () => {
 });
 
 describe("G2: the tools", () => {
-  it("are the nine read and act tools, with no tool that changes slot state", () => {
+  it("are the read tools and the action tools, with no tool that approves, sends, edits a reply, enters a fact by hand or deletes", () => {
     expect(AGENT_TOOL_NAMES).toEqual([
       "get_schedule",
       "get_appointment",
       "list_open_questions",
       "get_checklist",
       "check_calendar",
+      "get_activity",
       "import_message",
+      "accept_claim",
+      "reject_claim",
       "explain_conflict",
       "ask_next_question",
-      "draft_reply",
+      "answer_question",
+      "archive_appointment",
+      "unarchive_appointment",
+      "add_note",
+      "set_tags",
+      "start_reply",
+      "discard_draft",
+      "undo",
+      "set_timezone",
     ]);
-    for (const forbidden of ["accept", "reject", "answer", "approve", "send", "confirm", "archive", "delete", "grant", "undo", "note", "tag", "propose"]) {
+    for (const forbidden of ["approve", "send", "delete", "grant", "propose", "edit", "manual", "confirm", "pair"]) {
       expect(AGENT_TOOL_NAMES.filter((n) => n.includes(forbidden)), forbidden).toEqual([]);
     }
     for (const t of AGENT_TOOLS) expect(t.label).toMatch(/^[A-Z][a-z ]+$/);
+    expect(AGENT_TOOLS.filter((t) => t.readOnly).map((t) => t.name)).toEqual(["get_schedule", "get_appointment", "list_open_questions", "get_checklist", "check_calendar", "get_activity"]);
   });
 
   it("every tool runs without changing what only the person may change, and returns message text only in labeled fields", async () => {
@@ -160,11 +174,11 @@ describe("G2: the tools", () => {
     const app = await demoCase();
     const before = fingerprint(app);
     const model = sequence(
-      reply(fnCall("draft_reply", { template: "cancel_everything", slot_key: THU })),
+      reply(fnCall("start_reply", { template: "cancel_everything", slot_key: THU, expected_version: 0 })),
       reply(message("I could not do that.")),
     );
     const r = await say(agentFor(app, model), app, "Cancel Thursday");
-    expect(r.report.tools).toEqual([{ tool: "draft_reply", ok: false, code: "invalid_arguments" }]);
+    expect(r.report.tools).toEqual([{ tool: "start_reply", ok: false, code: "invalid_arguments" }]);
     expect(turnOutputs(model.calls[1]!.body.input)[0]!.output.error).toBe("invalid_arguments");
     expect(app.kase.view().reply.draft).toBeNull();
     expect(fingerprint(app)).toBe(before);
@@ -337,9 +351,9 @@ describe("G7: draft safety", () => {
   it("opens a draft only when none is open, and otherwise shows a notice and changes nothing", async () => {
     const app = await demoCase();
     const model = sequence(
-      reply(fnCall("draft_reply", { template: "accept_offer", slot_key: MON })),
+      reply(fnCall("start_reply", { template: "accept_offer", slot_key: MON, expected_version: 0 })),
       reply(message("A reply accepting Monday 11/16 1:00 PM is ready for your readback.")),
-      reply(fnCall("draft_reply", { template: "accept_offer", slot_key: "2026-11-13T09:15" })),
+      reply(fnCall("start_reply", { template: "accept_offer", slot_key: "2026-11-13T09:15", expected_version: 2 })),
       reply(message("A draft is already open.")),
     );
     const agent = agentFor(app, model);
@@ -361,16 +375,17 @@ describe("G7: draft safety", () => {
 
   it("code blocks a template the slot's state does not allow", async () => {
     const app = await demoCase();
-    const model = sequence(reply(fnCall("draft_reply", { template: "accept_offer", slot_key: THU })), reply(message("That reply is not possible.")));
+    const model = sequence(reply(fnCall("start_reply", { template: "accept_offer", slot_key: THU, expected_version: 0 })), reply(message("That reply is not possible.")));
     const r = await say(agentFor(app, model), app, "Accept Thursday");
-    expect(r.report.tools).toEqual([{ tool: "draft_reply", ok: false, code: "blocked" }]);
+    expect(r.report.tools).toEqual([{ tool: "start_reply", ok: false, code: "blocked" }]);
     expect(app.kase.view().reply.draft).toBeNull();
   });
 });
 
 describe("the demo story through chat", () => {
-  // A stand-in model: imports what the person pasted, reads the case for
-  // questions, and words its answer from the tool results.
+  // A stand-in model: imports what the person pasted and accepts its claims,
+  // reads the case for questions, and words its answer from the tool
+  // results.
   const demoModel = () =>
     new RuleModel([
       (input) => {
@@ -383,23 +398,27 @@ describe("the demo story through chat", () => {
         }
         if (/confirmed/i.test(text)) return [fnCall("get_schedule", {})];
         if (/friday/i.test(text)) return [fnCall("check_calendar", { date: "2026-11-13", time: "09:15" })];
-        if (/monday/i.test(text)) return [fnCall("draft_reply", { template: "accept_offer", slot_key: MON })];
+        if (/monday/i.test(text)) return [fnCall("get_schedule", {})];
         if (/bring/i.test(text)) return [fnCall("get_checklist", {})];
         return undefined;
       },
       (input) => {
         const last = turnOutputs(input).at(-1);
         if (!last) return undefined;
+        const text = currentUserText(input);
         switch (last.name) {
           case "import_message":
-            return [message(`I found ${last.output.claims.length} claims. Review each one on the card.`)];
+            return [fnCall("accept_claim", { claims: last.output.claims.map((c: any) => ({ evidence_id: c.evidence_id, expected_version: c.version })) })];
+          case "accept_claim":
+            return [message(`I accepted ${last.output.decided} claims from the message. You can undo each one.`)];
           case "get_schedule": {
+            if (/monday/i.test(text)) return [fnCall("start_reply", { template: "accept_offer", slot_key: MON, expected_version: last.output.reply_version })];
             const confirmed = last.output.appointments.filter((a: any) => a.state === "confirmed" || a.state === "change_proposed");
             return [message(confirmed.length ? `${confirmed.map((a: any) => a.label).join(" and ")} is confirmed.` : "Nothing is confirmed yet.")];
           }
           case "check_calendar":
             return [message(`Friday 11/13 9:15 AM overlaps an event that starts ${last.output.clashes_with_time[0].starts.replace("Friday 11/13 ", "")}.`)];
-          case "draft_reply":
+          case "start_reply":
             return [message(`A reply accepting ${last.output.slot_label} is ready. Read it back and approve it on the card.`)];
           case "get_checklist":
             return [message(`The office asked for ${last.output.items.length} things. They are on your checklist.`)];
@@ -408,18 +427,15 @@ describe("the demo story through chat", () => {
       },
     ]);
 
-  it("pastes m1 to m4, asks, drafts and approves, with every state change made by the person", async () => {
+  it("pastes m1 to m4 and the assistant accepts their facts, asks and drafts, and only the person approves the reply", async () => {
     const app = fresh();
     app.kase.loadCalendar("dana.ics", readFixtureText("calendar/dana.ics"), 0);
     const model = demoModel();
     const agent = agentFor(app, model);
-    const acceptPending = () => {
-      for (const e of app.intake.reviewQueue()) app.intake.accept(e.id, e.version);
-    };
     const turn = async (text: string) => {
-      const before = fingerprint(app);
+      const sentBefore = personOnly(app);
       const r = await say(agent, app, text);
-      expect(fingerprint(app), text).toBe(before);
+      expect(personOnly(app), text).toBe(sentBefore);
       expect(r.report.outcome, text).toBe("answered");
       return r;
     };
@@ -427,7 +443,12 @@ describe("the demo story through chat", () => {
     for (const id of ["m1", "m2", "m3"]) {
       const r = await turn(pasted(id));
       expect(r.of("card").map((c) => c.card.kind)).toEqual(["claims"]);
-      acceptPending();
+      // Each action reached the page as it happened, and can be undone.
+      const kinds = r.of("action").map((a) => a.entry.kind);
+      expect(kinds[0]).toBe("message_imported");
+      expect(kinds.slice(1).every((k) => k === "claim_accepted")).toBe(true);
+      expect(r.of("action").every((a) => a.entry.actor === "agent" && a.entry.undoable)).toBe(true);
+      expect(app.intake.reviewQueue()).toEqual([]);
     }
     let r = await turn("What is confirmed right now?");
     expect(r.text).toBe("Thursday 11/12 10:30 AM is confirmed.");
@@ -436,6 +457,9 @@ describe("the demo story through chat", () => {
     r = await turn("Please move me to Monday");
     const draft = app.kase.view().reply.draft!;
     expect(r.of("card").map((c) => c.card)).toEqual([{ kind: "reply", draftId: draft.id }]);
+    expect(r.of("action").map((a) => a.entry.kind)).toEqual(["draft_started"]);
+    // Nothing is sent until the person approves.
+    expect(app.kase.view().reply.sent).toEqual([]);
 
     // The person reads back and approves on the card.
     app.reply.approve(draft.id, draft.fields.map((f) => f.name), app.kase.view().reply.version);
@@ -443,19 +467,22 @@ describe("the demo story through chat", () => {
 
     r = await turn(pasted("m4", "The office wrote back:"));
     expect(r.of("card").map((c) => c.card)).toEqual([{ kind: "claims", messageId: "m4", evidenceIds: ["m4-e1", "m4-e2"] }]);
-    acceptPending();
     expect(app.kase.view().slots.find((s) => s.key === MON)!.stateLabel).toBe("Confirmed · office message");
     expect(app.kase.view().slots.find((s) => s.key === THU)!.stateLabel).toBe("Canceled · office message");
     r = await turn("What do I need to bring?");
     expect(r.text).toBe("The office asked for 2 things. They are on your checklist.");
 
-    // The chat holds every message in order, with its cards.
+    // The chat holds every message in order, with its cards and actions.
     const chat = agent.chat();
     expect(chat.messages).toHaveLength(16);
     // 16 messages and 4 imported-line records, one per paste.
     expect(chat.chatVersion).toBe(20);
     expect(chat.messages.every((m, i) => m.role === (i % 2 === 0 ? "user" : "assistant"))).toBe(true);
     expect(chat.messages[1]!.cards).toEqual([{ kind: "claims", messageId: "m1", evidenceIds: ["m1-e1", "m1-e2"] }]);
+    expect(chat.messages[1]!.actions).toHaveLength(3);
     expect(chat.messages[0]!.createdAt).toBe("2026-11-05T10:00:00.000-07:00");
+    // No slot's state rests on anything but an office message or the
+    // person's own report.
+    expect(unsupportedSlots(app)).toEqual([]);
   });
 });

@@ -130,7 +130,7 @@ describe("review queue", () => {
       origin: "manual",
       status: "pending",
       version: 1,
-      claim: { source_type: "reported_by_user", evidence_time: "2026-11-06T10:00:00.000Z" },
+      claim: { source_type: "reported_by_user", evidence_time: "2026-11-06T10:00:00.000+00:00" },
     });
     expect(service.acceptedEvidence()).toEqual([]);
     expect(service.accept(manual.id, 1).status).toBe("accepted");

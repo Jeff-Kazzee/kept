@@ -1,5 +1,5 @@
 // The chat routes: request checks in server/chat.ts, and the real server
-// process with its paired session, same-origin check and event stream.
+// process with its same-origin check and event stream (no session since 0009).
 import { spawn, type ChildProcess } from "node:child_process";
 import { request } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -112,12 +112,11 @@ async function startServer() {
   children.push(child);
   let stderr = "";
   child.stderr!.on("data", (d: Buffer) => (stderr += d.toString()));
-  const code = await new Promise<string>((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     let out = "";
     child.stdout!.on("data", (d: Buffer) => {
       out += d.toString();
-      const m = /Pairing code for this run: ([A-Z0-9]{4}-[A-Z0-9]{4})\./.exec(out);
-      if (m) resolve(m[1]!);
+      if (/Serving the UI through Vite/.test(out)) resolve();
     });
     child.on("exit", (c) => reject(new Error(`server exited ${c}`)));
     setTimeout(() => reject(new Error("server did not start")), 15_000);
@@ -129,19 +128,16 @@ async function startServer() {
     "X-Appointments-App": "1",
     ...extra,
   });
-  return { port, code, page, stderr: () => stderr };
+  return { port, page, stderr: () => stderr };
 }
 
 describe("the chat routes on the real server", () => {
-  it("need the paired session for GET and POST, refuse another origin, and stream a turn as server-sent events", async () => {
-    const { port, code, page, stderr } = await startServer();
-    for (const [method, body] of [["GET", undefined], ["POST", { text: "Hi", expectedVersion: 0 }]] as const) {
-      const res = await call(port, method, "/api/chat", page(), body);
-      expect([method, res.status, JSON.parse(res.text).error]).toEqual([method, 401, "not_paired"]);
-    }
-    const paired = await call(port, "POST", "/api/pair", page(), { code });
-    const cookie = paired.setCookie[0]!.split(";")[0]!;
-    const withSession = (extra: Record<string, string> = {}) => page({ Cookie: cookie, ...extra });
+  it("need no session, refuse another origin, and stream a turn as server-sent events", async () => {
+    const { port, page, stderr } = await startServer();
+    const empty = await call(port, "GET", "/api/chat", page());
+    expect([empty.status, JSON.parse(empty.text)]).toEqual([200, { chatVersion: 0, messages: [] }]);
+    expect(empty.setCookie).toEqual([]);
+    const withSession = page;
 
     const cross = await call(port, "POST", "/api/chat", { ...withSession(), Origin: "http://evil.example" }, { text: "Hi", expectedVersion: 0 });
     expect(cross.status).toBe(403);

@@ -211,11 +211,11 @@ describe("round 2 finding 3: a send time only from a header or the person's own 
   const SENT = "2026-11-05T17:00:00.000Z";
   it("refuses an appointment time in the paste, and accepts a Sent header or 'this came yesterday at 3'", () => {
     const reminder = "Reminder: your appointment was Saturday, October 31 at 9:12 AM.";
-    expect(statedSendTime("2026-10-31T09:12:00-06:00", reminder, "My clinic sent this:", SENT)).toBe(false);
-    expect(statedSendTime("2026-10-31T09:12:00-06:00", `Sent: Saturday, October 31, 2026 9:12 AM\n${reminder}`, "", SENT)).toBe(true);
-    expect(statedSendTime("2026-11-04T15:00:00-07:00", reminder, "This came yesterday at 3.", SENT)).toBe(true);
-    expect(statedSendTime("2026-11-04T15:00:00-07:00", reminder, "I read this yesterday at 3.", SENT)).toBe(false);
-    expect(statedSendTime("2026-11-03T15:00:00-07:00", reminder, "This came yesterday at 3.", SENT)).toBe(false);
+    expect(statedSendTime("2026-10-31T09:12:00-06:00", reminder, "My clinic sent this:", SENT, "America/Denver")).toBe(false);
+    expect(statedSendTime("2026-10-31T09:12:00-06:00", `Sent: Saturday, October 31, 2026 9:12 AM\n${reminder}`, "", SENT, "America/Denver")).toBe(true);
+    expect(statedSendTime("2026-11-04T15:00:00-07:00", reminder, "This came yesterday at 3.", SENT, "America/Denver")).toBe(true);
+    expect(statedSendTime("2026-11-04T15:00:00-07:00", reminder, "I read this yesterday at 3.", SENT, "America/Denver")).toBe(false);
+    expect(statedSendTime("2026-11-03T15:00:00-07:00", reminder, "This came yesterday at 3.", SENT, "America/Denver")).toBe(false);
   });
 
   it("a turn that proposes the appointment time as the send time stores the chat's send time", async () => {
@@ -308,13 +308,9 @@ describe("round 2 finding 9: building and property words pass the shared scope c
     const note = app.records.addNote("2026-11-12T10:30", OK[0]!, 0, { kind: "user" });
     expect(note.notes).toHaveLength(1);
     expect(() => app.records.addNote("2026-11-12T10:30", BLOCKED[0]!, note.version, { kind: "user" })).toThrow(OutOfScopeError);
-    // A proposal from an agent (sprint 4 and 6), here an office request.
-    const { GrantStore } = await import("../src/grants/grants.ts");
-    const { grant } = new GrantStore(app.store).create("Phone helper", "propose");
-    expect(
-      app.records.propose({ kind: "user_report", claim_type: "office_request", date: null, request_item: OK[1]!, statement: `The office said: ${OK[1]}.` }, grant).status,
-    ).toBe("pending");
-    expect(() => app.records.propose({ kind: "user_report", claim_type: "office_request", date: null, request_item: BLOCKED[0]!, statement: "Office rule." }, grant)).toThrow(OutOfScopeError);
+    // Tags an agent sets (sprint 8), which take no building words but go
+    // through the same check.
+    expect(() => app.records.setTags("2026-11-12T10:30", ["fasting"], note.version, { kind: "agent", name: "the assistant" })).toThrow(OutOfScopeError);
     // A typed report (sprint 1).
     expect(app.intake.importMessage({ id: "r1", channel: "user_report", from: "Dana", received_at: "2026-11-05T10:00:00-07:00", text: `${OK[1]}.` }).id).toBe("r1");
     // A reply edit (sprint 3).

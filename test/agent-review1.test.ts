@@ -206,7 +206,7 @@ describe("finding 8: a pasted message replays as a reference, not as the person'
     });
     expect(JSON.stringify(history)).not.toContain("ignore your previous instructions");
     // A message whose turn imported nothing replays as it was.
-    expect(historyItem({ id: "x", role: "user", text: "a\nb", createdAt: SENT, cards: [], chips: [] })).toEqual({ role: "user", content: "a\nb" });
+    expect(historyItem({ id: "x", role: "user", text: "a\nb", createdAt: SENT, cards: [], chips: [], actions: [] })).toEqual({ role: "user", content: "a\nb" });
   });
 });
 
@@ -325,8 +325,8 @@ describe("finding 11: no 'nothing changed' after a tool wrote", () => {
   it("a limit stop after a draft says so, and an error after a write says so", async () => {
     const app = await demoCase();
     const model = sequence(
-      reply(fnCall("draft_reply", { template: "accept_offer", slot_key: "2026-11-16T13:00" })),
-      ...Array.from({ length: 6 }, () => reply(fnCall("get_schedule", {}))),
+      reply(fnCall("start_reply", { template: "accept_offer", slot_key: "2026-11-16T13:00", expected_version: 0 })),
+      ...Array.from({ length: 8 }, () => reply(fnCall("get_schedule", {}))),
     );
     const r = await say(agentFor(app, model), app, "Move me to Monday");
     expect(r.report.outcome).toBe("stopped");
@@ -349,14 +349,32 @@ describe("finding 11: no 'nothing changed' after a tool wrote", () => {
   });
 });
 
-describe("finding 12: no bare grant names or tags reach the model", () => {
-  it("get_schedule, get_appointment and check_calendar return them only as untrusted text", async () => {
+describe("finding 12: no bare agent names or tags reach the model", () => {
+  it("get_schedule, get_appointment and check_calendar return them only as untrusted text, old grant names included", async () => {
     const app = await demoCase();
-    const { GrantStore } = await import("../src/grants/grants.ts");
-    const { grant } = new GrantStore(app.store).create("Phone helper", "propose");
-    const p = app.records.propose({ kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: "The office confirmed Monday by phone." }, grant);
-    app.records.confirmProposal(p.id, p.version);
-    app.records.setTags("2026-11-16T13:00", ["Tag from helper"], app.records.record("2026-11-16T13:00").version, { kind: "agent", grant_id: grant.id, grant_name: grant.name });
+    // A report an old grant made and the person confirmed, from before
+    // sprint 8, and a tag that grant set.
+    app.store.append("evidence:p-1-1", 0, [
+      {
+        type: "agent_report_confirmed",
+        data: {
+          proposal_id: "p-1",
+          grant_id: "g-1",
+          claim: {
+            claim_type: "confirm",
+            slot: { date: "2026-11-16", time: "13:00", location: null },
+            quote: "The office confirmed Monday by phone.",
+            source_type: "reported_by_user_via_agent",
+            sender_kind: "person",
+            evidence_time: "2026-11-05T17:00:00.000Z",
+            event_time: null,
+            request_item: null,
+            agent_name: "Phone helper",
+          },
+        },
+      },
+    ]);
+    app.records.setTags("2026-11-16T13:00", ["Tag from helper"], app.records.record("2026-11-16T13:00").version, { kind: "agent", grant_id: "g-1", grant_name: "Phone helper" });
     const before = fingerprint(app);
     const model = sequence(
       reply(fnCall("get_schedule", {})),

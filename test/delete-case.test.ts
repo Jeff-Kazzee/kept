@@ -1,6 +1,6 @@
 // SP5.4 Delete case (O-a to O-d): the app erases every event of the case,
-// its access log and its rate-limit counters, and the removed text is gone
-// from the database file and its -wal and -shm files. Grants stay. The
+// its activity and access logs, and the removed text is gone from the
+// database file and its -wal and -shm files. Settings stay (0009). The
 // append-only guard stays in force for every other path. An MCP server
 // that has the file open keeps working and finds no case.
 import { spawnSync } from "node:child_process";
@@ -14,7 +14,8 @@ import { RateLimiter } from "../mcp/rate-limit.ts";
 import { callTool } from "../mcp/server.ts";
 import { CaseService, KEPT_ON_DELETE } from "../src/case/service.ts";
 import { loadCaseProfile, readFixtureText } from "../src/fixtures/load.ts";
-import { GrantStore } from "../src/grants/grants.ts";
+import { CaseActions } from "../src/actions/service.ts";
+import { timezoneSettings } from "../src/settings/events.ts";
 import { InvalidRequestError } from "../src/intake/service.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
 import { PACKAGE_ROOT } from "../src/paths.ts";
@@ -22,7 +23,7 @@ import { USER } from "../src/records/events.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { EventStore, StaleEditError } from "../src/store/event-log.ts";
-import { acceptMessages, intake } from "./helpers.ts";
+import { acceptMessages, intake, useZone } from "./helpers.ts";
 
 const CLOCK = () => "2026-11-06T17:00:00.000Z";
 const THU = "2026-11-12T10:30";
@@ -47,25 +48,23 @@ function services(store: EventStore) {
   const client = RecordedModelClient.fromDirectory();
   const svc = intake(store);
   const kase = new CaseService(store, svc, client, { userName: loadCaseProfile().user_name });
-  return {
-    store,
-    intake: svc,
-    kase,
-    reply: new ReplyService(store, kase, client),
-    records: new RecordsService(store, svc, kase),
-    grants: new GrantStore(store),
-  };
+  const reply = new ReplyService(store, kase, client);
+  const records = new RecordsService(store, svc, kase);
+  return { store, intake: svc, kase, reply, records, actions: new CaseActions(store, { intake: svc, kase, reply, records }) };
 }
+
+const mcp = (app: App) => ({ store: app.store, services: app, limiter: new RateLimiter() });
 
 type App = ReturnType<typeof services>;
 
 // Every kind of case event: messages, evidence and reviews, a rejected
 // claim, the calendar, an explanation, a question and its answer, a reply
-// draft with an edit, notes, tags, an archive and its undo, a proposal, an
-// agent call in the access log and a rate-limit counter. The marker goes
-// into a pasted message, the calendar name, a note, a proposal statement
-// and a reply edit.
+// draft with an edit, notes, tags, an archive and its undo, an agent's
+// action in the activity log, an agent call in the access log, and the
+// time zone setting. The marker goes into a pasted message, the calendar
+// name, notes and a reply edit.
 async function seedEverything(app: App) {
+  useZone(app.store);
   await acceptMessages(app.intake, ["m1", "m2", "m3"]);
   const pasted = app.intake.importMessage({
     id: "pasted-1",
@@ -95,36 +94,33 @@ async function seedEverything(app: App) {
   app.records.setTags(THU, ["moved"], 1, USER);
   app.records.archive(THU, 2);
   app.records.undo(THU, 3, 3);
-  const { grant, token } = app.grants.create("Laptop assistant", "propose");
-  app.records.propose({ kind: "user_report", claim_type: "confirm", date: "2026-11-16", time: "13:00", statement: `Dana said ${MARKER}` }, grant);
-  const limiter = new RateLimiter(app.store);
-  const listed = await callTool({ records: app.records, grants: app.grants, token, limiter }, "list_appointments", {});
+  app.actions.addNote({ actor: "agent" }, MON, `Agent note ${MARKER}`, 0);
+  const listed = await callTool(mcp(app), "get_schedule", {});
   expect(listed).toHaveProperty("structuredContent");
-  return { grant, token };
 }
 
 const filesWith = (dir: string, text: string) => readdirSync(dir).filter((f) => readFileSync(path.join(dir, f)).includes(Buffer.from(text, "utf8")));
 
 describe("SP5.4 Delete case", () => {
-  it("O-a: erases every event of the case, its access log and its rate counters, and keeps grants", async () => {
+  it("O-a: erases every event of the case, its activity and access logs, and keeps the settings", async () => {
     const app = services(new EventStore(":memory:", CLOCK));
-    const { grant } = await seedEverything(app);
+    await seedEverything(app);
+    // Streams from before sprint 8 are case data too.
+    app.store.append("grant:g-1", 0, [{ type: "grant_created", data: { name: "Old", tier: "read", token_sha256: "00" } }]);
     const kinds = new Set(app.store.readAll().map((e) => e.streamId.replace(/:.*$/, "")));
-    expect([...kinds].sort()).toEqual(["access_log", "calendar", "conflict", "evidence", "grant", "message", "proposal", "questions", "record", "reply"]);
-    expect(app.store.rateWindow(grant.id, Math.floor(Date.now() / 60_000) * 60_000).calls).toBe(1);
+    expect([...kinds].sort()).toEqual(["access_log", "activity", "calendar", "conflict", "evidence", "grant", "message", "questions", "record", "reply", "settings"]);
 
     const result = app.kase.deleteCase(app.kase.caseVersion(), "DELETE");
     expect(result.erased).toBeGreaterThan(20);
-    expect(app.store.readAll().every((e) => e.streamId.startsWith("grant:"))).toBe(true);
-    expect(app.grants.list()).toEqual([expect.objectContaining({ id: grant.id, name: "Laptop assistant", status: "active" })]);
-    expect(app.store.closeRateWindows(null, Number.MAX_SAFE_INTEGER)).toEqual([]);
+    expect(app.store.readAll().every((e) => e.streamId === "settings")).toBe(true);
+    expect(timezoneSettings(app.store)).toMatchObject({ timezone: "America/Denver", timezoneSource: "agent" });
     expect(app.records.accessLog()).toEqual([]);
+    expect(app.actions.activity()).toEqual({ activityVersion: 0, entries: [] });
     expect(app.intake.messages()).toEqual([]);
-    expect(app.records.proposals()).toEqual([]);
     expect(app.kase.caseVersion()).toBe(0);
     const view = app.kase.view();
     expect(view).toMatchObject({ slots: [], conflicts: [], question: null, calendar: null, reply: { draft: null, sent: [], version: 0 } });
-    expect(KEPT_ON_DELETE).toEqual(["grant:"]);
+    expect(KEPT_ON_DELETE).toEqual(["settings"]);
   });
 
   it("needs the typed confirmation and the case version, and a mismatch erases nothing", async () => {
@@ -143,13 +139,14 @@ describe("SP5.4 Delete case", () => {
   it("an agent reading the case does not make the user's confirmation stale", async () => {
     const app = services(new EventStore(":memory:", CLOCK));
     await acceptMessages(app.intake, ["m2"]);
-    const { token } = app.grants.create("Laptop assistant", "read");
     const version = app.kase.caseVersion();
-    await callTool({ records: app.records, grants: app.grants, token, limiter: new RateLimiter(app.store) }, "list_appointments", {});
+    await callTool(mcp(app), "get_schedule", {});
     expect(app.records.accessLog()).toHaveLength(1);
     expect(app.kase.caseVersion()).toBe(version);
-    // A grant is not case data, so creating one does not move the version either.
-    app.grants.create("Phone assistant", "read");
+    // A setting is not case data, so a time zone change does not move the
+    // version either.
+    useZone(app.store, "Asia/Tokyo");
+    expect(app.kase.caseVersion()).toBe(version);
     expect(app.kase.deleteCase(version, "DELETE").erased).toBeGreaterThan(0);
   });
 
@@ -164,14 +161,14 @@ describe("SP5.4 Delete case", () => {
     // While the store is still open, with its -wal and -shm files on disk.
     expect(readdirSync(dir).sort()).toEqual(["app.sqlite", "app.sqlite-shm", "app.sqlite-wal"]);
     expect(filesWith(dir, MARKER)).toEqual([]);
-    for (const text of ["Lantern Hill", "insurance card", "Dana Reyes", "I accept Monday"]) expect(filesWith(dir, text), text).toEqual([]);
+    for (const text of ["Lantern Hill", "insurance card", "Dana Reyes", "I accept Monday", "Added a note to"]) expect(filesWith(dir, text), text).toEqual([]);
     app.store.close();
     expect(filesWith(dir, MARKER)).toEqual([]);
 
-    // The file is sound and the grant is still there.
+    // The file is sound and the time zone is still set.
     const reopened = new EventStore(file);
     cleanups.push(() => reopened.close());
-    expect(new GrantStore(reopened).list().map((g) => g.name)).toEqual(["Laptop assistant"]);
+    expect(timezoneSettings(reopened).timezone).toBe("America/Denver");
     expect(services(reopened).kase.view().slots).toEqual([]);
   });
 
@@ -209,13 +206,12 @@ describe("SP5.4 Delete case", () => {
     cleanups.push(() => app.store.close());
     await acceptMessages(app.intake, ["m1", "m2", "m3"]);
     app.records.addNote(THU, `Parking note ${MARKER}`, 0, USER);
-    const { token } = app.grants.create("Laptop assistant", "read");
 
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.join(PACKAGE_ROOT, "mcp/main.ts")],
       cwd: PACKAGE_ROOT,
-      env: { ...getDefaultEnvironment(), APP_DB: file, APPT_GRANT_TOKEN: token },
+      env: { ...getDefaultEnvironment(), APP_DB: file },
       stderr: "pipe",
     });
     let stderr = "";
@@ -223,20 +219,20 @@ describe("SP5.4 Delete case", () => {
     const client = new Client({ name: "test-agent", version: "1.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
     await client.connect(transport);
     cleanups.push(() => client.close());
-    const list = async () => (await client.callTool({ name: "list_appointments", arguments: {} })).structuredContent as { appointments: unknown[] };
+    const list = async () => (await client.callTool({ name: "get_schedule", arguments: {} })).structuredContent as { appointments: unknown[] };
     expect((await list()).appointments).toHaveLength(4);
 
     // The user deletes the case in the app while the server process runs.
     app.kase.deleteCase(app.kase.caseVersion(), "DELETE");
     expect(filesWith(dir, MARKER)).toEqual([]);
 
-    expect(await list()).toEqual({ appointments: [] });
-    const one = await client.callTool({ name: "get_appointment", arguments: { appointment_id: MON } });
+    expect((await list()).appointments).toEqual([]);
+    const one = await client.callTool({ name: "get_appointment", arguments: { slot_key: MON } });
     expect(one.isError).toBe(true);
     expect(JSON.parse((one.content as Array<{ text: string }>)[0]!.text)).toMatchObject({ error: "not_found" });
     // Only the calls after the delete are in the new access log.
     expect(app.records.accessLog().map((e) => [e.tool, e.result])).toEqual([
-      ["list_appointments", "ok"],
+      ["get_schedule", "ok"],
       ["get_appointment", "not_found"],
     ]);
     await client.close();
