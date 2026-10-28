@@ -117,21 +117,30 @@ The types are in `ui/chat/types.ts`.
   this time" with the templates that fit. The calendar's own events on the
   same days show as dashed rows marked "Your calendar".
 - B3. A fact chip opens the Schedule tab (the side sheet on a tablet, the
-  Schedule view on a phone), scrolls to the appointment and outlines it.
-- B4. The mock chat (`ui/chat/mockStream.ts`, `?mockchat=1`) follows the
-  contract and its event order, and changes the case only through the
-  existing routes: import and read a message, explain a conflict, ask the
-  next question. It holds its text to the end and sends it in pieces of
-  about 80 characters, and stores a declined message as the fixed
-  sentence. Its text
-  is written by code from the live case and is tagged "Scripted demo
-  reply, not a model". It keeps its chat in the tab's sessionStorage,
+  Schedule view on a phone), scrolls to the appointment, outlines it and
+  moves focus to it. Focus goes back to the chip when the sheet closes or
+  the phone goes back to Chat. A chip names only a slot: its label and
+  state come from the live case view, with the state at the time as a
+  muted line when it changed. A slot that is gone or archived shows "No
+  longer on your schedule" and the chip is disabled (review round 1).
+- B4. The mock chat (`ui/chat/mockStream.ts`, `?mockchat=1`) is a
+  development tool. Only `pnpm dev` has it: the production bundle is built
+  without it and ignores the parameter, because it makes real case writes
+  (review round 1). It follows the contract and its event order, and
+  changes the case only through the existing routes: import and read a
+  message, explain a conflict, ask the next question. It holds its text to
+  the end and sends it in pieces of about 80 characters, and stores a
+  declined message as the fixed sentence. Its text is written by code from
+  the live case and is tagged "Scripted demo reply, not a model". It keeps its chat in the tab's sessionStorage,
   which Delete case or closing the tab clears. A pasted text that matches
   a fixture message is imported with that message's id, sender and time,
   so the recorded extraction applies.
-- B5. Without `?mockchat=1`, the page asks `GET /api/chat`. A 404 shows
-  "The chat is not available in this build yet" and disables the
-  composer. The schedule panel works as before.
+- B5. Without the scripted chat, the page asks `GET /api/chat`. A 404
+  shows "The chat is not available in this build yet" and disables the
+  message box. The schedule panel and "Add an office message" work as
+  before. Only a development build mentions `?mockchat=1` there. The
+  message box grows by its `rows` attribute and CSS `field-sizing:
+  content`, never by a style written from script.
 - B6. A question card shows the reply draft its answer opened, under the
   question, and then the simulated send. The open question and draft also
   show in "Waiting for you".
@@ -184,7 +193,12 @@ The types are in `ui/chat/types.ts`.
   `Cross-Origin-Opener-Policy` and `Cross-Origin-Resource-Policy`
   same-origin, and a `Permissions-Policy` that turns off camera,
   microphone, location, payment and USB. Vite emits no inline script and
-  assets are never inlined as data URLs.
+  assets are never inlined as data URLs. Every `/api` response, refused
+  hosts and the chat route included, has `X-Content-Type-Options: nosniff`
+  and `Content-Security-Policy: default-src 'none'; frame-ancestors
+  'none'`, set before routing so a streamed response carries them too.
+  The build loader refuses a symlink or any file outside the build root's
+  real path, and the start fails with the reason (review round 1).
 - B17. The person's words of a declined message are kept in the page's
   memory only, by user message id, so "Add this as an office message" can
   prefill them. They are never written to storage. After a reload the

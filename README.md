@@ -147,9 +147,11 @@ pnpm start       # serves the production build on http://127.0.0.1:5180
 pnpm scan:secrets  # grant tokens in the repository, see "What the secret scan finds"
 ```
 
-Add `?mockchat=1` to the page address for the scripted chat, which plays
-the demo through the existing routes with no model. Its replies are
-labeled "Scripted demo reply, not a model".
+With `pnpm dev`, add `?mockchat=1` to the page address for the scripted
+chat, which plays the demo through the existing routes with no model. Its
+replies are labeled "Scripted demo reply, not a model". The production
+build (`pnpm build`, `pnpm start`) leaves it out and ignores the
+parameter.
 
 To reach the app through a private proxy on the same computer, such as
 Tailscale serve, list its host names in `APP_ALLOWED_HOSTS`
