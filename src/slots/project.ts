@@ -313,7 +313,13 @@ export function claimsToReach(from: SlotStatus | "none", to: SlotStatus): SlotSt
 }
 
 export function projectSlots(input: ProjectionInput): Projection {
-  const accepted = input.evidence.filter((e) => e.status === "accepted").sort(byArrival);
+  // A report from an agent that the person never confirmed is kept aside,
+  // whatever it says (0009, D1 and review round 2, finding 7). It shows as
+  // unconfirmed until an office message or the person's own report agrees,
+  // and only that agreeing claim counts.
+  const all = input.evidence.filter((e) => e.status === "accepted").sort(byArrival);
+  const unconfirmed = all.filter(unconfirmedAgentReport);
+  const accepted = all.filter((e) => !unconfirmedAgentReport(e));
   const settled = input.settled ?? new Set<string>();
   const conflicts: Conflict[] = [];
 
@@ -327,13 +333,9 @@ export function projectSlots(input: ProjectionInput): Projection {
     else if (e.claim.slot.location !== null) placeAnswers.set(slotKey(e.claim.slot.date, e.claim.slot.time), e);
   }
 
-  // Step 1: place claims on slots. A report from an agent that the person
-  // never confirmed is kept aside when it would hold, cancel or move a slot
-  // (0009, D1, rule 1). It shows on the slot as unconfirmed until an office
-  // message or the person's own report agrees.
+  // Step 1: place claims on slots.
   const timed = new Map<string, SlotDraft>();
   const dateOnly: Array<{ ev: EvidenceView; date: string }> = [];
-  const unconfirmed: Array<{ ev: EvidenceView; date: string | null; time: string | null }> = [];
   for (const e of accepted) {
     const type = e.claim.claim_type;
     if (STATUS_OF[type] === undefined && type !== "move") continue;
@@ -346,10 +348,6 @@ export function projectSlots(input: ProjectionInput): Projection {
         conflicts.push(ambiguousConflict(e, candidates.map((d) => ({ date: d, time }))));
         continue;
       }
-    }
-    if (unconfirmedAgentReport(e)) {
-      unconfirmed.push({ ev: e, date, time });
-      continue;
     }
     if (date === null) continue;
     if (time === null) dateOnly.push({ ev: e, date });
@@ -436,7 +434,7 @@ export function projectSlots(input: ProjectionInput): Projection {
         evidenceIds: [...f.items].sort(byArrival).map((e) => e.id),
         proposalEvidenceIds: state === "change_proposed" ? proposals.get(f.key)!.evidence.map((e) => e.id) : [],
         staleEvidenceIds: f.stale.map((e) => e.id),
-        unconfirmedEvidenceIds: unconfirmed.filter((u) => u.date === f.date && (u.time === null || u.time === f.time)).map((u) => u.ev.id),
+        unconfirmedEvidenceIds: unconfirmedOn(f, unconfirmed, folded),
         clashes: input.calendar && f.time !== null && !closed ? findClashes(f.date, f.time, input.calendar, input.timeZone ?? DEFAULT_TIME_ZONE) : null,
       };
     });
@@ -446,18 +444,27 @@ export function projectSlots(input: ProjectionInput): Projection {
     slots,
     conflicts,
     staleEvidenceIds: folded.flatMap((f) => f.stale.map((e) => e.id)),
-    unconfirmedEvidenceIds: unconfirmed.map((u) => u.ev.id),
+    unconfirmedEvidenceIds: unconfirmed.map((u) => u.id),
   };
 }
 
-// Claim types that hold, cancel or move a slot.
-const HOLDS_OR_RELEASES: ReadonlySet<string> = new Set(["confirm", "reminder", "cancel", "move"]);
-
 // A claim an agent reported that the person did not confirm: the report of
-// an external agent over MCP, or an agent's answer. A report an old grant
-// made and the person confirmed (origin "agent") still counts.
+// an external agent over MCP, or an agent's answer, of any claim type. A
+// report an old grant made and the person confirmed (origin "agent") still
+// counts.
 export function unconfirmedAgentReport(e: EvidenceView): boolean {
-  return e.claim.source_type === "reported_by_user_via_agent" && e.origin !== "agent" && HOLDS_OR_RELEASES.has(e.claim.claim_type);
+  return e.claim.source_type === "reported_by_user_via_agent" && e.origin !== "agent";
+}
+
+// The unconfirmed reports shown on one slot: those for its date and time,
+// and a report with a date and no time only when the slot is the one slot
+// on that date (review round 2, finding 9). Every other one is listed for
+// the case only.
+function unconfirmedOn(f: Folded, unconfirmed: EvidenceView[], slots: Folded[]): string[] {
+  const alone = slots.filter((s) => s.date === f.date).length === 1;
+  return unconfirmed
+    .filter((u) => u.claim.slot.date === f.date && (u.claim.slot.time === null ? alone : u.claim.slot.time === f.time))
+    .map((u) => u.id);
 }
 
 function addTo(map: Map<string, SlotDraft>, date: string, time: string | null, ev: EvidenceView) {

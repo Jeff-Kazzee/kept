@@ -15,7 +15,7 @@ import { InvalidRequestError, NotFoundError, type IntakeService } from "../intak
 import type { ModelClient } from "../model/client.ts";
 import { MODEL } from "../model/request.ts";
 import { ASSUMED_SLOT_MINUTES } from "../slots/clash.ts";
-import { projectSlots } from "../slots/project.ts";
+import { projectSlots, unconfirmedAgentReport } from "../slots/project.ts";
 import { arrivalTime } from "../slots/time.ts";
 import type { Conflict } from "../slots/types.ts";
 import { StaleEditError, type EventStore, type StoredEvent, type StreamWrite } from "../store/event-log.ts";
@@ -235,7 +235,8 @@ export class CaseService {
       calendar: calendar && events ? { name: calendar.name, events, timeZone, assumedSlotMinutes: ASSUMED_SLOT_MINUTES } : null,
       calendarVersion: calendar?.version ?? 0,
       reply: replyView(replies, replyContext),
-      checklist: buildChecklist(evidence),
+      // An agent's report of an office request waits like its other reports.
+      checklist: buildChecklist(evidence.filter((e) => !unconfirmedAgentReport(e))),
     };
     return { view, evidence, conflicts: projection.conflicts, queue, open, current, replyContext, replies };
   }
@@ -475,14 +476,19 @@ export class CaseService {
           new AgentAnswerRefused(`Only an office message or your own report can set ${label} to ${state}. ${who} cannot answer with that choice. Answer it yourself in the app.`);
         const held = after.slots.find((s) => made.has(s.stateEvidenceId));
         if (held) throw refuse(held.label, STATE_WORDS[held.state]!);
-        // An item that would hold, cancel or move a slot is kept aside by
-        // the projection, so it is refused here by what it says.
-        const aside = writes.flatMap((w) => w.events).map((e) => (e.data as { claim: EvidenceClaim }).claim);
-        const asideIds = writes.map((w) => w.streamId.slice("evidence:".length));
-        const kept = asideIds.findIndex((id) => after.unconfirmedEvidenceIds.includes(id));
-        if (kept >= 0) {
-          const c = aside[kept]!;
-          throw refuse(slotLabel(c.slot.date!, c.slot.time), c.claim_type === "cancel" ? "canceled" : c.claim_type === "move" ? "moved" : "confirmed");
+        // The projection keeps an agent's items aside (review round 2,
+        // finding 7), so an answer that records any claim is refused by
+        // what its first item says.
+        const claims = writes
+          .filter((w) => w.streamId.startsWith("evidence:"))
+          .flatMap((w) => w.events)
+          .map((e) => (e.data as { claim: EvidenceClaim }).claim);
+        const c = claims.find((x) => x.slot.date !== null);
+        if (c) {
+          if (c.claim_type === "clarify") {
+            throw new AgentAnswerRefused(`Only you can say which date, time or place a fact means. ${who} cannot answer with that choice. Answer it yourself in the app.`);
+          }
+          throw refuse(slotLabel(c.slot.date!, c.slot.time), ANSWER_STATE_WORDS[c.claim_type] ?? "a new state");
         }
       }
     });
@@ -529,6 +535,16 @@ const STATE_WORDS: Record<string, string> = {
   change_proposed: "confirmed",
   canceled: "canceled",
   declined: "declined",
+};
+
+const ANSWER_STATE_WORDS: Record<string, string> = {
+  offer: "offered",
+  request: "requested",
+  confirm: "confirmed",
+  reminder: "confirmed",
+  cancel: "canceled",
+  decline: "declined",
+  move: "moved",
 };
 
 // An agent's answer would set a slot state that only an office message or
