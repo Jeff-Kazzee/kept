@@ -45,17 +45,20 @@ Rules:
 | 4 | MCP core: domain events, grants, tools | D5, part 1 | Oct 27 | Done (`49f9c45`) |
 | 5 | Saved outcome and checklist | D4 | Oct 28 | Done (`d6a0d86`) |
 | 6 | MCP in the app and connect test | D5, part 2 | Oct 28 | Done (`2bc8384`), real client run open |
-| 7A | Case agent: chat tool loop on Muse Spark | Chat app | Oct 28 to 29 | Next |
-| 7B | Web app: chat and schedule UI, production build, mobile | Chat app | Oct 28 to 29 | Next, beside 7A |
-| 8 (agent-first) | Agent-first back end: actions, activity log, undo, case time zone | Chat app | Oct 28 | In review (`sprint/08-agent-first`) |
-| 8 | Failure testing | All | Oct 30 to 31 | Planned |
-| 9 | Submission build | All | Nov 1 to 3 | Planned |
-| 11 | Gmail and Google Calendar connection | Chat app | Oct 28 | Integrated on `sprint/11-google`, in review |
+| 7A | Case agent: chat tool loop on Muse Spark | Chat app | Oct 28 | Done |
+| 7B | Web app: chat and schedule UI, production build, mobile | Chat app | Oct 28 | Done |
+| 8 | Agent-first back end: actions, activity log, undo, case time zone | Chat app | Oct 28 | Done |
+| 9 | Polished agent UI, outdoors theme, real routes (9, 9B, 9C) | Chat app | Oct 28 | Done (`d14d8c4`) |
+| 10 | Model providers and sign-in | Chat app | Oct 28 | Done, live sign-in open |
+| 11 | Gmail and Google Calendar connection | Chat app | Oct 28 | Done (`23b1dda`), real connect open |
+| 12 | Failure testing and quality | All | Oct 28 to 31 | Next |
+| 13 | Submission build | All | Nov 1 to 4 | Planned |
 
 On 2026-10-28 the plan changed to an agent-first app: sprint 8 is the
 agent-first back end and time zone, sprint 9 the polished agent UI
-(`sprint/09-polish`, in review, `docs/decisions/0011-ui-polish.md`) and
-sprint 10 model providers and sign-in.
+(`docs/decisions/0011-ui-polish.md`), sprint 10 model providers and
+sign-in, and sprint 11 Gmail and Google Calendar. Failure testing moved to
+sprint 12 and the submission build to sprint 13.
 
 Milestone checkpoint: Oct 31, after sprint 2. If sprint 2 is not merged by
 then, cut the MCP slice in this order: `propose_change`, then the annotate
@@ -422,32 +425,43 @@ contract.
 - [ ] SP8A.9 The sprint 7B UI still reads grants and proposals from
   `/api/state`. Sprint 9 replaces it.
 
-## Sprint 8: failure testing
+## Sprint 12: failure testing and quality
 
-Branch `sprint/08-failure-testing`.
+Branch `sprint/12-failure-testing`. Fix what breaks. No new features.
 
-- [ ] SP7.1 Full fixture suite S1 to S19 against the final model and host.
-- [ ] SP7.2 Fixed set of out-of-scope prompts for S11. A manual review finds
-  no clinical content in any response.
-- [ ] SP7.3 Demo path end to end three times with no manual fix.
-- [ ] SP7.4 Fix what breaks. No new features.
-- [ ] SP7.5 Milestone: fast-forward `prod` to `dev` with Jeff's approval.
+- [ ] SP12.1 "Am I booked Monday?" answers instead of falling back. The
+  live chat eval on `47c36d6` replaced the first answer in 2 of 3 runs.
+  The eval report should keep the replaced answer, so the cause can be
+  read.
+- [ ] SP12.2 Turn latency. Demo story p50 went from 4.5 s to 7.2 s after
+  the Google tools joined the registry. Offer only the tools the case can
+  use, and measure each model call and tool.
+- [ ] SP12.3 Live chat recordings, so the recorded mode answers the demo
+  story with no key. The coordinator runs the live recording.
+- [ ] SP12.4 Reply template no-fit on short office notes.
+- [ ] SP12.5 Out-of-scope set for S11, including evasions (other
+  languages, spacing, role play, split across turns), and meaning-flip
+  probes (negation, date and time swaps). A manual review finds no
+  clinical content in any response.
+- [ ] SP12.6 Full fixture suite S1 to S19 against the final model and
+  host, and `pnpm demo:check` running the demo path end to end.
+- [ ] SP12.7 The phone sheet audit (`<aside role="dialog">`).
+- [ ] SP12.8 Real runs with Jeff: Sign in with ChatGPT, the Google
+  connect, and the OpenCode connect test on his laptop.
+- [ ] SP12.9 Milestone: fast-forward `prod` to `dev` with Jeff's approval.
 
-Stretch work starts only after SP7.1 passes, in this order: intake form,
-calendar export, voice input.
+## Sprint 13: submission build
 
-## Sprint 9: submission build
+Branch `sprint/13-submission`.
 
-Branch `sprint/09-submission`.
-
-- [ ] SP8.1 Rehearse and record the three-minute demo.
-- [ ] SP8.2 Review the video and screenshots frame by frame for tokens and
+- [ ] SP13.1 Rehearse and record the three-minute demo.
+- [ ] SP13.2 Review the video and screenshots frame by frame for tokens and
   keys.
-- [ ] SP8.3 README for judges: what it does, how to run it, what the model
+- [ ] SP13.3 README for judges: what it does, how to run it, what the model
   does and what code checks, limits.
-- [ ] SP8.4 Security audit of the repository and its history before
+- [ ] SP13.4 Security audit of the repository and its history before
   publication. Checkpoint refs never go to the public repo.
-- [ ] SP8.5 Fast-forward `prod`. Publish only with Jeff's approval. Submit
+- [ ] SP13.5 Fast-forward `prod`. Publish only with Jeff's approval. Submit
   before the deadline.
 
 ## Sprint 10: model providers and sign-in
