@@ -129,16 +129,24 @@ holds: under 150 KB of JavaScript gzipped on first load.
   account. Usage is its own page on the hosted site.
 - Z5. The code-written sentences that named Settings now name the new
   place: the no-provider sentence says "Add one in Connections", the
-  credits sentence says "open Usage from your account menu", the
-  assistant's instructions say to connect Google in Connections, and the
-  scripted chat's Gmail sentences say Connections. The behavior is the
-  same.
+  credits sentence says "open Usage from your account menu", the ChatGPT
+  and Google sign-in errors say Connections, and so do the scripted chat's
+  Gmail sentences. The behavior is the same. One place is left as it was:
+  the assistant's instructions still tell it to say Google is connected
+  "in Settings", because the instructions are part of each recorded chat's
+  key, and changing them needs new recordings on the live model. Follow-up
+  for the next live session.
 - Z6. The work area's top bar shows the view's title as the page's one
   h1 ("Your case", "Connections", ...). The app name sits in the
   sidebar's head.
 - Z7. The theme switch in the account menu and the one in Settings are the
   same control, and stay in step through one window event.
-- Z8. A page takes focus at its heading when it opens. "Back to your case"
-  puts focus on the top bar's heading.
+- Z8. Opening a view, a page or the case through "Back to your case",
+  puts focus on the top bar's heading, which names the view.
+- Z10. Focus is tried again each frame, up to about half a second
+  (`focusSoon` in `ui/layout.ts`), because a sheet or the drawer that just
+  opened refuses focus for a frame or two while it slides in. This also
+  fixes the schedule sheet, whose title did not take focus on open in a
+  headless check before this sprint.
 - Z9. `ui/schedule/Settings.tsx` moved to `ui/pages/Settings.tsx`, because
   it is no longer part of the schedule panel.
