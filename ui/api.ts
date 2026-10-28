@@ -2,6 +2,7 @@
 import type { CaseView, ConflictView } from "../src/case/types.ts";
 import type { ChecklistItem } from "../src/case/checklist.ts";
 import type { Channel, Effort, EvidenceClaim, Message, SourceType } from "../src/domain/claim.ts";
+import type { ProposedChange } from "../src/records/types.ts";
 
 export type { CaseView, ChecklistItem, ConflictView };
 
@@ -64,6 +65,56 @@ export type AppState = {
   // True when a Delete case still has to clear the database file.
   erasePending: boolean;
   history: HistoryEntry[];
+  // Notes, tags and archive of every appointment, archived ones included.
+  records: RecordView[];
+  // Every change an agent proposed, pending or decided.
+  proposals: ProposalView[];
+  grants: GrantInfo[];
+  // The version this state was read at. The page polls for a newer one.
+  live: LiveVersion;
+};
+
+// The case generation and the highest event number. Any write moves one.
+export type LiveVersion = { generation: number; seq: number };
+
+export const versionChanged = (a: LiveVersion, b: LiveVersion) => a.generation !== b.generation || a.seq !== b.seq;
+
+export type Tier = "read" | "annotate" | "propose";
+
+// A grant as the app lists it. Never holds the token or its hash.
+export type GrantInfo = {
+  id: string;
+  name: string;
+  tier: Tier;
+  status: "active" | "revoked";
+  createdAt: string;
+  revokedAt: string | null;
+  version: number;
+  lastUsedAt: string | null;
+};
+
+export type Actor = { kind: "user" } | { kind: "agent"; grant_id: string; grant_name: string };
+
+export type RecordView = {
+  id: string;
+  version: number;
+  archived: boolean;
+  notes: Array<{ id: string; text: string; by: Actor; at: string }>;
+  tags: string[];
+  history: Array<{ version: number; type: string; by: Actor; at: string; undone: boolean; reverses: number | null }>;
+};
+
+export type ProposalView = {
+  id: string;
+  version: number;
+  grantId: string;
+  grantName: string;
+  change: ProposedChange;
+  recordVersion: number | null;
+  status: "pending" | "confirmed" | "rejected";
+  proposedAt: string;
+  decidedAt: string | null;
+  evidenceIds: string[];
 };
 
 export type FixtureScenario = {
@@ -136,6 +187,17 @@ export const api = {
     request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/discard`, { expectedVersion }),
   deleteCase: (expectedVersion: number, confirmation: string) =>
     request<{ erased: number }>("POST", "/api/case/delete", { expectedVersion, confirmation }),
+  liveVersion: () => request<LiveVersion>("GET", "/api/case/version"),
+  // The response holds the new token. It is shown once and never stored here.
+  createGrant: (name: string, tier: Tier) => request<{ grant: GrantInfo; token: string }>("POST", "/api/grants", { name, tier }),
+  revokeGrant: (id: string, expectedVersion: number) => request<GrantInfo>("POST", `/api/grants/${encodeURIComponent(id)}/revoke`, { expectedVersion }),
+  confirmProposal: (id: string, expectedVersion: number, recordVersion?: number) =>
+    request<ProposalView>("POST", `/api/proposals/${encodeURIComponent(id)}/confirm`, { expectedVersion, recordVersion }),
+  rejectProposal: (id: string, expectedVersion: number) =>
+    request<ProposalView>("POST", `/api/proposals/${encodeURIComponent(id)}/reject`, { expectedVersion }),
+  archive: (id: string, expectedVersion: number) => request<RecordView>("POST", `/api/records/${encodeURIComponent(id)}/archive`, { expectedVersion }),
+  undo: (id: string, version: number, expectedVersion: number) =>
+    request<RecordView>("POST", `/api/records/${encodeURIComponent(id)}/undo`, { expectedVersion, version }),
   approveDraft: (id: string, confirmedFields: string[], expectedVersion: number, confirmClaim: boolean) =>
     request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/approve`, { expectedVersion, confirmedFields, confirmClaim }),
 };

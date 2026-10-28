@@ -22,7 +22,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-const READS = new Set(["state", "fixtures", "calendar"]);
+const READS = new Set(["state", "fixtures", "calendar", "liveVersion"]);
 
 describe("ui api", () => {
   it("reads the case before its first write, then sends the generation on every write", async () => {

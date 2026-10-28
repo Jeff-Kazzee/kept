@@ -15,7 +15,9 @@ import {
   type FixtureScenario,
   type HistoryEntry,
   type MessageView,
+  type RecordView,
 } from "./api.ts";
+import { GrantPanel, ProposalCard, RecordNotes, useLiveRefresh } from "./AgentPanels.tsx";
 import { ReplyPanel, shortTime } from "./ReplyPanel.tsx";
 
 type Run = (action: () => Promise<unknown>) => Promise<void>;
@@ -67,6 +69,9 @@ export function App() {
     void refresh();
   }, [refresh]);
 
+  // A change by an agent or another tab shows without a reload.
+  useLiveRefresh(state?.live ?? null, refresh);
+
   // Runs an action, shows its error, and reloads state. A 409 means the
   // record changed since it was shown, so the reload shows the current one.
   const run = useCallback(
@@ -89,6 +94,8 @@ export function App() {
   if (!state) return <p>Loading…</p>;
   const pending = state.evidence.filter((e) => e.status === "pending");
   const decided = state.evidence.filter((e) => e.status !== "pending");
+  const pendingProposals = state.proposals.filter((p) => p.status === "pending");
+  const decidedProposals = state.proposals.filter((p) => p.status !== "pending");
   const kase = state.case;
 
   return (
@@ -126,18 +133,21 @@ export function App() {
       </section>
 
       <section>
-        <h2>4. Review queue ({pending.length})</h2>
-        <p>Nothing counts as evidence until you accept it.</p>
-        {pending.length === 0 && <p>No claims wait for review.</p>}
+        <h2>4. Review queue ({pending.length + pendingProposals.length})</h2>
+        <p>Nothing counts as evidence until you accept it. Changes your agents propose wait here too.</p>
+        {pending.length + pendingProposals.length === 0 && <p>No claims wait for review.</p>}
         {pending.map((e) => (
           <EvidenceCard key={e.id} item={e} state={state} run={run} />
+        ))}
+        {pendingProposals.map((p) => (
+          <ProposalCard key={p.id} proposal={p} records={state.records} run={run} />
         ))}
       </section>
 
       <section>
         <h2>5. Appointment slots</h2>
         <p>Built by code from accepted evidence only. Model output never changes a slot.</p>
-        <SlotsPanel state={state} />
+        <SlotsPanel state={state} run={run} />
       </section>
 
       <section>
@@ -165,9 +175,12 @@ export function App() {
 
       <section>
         <h2>10. Reviewed claims, your answers and your replies</h2>
-        {decided.length === 0 && <p>None yet.</p>}
+        {decided.length + decidedProposals.length === 0 && <p>None yet.</p>}
         {decided.map((e) => (
           <EvidenceCard key={e.id} item={e} state={state} run={run} />
+        ))}
+        {decidedProposals.map((p) => (
+          <ProposalCard key={p.id} proposal={p} records={state.records} run={run} />
         ))}
       </section>
 
@@ -177,7 +190,12 @@ export function App() {
       </section>
 
       <section>
-        <h2>12. Delete case</h2>
+        <h2>12. Agent access (MCP)</h2>
+        <GrantPanel grants={state.grants} run={run} />
+      </section>
+
+      <section>
+        <h2>13. Delete case</h2>
         <DeleteCasePanel version={state.caseVersion} erasePending={state.erasePending} run={run} />
       </section>
     </>
@@ -346,50 +364,86 @@ function CalendarPanel({ kase, run }: { kase: CaseView; run: Run }) {
   );
 }
 
-function SlotsPanel({ state }: { state: AppState }) {
+// The latest archive of a record that is still in effect, which Undo
+// reverses.
+export function activeArchive(record: RecordView | undefined): number | null {
+  return record?.history.filter((h) => h.type === "record_archived" && !h.undone).at(-1)?.version ?? null;
+}
+
+// G-f: archived slots leave this list. "Show archived" lists them with Undo.
+export function SlotsPanel({ state, run, initialShowArchived = false }: { state: AppState; run: Run; initialShowArchived?: boolean }) {
+  const [showArchived, setShowArchived] = useState(initialShowArchived);
   const kase = state.case;
   if (kase.slots.length === 0) return <p>No slots yet. Accept claims in the review queue.</p>;
+  const records = new Map(state.records.map((r) => [r.id, r]));
+  const archivedCount = kase.slots.filter((s) => records.get(s.key)?.archived).length;
+  const shown = kase.slots.filter((s) => showArchived || !records.get(s.key)?.archived);
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Slot</th>
-          <th>State</th>
-          <th>Place</th>
-          <th>Calendar</th>
-          <th>Evidence</th>
-        </tr>
-      </thead>
-      <tbody>
-        {kase.slots.map((s) => (
-          <tr key={s.key}>
-            <td>{s.label}</td>
-            <td>
-              <strong>{s.stateLabel}</strong>
-              <StateQuote id={s.stateEvidenceId} state={state} />
-              {s.missing.length > 0 && <div className="warn">Incomplete: no {s.missing.map((m) => (m === "time" ? "time" : "place")).join(", no ")}</div>}
-              {s.staleEvidenceIds.length > 0 && <div className="warn">Possibly stale reminder: {s.staleEvidenceIds.join(", ")}</div>}
-            </td>
-            <td>{s.locationDisputed ? <span className="warn">Sources disagree</span> : (s.location ?? "not stated")}</td>
-            <td>
-              {s.clashes === null
-                ? s.time === null || !kase.calendar
-                  ? "not checked"
-                  : "not checked (closed)"
-                : s.clashes.length === 0
-                  ? "no clash"
-                  : s.clashes.map((c, i) => (
-                      <div key={i} className="warn">
-                        Clashes with {c.summary} ({icsTimeText(c.start)}
-                        {c.end ? ` to ${icsTimeText(c.end)}` : ""})
-                      </div>
-                    ))}
-            </td>
-            <td>{s.evidenceIds.join(", ")}</td>
+    <>
+      <label>
+        <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Show archived ({archivedCount})
+      </label>
+      <table>
+        <thead>
+          <tr>
+            <th>Slot</th>
+            <th>State</th>
+            <th>Place</th>
+            <th>Calendar</th>
+            <th>Notes and tags</th>
+            <th>Evidence</th>
+            <th></th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {shown.map((s) => {
+            const record = records.get(s.key);
+            const archiveVersion = activeArchive(record);
+            return (
+              <tr key={s.key} className={record?.archived ? "archived" : undefined}>
+                <td>
+                  {s.label}
+                  {record?.archived && <div className="warn">Archived</div>}
+                </td>
+                <td>
+                  <strong>{s.stateLabel}</strong>
+                  <StateQuote id={s.stateEvidenceId} state={state} />
+                  {s.missing.length > 0 && <div className="warn">Incomplete: no {s.missing.map((m) => (m === "time" ? "time" : "place")).join(", no ")}</div>}
+                  {s.staleEvidenceIds.length > 0 && <div className="warn">Possibly stale reminder: {s.staleEvidenceIds.join(", ")}</div>}
+                </td>
+                <td>{s.locationDisputed ? <span className="warn">Sources disagree</span> : (s.location ?? "not stated")}</td>
+                <td>
+                  {s.clashes === null
+                    ? s.time === null || !kase.calendar
+                      ? "not checked"
+                      : "not checked (closed)"
+                    : s.clashes.length === 0
+                      ? "no clash"
+                      : s.clashes.map((c, i) => (
+                          <div key={i} className="warn">
+                            Clashes with {c.summary} ({icsTimeText(c.start)}
+                            {c.end ? ` to ${icsTimeText(c.end)}` : ""})
+                          </div>
+                        ))}
+                </td>
+                <td>
+                  <RecordNotes record={record} />
+                </td>
+                <td>{s.evidenceIds.join(", ")}</td>
+                <td>
+                  {record?.archived && archiveVersion !== null ? (
+                    <button onClick={() => run(() => api.undo(s.key, archiveVersion, record.version))}>Undo archive</button>
+                  ) : (
+                    <button onClick={() => run(() => api.archive(s.key, record?.version ?? 0))}>Archive</button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {shown.length === 0 && <p>Every slot is archived. Tick Show archived to see them.</p>}
+    </>
   );
 }
 
@@ -598,6 +652,9 @@ function ConflictCard({ conflict, state, run }: { conflict: ConflictView; state:
         {conflict.answer && `: ${conflict.answer.label}`}
       </div>
       <p>{conflict.summary}</p>
+      {conflict.archivedSlotKeys.length > 0 && (
+        <p className="warn">Not asked while {conflict.archivedSlotKeys.join(" and ")} is archived. Undo the archive to answer it.</p>
+      )}
       <div className="label">Sources ({conflict.evidenceIds.length})</div>
       <div className="sources">
         {conflict.evidenceIds.map((id) => (
