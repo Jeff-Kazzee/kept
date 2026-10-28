@@ -7,7 +7,7 @@ Meta's Model API is the main way to use the app and the default
 everywhere. Sign in with ChatGPT is the alternative, so people without a
 Meta key can use the app too. Later the same day he added that the user
 also chooses the model, per provider. Items 1 to 7 and M1 to M4 came with
-the sprint. P1 to P31 are choices the writer made while building it. All
+the sprint. P1 to P32 are choices the writer made while building it. All
 are proposed until Jeff confirms them.
 
 Code: `src/model/providers/` (the secrets file, the OpenID Connect checks,
@@ -21,7 +21,9 @@ and sign-in routes), `server/main.ts` (wiring), `src/eval/cli.ts`
 
 Shared with sprints 8 and 9.
 
-- `GET /api/settings` returns `settingsVersion`, `timezone`,
+- `GET /api/settings` is one answer, served by sprint 8's
+  `server/settings.ts` with this sprint's part from `server/auth.ts`
+  (P32). It returns `settingsVersion`, `timezone`,
   `timezoneSource`, `provider` (`"meta"`, `"chatgpt"` or `null`), `meta`
   (`keySet`, `source`), `chatgpt` (`signedIn`, `name`, `email`,
   `planUsage`), `model`, `models` (each `id`, `label`, `costHint`) and
@@ -267,11 +269,8 @@ runs it. The spend guard still prices tokens at the Meta rates (P22).
   then calls fail with a fixed sentence.
 - **P6.** The settings routes take no case generation header, as they are
   app settings that survive Delete case.
-- **P7.** `settingsVersion` is the settings file's version plus the time
-  zone's version, read through a `timezone` option of `createAuth`. Both
-  only grow, so the sum grows on any change. Until sprint 8 provides the
-  time zone setting, it reads `America/Denver`, `default`, version 0. A
-  token refresh does not change the version.
+- **P7.** `settingsVersion` is the settings database's version plus the
+  settings stream's version (P32). A token refresh does not change it.
 - **P8.** The tools namespace is `case_tools`. Effort `minimal` is sent
   as `low` to ChatGPT, as not every OpenAI reasoning model takes
   `minimal`.
@@ -364,6 +363,24 @@ runs it. The spend guard still prices tokens at the Meta rates (P22).
   whose stale takeover could race. The settings stay one JSON row, so the
   scan and the shape checks are unchanged. A JSON file from before is not
   read: no real sign-in or saved key existed yet.
+- **P32.** One `settingsVersion` for two stores, after sprint 8 merged
+  (2026-10-28). The time zone lives in the event log's `settings` stream
+  and the provider settings in their own database, and the page sends one
+  version with every settings write (`ui/agentApi.ts`). The version is the
+  sum of the two. Each part only grows, so the sum grows on any change and
+  an equal sum means neither part moved. `GET /api/settings` is served
+  once, by `server/settings.ts`, which takes this sprint's part through
+  `createAuth(...).source`. A provider write compares the sum inside its
+  own transaction, reading the time zone part there. The time zone write
+  takes the provider part off the page's version and lets the stream's
+  own check compare the rest, and its 409 reports the sum and the whole
+  view. Each write's compare-and-swap is exact for its own store. A write
+  to the other store that lands between the read of its part and the
+  commit is the one gap, a few microseconds wide.
+- The MCP server's extraction, explanation and question calls take their
+  client from the same provider factory as the app (`mcp/main.ts`), so
+  they follow the provider and model chosen in settings. The live eval
+  keeps its own `--provider` and `--model`.
 
 ## What the server cannot control
 

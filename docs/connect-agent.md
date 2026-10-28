@@ -34,8 +34,10 @@ claude mcp add appointments -e APP_DB=/path/to/meta-hackathon-appointments/data/
 ```
 
 The server uses recorded model responses for extraction, explanations and
-questions unless `APP_LIVE_MODEL=1` and `MODEL_API_KEY` are set for it, as
-for the app. `APPT_NODE` selects the Node 24 binary when `node` on the
+questions unless `APP_LIVE_MODEL=1` is set for it, as for the app. Live
+calls then go to the provider and model chosen in the app's settings (a
+Meta key, the server's `MODEL_API_KEY`, or the ChatGPT connection the app
+saved), read from `app-secrets.sqlite` beside `APP_DB`. `APPT_NODE` selects the Node 24 binary when `node` on the
 PATH is another version. Ask the agent to list the appointments tools: it
 should name the same tools as the app's assistant, from `get_schedule` to
 `set_timezone`.
