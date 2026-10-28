@@ -297,7 +297,9 @@ describe("citation and date checks", () => {
     const strings = (v: unknown): string[] =>
       typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(strings) : v && typeof v === "object" ? Object.values(v).flatMap(strings) : [];
     const dir = fromPackage("fixtures/recordings");
-    const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".json"));
+    // Chat recordings have their own format and the same check in
+    // test/agent-recorded.test.ts.
+    const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".json") && !f.startsWith(`chat${path.sep}`));
     expect(files.length).toBeGreaterThan(30);
     for (const f of files) {
       for (const a of readRecording(path.join(dir, f)).attempts) {

@@ -17,6 +17,7 @@ import {
 } from "../src/agent/recorded.ts";
 import { defaultMessageId } from "../src/agent/tools.ts";
 import type { InputItem } from "../src/model/responses.ts";
+import { hasClinicalContent } from "../src/domain/scope.ts";
 import { fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { keyForFile } from "../scripts/recording-key.ts";
@@ -80,6 +81,18 @@ describe("G10: recorded chat turns", () => {
     const app = await demoCase();
     const r = await say(agentFor(app, RecordedChatClient.fromDirectory(tempDir())), app, "Something new");
     expect(r.of("turn.error").map((e) => e.code)).toEqual(["model_unavailable"]);
+  });
+
+  it("no chat recording or fault holds clinical text", () => {
+    const strings = (v: unknown): string[] =>
+      typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(strings) : v && typeof v === "object" ? Object.values(v).flatMap(strings) : [];
+    const files = readdirSync(CHAT_RECORDINGS_DIR, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".json"));
+    expect(files.length).toBeGreaterThanOrEqual(7);
+    for (const f of files) {
+      const json = JSON.parse(readFileSync(path.join(CHAT_RECORDINGS_DIR, f), "utf8"));
+      const replies = json.replies ?? [json.reply];
+      for (const text of strings(replies.map((r: { output?: unknown }) => r.output))) expect(hasClinicalContent(text), `${f}: ${text}`).toBe(false);
+    }
   });
 
   it("every fault and recording file in the repository parses", () => {
