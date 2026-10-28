@@ -137,8 +137,15 @@ export class FakeOpenAi {
 
 export function tempStore() {
   const dir = mkdtempSync(path.join(tmpdir(), "providers-"));
-  const store = new SecretsStore(path.join(dir, "app-secrets.json"));
-  return { dir, store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  const store = new SecretsStore(path.join(dir, "app-secrets.sqlite"));
+  return {
+    dir,
+    store,
+    cleanup: () => {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 // A signed-in connection, through the real start and callback.

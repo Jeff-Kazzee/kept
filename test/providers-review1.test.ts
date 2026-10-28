@@ -8,11 +8,12 @@ import { IntakeService } from "../src/intake/service.ts";
 import { MetaResponsesClient, ModelCallError } from "../src/model/client.ts";
 import { buildToolRequest } from "../src/model/responses.ts";
 import { MODEL } from "../src/model/request.ts";
-import { ChatGptAuth, ChatGptAuthError, DYNAMIC_CLIENT_ID } from "../src/model/providers/chatgpt-auth.ts";
+import { ChatGptAuth, ChatGptAuthError, DYNAMIC_CLIENT_ID, SESSION_LEASE } from "../src/model/providers/chatgpt-auth.ts";
 import { ChatGptResponsesClient } from "../src/model/providers/chatgpt-client.ts";
 import { chatGptModel, DEFAULT_CHATGPT_MODEL, modelOptions } from "../src/model/providers/models.ts";
 import { JWKS_DEFAULT_TTL_MS, OPENAI_ISSUER, OpenAiIdentity } from "../src/model/providers/oidc.ts";
-import { LOCK_STALE_MS, SecretsStore } from "../src/model/providers/secrets.ts";
+import { LEASE_MS, SecretsStore } from "../src/model/providers/secrets.ts";
+import { DatabaseSync } from "node:sqlite";
 import { fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { fixtureMessage } from "./helpers.ts";
@@ -155,26 +156,56 @@ describe("review round 1, finding 3: refreshes are serialized across processes",
     expect(n).toBe(1);
   });
 
-  it("waits for a lock file another process holds, and takes over a stale one", async () => {
+  it("a live lease another process holds makes a refresh wait and use that process's result, and an expired one is taken over", async () => {
     const s = setup();
-    writeFileSync(s.store.lockFile, `other-token 1 ${Date.now()}\n`);
-    let ran = false;
-    const held = s.store.withLock(async () => void (ran = true));
+    await signIn(s.fake, s.store, s.auth);
+    s.fake.now += 59 * 60_000;
+    // Another process holds the session lease, live for 30 seconds.
+    const raw = new DatabaseSync(s.store.file);
+    raw.prepare("INSERT INTO lease (name, holder, expires_at) VALUES (?, ?, ?)").run(SESSION_LEASE, "other-process", Date.now() + LEASE_MS);
+    const call = s.auth.accessToken();
     await new Promise((r) => setTimeout(r, 100));
-    expect(ran).toBe(false);
-    writeFileSync(s.store.lockFile, `other-token 1 ${Date.now() - LOCK_STALE_MS - 1000}\n`);
-    await held;
-    expect(ran).toBe(true);
-    expect(existsSync(s.store.lockFile)).toBe(false);
-    expect(readdirSync(path.dirname(s.store.file)).filter((f) => f.endsWith(".stale"))).toEqual([]);
+    expect(refreshRequests(s.fake)).toHaveLength(0);
+    // It stores its refresh. This process reads it and makes none.
+    s.store.update((x) => ({ ...x, chatgpt: { ...x.chatgpt, session: { ...x.chatgpt.session!, accessToken: "access-other", expiresAt: s.fake.now + 3_600_000 } } }), { bump: false });
+    expect(await call).toBe("access-other");
+    expect(refreshRequests(s.fake)).toHaveLength(0);
+
+    // Its holder stopped: the lease is past expires_at, so it is taken over.
+    s.fake.now += 59 * 60_000;
+    raw.prepare("UPDATE lease SET expires_at = ? WHERE name = ?").run(Date.now() - 1, SESSION_LEASE);
+    raw.close();
+    s.fake.token = () => Response.json({ access_token: "access-3", refresh_token: "refresh-3", expires_in: 3600 });
+    expect(await s.auth.accessToken()).toBe("access-3");
+    expect(refreshRequests(s.fake)).toHaveLength(1);
   });
 
-  it("a real second process holding the lock runs before this one, never at the same time", async () => {
+  it("a refresh whose lease was taken over meanwhile stores nothing and revokes its new refresh token", async () => {
     const s = setup();
+    await signIn(s.fake, s.store, s.auth);
+    s.fake.now += 59 * 60_000;
+    const release = heldRefresh(s.fake);
+    const call = s.auth.accessToken().catch((e: unknown) => e);
+    await vi.waitFor(() => expect(refreshRequests(s.fake)).toHaveLength(1));
+    // The lease is lost, as when this process stalled past expires_at.
+    const raw = new DatabaseSync(s.store.file);
+    raw.prepare("UPDATE lease SET holder = ? WHERE name = ?").run("other-process", SESSION_LEASE);
+    raw.close();
+    const before = s.store.read().chatgpt.session;
+    release();
+    expect(await call).toBeInstanceOf(ChatGptAuthError);
+    expect(s.store.read().chatgpt.session).toEqual(before);
+    expect(s.fake.to(REVOKE_URL).map((r) => s.fake.form(r).get("token"))).toEqual(["refresh-2"]);
+  });
+
+  it("a real second process holding the lease runs before this one, never at the same time", async () => {
+    const s = setup();
+    s.store.read();
     const script = [
       `import { SecretsStore } from ${JSON.stringify(fromPackage("src/model/providers/secrets.ts"))};`,
       `const store = new SecretsStore(${JSON.stringify(s.store.file)});`,
-      `await store.withLock(async () => { console.log("held " + Date.now()); await new Promise((r) => setTimeout(r, 400)); console.log("released " + Date.now()); });`,
+      `await store.withLease("chatgpt_session", async () => { console.log("held " + Date.now()); await new Promise((r) => setTimeout(r, 400)); console.log("released " + Date.now()); });`,
+      `store.close();`,
     ].join("\n");
     const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
     // Made now: the child may exit before this test waits for it.
@@ -184,7 +215,7 @@ describe("review round 1, finding 3: refreshes are serialized across processes",
     child.stderr.on("data", (d: Buffer) => (out += d.toString()));
     await vi.waitFor(() => expect(out).toContain("held"), { timeout: 10_000 });
     let startedAt = 0;
-    await s.store.withLock(async () => void (startedAt = Date.now()));
+    await s.store.withLease("chatgpt_session", async () => void (startedAt = Date.now()));
     await closed;
     const released = Number(/released (\d+)/.exec(out)![1]);
     expect(startedAt).toBeGreaterThanOrEqual(released);

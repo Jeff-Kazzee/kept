@@ -7,7 +7,7 @@ Meta's Model API is the main way to use the app and the default
 everywhere. Sign in with ChatGPT is the alternative, so people without a
 Meta key can use the app too. Later the same day he added that the user
 also chooses the model, per provider. Items 1 to 7 and M1 to M4 came with
-the sprint. P1 to P30 are choices the writer made while building it. All
+the sprint. P1 to P31 are choices the writer made while building it. All
 are proposed until Jeff confirms them.
 
 Code: `src/model/providers/` (the secrets file, the OpenID Connect checks,
@@ -94,25 +94,33 @@ this is built.
 
 ## 2. Secrets
 
-`data/app-secrets.json` (beside the event log, from `APP_DB`) holds the
+`data/app-secrets.sqlite` (beside the event log, from `APP_DB`) holds the
 provider choice, the user's Meta key, the model choices and the ChatGPT
-connection. It is outside the event log, so Delete case leaves it. "Remove
-key" and "Sign out" clear their parts.
+connection, as one settings row of JSON (P31). It is its own SQLite file,
+outside the event log, so Delete case leaves it. "Remove key" and "Sign
+out" clear their parts.
 
-- Mode 600. A wider file is narrowed to 600 when read. A file owned by
-  another user is refused. The folder is made with mode 700.
-- Written atomically: a new file with a random name, flushed, then renamed
-  over the old one, then the folder is flushed.
-- Never followed through a symbolic link: reads open with `O_NOFOLLOW`,
-  and the rename replaces a link, never its target.
-- Read from disk on every use, so the app and `pnpm eval:live` see each
-  other's refreshes.
+- Mode 600. A missing file is made empty with mode 600 before SQLite opens
+  it, and SQLite gives its `-wal` and `-shm` files the same mode. A wider
+  file is narrowed to 600 when opened. A file owned by another user is
+  refused. The folder is made with mode 700.
+- Never opened through a symbolic link: the path is checked with `lstat`
+  before and after the open.
+- Every write is one `BEGIN IMMEDIATE` transaction that reads the row,
+  applies the change and writes it, so a check on the settings version or
+  the session id and the write are one compare-and-swap, across processes
+  too. WAL and a 5 second busy timeout let a writer wait for another.
+- Read from the database on every use, so the app and `pnpm eval:live`
+  see each other's refreshes.
 - Never logged, returned, put in an error or written to the event log. An
-  unreadable file is named by its path and the failing fields, never its
-  values.
+  unreadable row is named by the file's path and the failing fields, never
+  its values.
+- A session saved without an id is read as it is and given one on the
+  next write.
 - The ID token is checked and not kept (P2).
-- `pnpm scan:secrets` finds the file's name in any tracked path or tree,
-  local env file names, and the file's token fields in any content (P20).
+- `pnpm scan:secrets` finds the database's name and side files in any
+  tracked path or tree, local env file names, the settings rows of any
+  SQLite file it reads, and the token fields in any content (P20, P30).
 
 ## 3. The ChatGPT sign-in
 
@@ -153,17 +161,26 @@ and allow plan usage, or switch to Meta in settings."
 - A 401 from the Responses API refreshes once and tries once more. A
   second 401 fails with a sign-in-again sentence and keeps the tokens,
   since a 401 alone does not confirm revocation (P12).
-- Refresh, sign-in completion and sign-out each hold the secrets file's
-  lock from their read to their write: a queue within the process and a
-  lock file made with `O_EXCL` beside the secrets file between processes,
-  such as the app and `pnpm eval:live`. A lock file older than 60 seconds
-  is taken over. After taking the lock, a refresh reads the file again and
-  uses a refresh another process already made.
+- A refresh and a sign-out hold the `chatgpt_session` lease row while
+  they call OpenAI (P31). A process claims it in a transaction with its
+  holder id and an expiry 30 seconds ahead, renews it every 10 seconds
+  while it works and releases it after. A process that finds another's
+  live lease waits and reads the settings again, and uses that holder's
+  refresh when it lands instead of refreshing. A lease past its expiry,
+  whose holder stopped, is taken over in a transaction. Sign-in completion
+  is one compare-and-swap transaction and takes no lease.
 - Each session has an id made at sign-in and kept through refreshes. A
-  refresh stores its result only if the stored session is still the one it
-  refreshed. Otherwise the new refresh token is revoked and the call fails
-  as signed out. A sign-out that comes during a refresh waits for it, then
-  revokes the new refresh token.
+  refresh stores its result in one transaction only if the lease is still
+  its own and the stored session is still the one it refreshed. Otherwise
+  the new refresh token is revoked and dropped, and the call uses another
+  holder's fresh token or fails as signed out. A sign-out that comes
+  during a refresh waits for it, then revokes the new refresh token. A
+  sign-out or a failed refresh clears the session only if it is still the
+  one it read, so a newer sign-in is never cleared.
+- A settings database busy past the busy timeout, or a lease held past a
+  75 second wait, fails the route with a retryable 503 `settings_busy`,
+  the callback with `signInError=settings_busy` and a model call with a
+  fixed try-again sentence. Nothing is written.
 - A refresh that grants no `chatgpt.tokens.use.direct` stores the token
   set, shows plan usage off and fails the call with the plan-usage
   sentence.
@@ -297,12 +314,8 @@ runs it. The spend guard still prices tokens at the Meta rates (P22).
   `model_unavailable`.
 - **P22.** The eval's spend guard prices at the Meta rates for both
   providers.
-- **P23.** The lock (item 4) covers the steps that call OpenAI between
-  their read and their write. The settings writes (provider, model, Meta
-  key) do not take it: each is one read and one write with no wait in
-  between, and it re-reads the file, so it never writes back an old
-  session. Between processes, a settings write and a token write that land
-  in the same instant can still lose one of them.
+- **P23.** Replaced by P31. Every settings and token write is a
+  transaction, so no write can lose another's.
 - **P24.** A Meta key is one run of 8 to 512 printable characters with no
   spaces. Nothing more is known about its format.
 - **P25.** The secret scan guards what can be published, set by the
@@ -325,20 +338,32 @@ runs it. The spend guard still prices tokens at the Meta rates (P22).
 - **P27.** The signing keys are kept for the JWKS response's
   `Cache-Control` max-age, between 1 minute and 24 hours, or 1 hour with
   none. A failed signature reloads them once, at most once a minute, and
-  checks again, for a key replaced under the same `kid`.
+  checks again, for a key replaced under the same `kid`. Calls that need
+  the keys while a load runs share that one load.
 - **P28.** A Meta error message is `Model call returned HTTP <status>`
   with the API's error type and code when they are lower-case identifiers.
   It never holds body text, which extraction would write to the event
   log. Error types, codes and params on every provider must now start with
   a lower-case letter, so mixed-case text that could be an echoed key is
-  dropped.
+  dropped. The capability codes and the request fields they name (M4) are
+  an allowlist matched in any case first and kept in lower case, so the
+  capability check still sees them.
 - **P29.** The ChatGPT client checks the model it sends right before the
   request, and the model always comes from the connection's listing with
   contributor models removed.
 - **P30.** The scan also reads every `.json` file up to 8 MB as JSON, on
   disk and in history, and matches the Meta key across the two lines the
-  settings file writes it on. Angle brackets are not key characters, so a
-  `<META_KEY>` placeholder is not a hit.
+  settings file writes it on. The value shape is the one the app accepts:
+  any printable ASCII with no space, with an escaped quote or backslash in
+  JSON text. Only an exact placeholder of the form `<NAME>` is skipped. It
+  also opens any file or blob up to 8 MB that starts with the SQLite
+  header, from a private read-only copy, and reads its settings rows.
+- **P31.** The secrets store is its own SQLite file with a lease row for
+  refresh and sign-out, set by the coordinator on 2026-10-28 after review
+  round 2. It replaces the JSON file and the `O_EXCL` lock file of round 1,
+  whose stale takeover could race. The settings stay one JSON row, so the
+  scan and the shape checks are unchanged. A JSON file from before is not
+  read: no real sign-in or saved key existed yet.
 
 ## What the server cannot control
 

@@ -358,9 +358,11 @@ In each of those it finds, on one line:
   `accessToken`, `refreshToken`, `access_token`, `refresh_token` or
   `id_token` field with a token value, or a `"meta": { "key": ... }` field,
   on one line or with `"key"` on the line after `"meta": {`. Every `.json`
-  file up to 8 MB is also read as JSON for those fields, so a renamed copy
-  of the settings file is found.
-- A file or folder named like the settings file (`app-secrets.json`) or a
+  file up to 8 MB is also read as JSON for those fields, and every file up
+  to 8 MB that is a SQLite database has its settings rows read, so a
+  renamed copy of the settings database or an export of it is found.
+- A file or folder named like the settings database (`app-secrets.sqlite`
+  and its `-wal`, `-shm` and `-journal` files) or a
   local env file (`.env.local`, `.env.<name>.local`), in the tree or in
   history.
 

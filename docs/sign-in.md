@@ -32,7 +32,7 @@ the environment.
 
 **In the app.** Open settings, paste your Meta Model API key and save it.
 The key goes to the app's server and stays there, in
-`data/app-secrets.json` (readable only by your user). The page never gets
+`data/app-secrets.sqlite` (readable only by your user). The page never gets
 it back. "Remove key" deletes it.
 
 **In `.env.local`, through varlock.** Put the key in `.env.local` as
@@ -93,7 +93,7 @@ sign in again or switch to Meta.
 
 ## What the app keeps
 
-`data/app-secrets.json`, beside the case database, holds your Meta key,
+`data/app-secrets.sqlite`, beside the case database, holds your Meta key,
 the ChatGPT tokens, the provider and model choices, and an identifier for
 this installation. It has mode 600, is written in one step, is never sent
 to the browser or logged, and is ignored by git. Delete case does not

@@ -335,14 +335,16 @@ describe("the secret scan", () => {
     expectSilent(run, token);
   }, 60_000);
 
-  it("review round 1, finding 5: real settings-file output under another name is found on disk and in history", () => {
+  it("review round 2: the real settings database, by name, renamed, and as a pretty JSON export, on disk and in history", () => {
     const r = repo();
     r.write("README.md", "Nothing here.\n");
     r.commit("First");
     const metaKey = `LLM|${randomBytes(12).toString("hex")}`;
     const access = randomBytes(24).toString("base64url");
     const refresh = randomBytes(24).toString("base64url");
-    new SecretsStore(path.join(r.dir, "backup.json")).update(
+    const dbFile = path.join(r.dir, "data", "app-secrets.sqlite");
+    const store = new SecretsStore(dbFile);
+    const saved = store.update(
       (x) => ({
         ...x,
         meta: { key: metaKey },
@@ -350,28 +352,37 @@ describe("the secret scan", () => {
       }),
       { bump: true },
     );
-    // The store writes pretty JSON: "meta": { on one line, "key" on the next.
-    expect(readFileSync(path.join(r.dir, "backup.json"), "utf8")).toMatch(/"meta": \{\n\s+"key": /);
+    // Closing checkpoints the WAL into the database file, as a copy would hold.
+    store.close();
+    r.write("backup.db", readFileSync(dbFile));
+    r.write("export.json", JSON.stringify(saved, null, 2) + "\n");
+    // The export is pretty JSON: "meta": { on one line, "key" on the next.
+    expect(readFileSync(path.join(r.dir, "export.json"), "utf8")).toMatch(/"meta": \{\n\s+"key": /);
+    r.git("add", "-f", "data/app-secrets.sqlite");
     r.commit("Backup");
     let run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toMatch(/Possible secret at backup\.json:\d+\n/);
-    expect(run.stdout).toContain("Possible secret at backup.json (JSON field meta.key)\n");
-    expect(run.stdout).toContain("Possible secret at backup.json (JSON field chatgpt.session.accessToken)\n");
-    expect(run.stdout).toContain("Possible secret at backup.json (JSON field chatgpt.session.refreshToken)\n");
-    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} backup\\.json \\(JSON field meta\\.key\\)\\n`));
+    expect(run.stdout).toContain("Possible secret at tracked settings or env file data/app-secrets.sqlite\n");
+    for (const where of ["data/app-secrets.sqlite", "backup.db"]) {
+      for (const field of ["meta.key", "chatgpt.session.accessToken", "chatgpt.session.refreshToken"]) {
+        expect(run.stdout).toContain(`Possible secret at ${where} (settings database field ${field})\n`);
+      }
+    }
+    expect(run.stdout).toMatch(/Possible secret at export\.json:\d+\n/);
+    expect(run.stdout).toContain("Possible secret at export.json (JSON field meta.key)\n");
+    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} backup\\.db \\(settings database field meta\\.key\\)\\n`));
     expectSilent(run, access, refresh);
     expect(run.stdout).not.toContain(metaKey);
 
-    // Only history holds it now, and only the multi-line key and the JSON
-    // read would find the key there.
-    r.git("rm", "-q", "backup.json");
-    r.commit("Remove the backup");
+    // Only history holds them now.
+    r.git("rm", "-q", "backup.db", "export.json", "data/app-secrets.sqlite");
+    r.commit("Remove the backups");
     run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).not.toContain("Possible secret at backup.json");
-    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} backup\\.json:\\d+\\n`));
-    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} backup\\.json \\(JSON field meta\\.key\\)\\n`));
+    expect(run.stdout).not.toContain("Possible secret at backup.db");
+    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} backup\\.db \\(settings database field chatgpt\\.session\\.refreshToken\\)\\n`));
+    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} export\\.json \\(JSON field meta\\.key\\)\\n`));
+    expect(run.stdout).toMatch(new RegExp(`a settings or env file in tree ${BLOB}: app-secrets\\.sqlite\\n`));
   });
 
   it("review round 1, finding 5: the two-line key match and the JSON read find the key alone", () => {

@@ -12,6 +12,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { fromPackage } from "../src/paths.ts";
 import { fakeSecret } from "./provider-fakes.ts";
+import { SecretsStore } from "../src/model/providers/secrets.ts";
 
 const children: ChildProcess[] = [];
 const dirs: string[] = [];
@@ -81,9 +82,11 @@ describe("0010 provider routes on the real server", () => {
     const saved = await call(app.port, "POST", "/api/auth/meta-key", app.page, JSON.stringify({ key, expectedVersion: 0 }));
     expect(saved.status).toBe(200);
     expect(saved.text).not.toContain(key);
-    const file = path.join(app.dir, "app-secrets.json");
+    const file = path.join(app.dir, "app-secrets.sqlite");
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(readFileSync(file, "utf8")).toContain(key);
+    const peek = new SecretsStore(file);
+    expect(peek.read().meta).toEqual({ key });
+    peek.close();
 
     const notJson = await call(app.port, "PUT", "/api/settings/model", { ...app.page, "Content-Type": "text/plain" }, "x");
     expect(notJson.status).toBe(415);
