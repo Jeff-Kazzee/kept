@@ -52,7 +52,8 @@ export const message = (text: string) => ({ type: "message", role: "assistant", 
 type Handler = (req: Recorded) => Response | Promise<Response>;
 
 export class FakeOpenAi {
-  readonly key = signingKey();
+  key = signingKey();
+  jwksCacheControl: string | null = null;
   readonly requests: Recorded[] = [];
   now = Date.parse("2026-11-05T17:00:00.000Z");
   // The next authorization's nonce, read from the authorize URL by tests.
@@ -116,7 +117,7 @@ export class FakeOpenAi {
     this.requests.push(req);
     const url = req.url;
     if (url === DISCOVERY_URL) return Response.json(this.discovery());
-    if (url === JWKS_URL) return Response.json({ keys: [this.key.jwk] });
+    if (url === JWKS_URL) return Response.json({ keys: [this.key.jwk] }, this.jwksCacheControl ? { headers: { "cache-control": this.jwksCacheControl } } : {});
     if (url === TOKEN_URL) return this.token ? this.token(req) : this.tokenResponse();
     if (url === REVOKE_URL) return this.revoke(req);
     if (url === MODELS) return this.models(req);

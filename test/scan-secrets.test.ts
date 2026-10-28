@@ -7,11 +7,12 @@
 // up at test time in temporary repositories.
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { hasSecret, redact, scanBytes } from "../scripts/scan-secrets.ts";
+import { hasSecret, jsonSecretFields, redact, scanBytes } from "../scripts/scan-secrets.ts";
+import { SecretsStore } from "../src/model/providers/secrets.ts";
 import { PACKAGE_ROOT } from "../src/paths.ts";
 
 const SCANNER = path.join(PACKAGE_ROOT, "scripts/scan-secrets.ts");
@@ -333,6 +334,58 @@ describe("the secret scan", () => {
     expect(run.stdout).toContain("Skipped local refs: refs/entire (1), refs/t3 (1).");
     expectSilent(run, token);
   }, 60_000);
+
+  it("review round 1, finding 5: real settings-file output under another name is found on disk and in history", () => {
+    const r = repo();
+    r.write("README.md", "Nothing here.\n");
+    r.commit("First");
+    const metaKey = `LLM|${randomBytes(12).toString("hex")}`;
+    const access = randomBytes(24).toString("base64url");
+    const refresh = randomBytes(24).toString("base64url");
+    new SecretsStore(path.join(r.dir, "backup.json")).update(
+      (x) => ({
+        ...x,
+        meta: { key: metaKey },
+        chatgpt: { ...x.chatgpt, session: { id: "s", accessToken: access, refreshToken: refresh, expiresAt: 0, earliestRefreshAt: null, scopes: [], savedAt: "" } },
+      }),
+      { bump: true },
+    );
+    // The store writes pretty JSON: "meta": { on one line, "key" on the next.
+    expect(readFileSync(path.join(r.dir, "backup.json"), "utf8")).toMatch(/"meta": \{\n\s+"key": /);
+    r.commit("Backup");
+    let run = scan(r.dir);
+    expect(run.status).toBe(1);
+    expect(run.stdout).toMatch(/Possible secret at backup\.json:\d+\n/);
+    expect(run.stdout).toContain("Possible secret at backup.json (JSON field meta.key)\n");
+    expect(run.stdout).toContain("Possible secret at backup.json (JSON field chatgpt.session.accessToken)\n");
+    expect(run.stdout).toContain("Possible secret at backup.json (JSON field chatgpt.session.refreshToken)\n");
+    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} backup\\.json \\(JSON field meta\\.key\\)\\n`));
+    expectSilent(run, access, refresh);
+    expect(run.stdout).not.toContain(metaKey);
+
+    // Only history holds it now, and only the multi-line key and the JSON
+    // read would find the key there.
+    r.git("rm", "-q", "backup.json");
+    r.commit("Remove the backup");
+    run = scan(r.dir);
+    expect(run.status).toBe(1);
+    expect(run.stdout).not.toContain("Possible secret at backup.json");
+    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} backup\\.json:\\d+\\n`));
+    expect(run.stdout).toMatch(new RegExp(`Possible secret at blob ${BLOB} backup\\.json \\(JSON field meta\\.key\\)\\n`));
+  });
+
+  it("review round 1, finding 5: the two-line key match and the JSON read find the key alone", () => {
+    const key = `LLM|${randomBytes(6).toString("hex")}`;
+    let lines: number[] = [];
+    scanBytes(Buffer.from(`{\n  "meta": {\n    "key": "${key}"\n  }\n}\n`), (line) => lines.push(line));
+    expect(lines).toEqual([3]);
+    lines = [];
+    scanBytes(Buffer.from(`{\n  "meta": {\n    "key": "<META_KEY>"\n  }\n}\n`), (line) => lines.push(line));
+    expect(lines).toEqual([]);
+    expect(jsonSecretFields(JSON.stringify({ a: [{ meta: { key: key } }] }))).toEqual(["a.0.meta.key"]);
+    expect(jsonSecretFields(JSON.stringify({ meta: { key: "<META_KEY>" }, accessToken: "<ACCESS_TOKEN>" }))).toEqual([]);
+    expect(jsonSecretFields("not json")).toEqual([]);
+  });
 
   it("0010 P25: a token staged in the index and then changed on disk is found", () => {
     const r = repo();

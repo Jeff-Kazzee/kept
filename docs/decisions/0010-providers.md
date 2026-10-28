@@ -7,7 +7,7 @@ Meta's Model API is the main way to use the app and the default
 everywhere. Sign in with ChatGPT is the alternative, so people without a
 Meta key can use the app too. Later the same day he added that the user
 also chooses the model, per provider. Items 1 to 7 and M1 to M4 came with
-the sprint. P1 to P25 are choices the writer made while building it. All
+the sprint. P1 to P30 are choices the writer made while building it. All
 are proposed until Jeff confirms them.
 
 Code: `src/model/providers/` (the secrets file, the OpenID Connect checks,
@@ -115,9 +115,9 @@ step and its source in OpenAI's guide for open-source apps:
 |---|---|---|
 | Host id (overview) | Choose and persist an opaque `ext_agent_host_id` before the first sign-in. A `urn:uuid:` UUIDv4 is supported. | Made once with `randomUUID()`, saved before the first authorize URL, kept through sign-out. |
 | Authorize (sign-in, step 2) | Fresh `state`, `nonce` and PKCE verifier per attempt. `client_id=dynamic_agent_client` with `agent_name_hint` and `ext_agent_host_id` for a first registration, the issued client id without `agent_name_hint` later. `response_type=code`, the scopes, `resource=https://api.openai.com/v1`, `code_challenge_method=S256`. Redirect to `127.0.0.1`, never `localhost`. Only the port may change. | All of these. 32 random bytes each for state, nonce and verifier, kept in memory only, one use, ten minutes. `login_hint` from the saved email on a returning sign-in. No `id_token_hint` (P2). |
-| Callback (step 3) | Validate `state` and handle an OAuth error first. `access_denied` stops with no exchange. A new registration returns the issued client id, and none means registration is incomplete. A returning sign-in may omit it, and a different one is refused. | State first, then the error, then the client id. The issued id is saved before the exchange, so a later attempt reuses it. |
+| Callback (step 3) | Validate `state` and handle an OAuth error first. `access_denied` stops with no exchange. A new registration returns the issued client id, and none means registration is incomplete. A returning sign-in may omit it, and a different one is refused. | State first, then the error, then the client id. The issued id stays with the attempt and is saved only after the exchange and the ID token check succeed with it. If another registration was saved meanwhile, this one is refused (P26). |
 | Exchange (step 3) | POST a form-encoded `authorization_code` grant with the issued client id, the code, the verifier, the same redirect URI and the same resource. No client secret. | As written. |
-| ID token (step 4) | Verify the signature against OpenAI's JWKS, the issuer, the audience against the issued client id, the expiry and the nonce. Use `sub` as the identity. A returning account must match. Check the granted scopes for `chatgpt.tokens.use.direct`. | The discovery document at `https://auth.openai.com/.well-known/openid-configuration` must name OpenAI's issuer, with every endpoint on that origin. RS256 or ES256 only, the key by `kid`, 5 seconds of clock tolerance, `iat` and `nbf` checked too (P14). A different `sub` is refused. |
+| ID token (step 4) | Verify the signature against OpenAI's JWKS, the issuer, the audience against the issued client id, the expiry and the nonce. Use `sub` as the identity. A returning account must match. Check the granted scopes for `chatgpt.tokens.use.direct`. | The discovery document at `https://auth.openai.com/.well-known/openid-configuration` must name OpenAI's issuer, with every endpoint on that origin. RS256 or ES256 only, the key by `kid`, 5 seconds of clock tolerance, `iat` and `nbf` checked too (P14). The keys expire (P27). A different `sub` is refused. |
 | Store (step 5) | Atomic, owner-only, never committed or logged. Replace the access token, expiry, scopes and rotated refresh token together after a refresh. | The secrets file (item 2). |
 | Models (models and inference, step 1) | `GET https://api.openai.com/v1/models` with the access token. Keep `visibility: "list"`, in the server's order. Show `display_name`, send `slug`. | Listed at sign-in when plan usage is granted, and saved. |
 | Inference (step 2 and 3, preview limitations) | `POST https://api.openai.com/v1/responses` with `store: false` and `stream: true`. Success only at `response.completed`. `input` is an array. Function tools in namespaces. A list of unsupported fields. | Item 1. The unsupported fields are removed if a later change adds one. |
@@ -145,9 +145,20 @@ and allow plan usage, or switch to Meta in settings."
 - A 401 from the Responses API refreshes once and tries once more. A
   second 401 fails with a sign-in-again sentence and keeps the tokens,
   since a 401 alone does not confirm revocation (P12).
-- Refreshes run one at a time. A call that waited uses the result. Before
-  refreshing, the file is read again, so a refresh another process made is
-  used.
+- Refresh, sign-in completion and sign-out each hold the secrets file's
+  lock from their read to their write: a queue within the process and a
+  lock file made with `O_EXCL` beside the secrets file between processes,
+  such as the app and `pnpm eval:live`. A lock file older than 60 seconds
+  is taken over. After taking the lock, a refresh reads the file again and
+  uses a refresh another process already made.
+- Each session has an id made at sign-in and kept through refreshes. A
+  refresh stores its result only if the stored session is still the one it
+  refreshed. Otherwise the new refresh token is revoked and the call fails
+  as signed out. A sign-out that comes during a refresh waits for it, then
+  revokes the new refresh token.
+- A refresh that grants no `chatgpt.tokens.use.direct` stores the token
+  set, shows plan usage off and fails the call with the plan-usage
+  sentence.
 - A refresh the token endpoint refuses for good (`invalid_grant`,
   `invalid_refresh_token`, `token_expired`, `refresh_token_expired`,
   `refresh_token_invalidated`, `refresh_token_reused`, `invalid_client`)
@@ -278,10 +289,12 @@ runs it. The spend guard still prices tokens at the Meta rates (P22).
   `model_unavailable`.
 - **P22.** The eval's spend guard prices at the Meta rates for both
   providers.
-- **P23.** Refreshes are serialized within one process, and the file is
-  read again before each one. There is no lock between processes. If the
-  app and the eval refresh at the same moment, one may get
-  `refresh_token_reused`, which signs the user out.
+- **P23.** The lock (item 4) covers the steps that call OpenAI between
+  their read and their write. The settings writes (provider, model, Meta
+  key) do not take it: each is one read and one write with no wait in
+  between, and it re-reads the file, so it never writes back an old
+  session. Between processes, a settings write and a token write that land
+  in the same instant can still lose one of them.
 - **P24.** A Meta key is one run of 8 to 512 printable characters with no
   spaces. Nothing more is known about its format.
 - **P25.** The secret scan guards what can be published, set by the
@@ -296,6 +309,28 @@ runs it. The spend guard still prices tokens at the Meta rates (P22).
   sample values, captured by those tools from the working tree, fail the
   scan after the branch's own history no longer held them. Publishing must
   still never push a skipped ref.
+- **P26.** The issued client id is saved only once it verifies, which
+  replaces the guide's "save it before the exchange" advice: a sign-in
+  whose code exchange fails starts a new registration next time. That
+  keeps a tampered callback from saving a client id. Of two first
+  registrations, the first to finish is kept.
+- **P27.** The signing keys are kept for the JWKS response's
+  `Cache-Control` max-age, between 1 minute and 24 hours, or 1 hour with
+  none. A failed signature reloads them once, at most once a minute, and
+  checks again, for a key replaced under the same `kid`.
+- **P28.** A Meta error message is `Model call returned HTTP <status>`
+  with the API's error type and code when they are lower-case identifiers.
+  It never holds body text, which extraction would write to the event
+  log. Error types, codes and params on every provider must now start with
+  a lower-case letter, so mixed-case text that could be an echoed key is
+  dropped.
+- **P29.** The ChatGPT client checks the model it sends right before the
+  request, and the model always comes from the connection's listing with
+  contributor models removed.
+- **P30.** The scan also reads every `.json` file up to 8 MB as JSON, on
+  disk and in history, and matches the Meta key across the two lines the
+  settings file writes it on. Angle brackets are not key characters, so a
+  `<META_KEY>` placeholder is not a hit.
 
 ## What the server cannot control
 

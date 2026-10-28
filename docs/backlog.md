@@ -478,4 +478,4 @@ Branch `sprint/10-providers`. See `docs/decisions/0010-providers.md`.
   link, the first-sign-in confirmation, and the `signedIn` and
   `signInError` query codes.
 - [ ] Confirm or change the decisions in
-  `docs/decisions/0010-providers.md` (P1 to P25).
+  `docs/decisions/0010-providers.md` (P1 to P30).

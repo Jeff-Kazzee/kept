@@ -356,7 +356,10 @@ In each of those it finds, on one line:
   upper-case letter, a lower-case letter and a digit.
 - A provider secret in the shape the app's settings file stores it: an
   `accessToken`, `refreshToken`, `access_token`, `refresh_token` or
-  `id_token` field with a token value, or a `"meta": { "key": ... }` field.
+  `id_token` field with a token value, or a `"meta": { "key": ... }` field,
+  on one line or with `"key"` on the line after `"meta": {`. Every `.json`
+  file up to 8 MB is also read as JSON for those fields, so a renamed copy
+  of the settings file is found.
 - A file or folder named like the settings file (`app-secrets.json`) or a
   local env file (`.env.local`, `.env.<name>.local`), in the tree or in
   history.
