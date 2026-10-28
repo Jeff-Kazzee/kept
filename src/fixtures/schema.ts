@@ -3,6 +3,7 @@
 // scenario. Every resolved message carries its expected claims, which may be
 // an empty list.
 import { z } from "zod";
+import { isTimeZone } from "../domain/zone.ts";
 import { ClaimType, Message, SenderKind } from "../domain/claim.ts";
 import { TEMPLATE_IDS } from "../reply/templates.ts";
 
@@ -176,14 +177,14 @@ export const D4Checkpoint = z
   .strict();
 export type D4Checkpoint = z.infer<typeof D4Checkpoint>;
 
-// MCP expectations (D5). The test seeds the case with the scenario's
-// messages through recorded extraction and the review queue, creates the
-// grant, and drives the real MCP server. `slots_after` gives slot state
-// labels after the scenario's last step.
+// MCP expectations (D5, and 0009 for sprint 8). The test seeds the case
+// with the scenario's messages through recorded extraction and the review
+// queue, and drives the real MCP server as an external agent. There is no
+// grant. `slots_after` gives slot state labels after the scenario's last
+// step.
 export const McpCheck = z
   .object({
     expect: z.string().min(1),
-    grant: z.object({ name: z.string().min(1), tier: z.enum(["read", "annotate", "propose"]) }).strict(),
     slots_after: z.record(z.string(), z.string()).optional(),
   })
   .strict();
@@ -216,5 +217,9 @@ export type ResolvedScenario = Omit<Scenario, "messages"> & { messages: FixtureM
 
 export const BaseMessages = z.array(FixtureMessage);
 
-export const CaseProfile = z.object({ user_name: z.string().trim().min(1).max(100) }).strict();
+// `time_zone` is the zone of the demo's clinic and calendar. "Load the
+// demo" sets the case to it, as an action the person can undo (0009, J5).
+export const CaseProfile = z
+  .object({ user_name: z.string().trim().min(1).max(100), time_zone: z.string().refine(isTimeZone, "Use an IANA time zone name.") })
+  .strict();
 export type CaseProfile = z.infer<typeof CaseProfile>;

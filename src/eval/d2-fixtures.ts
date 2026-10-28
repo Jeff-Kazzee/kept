@@ -14,6 +14,7 @@ import type { ModelCall, ModelClient } from "../model/client.ts";
 import { Recording, RecordedModelClient } from "../model/recorded.ts";
 import { ReplyService } from "../reply/service.ts";
 import { EventStore } from "../store/event-log.ts";
+import { setTimezone } from "../settings/settings.ts";
 
 export const REPLAY_NOW = "2026-11-11T12:00:00.000Z";
 
@@ -64,6 +65,9 @@ export async function replayCheckpoint(
   };
   let { store, intake, kase, reply } = openApp();
   const reopens: Replayed["reopens"] = [];
+  // The fixtures' clinic and calendar are in the demo's zone, as "Load the
+  // demo" sets it (0009, J5).
+  setTimezone(store, loadCaseProfile().time_zone, "agent", 0);
   if (scenario.calendar) kase.loadCalendar(scenario.calendar, readFixtureText(scenario.calendar), 0);
   for (const step of checkpoint.steps) {
     if ("reopen" in step) {

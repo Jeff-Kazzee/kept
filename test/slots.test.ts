@@ -3,13 +3,18 @@ import { parseIcs } from "../src/domain/ics.ts";
 import { weekdayOnlyCandidates } from "../src/domain/datetime.ts";
 import { readFixtureText } from "../src/fixtures/load.ts";
 import type { AnswerMeta } from "../src/intake/events.ts";
-import { ASSUMED_SLOT_MINUTES, findClashes, wallClockToUtc } from "../src/slots/clash.ts";
+import { ASSUMED_SLOT_MINUTES, findClashes as findClashesIn } from "../src/slots/clash.ts";
+import { wallClockToUtc as wallClockIn } from "../src/domain/zone.ts";
 import { slotLabel, sourceLabel, stateLabel } from "../src/slots/labels.ts";
 import { locationsAgree } from "../src/slots/location.ts";
 import { TRANSITIONS, claimsToReach, projectSlots } from "../src/slots/project.ts";
 import type { Choice, Conflict } from "../src/slots/types.ts";
 import { EventStore } from "../src/store/event-log.ts";
-import { acceptMessages, ev, intake } from "./helpers.ts";
+import { DEMO_ZONE, acceptMessages, ev, intake } from "./helpers.ts";
+
+// The demo calendar and messages are in America/Denver.
+const findClashes = (date: string, time: string, events: Parameters<typeof findClashesIn>[2]) => findClashesIn(date, time, events, DEMO_ZONE);
+const wallClockToUtc = (date: string, time: string) => wallClockIn(date, time, DEMO_ZONE);
 
 const THU = { date: "2026-11-12", time: "10:30" };
 const MON = { date: "2026-11-16", time: "13:00" };
@@ -35,7 +40,7 @@ const disagreements = (p: ReturnType<typeof projectSlots>) => p.conflicts.filter
 async function scenario(ids: string[]) {
   const service = intake(new EventStore());
   await acceptMessages(service, ids);
-  return projectSlots({ evidence: service.evidence(), calendar: parseIcs(readFixtureText("calendar/dana.ics")) });
+  return projectSlots({ evidence: service.evidence(), calendar: parseIcs(readFixtureText("calendar/dana.ics")), timeZone: DEMO_ZONE });
 }
 
 describe("SP2.1 slot projection from accepted evidence only", () => {
@@ -601,14 +606,15 @@ describe("SP2.10 calendar clashes", () => {
 
   it("checks offered, requested and held slots, not closed ones, and needs a calendar", () => {
     const fri = { date: "2026-11-13", time: "09:15" };
-    const offered = projectSlots({ evidence: [ev("a", "offer", fri.date, fri.time, T1)], calendar });
+    const offered = projectSlots({ evidence: [ev("a", "offer", fri.date, fri.time, T1)], calendar, timeZone: DEMO_ZONE });
     expect(offered.slots[0]!.clashes!.map((c) => c.summary)).toEqual(["Team meeting"]);
     const requested = projectSlots({
       evidence: [ev("a", "offer", fri.date, fri.time, T1), ev("b", "request", fri.date, fri.time, T3, { ...user, origin: "answer", answer: answer() })],
       calendar,
+      timeZone: DEMO_ZONE,
     });
     expect(requested.slots[0]!.clashes!.map((c) => c.summary)).toEqual(["Team meeting"]);
-    const canceled = projectSlots({ evidence: [ev("a", "offer", fri.date, fri.time, T1), ev("b", "cancel", fri.date, fri.time, T2)], calendar });
+    const canceled = projectSlots({ evidence: [ev("a", "offer", fri.date, fri.time, T1), ev("b", "cancel", fri.date, fri.time, T2)], calendar, timeZone: DEMO_ZONE });
     expect(canceled.slots[0]!.clashes).toBeNull();
     expect(projectSlots({ evidence: [ev("a", "offer", fri.date, fri.time, T1)] }).slots[0]!.clashes).toBeNull();
   });

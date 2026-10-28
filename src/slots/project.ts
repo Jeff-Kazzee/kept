@@ -27,6 +27,7 @@ import type { EvidenceClaim, SlotState } from "../domain/claim.ts";
 import { weekdayOnlyCandidates } from "../domain/datetime.ts";
 import type { IcsEvent } from "../domain/ics.ts";
 import type { EvidenceView } from "../intake/events.ts";
+import { DEFAULT_TIME_ZONE } from "../domain/zone.ts";
 import { findClashes } from "./clash.ts";
 import { dateLabel, slotIdPart, slotKey, slotLabel, sourceLabel, stateLabel } from "./labels.ts";
 import { distinctiveWords, locationsAgree } from "./location.ts";
@@ -49,6 +50,9 @@ export type ProjectionInput = {
   settled?: ReadonlySet<string>;
   // Events of the loaded calendar, or null when none is loaded.
   calendar?: IcsEvent[] | null;
+  // The case's time zone, for the calendar clash math (0009, J5). UTC
+  // when not given.
+  timeZone?: string;
 };
 
 const STATUS_OF: Partial<Record<EvidenceClaim["claim_type"], SlotStatus>> = {
@@ -424,7 +428,7 @@ export function projectSlots(input: ProjectionInput): Projection {
         evidenceIds: [...f.items].sort(byArrival).map((e) => e.id),
         proposalEvidenceIds: state === "change_proposed" ? proposals.get(f.key)!.evidence.map((e) => e.id) : [],
         staleEvidenceIds: f.stale.map((e) => e.id),
-        clashes: input.calendar && f.time !== null && !closed ? findClashes(f.date, f.time, input.calendar) : null,
+        clashes: input.calendar && f.time !== null && !closed ? findClashes(f.date, f.time, input.calendar, input.timeZone ?? DEFAULT_TIME_ZONE) : null,
       };
     });
 

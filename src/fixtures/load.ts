@@ -67,7 +67,8 @@ export function readFixtureText(relativePath: string, fixturesDir: string = FIXT
   return readFileSync(resolved, "utf8");
 }
 
-// The synthetic case profile: the name that signs replies.
+// The synthetic case profile: the name that signs replies and the demo's
+// time zone.
 export function loadCaseProfile(fixturesDir: string = FIXTURES_DIR): CaseProfile {
   return CaseProfile.parse(readJson(path.join(fixturesDir, "case.json")));
 }
