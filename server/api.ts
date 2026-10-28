@@ -1,23 +1,26 @@
 // JSON API for the UI. Kept free of sockets so tests can call it directly.
-// The browser never sees the API key: the model client lives here.
+// The browser never sees the API key: the model client lives here. Every
+// action goes through the case actions (src/actions/service.ts) as "you",
+// so it is an activity entry like the agent's.
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { CaseActions, UndoBlockedError, YOU } from "../src/actions/service.ts";
 import { CaseService } from "../src/case/service.ts";
 import { Channel, DEFAULT_EXTRACTION_EFFORT, Effort } from "../src/domain/claim.ts";
 import { OutOfScopeError } from "../src/domain/scope.ts";
-import { loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
-import { GrantStore } from "../src/grants/grants.ts";
+import { loadCaseProfile, loadScenarios, readFixtureText } from "../src/fixtures/load.ts";
 import { IntakeService, InvalidRequestError, ManualClaimInput, NotFoundError } from "../src/intake/service.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
-import { CaseDeletedError, CompactionError, StaleEditError, StoreBusyError } from "../src/store/event-log.ts";
+import { timezoneSettings } from "../src/settings/events.ts";
+import { CaseDeletedError, CompactionError, StaleEditError, StoreBusyError, type EventStore } from "../src/store/event-log.ts";
+import { settingsRoutes, type ProviderSettings, type Route } from "./settings.ts";
 
 // `generation` is the case generation the page last read. Every request
 // that changes state must carry it, and a write from a page opened before a
 // Delete case is refused instead of landing in the empty case. Only GET may
-// leave it out.
-// The server checks the paired session before it calls the API (see
-// guard.ts).
+// leave it out. The server checks the host and the request's source before
+// it calls the API (see hosts.ts and guard.ts).
 export type ApiRequest = { method: string; path: string; body: unknown; generation?: number };
 export type ApiResponse = { status: number; body: unknown };
 
@@ -49,25 +52,24 @@ const ApproveBody = z
   .object({ expectedVersion: Version, confirmedFields: z.array(z.string().max(50)).max(20), confirmClaim: z.boolean().optional() })
   .strict();
 
-const CreateGrantBody = z.object({ name: z.string().max(200), tier: z.string().max(20) }).strict();
-const ConfirmProposalBody = z.object({ expectedVersion: Version, recordVersion: Version.optional() }).strict();
 const UndoBody = z.object({ expectedVersion: Version, version: Version }).strict();
 
-export type ApiOptions = { mode: "recorded" | "live" };
+export type ApiOptions = { mode: "recorded" | "live"; provider?: () => ProviderSettings };
 
-// The records service and the grant store, which the MCP server also uses.
-export type AgentAccess = { records: RecordsService; grants: GrantStore };
+// The store and the records service, which the MCP server also uses.
+export type AgentAccess = { store: EventStore; records: RecordsService };
 
 export function createApi(service: IntakeService, kase: CaseService, options: ApiOptions, reply: ReplyService, access: AgentAccess) {
   const scenarios = loadScenarios();
-  const { records, grants } = access;
+  const { records, store } = access;
+  const actions = new CaseActions(store, { intake: service, kase, reply, records });
+  const demoCalendar = readFixtureText("calendar/dana.ics");
 
-  const routes: Array<[string, RegExp, (m: RegExpExecArray, body: unknown) => Promise<unknown> | unknown]> = [
+  const routes: Route[] = [
     ["GET", /^\/api\/state$/, () => {
       // Read first, so a write that lands during this read makes the page
       // poll again instead of being missed.
       const live = kase.liveVersion();
-      const used = grants.lastUsed();
       return {
         mode: options.mode,
         modelClient: service.modelLabel,
@@ -79,11 +81,19 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
         erasePending: kase.erasePending(),
         history: kase.history(),
         records: records.appointments({ includeArchived: true }).map((a) => a.record),
-        proposals: records.proposals(),
-        grants: grants.list().map((g) => ({ ...g, lastUsedAt: used.get(g.id) ?? null })),
+        settings: timezoneSettings(store),
+        activity: actions.activity(),
         live,
       };
     }],
+    // The activity log (0009, design 3) and undo. Undo states the activity
+    // version the page saw and answers the new case view.
+    ["GET", /^\/api\/activity$/, () => actions.activity()],
+    ["POST", /^\/api\/activity\/([^/]+)\/undo$/, (m, body) => {
+      actions.undo(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion);
+      return kase.view();
+    }],
+    ...settingsRoutes(store, actions, options.provider),
     // G-d: a cheap read the page polls to learn that the app, the MCP server
     // or another tab wrote something.
     ["GET", /^\/api\/case\/version$/, () => kase.liveVersion()],
@@ -97,33 +107,43 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     ["GET", /^\/api\/fixtures\/calendar$/, () => ({ name: "dana.ics", text: readFixtureText("calendar/dana.ics") })],
     ["POST", /^\/api\/messages$/, (_m, body) => {
       const input = PastedMessage.parse(body);
-      return service.importMessage({ ...input, id: input.id ?? `pasted-${randomUUID()}` });
+      return actions.importMessage(YOU, { ...input, id: input.id ?? `pasted-${randomUUID()}` });
     }],
     ["POST", /^\/api\/messages\/([^/]+)\/extract$/, (m, body) => {
       const { effort, expectedVersion } = ExtractBody.parse(body);
-      return service.extract(decodeURIComponent(m[1]!), { effort, expectedVersion });
+      return actions.extract(YOU, decodeURIComponent(m[1]!), { effort, expectedVersion });
     }],
     ["POST", /^\/api\/messages\/([^/]+)\/manual$/, (m, body) => {
       const { expectedVersion, claim } = ManualBody.parse(body);
-      return service.enterManually(decodeURIComponent(m[1]!), expectedVersion, claim);
+      return actions.enterManually(YOU, decodeURIComponent(m[1]!), expectedVersion, claim);
     }],
     ["POST", /^\/api\/evidence\/([^/]+)\/accept$/, (m, body) =>
-      service.accept(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+      actions.acceptClaim(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
     ],
     ["POST", /^\/api\/evidence\/([^/]+)\/reject$/, (m, body) =>
-      service.reject(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+      actions.rejectClaim(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
     ],
+    // "Load the demo" loads the demo calendar through this route. The demo's
+    // clinic is in America/Denver, so loading the demo calendar also sets
+    // the case to the demo's zone, as an action of the assistant that the
+    // person can undo (J5).
     ["POST", /^\/api\/calendar$/, (_m, body) => {
       const { name, text, expectedVersion } = CalendarBody.parse(body);
-      return kase.loadCalendar(name, text, expectedVersion);
+      const view = actions.loadCalendar(YOU, name, text, expectedVersion);
+      if (text !== demoCalendar) return view;
+      const demoZone = loadCaseProfile().time_zone;
+      const current = timezoneSettings(store);
+      if (current.timezone === demoZone && current.timezoneSource !== "default") return view;
+      actions.setTimezone({ actor: "agent" }, demoZone, current.settingsVersion);
+      return kase.view();
     }],
     ["POST", /^\/api\/conflicts\/([^/]+)\/explain$/, (m, body) =>
-      kase.explain(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+      actions.explain(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
     ],
-    ["POST", /^\/api\/questions\/next$/, (_m, body) => kase.askNext(ReviewBody.parse(body).expectedVersion)],
+    ["POST", /^\/api\/questions\/next$/, (_m, body) => actions.askNext(YOU, ReviewBody.parse(body).expectedVersion)],
     ["POST", /^\/api\/questions\/([^/]+)\/answer$/, (m, body) => {
       const { expectedVersion, choiceId, replyVersion } = AnswerBody.parse(body);
-      return kase.answer(decodeURIComponent(m[1]!), choiceId, expectedVersion, replyVersion);
+      return actions.answerQuestion(YOU, decodeURIComponent(m[1]!), choiceId, expectedVersion, replyVersion);
     }],
     // Delete case. App only, with its own typed confirmation. No MCP tool
     // reaches it.
@@ -131,49 +151,35 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       const { expectedVersion, confirmation } = DeleteCaseBody.parse(body);
       return kase.deleteCase(expectedVersion, confirmation);
     }],
-    // Grants are app settings. No MCP tool reaches these routes. The token
-    // is in this response only, once.
-    ["POST", /^\/api\/grants$/, (_m, body) => {
-      const { name, tier } = CreateGrantBody.parse(body);
-      return grants.create(name, tier as never);
-    }],
-    ["POST", /^\/api\/grants\/([^/]+)\/revoke$/, (m, body) =>
-      grants.revoke(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
-    ],
-    // Agent proposals. Only the user confirms or rejects one, here. No MCP
-    // tool does.
-    ["POST", /^\/api\/proposals\/([^/]+)\/confirm$/, (m, body) => {
-      const { expectedVersion, recordVersion } = ConfirmProposalBody.parse(body);
-      return records.confirmProposal(decodeURIComponent(m[1]!), expectedVersion, { recordVersion });
-    }],
-    ["POST", /^\/api\/proposals\/([^/]+)\/reject$/, (m, body) =>
-      records.rejectProposal(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
-    ],
     ["POST", /^\/api\/records\/([^/]+)\/archive$/, (m, body) =>
-      records.archive(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+      actions.archive(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+    ],
+    ["POST", /^\/api\/records\/([^/]+)\/unarchive$/, (m, body) =>
+      actions.unarchive(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
     ],
     ["POST", /^\/api\/records\/([^/]+)\/undo$/, (m, body) => {
       const { expectedVersion, version } = UndoBody.parse(body);
-      return records.undo(decodeURIComponent(m[1]!), version, expectedVersion);
+      return actions.undoRecordEvent(YOU, decodeURIComponent(m[1]!), version, expectedVersion);
     }],
     ["POST", /^\/api\/reply\/suggest$/, (_m, body) => {
       const { expectedVersion, intent } = SuggestBody.parse(body);
-      return reply.suggest(intent, expectedVersion);
+      return actions.suggestReply(YOU, intent, expectedVersion);
     }],
     ["POST", /^\/api\/reply\/drafts$/, (_m, body) => {
       const { expectedVersion, template, slotKey } = StartDraftBody.parse(body);
-      return reply.start(template, slotKey, expectedVersion);
+      return actions.startReply(YOU, template, slotKey, expectedVersion);
     }],
     ["POST", /^\/api\/reply\/drafts\/([^/]+)\/edit$/, (m, body) => {
       const { expectedVersion, text } = EditDraftBody.parse(body);
-      return reply.edit(decodeURIComponent(m[1]!), text, expectedVersion);
+      return actions.editDraft(YOU, decodeURIComponent(m[1]!), text, expectedVersion);
     }],
     ["POST", /^\/api\/reply\/drafts\/([^/]+)\/discard$/, (m, body) =>
-      reply.discard(decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
+      actions.discardDraft(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
     ],
+    // The simulated send. The person only: no agent or MCP tool reaches it.
     ["POST", /^\/api\/reply\/drafts\/([^/]+)\/approve$/, (m, body) => {
       const { expectedVersion, confirmedFields, confirmClaim } = ApproveBody.parse(body);
-      return reply.approve(decodeURIComponent(m[1]!), confirmedFields, expectedVersion, { confirmClaim });
+      return actions.approveDraft(YOU, decodeURIComponent(m[1]!), confirmedFields, expectedVersion, { confirmClaim });
     }],
   ];
 
@@ -203,6 +209,7 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
 }
 
 function toErrorResponse(err: unknown): ApiResponse {
+  if (err instanceof UndoBlockedError) return { status: 409, body: { error: "undo_blocked", message: err.message } };
   if (err instanceof StaleEditError) {
     return { status: 409, body: { error: "stale_edit", message: err.message, currentVersion: err.currentVersion, current: err.current } };
   }

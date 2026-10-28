@@ -13,14 +13,13 @@ import { mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { CaseService } from "../src/case/service.ts";
-import { GrantStore } from "../src/grants/grants.ts";
 import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { MetaResponsesClient, type ModelClient } from "../src/model/client.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
-import { PACKAGE_ROOT, fromPackage } from "../src/paths.ts";
+import { appDbPath, fromPackage } from "../src/paths.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { createApi } from "./api.ts";
 import { CHAT_PATH, createChat, sseFrame } from "./chat.ts";
@@ -28,7 +27,7 @@ import { CaseAgent } from "../src/agent/agent.ts";
 import { defaultMessageId } from "../src/agent/tools.ts";
 import { RecordedChatClient, fixtureMessageIds } from "../src/agent/recorded.ts";
 import type { ToolModelClient } from "../src/model/responses.ts";
-import { APP_HEADER, Pairing, Sessions, createGate, requestSourceProblem } from "./guard.ts";
+import { APP_HEADER, requestSourceProblem } from "./guard.ts";
 import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
 import { API_SECURITY_HEADERS, createStaticHandler } from "./static.ts";
 
@@ -63,7 +62,7 @@ if (live) {
   chatClient = RecordedChatClient.fromDirectory();
 }
 
-const dbPath = path.resolve(PACKAGE_ROOT, process.env.APP_DB ?? "data/app.sqlite");
+const dbPath = appDbPath();
 mkdirSync(path.dirname(dbPath), { recursive: true });
 const store = new EventStore(dbPath);
 // Finish a Delete case that stopped before it cleared the file.
@@ -74,16 +73,9 @@ try {
 }
 const intake = new IntakeService(store, client);
 const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name });
-// Kept in memory only. A restart makes a new code and forgets every
-// paired session.
-const pairing = new Pairing();
-const gate = createGate({ pairing, sessions: new Sessions(), port: PORT });
 const reply = new ReplyService(store, kase, client);
 const records = new RecordsService(store, intake, kase);
-const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, reply, {
-  records,
-  grants: new GrantStore(store),
-});
+const api = createApi(intake, kase, { mode: live ? "live" : "recorded" }, reply, { store, records });
 // The case agent (0007). In recorded mode a pasted fixture message keeps
 // its fixture id, so its extraction recording replays.
 const chat = createChat(
@@ -168,30 +160,17 @@ server.on("request", async (req, res) => {
     appOrigins,
   );
   if (problem) return send(res, 403, { error: "forbidden_source", message: problem });
-  // Pairing is the one route a browser may use before it has a session.
-  // Every other route, reads included, needs the paired session.
-  const pairRoute = url.pathname === "/api/pair";
-  if (!pairRoute) {
-    const unpaired = gate.sessionProblem(headerOf("cookie"));
-    if (unpaired) return send(res, unpaired.status, unpaired.body);
-  }
-  if (req.method === "POST" && !String(req.headers["content-type"] ?? "").startsWith("application/json")) {
+  // No pairing or session (0009, J3): the host check above and the
+  // same-origin and app header checks keep other sites out.
+  const hasBody = req.method === "POST" || req.method === "PUT";
+  if (hasBody && !String(req.headers["content-type"] ?? "").startsWith("application/json")) {
     return send(res, 415, { error: "json_required" });
   }
   let body: unknown;
   try {
-    body = req.method === "POST" ? await readBody(req) : undefined;
+    body = hasBody ? await readBody(req) : undefined;
   } catch (err) {
     return send(res, 400, { error: err instanceof Error ? err.message : "bad_body" });
-  }
-  if (pairRoute) {
-    if (req.method !== "POST") return send(res, 405, { error: "method_not_allowed" });
-    // A page reached over HTTPS, through a private proxy, gets a cookie
-    // marked Secure. The browser always sends Origin on this POST.
-    const secure = (headerOf("origin") ?? "").startsWith("https://") || headerOf("x-forwarded-proto") === "https";
-    const paired = gate.pair(body, { secure });
-    if (paired.setCookie) res.setHeader("Set-Cookie", paired.setCookie);
-    return send(res, paired.status, paired.body);
   }
   const header = req.headers["x-case-generation"];
   // A missing or malformed header leaves it undefined, and the API refuses
@@ -232,7 +211,6 @@ server.listen(PORT, HOST, () => {
   console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${live ? "live" : "recorded responses"})`);
   console.log(serveBuild ? "Serving the production build from dist/ui." : "Serving the UI through Vite for development.");
   if (extraHosts.length > 0) console.log(`Also answers to: ${extraHosts.join(", ")}`);
-  console.log(`Pairing code for this run: ${pairing.code}. The app asks for it once per browser, until the app restarts.`);
 });
 
 const shutdown = async () => {
