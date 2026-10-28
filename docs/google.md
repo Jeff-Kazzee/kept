@@ -57,7 +57,8 @@ connected.
   set it), as its own `google` row. That is the same file, mode 600 and
   transactions as the model provider settings (`docs/sign-in.md`). It is
   not in the event log, so it is never part of a case, a Delete case or an
-  export. The short-lived access token stays in memory.
+  export. The last short-lived access token is kept there too, so the app
+  and an MCP server that share the file refresh it only once.
 - No token, secret or email body is written to a log, an error message or
   the browser. The page sees only the status: whether Google is connected,
   the account's email, which permissions are on and the calendar id.

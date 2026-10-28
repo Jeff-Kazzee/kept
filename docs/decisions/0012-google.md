@@ -165,8 +165,10 @@ the wiring in `server/main.ts`. Tests: `test/google.test.ts` and
 - G9 (proposed). The redirect URI follows the host the page used, so the
   browser sends the flow cookie back. An allowed host reached over plain
   `http` is refused, because Google allows `http` only for loopback.
-- G10 (proposed). The access token is kept in memory only. A restart
-  refreshes it.
+- G10 (proposed, changed in review round 3). The last access token is
+  kept in memory and in the `google` row, so another process that shares
+  the file uses it instead of refreshing again (R3-7). It never reaches
+  the status, a log or the browser.
 - G11 (proposed, coordinator decision in review round 2). Each event's id
   is `appt` and the base32hex of a SHA-256 over a fixed app namespace, the
   account's Google id (`sub`), the calendar id and the slot key: 56
@@ -325,8 +327,9 @@ Findings 1 to 9 were confirmed. New items:
   entry for the same appointment is in effect, reverses the write at
   Google with `undoGoogleActivity` outside the store transaction (a
   network call), then writes sprint 8's `undo` entry and marks the entry
-  undone in one transaction. A Google refusal is `undo_blocked` with its
-  sentence. Any other entry goes to sprint 8's `undo` unchanged.
+  undone in one transaction. Since review round 3 an intent comes first
+  (R3-1 to R3-3). A Google refusal is `undo_blocked` with its sentence.
+  Any other entry goes to sprint 8's `undo` unchanged.
 - I4. Time zone. `GoogleCalendar` takes the case's zone
   (`kase.timeZone()`) at each call. The America/Denver default is gone.
   Event times, list windows and labels use it, through sprint 8's
@@ -336,17 +339,21 @@ Findings 1 to 9 were confirmed. New items:
   join the loaded `.ics` events in the case view, so `get_schedule`,
   `check_calendar` and the slots' clashes read both. The view names both
   ("dana.ics and Google Calendar"). The events are read at start when a
-  calendar connection exists, after a connect, by `calendar_list`, and by
+  calendar connection exists, after a connect, and by
   `POST /api/google/calendar/refresh`, for 31 days from the earliest of
-  today and the case's appointments. A disconnect clears them (proposed).
+  today and the case's appointments. `calendar_list` only reads (R3-5). A
+  disconnect and the start of a connect clear them (R3-6).
 - I6. Sprint 8's rules. In a paste turn (D2') `gmail_import` counts as an
   import, and its claims may be reviewed in that turn
   (`ChatTurnState.gmailImported`). `calendar_sync_slot` and
   `calendar_remove_slot` are refused that turn with `waits_for_person`.
   Gmail messages keep their header sender and sent time, are office
   messages and are never offered as the person's own report (D1').
-  Grounding counts `gmail_message_imported` for "I imported" and
-  `calendar_event_removed` for "I removed".
+  Only a message the call itself imported counts, and a message from an
+  earlier turn is not read in a paste turn (R3-4). Grounding counts
+  `gmail_message_imported` for "I imported", `calendar_event_removed` for
+  "I removed", and `calendar_event_added` for "I added", "I created" and
+  "I put" (R3-9).
 - I7. Secrets. The Google state moved from its own JSON file into sprint
   10's `app-secrets.sqlite`, as the `google` row of a new `rows` table
   (`SecretsStore.readRow` and `updateRow`). It gets that file's mode 600,
@@ -357,11 +364,55 @@ Findings 1 to 9 were confirmed. New items:
   the current shape still reads as needing a reconnect (G22).
 - I8. Routes. No pairing or session (sprint 8). `/api/google` and its
   writes are behind the host allowlist, the same-origin guard and the app
-  header, and the writes need the case generation. Connect accepts the
-  page's `{}`: both permissions and the primary calendar, and the version
-  is optional (the flow still keeps the version it started at).
-  Disconnect needs `expectedVersion`, which the page sends from
-  `GET /api/google`.
+  header, and the writes need the case generation. Connect and disconnect
+  both need `expectedVersion`, the `version` of `GET /api/google`
+  (R3-8). Connect turns on both permissions and the primary calendar
+  unless the body says otherwise. The page sends `{}` to connect today, so
+  sprint 9 adds the version.
+
+## Review round 3 (Muse Wonder, xhigh, cfe9ee4)
+
+- R3-1 to R3-3. A Google write and its entry cannot share a transaction.
+  So each calendar write and each Google undo first records an intent on
+  the `google_intents` stream, in a store transaction: the plan (event
+  id, the fields before and the fields wanted) or the entry to undo. Then
+  it calls Google. Then one transaction writes the entry and closes the
+  intent. While an intent for an appointment is open, another Google
+  write or undo for it is refused with `google_busy`, in this process and
+  in the MCP process, which share the store. A refused Google call closes
+  its intent. A lost answer (`google_unavailable`,
+  `google_invalid_response`) leaves it open. An intent left open is
+  finished by `CaseActions.reconcileGoogle`, which every calendar write
+  runs first: it reads the event at Google and writes the entry with its
+  undo when the write is there, drops the intent when it is not, and
+  writes an entry with no undo when the event changed since. An undo
+  intent is finished by retrying the undo, or by reconcile when Google
+  shows the change reversed. `GoogleCalendar.undo` treats an undo that
+  already happened as success: the earlier fields back for an update, or
+  the app's event live again with the deleted fields for a delete. The
+  commit transaction checks again that the entry is not undone and that
+  no later Google entry for the appointment is in effect, and aborts if
+  either changed. A moved activity version alone does not abort, because
+  Google has already reversed the change and the open intent kept every
+  other Google write for the appointment out (proposed). Reconcile skips
+  an intent this process is still running, and one another process
+  opened less than two minutes ago.
+- R3-4. `gmail_import` counts a message as imported in a paste turn only
+  when this call imported it, and does not read a message from an
+  earlier turn in a paste turn.
+- R3-5. `calendar_list` no longer writes the clash events.
+- R3-6. The clash events carry the account and calendar they were read
+  for and a generation. A clear starts a new generation, so a fetch in
+  flight is dropped, and the snapshot is empty as soon as the connection
+  names another account or calendar.
+- R3-7. A refresh holds the `google_refresh` lease of the secrets
+  database. A process that waited uses the access token the other stored,
+  or refreshes with the rotated refresh token. A successful refresh for
+  the same connection clears a reconnect mark set while it ran.
+- R3-8. Connect needs `expectedVersion` again.
+- R3-9. The grounding verbs "added", "created" and "put" need an entry
+  that added something: `calendar_event_added`, an import, a note, tags or
+  a draft.
 
 ## Not done here
 
