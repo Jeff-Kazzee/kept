@@ -146,6 +146,10 @@ describe("chat view", () => {
     });
     expect(setup).toContain(`<p>${NO_PROVIDER_TEXT}</p>`);
     expect(setup).toContain("Open Settings</button>");
+    expect(setup).toContain("Written by code");
+    // Once in the thread, and once in the screen reader live region.
+    expect(setup.split(NO_PROVIDER_TEXT)).toHaveLength(3);
+    expect(setup).not.toContain("Model output");
     expect(turnErrorText({ code: "provider_not_ready", message: NO_PROVIDER_TEXT })).toBe(NO_PROVIDER_TEXT);
     expect(failed).not.toContain("Open Settings");
   });

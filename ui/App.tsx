@@ -439,12 +439,16 @@ function Shell({
               ))}
             </nav>
           )}
-          <aside
+          {/* SP12.7: a div, so it may take either role. It is the
+              complementary landmark beside the chat, and a modal dialog
+              while it is the open sheet on a phone or a tablet. An aside
+              may not be a dialog. */}
+          <div
             id="schedule-panel"
             className="panel"
             aria-label="Schedule"
             hidden={laptop && railed}
-            role={sheetModal ? "dialog" : undefined}
+            role={sheetModal ? "dialog" : "complementary"}
             aria-modal={sheetModal || undefined}
             inert={!laptop && !panelShown}
           >
@@ -458,7 +462,7 @@ function Shell({
               onClose={laptop ? undefined : closeSchedule}
               onCollapse={laptop ? () => setRailed(true) : undefined}
             />
-          </aside>
+          </div>
         </main>
         <div className="toasts" aria-live="polite">
           {toasts.map((t) => (

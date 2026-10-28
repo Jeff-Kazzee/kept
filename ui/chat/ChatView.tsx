@@ -465,6 +465,10 @@ function PendingItem({
       <article className="msg msg-assistant" aria-label="Assistant" aria-busy={turn.status === "streaming"}>
         {err?.code === "out_of_scope" ? (
           <Declined text={turn.text.trim() || err.message} onImport={onImport} />
+        ) : err?.code === "provider_not_ready" ? (
+          // J12: refused before it started. Code wrote the sentence, and no
+          // model ran.
+          <SetupNotice text={turnErrorText(err)} />
         ) : (
           <>
             {codeText === null && <AssistantHead scripted={scripted} />}
@@ -491,12 +495,11 @@ function PendingItem({
             <span>{turnErrorText(err)}</span>
           </p>
         )}
-        {err && err.code !== "out_of_scope" && err.code !== "stopped" && !fixed && (
+        {err && err.code !== "out_of_scope" && err.code !== "stopped" && err.code !== "provider_not_ready" && !fixed && (
           <div className="turn-error" role="alert">
             <Icon name="alert" />
             <div className="stack-sm">
               <p>{turnErrorText(err)}</p>
-              {err.code === "provider_not_ready" && <SettingsLink />}
               {offerImport && <ImportOffer onImport={onImport} />}
             </div>
           </div>
@@ -506,13 +509,23 @@ function PendingItem({
   );
 }
 
-// J12: the setup sentence links to Settings.
-export function SettingsLink() {
+// J12: the setup sentence, written by code, with a link to Settings.
+function SetupNotice({ text }: { text: string }) {
   const { openSettings } = useAgent();
   return (
-    <button type="button" className="btn btn-sm" onClick={openSettings}>
-      <Icon name="settings" size="sm" /> Open Settings
-    </button>
+    <div className="notice" role="alert">
+      <Icon name="info" />
+      <div className="stack-sm">
+        <div className="msg-meta">
+          <span className="msg-who">Assistant</span>
+          <span className="model-tag">Written by code</span>
+        </div>
+        <p>{text}</p>
+        <button type="button" className="btn btn-sm" onClick={openSettings}>
+          <Icon name="settings" size="sm" /> Open Settings
+        </button>
+      </div>
+    </div>
   );
 }
 
