@@ -302,6 +302,27 @@ mountains, rivers, creeks, hot springs and wildlife, at a high-end polish.
   claim. The page needs no change: a refused answer comes back as a turn
   error or an activity refusal in the server's words.
 
+## On sprint 10's routes (`sprint/09b-real-settings`, from `dev` at `2db4521`)
+
+- U47. The provider, model and sign-in parts of Settings use sprint 10's
+  routes, and their fakes are gone. The development fake now covers only
+  `/api/google` (sprint 11) and the Gmail and Google Calendar entries the
+  scripted chat writes. `providersInBuild` is gone: the server always
+  sends the model list.
+- U48. The server never switches the provider by itself. A provider that
+  lost its key or its ChatGPT sign-in stays the provider, and Settings and
+  the composer say it needs setup. With recorded responses the composer
+  names the chosen model with "(recorded)".
+- U49. Errors: 422 `provider_not_ready` and `unknown_model`, 400
+  `invalid_key`, 503 `settings_busy` and the other settings refusals show
+  the server's own sentence. A write that meets `settings_busy` with
+  `retryable: true` is tried once more. `modelNotice` shows under the
+  model choice and in the composer's menu. The sign-out's `notice` shows
+  as a toast. A failed ChatGPT sign-in comes back to `?signInError=<code>`
+  and shows a plain sentence for the code.
+- U50. The default zone is UTC, the server's. Every settings and sign-in
+  write states the one `settingsVersion`.
+
 ## Measured on the production build
 
 Measured 2026-10-28 on the server with a temporary database, in Chrome
