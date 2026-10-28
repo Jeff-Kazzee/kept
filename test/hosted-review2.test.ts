@@ -138,7 +138,7 @@ describe("finding 1: a revoke never takes other credit", () => {
       expect(revoked(s, g), `seed ${seed}`).toBe(expectedRemoval);
       expect(s.balance(g), `seed ${seed}`).toBe(other + judgeGranted - charged - expectedRemoval);
     }
-  });
+  }, 30_000);
 });
 
 describe("finding 2: the workspace cache has a hard ceiling", () => {

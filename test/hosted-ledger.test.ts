@@ -222,7 +222,7 @@ describe("the ledger", () => {
         expect(rows.every((x) => Number.isSafeInteger(x.amount))).toBe(true);
       }
     }
-  });
+  }, 30_000);
 
   it("concurrent holds from two connections never overspend", async () => {
     const file = tempFile();

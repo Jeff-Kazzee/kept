@@ -393,7 +393,10 @@ export class AccountsStore {
   // The balance a person may spend: what a revoked code still owes the
   // account is not part of it.
   balance(accountId: string): number {
-    return this.#read((db) => Math.max(0, this.#balance(db, accountId) - this.#due(db, accountId)));
+    return this.#read((db) => {
+      const due = this.#due(db, accountId);
+      return due === 0 ? this.#balance(db, accountId) : Math.max(0, this.#balance(db, accountId) - due);
+    });
   }
 
   // The model cost of the UTC day so far: every charge's cost and every
@@ -549,6 +552,7 @@ export class AccountsStore {
   // leaves the balance. It came back from those holds, and no hold since
   // could draw on it, so no other credit is taken.
   #collectDue(db: DatabaseSync, accountId: string, holdId: number, charged: number): void {
+    // Most accounts owe nothing: one indexed read and done.
     const owed = db.prepare("SELECT id, revoke_due, revoke_hold_max FROM judge_codes WHERE account_id = ? AND revoked_at IS NOT NULL AND revoke_due > 0").all(accountId) as Row[];
     for (const c of owed) {
       const codeId = String(c.id);
