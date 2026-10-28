@@ -1,33 +1,33 @@
-// Secret scan for grant tokens (G-c, and review round 1 findings 3 to 6).
+// Secret scan for the product key (0009, design 6). Grant tokens no longer
+// exist. The secret that matters is MODEL_API_KEY, the Meta Model API key,
+// which lives only in .env.local and in the server's environment.
 //
 // What it reads:
 // - every tracked file as it is on disk, as bytes, binary files included,
 //   and every tracked path.
 // - every object reachable from any ref (`git rev-list --all --objects`),
 //   the bytes of every blob, the text of every commit and tag (headers and
-//   message) and every entry name in every tree. So a token in any version
+//   message) and every entry name in every tree. So a key in any version
 //   of any file, in a merge result, in a binary file or in a file name is
 //   read, whatever `git log -p` would show.
 // - every ref name.
 //
-// What it finds, in each of those:
-// - a grant token, `appt_` and 43 base64url characters at the end of a run
-//   of base64url characters, on one line, or split across two adjacent
-//   lines at a line break (spaces and tabs at the start of the second line
-//   are ignored).
-// - the same token written in hexadecimal, upper or lower case, on one line.
-// - a run of exactly 43 base64url characters with an upper-case letter, a
-//   lower-case letter and a digit, on one line. That is the shape of a token
-//   without its prefix, as tokens were made before sprint 6. A run next to
-//   + or /, or followed by = padding, is part of standard base64, such as a
-//   lockfile hash, and is skipped. So is a run that starts with `mcp__`, an
-//   MCP tool name.
-//
-// What it does not find: a token in any other encoding (base64 of the
-// token, URL encoding, UTF-16, compression or encryption), split into more
-// than two parts or with other text between the parts, a hex token split
-// across lines, an old unprefixed token split across lines, and anything
-// outside this repository's reachable objects and working tree.
+// What it finds, on one line, in each of those:
+// - an assignment of MODEL_API_KEY with a value: `MODEL_API_KEY=value`,
+//   with optional spaces, `export` and quotes, as in an env file or a shell
+//   line. The value is at least 12 characters. A value that starts with $
+//   or <, such as $MODEL_API_KEY or <your key>, is a reference or a
+//   placeholder, not a key, and `MODEL_API_KEY=` with nothing after it, as
+//   in .env.schema, is the empty template.
+// - a bearer token in a request header or log: `Bearer ` and a run of at
+//   least 24 token characters with an upper-case letter, a lower-case
+//   letter and a digit. `Bearer ${key}` in code is a template, and a
+//   made-up test value such as `Bearer server-key-1` has one case only.
+// The key's own shape is not known to this scan, so it does not look for a
+// bare key. A key written anywhere without its name or `Bearer` is not
+// found, nor one in another encoding (base64, URL encoding, UTF-16,
+// compression or encryption), one split across lines, or anything outside
+// this repository's reachable objects and working tree.
 //
 // How it reads (review round 2, B4 and B5): object ids have the length of
 // the repository's object format (`git rev-parse --show-object-format`),
@@ -38,8 +38,8 @@
 // FIFO, a device, a folder of a submodule) is not opened. It is listed as
 // skipped. A symbolic link is scanned as its link text, as git stores it.
 // Files and objects are read as a stream. A line longer than 1 MB is read
-// in segments that overlap by 256 bytes, so a token on a segment boundary
-// is still found.
+// in segments that overlap by 256 bytes, so a key on a segment boundary is
+// still found.
 //
 // It prints only where a hit is. A path or ref name is printed with the
 // secret part replaced by <redacted>. Exit code 0 means no hit, 1 means at
@@ -52,142 +52,49 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 const NEWLINE = 10;
-const PREFIX = Buffer.from("appt_");
-const MCP = Buffer.from("mcp__");
-// "appt_" in hexadecimal, without its last digit, which may be f or F.
-const HEX_PREFIX = Buffer.from("617070745");
-const TOKEN_CHARS = 43;
-
-const isRunByte = (c: number | undefined) =>
-  c !== undefined && ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 45 || c === 95);
-// Standard base64 uses + and /, and ends with = padding. A = before a run
-// is an assignment, as in KEY=value, so it does not count.
-const isEdgeBefore = (c: number | undefined) => c === 43 || c === 47;
-const isEdgeAfter = (c: number | undefined) => c === 43 || c === 47 || c === 61;
-const startsWith = (b: Uint8Array, at: number, prefix: Uint8Array) => prefix.every((p, i) => b[at + i] === p);
-const hexValue = (c: number | undefined): number =>
-  c === undefined ? -1 : c >= 48 && c <= 57 ? c - 48 : c >= 97 && c <= 102 ? c - 87 : c >= 65 && c <= 70 ? c - 55 : -1;
 
 type Range = [number, number];
 
-function mixedClasses(b: Uint8Array, start: number, end: number): boolean {
-  let upper = false;
-  let lower = false;
-  let digit = false;
-  for (let i = start; i < end; i++) {
-    const c = b[i]!;
-    if (c >= 65 && c <= 90) upper = true;
-    else if (c >= 97 && c <= 122) lower = true;
-    else if (c >= 48 && c <= 57) digit = true;
-  }
-  return upper && lower && digit;
-}
-
-// The part of a run of base64url characters that is a secret, or null.
-function runSecret(b: Uint8Array, start: number, end: number, lineStart: number, lineEnd: number): Range | null {
-  const length = end - start;
-  if (length >= PREFIX.length + TOKEN_CHARS && startsWith(b, end - PREFIX.length - TOKEN_CHARS, PREFIX)) return [end - PREFIX.length - TOKEN_CHARS, end];
-  if (length !== TOKEN_CHARS) return null;
-  if ((start > lineStart && isEdgeBefore(b[start - 1])) || (end < lineEnd && isEdgeAfter(b[end]))) return null;
-  if (startsWith(b, start, MCP)) return null;
-  return mixedClasses(b, start, end) ? [start, end] : null;
-}
-
-// Hex-encoded tokens: "617070745f" and then 86 hex digits that decode to
-// base64url characters.
-function hexSecrets(b: Buffer, start: number, end: number, out: Range[]): void {
-  const total = HEX_PREFIX.length + 1 + 2 * TOKEN_CHARS;
-  if (end - start < total) return;
-  // Searched within the line only.
-  const line = b.subarray(start, end);
-  for (let k = line.indexOf(HEX_PREFIX); k >= 0 && k + total <= line.length; k = line.indexOf(HEX_PREFIX, k + 1)) {
-    const i = start + k;
-    const f = b[i + HEX_PREFIX.length];
-    if (f !== 102 && f !== 70) continue;
-    let ok = true;
-    for (let j = i + HEX_PREFIX.length + 1; j < i + total; j += 2) {
-      const hi = hexValue(b[j]);
-      const lo = hexValue(b[j + 1]);
-      if (hi < 0 || lo < 0 || !isRunByte(hi * 16 + lo)) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) out.push([i, i + total]);
-  }
-}
+// The value of a MODEL_API_KEY assignment, and a bearer token. Read on the
+// line's bytes as latin1, so string offsets are byte offsets.
+const ASSIGNMENT = /(?<![A-Za-z0-9_])MODEL_API_KEY[ \t]*=[ \t]*["']?([^\s"'`$<>]{12,})/g;
+const BEARER = /(?<![A-Za-z0-9_])Bearer[ \t]+([A-Za-z0-9._~+/=|-]{24,})/g;
+const MIXED = (v: string) => /[A-Z]/.test(v) && /[a-z]/.test(v) && /\d/.test(v);
 
 // Every secret in bytes [start, end) of `b`, one line.
 export function lineSecrets(b: Buffer, start = 0, end = b.length): Range[] {
+  const line = b.toString("latin1", start, end);
   const out: Range[] = [];
-  if (end - start < TOKEN_CHARS) return out;
-  let run = -1;
-  for (let i = start; i <= end; i++) {
-    if (i < end && isRunByte(b[i])) {
-      if (run < 0) run = i;
-    } else if (run >= 0) {
-      if (i - run >= TOKEN_CHARS) {
-        const hit = runSecret(b, run, i, start, end);
-        if (hit) out.push(hit);
-      }
-      run = -1;
+  for (const re of [ASSIGNMENT, BEARER]) {
+    for (const m of line.matchAll(re)) {
+      const value = m[1]!;
+      if (re === BEARER && !MIXED(value)) continue;
+      const at = m.index! + m[0].length - value.length;
+      out.push([start + at, start + at + value.length]);
     }
   }
-  hexSecrets(b, start, end, out);
   return out;
 }
 
 export const lineHasSecret = (b: Buffer, start = 0, end = b.length) => lineSecrets(b, start, end).length > 0;
 export const hasSecret = (line: string) => lineHasSecret(Buffer.from(line, "utf8"));
 
-// Where the run of base64url characters that ends `b` starts.
-function tailRun(b: Buffer): number {
-  let i = b.length;
-  while (i > 0 && isRunByte(b[i - 1])) i--;
-  return i;
-}
-
-// The run that starts a line, after its spaces and tabs.
-function headRun(b: Buffer, start: number, end: number): Range {
-  let i = start;
-  while (i < end && (b[i] === 32 || b[i] === 9)) i++;
-  let j = i;
-  while (j < end && isRunByte(b[j])) j++;
-  return [i, j];
-}
-
-// A token split at a line break: the tail run of one line (`previous`, its
-// last bytes) and the head run of the next, joined, hold a prefixed token
-// that starts on the first line and ends on the second.
-function splitSecret(previous: Buffer, b: Buffer, start: number, end: number): boolean {
-  const tail = previous.subarray(tailRun(previous));
-  const [hs, he] = headRun(b, start, end);
-  if (tail.length === 0 || he === hs) return false;
-  const joined = Buffer.concat([tail, b.subarray(hs, he)]);
-  const hit = runSecret(joined, 0, joined.length, 0, joined.length);
-  return hit !== null && startsWith(joined, hit[0], PREFIX) && hit[0] < tail.length && hit[1] > tail.length;
-}
-
 // A line longer than this is scanned in segments.
 const SEGMENT_BYTES = 1 << 20;
-// Each segment starts with the last bytes of the one before, more than the
-// longest pattern (a hex token is 96 characters).
+// Each segment starts with the last bytes of the one before, more than a
+// key and its name.
 const OVERLAP_BYTES = 256;
-// What is kept of the line before, for a token split across two lines.
-const TAIL_BYTES = 128;
 
 // Scans bytes as they arrive, line by line, and calls `hit` with the
-// 1-based number of each line that holds a secret, and with the first line
-// of a token split across two lines. A hit found twice in an overlap has
-// the same line number, so the caller's set of places keeps it once.
+// 1-based number of each line that holds a secret. A hit found twice in an
+// overlap has the same line number, so the caller's set of places keeps it
+// once.
 export class LineScanner {
-  readonly #hit: (line: number, split: boolean) => void;
+  readonly #hit: (line: number) => void;
   #line = 1;
   #carry: Buffer = Buffer.alloc(0);
-  #previous: Buffer | null = null;
-  #headChecked = false;
 
-  constructor(hit: (line: number, split: boolean) => void) {
+  constructor(hit: (line: number) => void) {
     this.#hit = hit;
   }
 
@@ -213,23 +120,17 @@ export class LineScanner {
   }
 
   #check(b: Buffer, start: number, end: number): void {
-    if (lineHasSecret(b, start, end)) this.#hit(this.#line, false);
-    if (!this.#headChecked) {
-      if (this.#previous && splitSecret(this.#previous, b, start, end)) this.#hit(this.#line - 1, true);
-      this.#headChecked = true;
-    }
+    if (lineHasSecret(b, start, end)) this.#hit(this.#line);
   }
 
   #finishLine(b: Buffer, start: number, nl: number): void {
     const end = nl > start && b[nl - 1] === 13 ? nl - 1 : nl;
     this.#check(b, start, end);
-    this.#previous = Buffer.from(b.subarray(Math.max(start, end - TAIL_BYTES), end));
     this.#line++;
-    this.#headChecked = false;
   }
 }
 
-export function scanBytes(b: Buffer, hit: (line: number, split: boolean) => void): void {
+export function scanBytes(b: Buffer, hit: (line: number) => void): void {
   const scanner = new LineScanner(hit);
   scanner.push(b);
   scanner.end();
@@ -251,8 +152,7 @@ export function redact(name: string): string {
   return /[\u0000-\u001f\u007f]/.test(out) ? JSON.stringify(out) : out;
 }
 
-// Each line of a name, so a token split across lines of a file name is
-// found too.
+// Each line of a name.
 const nameHasSecret = (name: string) => {
   let found = false;
   scanBytes(Buffer.from(name, "utf8"), () => (found = true));
@@ -277,7 +177,7 @@ type Hit = (where: string) => void;
 
 // `where` names the line, for example "notes.md:3".
 function lineHits(where: (line: number) => string, hit: Hit) {
-  return (line: number, split: boolean) => hit(split ? `${where(line)} (split across lines ${line} and ${line + 1})` : where(line));
+  return (line: number) => hit(where(line));
 }
 
 const READ_BYTES = 1 << 20;
@@ -467,13 +367,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   try {
     const { hits, notes, files, commits, objects } = await scanRepo(repo);
     for (const n of notes) console.log(n);
-    for (const h of hits) console.log(`Possible grant token at ${h}`);
+    for (const h of hits) console.log(`Possible model API key at ${h}`);
     if (hits.length > 0) {
       console.log(`Secret scan failed: ${hits.length} place${hits.length === 1 ? "" : "s"} to check. The matched text is not shown.`);
       console.log("For a blob, `git log --all --find-object=<id>` lists the commits that hold it.");
       process.exit(1);
     }
-    console.log(`Secret scan passed: no grant token in ${files} tracked files, ${commits} commits or ${objects} reachable objects.`);
+    console.log(`Secret scan passed: no model API key in ${files} tracked files, ${commits} commits or ${objects} reachable objects.`);
   } catch (err) {
     console.error(`Secret scan could not run: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(2);

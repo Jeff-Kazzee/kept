@@ -1,9 +1,10 @@
-// SP6.5 and G-c, with review round 1 findings 3 to 6: the secret scan finds
-// a grant token in a tracked file, in any reachable object (an old version,
-// a merge result, a binary file, a commit message), in a file name and in a
-// ref name, also hex-encoded or split across two lines. It prints only
-// where a hit is, and passes on this repository. The planted tokens are
-// made at test time in temporary repositories.
+// The secret scan (0009, design 6, keeping the coverage of SP6.5 and
+// review round 1 findings 3 to 6): it finds the product key, a
+// MODEL_API_KEY assignment with a value or a bearer token, in a tracked
+// file, in any reachable object (an old version, a merge result, a binary
+// file, a commit message), in a file name and in a ref name. It prints only
+// where a hit is, and passes on this repository. The planted keys are made
+// up at test time in temporary repositories.
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -11,7 +12,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hasSecret, redact, scanBytes } from "../scripts/scan-secrets.ts";
-import { newGrantToken } from "../src/grants/grants.ts";
 import { PACKAGE_ROOT } from "../src/paths.ts";
 
 const SCANNER = path.join(PACKAGE_ROOT, "scripts/scan-secrets.ts");
@@ -44,106 +44,115 @@ function repo() {
 const scan = (dir: string) => spawnSync(process.execPath, [SCANNER, "--repo", dir], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } });
 const BLOB = "[0-9a-f]{12}";
 
-// A token in the old, unprefixed format: 43 base64url characters with
-// every class of character, as a real one has.
-function oldToken(): string {
+// A made-up key with upper and lower case letters and digits, as a real
+// one may have.
+function fakeKey(): string {
   for (;;) {
-    const t = randomBytes(32).toString("base64url");
-    if (/[A-Z]/.test(t) && /[a-z]/.test(t) && /[0-9]/.test(t)) return t;
+    const k = randomBytes(30).toString("base64url");
+    if (/[A-Z]/.test(k) && /[a-z]/.test(k) && /[0-9]/.test(k)) return k;
   }
 }
+const assignment = (key = fakeKey()) => ({ key, text: ["MODEL_API_KEY", key].join("=") });
+const bearer = (key = fakeKey()) => ({ key, text: `Authorization: Bearer ${key}` });
 
 function expectSilent(run: ReturnType<typeof scan>, ...secrets: string[]) {
   for (const s of secrets) {
     expect(run.stdout + run.stderr).not.toContain(s);
-    expect(run.stdout + run.stderr).not.toContain(s.slice(-43, -20));
+    expect(run.stdout + run.stderr).not.toContain(s.slice(4, 20));
   }
 }
 
-describe("SP6.5 secret scan", () => {
-  it("matches tokens, old tokens, hex and split tokens, and skips ordinary text", () => {
-    const token = newGrantToken();
-    expect(hasSecret(token)).toBe(true);
-    expect(hasSecret(`"APPT_GRANT_TOKEN": "${token}"`)).toBe(true);
-    expect(hasSecret(`x${token}`)).toBe(true);
-    expect(hasSecret(`token=${oldToken()};`)).toBe(true);
-    // Finding 5: the hex encoding, in either case.
-    const hex = Buffer.from(token).toString("hex");
-    expect(hex.startsWith("617070745f")).toBe(true);
-    expect(hasSecret(`blob ${hex} end`)).toBe(true);
-    expect(hasSecret(hex.toUpperCase())).toBe(true);
-    expect(hasSecret(Buffer.from("appt_ is the prefix of a token").toString("hex"))).toBe(false);
-    // Finding 5: split across two lines, also after indentation.
+describe("the secret scan", () => {
+  it("matches a MODEL_API_KEY assignment with a value and a bearer token, and skips templates, references and test values", () => {
+    const key = fakeKey();
+    const name = "MODEL_API_KEY";
+    for (const line of [`${name}=${key}`, `export ${name}=${key}`, `${name}="${key}"`, `${name} = '${key}'`, `  ${name}=${key} # local`, `x=1 ${name}=${key} pnpm start`]) {
+      expect(hasSecret(line), line).toBe(true);
+    }
+    expect(hasSecret(`curl -H "Authorization: Bearer ${key}" https://example.invalid`)).toBe(true);
+    for (const line of [
+      `${name}=`,
+      `${name}=$${name}`,
+      `${name}=\${${name}}`,
+      `${name}=<your key>`,
+      `${name}=short`,
+      `${name}: "test-key-not-real"`,
+      `process.env.${name}`,
+      "Authorization: `Bearer \${this.#apiKey}`",
+      "Bearer server-key-1234567890-abcdef",
+      "Bearer secret-value-123",
+      "integrity: sha512-" + randomBytes(64).toString("base64"),
+      randomBytes(32).toString("hex"),
+    ]) {
+      expect(hasSecret(line), line).toBe(false);
+    }
     const lines: number[] = [];
-    scanBytes(Buffer.from(`one\nkey: ${token.slice(0, 20)}\n    ${token.slice(20)}\nlast\n`), (line, split) => split && lines.push(line));
-    expect(lines).toEqual([2]);
-    const none: number[] = [];
-    scanBytes(Buffer.from("const appt_ = 1\nlooksLikeTextAndNotAToken0123456789abcdefghijk\n"), (line) => none.push(line));
-    expect(none).toEqual([]);
-    // A lockfile hash is standard base64, and a hex hash has no capitals.
-    expect(hasSecret(`integrity: sha512-${randomBytes(64).toString("base64")}`)).toBe(false);
-    expect(hasSecret(randomBytes(32).toString("hex"))).toBe(false);
-    expect(hasSecret("mcp__claude_ai_Ahrefs__site-explorer-metrics")).toBe(false);
-    expect(hasSecret("the appt_ prefix and then 43 base64url characters")).toBe(false);
-    expect(hasSecret(`${oldToken()}x`)).toBe(false);
-    // Finding 6: a printed name never shows the secret part.
-    expect(redact(`fixtures/${token}.json`)).toBe("fixtures/<redacted>.json");
+    scanBytes(Buffer.from(`one\n${name}=\nthree ${name}=${key}\nBearer ${key}\n`), (line) => lines.push(line));
+    expect(lines).toEqual([3, 4]);
+    // A printed name never shows the secret part. The value runs to the
+    // next space or quote, so the rest of a name goes with it.
+    expect(redact(`notes/${name}=${key}.txt`)).toBe(`notes/${name}=<redacted>`);
+    expect(redact(`notes/${name}=${key} copy.txt`)).toBe(`notes/${name}=<redacted> copy.txt`);
   });
 
-  it("fails on a planted token in a tracked file and in history, and prints only file and line", () => {
+  it("fails on a planted key in a tracked file and in history, and prints only file and line", () => {
     const r = repo();
     r.write("README.md", "Nothing here.\n");
     r.commit("First");
-    expect(scan(r.dir)).toMatchObject({ status: 0, stdout: expect.stringMatching(/^Secret scan passed: no grant token in 1 tracked files, 1 commits or 3 reachable objects\.\n$/) });
+    expect(scan(r.dir)).toMatchObject({ status: 0, stdout: expect.stringMatching(/^Secret scan passed: no model API key in 1 tracked files, 1 commits or 3 reachable objects\.\n$/) });
 
-    const token = newGrantToken();
-    r.write("fixtures/case.json", `{\n  "note": "ok",\n  "token": "${token}"\n}\n`);
-    r.commit("Add a fixture");
+    const planted = assignment();
+    r.write(".env.local.backup", `# saved\nAPP_PORT=5180\n${planted.text}\n`);
+    r.commit("Add a backup");
     let run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toContain("Possible grant token at fixtures/case.json:3\n");
-    expect(run.stdout).toMatch(new RegExp(`Possible grant token at blob ${BLOB} fixtures/case\\.json:3\\n`));
-    expectSilent(run, token);
+    expect(run.stdout).toContain("Possible model API key at .env.local.backup:3\n");
+    expect(run.stdout).toMatch(new RegExp(`Possible model API key at blob ${BLOB} \\.env\\.local\\.backup:3\\n`));
+    expectSilent(run, planted.key);
 
     // Removed from the tree, it is still in history.
-    rmSync(path.join(r.dir, "fixtures/case.json"));
+    rmSync(path.join(r.dir, ".env.local.backup"));
     r.commit("Remove it");
     run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).not.toContain("at fixtures/case.json:3\n");
-    expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} fixtures/case\\.json:3`));
-    expectSilent(run, token);
+    expect(run.stdout).not.toContain("at .env.local.backup:3\n");
+    expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} \\.env\\.local\\.backup:3`));
+    expectSilent(run, planted.key);
   });
 
-  it("finds an old unprefixed token in a log, a token in a commit message, and one on a branch that is not checked out", () => {
+  it("finds a bearer token in a log, a key in a commit message, and one on a branch that is not checked out", () => {
     const r = repo();
-    r.write("run.log", `started\ntoken ${oldToken()}\n`);
+    const logged = bearer();
+    const inMessage = assignment();
+    const onBranch = assignment();
+    r.write("run.log", `started\n${logged.text}\n`);
     r.git("add", ".");
-    r.git("commit", "-q", "-m", `Log\n\nToken was ${newGrantToken()}`);
+    r.git("commit", "-q", "-m", `Log\n\nRan with ${inMessage.text}`);
     r.git("checkout", "-q", "-b", "side");
-    r.write("docs.md", `Use ${newGrantToken()}\n`);
+    r.write("docs.md", `Run ${onBranch.text} pnpm start\n`);
     r.commit("Side");
     r.git("checkout", "-q", "main");
     const run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toContain("Possible grant token at run.log:2\n");
+    expect(run.stdout).toContain("Possible model API key at run.log:2\n");
     expect(run.stdout).toMatch(new RegExp(`commit ${BLOB}, line \\d+ of its message or header\\n`));
     expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} docs\\.md:1\\n`));
+    expectSilent(run, logged.key, inMessage.key, onBranch.key);
   });
 
-  it("finding 3: a token in a binary file, in the tree and in history", () => {
+  it("finding 3: a key in a binary file, in the tree and in history", () => {
     const r = repo();
-    const token = newGrantToken();
-    r.write("assets/icon.bin", Buffer.concat([Buffer.from([0, 1, 2, 255, 0]), Buffer.from(` ${token} `), Buffer.from([0, 0, 7])]));
+    const planted = assignment();
+    r.write("assets/icon.bin", Buffer.concat([Buffer.from([0, 1, 2, 255, 0]), Buffer.from(` ${planted.text} `), Buffer.from([0, 0, 7])]));
     r.commit("Add an icon");
     const run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toContain("Possible grant token at assets/icon.bin:1\n");
+    expect(run.stdout).toContain("Possible model API key at assets/icon.bin:1\n");
     expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} assets/icon\\.bin:1\\n`));
-    expectSilent(run, token);
+    expectSilent(run, planted.key);
   });
 
-  it("finding 4: a token added only in a merge result and removed later", () => {
+  it("finding 4: a key added only in a merge result and removed later", () => {
     const r = repo();
     r.write("a.txt", "base\n");
     r.commit("Base");
@@ -154,8 +163,8 @@ describe("SP6.5 secret scan", () => {
     r.write("c.txt", "main\n");
     r.commit("Main");
     r.git("merge", "-q", "--no-ff", "--no-commit", "feature");
-    const token = newGrantToken();
-    r.write("merged.txt", `resolved with ${token}\n`);
+    const planted = bearer();
+    r.write("merged.txt", `resolved with ${planted.text}\n`);
     r.commit("Merge feature");
     // Removed in a second merge, so no plain commit's diff shows it either.
     r.git("checkout", "-q", "-b", "later", "feature");
@@ -165,65 +174,49 @@ describe("SP6.5 secret scan", () => {
     r.git("merge", "-q", "--no-ff", "--no-commit", "later");
     rmSync(path.join(r.dir, "merged.txt"));
     r.commit("Merge later");
-    // `git log --all -p` shows no diff for a merge, so a diff scan misses it.
     expect(r.git("log", "--all", "-p", "--no-color")).not.toContain("merged.txt");
     const run = scan(r.dir);
     expect(run.status).toBe(1);
     expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} merged\\.txt:1\\n`));
-    expectSilent(run, token);
+    expectSilent(run, planted.key);
   });
 
-  it("finding 5: a hex-encoded token and a token split across two lines in a file", () => {
+  it("finding 6: a key in a tracked path, in a path only history holds, and in a ref name, printed redacted", () => {
     const r = repo();
-    const a = newGrantToken();
-    const b = newGrantToken();
-    r.write("dump.txt", `header\n${Buffer.from(a).toString("hex")}\n`);
-    r.write("notes.md", `The token is ${b.slice(0, 30)}\n  ${b.slice(30)} and nothing else.\n`);
-    r.commit("Notes");
-    const run = scan(r.dir);
-    expect(run.status).toBe(1);
-    expect(run.stdout).toContain("Possible grant token at dump.txt:2\n");
-    expect(run.stdout).toContain("Possible grant token at notes.md:1 (split across lines 1 and 2)\n");
-    expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} notes\\.md:1 \\(split across lines 1 and 2\\)`));
-    expectSilent(run, a, b, Buffer.from(a).toString("hex"));
-  });
-
-  it("finding 6: a token in a tracked path, in a path only history holds, and in a ref name, printed redacted", () => {
-    const r = repo();
-    const inPath = newGrantToken();
-    const inRef = newGrantToken();
-    r.write(`keys/${inPath}.txt`, "hello\n");
+    const inPath = assignment();
+    const inRef = assignment();
+    r.write(`keys/${inPath.text}.txt`, "hello\n");
     // Same content as another file, so the blob alone would not name it.
     r.write("hello.txt", "hello\n");
     r.commit("Keys");
-    r.git("branch", `backup/${inRef}`);
+    r.git("branch", `backup/${inRef.text}`);
     let run = scan(r.dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toContain("Possible grant token at tracked path keys/<redacted>.txt\n");
-    expect(run.stdout).toContain("Possible grant token at ref name refs/heads/backup/<redacted>\n");
-    expect(run.stdout).toMatch(new RegExp(`a file or folder name in tree ${BLOB}: <redacted>\\.txt\\n`));
-    expectSilent(run, inPath, inRef);
+    expect(run.stdout).toContain("Possible model API key at tracked path keys/MODEL_API_KEY=<redacted>\n");
+    expect(run.stdout).toContain("Possible model API key at ref name refs/heads/backup/MODEL_API_KEY=<redacted>\n");
+    expect(run.stdout).toMatch(new RegExp(`a file or folder name in tree ${BLOB}: MODEL_API_KEY=<redacted>\\n`));
+    expectSilent(run, inPath.key, inRef.key);
 
-    r.git("branch", "-D", `backup/${inRef}`);
-    r.git("rm", "-q", `keys/${inPath}.txt`);
+    r.git("branch", "-D", `backup/${inRef.text}`);
+    r.git("rm", "-q", `keys/${inPath.text}.txt`);
     r.git("commit", "-q", "-m", "Remove the key");
     run = scan(r.dir);
     expect(run.status).toBe(1);
     expect(run.stdout).not.toContain("tracked path");
     expect(run.stdout).not.toContain("ref name");
-    expect(run.stdout).toMatch(new RegExp(`a file or folder name in tree ${BLOB}: <redacted>\\.txt\\n`));
-    expectSilent(run, inPath, inRef);
+    expect(run.stdout).toMatch(new RegExp(`a file or folder name in tree ${BLOB}: MODEL_API_KEY=<redacted>\\n`));
+    expectSilent(run, inPath.key, inRef.key);
   });
 
   it("B4: a newline in a path, and a SHA-256 repository", () => {
     const r = repo();
-    const token = newGrantToken();
-    r.write("odd\nfolder/notes.md", `x ${token}\n`);
+    const planted = assignment();
+    r.write("odd\nfolder/notes.md", `x ${planted.text}\n`);
     r.commit("Odd name");
     let run = scan(r.dir);
     expect(run.status).toBe(1);
     // The path is read from NUL-delimited output and printed escaped, on one line.
-    expect(run.stdout).toContain('Possible grant token at "odd\\nfolder/notes.md":1\n');
+    expect(run.stdout).toContain('Possible model API key at "odd\\nfolder/notes.md":1\n');
     expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} "odd\\\\nfolder/notes\\.md":1\\n`));
 
     const dir = mkdtempSync(path.join(tmpdir(), "scan-256-"));
@@ -231,15 +224,15 @@ describe("SP6.5 secret scan", () => {
     const git = (...args: string[]) => spawnSync("git", ["-C", dir, "-c", "user.name=T", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
     expect(git("init", "-q", "--object-format=sha256").status).toBe(0);
     mkdirSync(path.join(dir, "fixtures"));
-    writeFileSync(path.join(dir, "fixtures/a.json"), `"${token}"\n`);
+    writeFileSync(path.join(dir, "fixtures/a.env"), `${planted.text}\n`);
     git("add", "-A");
     git("commit", "-q", "-m", "a");
-    rmSync(path.join(dir, "fixtures/a.json"));
+    rmSync(path.join(dir, "fixtures/a.env"));
     git("add", "-A");
     git("commit", "-q", "-m", "b");
     run = scan(dir);
     expect(run.status).toBe(1);
-    expect(run.stdout).toMatch(/Possible grant token at blob [0-9a-f]{12} fixtures\/a\.json:1\n/);
+    expect(run.stdout).toMatch(/Possible model API key at blob [0-9a-f]{12} fixtures\/a\.env:1\n/);
     expect(git("rev-parse", "--show-object-format").stdout.trim()).toBe("sha256");
   });
 
@@ -247,7 +240,6 @@ describe("SP6.5 secret scan", () => {
     const notRepo = mkdtempSync(path.join(tmpdir(), "scan-none-"));
     dirs.push(notRepo);
     expect(scan(notRepo)).toMatchObject({ status: 2, stdout: "", stderr: expect.stringContaining("Secret scan could not run") });
-    // A missing object.
     const r = repo();
     r.write("a.txt", "a\n");
     r.commit("a");
@@ -260,12 +252,12 @@ describe("SP6.5 secret scan", () => {
     const r = repo();
     const outside = mkdtempSync(path.join(tmpdir(), "scan-outside-"));
     dirs.push(outside);
-    const target = newGrantToken();
-    writeFileSync(path.join(outside, "secret.txt"), `${target}\n`);
+    const target = assignment();
+    writeFileSync(path.join(outside, "secret.env"), `${target.text}\n`);
     r.write("pipe", "was a file\n");
-    symlinkSync(path.join(outside, "secret.txt"), path.join(r.dir, "plain-link"));
-    const linkToken = newGrantToken();
-    symlinkSync(`/tmp/${linkToken}`, path.join(r.dir, "token-link"));
+    symlinkSync(path.join(outside, "secret.env"), path.join(r.dir, "plain-link"));
+    const inLink = assignment();
+    symlinkSync(`/tmp/${inLink.text}`, path.join(r.dir, "key-link"));
     r.commit("Files and links");
     rmSync(path.join(r.dir, "pipe"));
     expect(spawnSync("mkfifo", [path.join(r.dir, "pipe")]).status).toBe(0);
@@ -273,42 +265,42 @@ describe("SP6.5 secret scan", () => {
     const run = scan(r.dir);
     expect(Date.now() - started).toBeLessThan(30_000);
     expect(run.stdout).toContain("Skipped pipe: not a regular file or a symbolic link.\n");
-    // The link's target is not followed. The link text with a token is found,
+    // The link's target is not followed. The link text with a key is found,
     // in the tree and in the blob git stores for the link.
     expect(run.stdout).not.toContain("plain-link");
-    expect(run.stdout).toContain("Possible grant token at token-link:1\n");
-    expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} token-link:1\\n`));
+    expect(run.stdout).toContain("Possible model API key at key-link:1\n");
+    expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} key-link:1\\n`));
     expect(run.status).toBe(1);
-    expectSilent(run, target, linkToken);
+    expectSilent(run, target.key, inLink.key);
   });
 
-  it("B5: a token on a segment boundary of a long line is found, on disk and in a blob", () => {
+  it("B5: a key on a segment boundary of a long line is found, on disk and in a blob", () => {
     const r = repo();
     const MB = 1 << 20;
-    const tokens: string[] = [];
+    const keys: string[] = [];
     for (const [i, at] of [MB - 20, 2 * MB - 20, 2 * MB - 250, 3 * MB + 5].entries()) {
-      const token = newGrantToken();
-      tokens.push(token);
+      const planted = assignment();
+      keys.push(planted.key);
       const line = Buffer.alloc(4 * MB, ".");
-      line.write(` ${token} `, at);
+      line.write(` ${planted.text} `, at);
       r.write(`big${i}.txt`, Buffer.concat([Buffer.from("first line\n"), line, Buffer.from("\nlast\n")]));
     }
     r.commit("Big files");
     const run = scan(r.dir);
     expect(run.status).toBe(1);
-    for (let i = 0; i < tokens.length; i++) {
-      expect(run.stdout).toContain(`Possible grant token at big${i}.txt:2\n`);
+    for (let i = 0; i < keys.length; i++) {
+      expect(run.stdout).toContain(`Possible model API key at big${i}.txt:2\n`);
       expect(run.stdout).toMatch(new RegExp(`blob ${BLOB} big${i}\\.txt:2\\n`));
     }
-    expectSilent(run, ...tokens);
+    expectSilent(run, ...keys);
     // Only line 2 of each, once.
-    expect(run.stdout.match(/Possible grant token/g)).toHaveLength(8);
+    expect(run.stdout.match(/Possible model API key/g)).toHaveLength(8);
   }, 60_000);
 
   it("passes on this repository", () => {
     const run = scan(PACKAGE_ROOT);
     expect(run.stderr).toBe("");
     expect(run.status).toBe(0);
-    expect(run.stdout).toMatch(/^Secret scan passed: no grant token in \d+ tracked files, \d+ commits or \d+ reachable objects\.\n$/);
+    expect(run.stdout).toMatch(/^Secret scan passed: no model API key in \d+ tracked files, \d+ commits or \d+ reachable objects\.\n$/);
   }, 60_000);
 });
