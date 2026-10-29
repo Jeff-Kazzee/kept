@@ -182,7 +182,11 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     // reaches it.
     ["POST", /^\/api\/case\/delete$/, (_m, body) => {
       const { expectedVersion, confirmation } = DeleteCaseBody.parse(body);
-      return kase.deleteCase(expectedVersion, confirmation, { turnRunning: options.turnRunning });
+      const done = kase.deleteCase(expectedVersion, confirmation, { turnRunning: options.turnRunning });
+      // Fix round 2, F4: the stored calendar reads named the erased case's
+      // appointments, so they go with it.
+      access.google?.events?.clear();
+      return done;
     }],
     ["POST", /^\/api\/records\/([^/]+)\/archive$/, (m, body) =>
       actions.archive(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),

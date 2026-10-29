@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { mcpContext } from "../mcp/tools.ts";
+import { createApi } from "../server/api.ts";
 import { toolByName } from "../src/agent/tools.ts";
 import { CaseService, DeleteBlockedError, KEPT_ON_DELETE } from "../src/case/service.ts";
 import { CALENDAR_CASE_STREAM, calendarCaseMark } from "../src/google/case-mark.ts";
@@ -359,5 +360,21 @@ describe("sprint 13D fix round 2, F3 and F4: what the stored reads say about the
     fake.now += 1000;
     await events.refresh(["2026-11-16"], "2026-11-05");
     expect(events.ownSeen().map((w) => w.slots)).toEqual([[]]);
+  });
+});
+
+describe("sprint 13D fix round 2, F4: Delete case clears the stored calendar reads", () => {
+  it("after Delete case the reads no longer carry the erased case's appointments", async () => {
+    const { app } = await connected();
+    await receive(app, "m-monday", MONDAY);
+    await call(app, "calendar_sync_slot", { slot_key: MONDAY_KEY });
+    const events = app.google.events!;
+    await events.refresh(["2026-11-16"], "2026-11-05");
+    expect(events.ownSeen().flatMap((w) => w.slots)).toEqual([MONDAY_KEY]);
+    const api = createApi(app.intake, app.kase, {}, app.reply, { store: app.store, records: app.records, google: app.google });
+    const res = await api({ method: "POST", path: "/api/case/delete", body: { expectedVersion: app.kase.caseVersion(), confirmation: "DELETE" }, generation: app.kase.generation() });
+    expect(res.status).toBe(200);
+    expect(events.ownSeen()).toEqual([]);
+    expect(events.snapshot()).toBeNull();
   });
 });
