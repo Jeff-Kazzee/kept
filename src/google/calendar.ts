@@ -338,6 +338,12 @@ export class GoogleCalendar {
   // the case time zone, at most MAX_WINDOW_DAYS days. Recurring events are
   // expanded. Canceled events are left out.
   async list(window: { from: string; to: string }): Promise<CalendarEvent[]> {
+    return (await this.listRead(window)).events;
+  }
+
+  // The same, and whether the read is complete: false when Google still had
+  // a page after the last one read (fix round 2, F3).
+  async listRead(window: { from: string; to: string }): Promise<{ events: CalendarEvent[]; complete: boolean }> {
     const { calendarId, sub } = this.#conn.calendar();
     const tz = this.#timeZone();
     const url = new URL(this.#events(calendarId));
@@ -348,6 +354,7 @@ export class GoogleCalendar {
     url.searchParams.set("timeZone", tz);
     url.searchParams.set("maxResults", "250");
     const out: Array<CalendarEvent & { raw: RawEvent }> = [];
+    let complete = false;
     for (let page = 0; page < 4; page++) {
       const res = await this.#call(url.toString());
       if (res.status !== 200) throw apiError(res.status, res.body);
@@ -369,13 +376,16 @@ export class GoogleCalendar {
           raw: e.data,
         });
       }
-      if (!parsed.data.nextPageToken) break;
+      if (!parsed.data.nextPageToken) {
+        complete = true;
+        break;
+      }
       url.searchParams.set("pageToken", parsed.data.nextPageToken);
     }
     // Read after the events, so an event this case made while they were
     // read counts as its own (0017, E1).
     const mark = this.#caseMark({ create: false });
-    return out.map(({ raw, ...e }) => ({ ...e, slotKey: ownSlot(sub, raw, mark) }));
+    return { events: out.map(({ raw, ...e }) => ({ ...e, slotKey: ownSlot(sub, raw, mark) })), complete };
   }
 
   // The event with this id, deleted ones included, or null.

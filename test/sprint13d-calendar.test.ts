@@ -341,3 +341,23 @@ describe("sprint 13D fix round 2, F2: a Google write that a Delete case outlived
     expect(r.text).not.toContain("undo");
   });
 });
+
+describe("sprint 13D fix round 2, F3 and F4: what the stored reads say about the app's own events", () => {
+  it("a read cut at the page limit never says the event is gone", async () => {
+    const { fake, app } = await connected();
+    await receive(app, "m-monday", MONDAY);
+    await call(app, "calendar_sync_slot", { slot_key: MONDAY_KEY });
+    const events = app.google.events!;
+    // Google keeps saying there is another page: the read is incomplete, and
+    // the event may sit on a page the app did not read.
+    fake.listHasMore = true;
+    live(fake)[0]!.status = "cancelled";
+    await events.refresh(["2026-11-16"], "2026-11-05");
+    expect(events.ownSeen()).toEqual([]);
+    // A complete read that no longer finds it does.
+    fake.listHasMore = false;
+    fake.now += 1000;
+    await events.refresh(["2026-11-16"], "2026-11-05");
+    expect(events.ownSeen().map((w) => w.slots)).toEqual([[]]);
+  });
+});

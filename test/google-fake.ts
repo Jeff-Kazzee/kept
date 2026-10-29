@@ -60,6 +60,9 @@ export class FakeGoogle {
   beforeCalendarWrite: (() => Promise<void>) | null = null;
   // A list of events in a window waits for this before it answers.
   listGate: Promise<void> | null = null;
+  // Every list of events in a window says Google has another page, as when
+  // a busy calendar has more events than the app reads (0017, F3).
+  listHasMore = false;
   // A rotation revokes the refresh token it replaced, as Google may.
   rotationRevokesOld = false;
   // GET answers leave out the event's etag.
@@ -210,7 +213,7 @@ export class FakeGoogle {
       };
       if (min) items = items.filter((e) => startOf(e) >= Date.parse(min) - 86_400_000);
       if (max) items = items.filter((e) => startOf(e) < Date.parse(max));
-      return json(200, { kind: "calendar#events", timeZone: "America/Denver", items });
+      return json(200, { kind: "calendar#events", timeZone: "America/Denver", items, ...(this.listHasMore && min ? { nextPageToken: "more" } : {}) });
     }
     if (!eventId && method === "POST") {
       const sent = JSON.parse(body) as Record<string, unknown>;

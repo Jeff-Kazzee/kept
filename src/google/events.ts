@@ -48,7 +48,8 @@ const addDays = (date: string, days: number) => {
   return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 };
 
-type Window = { from: string; to: string; zone: string; startMs: number; endMs: number; readAt: number; events: CalendarEvent[] };
+// `complete` is false when Google had more pages than were read (F3).
+type Window = { from: string; to: string; zone: string; startMs: number; endMs: number; readAt: number; events: CalendarEvent[]; complete: boolean };
 
 // The last read, for Connections (H2). Counts the person's own events only.
 export type CalendarReadStatus = {
@@ -161,9 +162,11 @@ export class GoogleCalendarEvents {
 
   // For each stored window, when it was read and the slots whose own event
   // it found live, so the page can say an event was removed in Google
-  // Calendar (0017, fix round 1). Empty without a calendar connection.
+  // Calendar (0017, fix round 1). Empty without a calendar connection. A
+  // read cut at the page limit may have missed the event, so it is left
+  // out (fix round 2, F3).
   ownSeen(): Array<{ from: string; to: string; readAt: string; slots: string[] }> {
-    return (this.#windows() ?? []).map((w) => ({
+    return (this.#windows() ?? []).filter((w) => w.complete).map((w) => ({
       from: w.from,
       to: w.to,
       readAt: new Date(w.readAt).toISOString(),
@@ -291,8 +294,9 @@ export class GoogleCalendarEvents {
     if (account === null) return this.#drop();
     const zone = this.#calendar.timeZone;
     let events: CalendarEvent[];
+    let complete: boolean;
     try {
-      events = await this.#calendar.list(window);
+      ({ events, complete } = await this.#calendar.listRead(window));
     } catch (err) {
       if (generation === this.#generation) this.#error = { code: err instanceof GoogleError ? err.code : "google_unavailable", at: this.#now() };
       throw err;
@@ -308,6 +312,7 @@ export class GoogleCalendarEvents {
       endMs: wallClockToUtc(addDays(window.to, 1), "00:00", zone),
       readAt: now,
       events,
+      complete,
     };
     const kept = (this.#state?.account === account ? this.#state.windows : []).filter((w) => !(w.from === window.from && w.to === window.to && w.zone === zone));
     this.#state = { account, windows: this.#keep([...kept, stored], now) };
