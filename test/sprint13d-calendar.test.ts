@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { mcpContext } from "../mcp/tools.ts";
 import { toolByName } from "../src/agent/tools.ts";
-import { CaseService, DeleteBlockedError } from "../src/case/service.ts";
+import { CaseService, DeleteBlockedError, KEPT_ON_DELETE } from "../src/case/service.ts";
 import { CALENDAR_CASE_STREAM, calendarCaseMark } from "../src/google/case-mark.ts";
 import { CASE_PROPERTY, GoogleCalendar, eventIdFor } from "../src/google/calendar.ts";
 import { GoogleConnection } from "../src/google/connection.ts";
@@ -21,8 +21,8 @@ import { RecordsService } from "../src/records/service.ts";
 import { slotFields } from "../src/reply/draft.ts";
 import { officeOf } from "../src/reply/office.ts";
 import { ReplyService } from "../src/reply/service.ts";
-import { EventStore } from "../src/store/event-log.ts";
-import { CLOCK } from "./agent-helpers.ts";
+import { CaseDeletedError, EventStore } from "../src/store/event-log.ts";
+import { CLOCK, agentFor, fnCall, message, reply, say, sequence } from "./agent-helpers.ts";
 import { FAKE_ACCOUNT, FAKE_CLIENT, FakeGoogle, type FakeEvent } from "./google-fake.ts";
 import { DEMO_ZONE, useZone } from "./helpers.ts";
 
@@ -304,5 +304,40 @@ describe("sprint 13D fix round 1: what the app last read of its own events", () 
     await events.refresh(["2026-11-16"], "2026-11-05");
     const newest = events.ownSeen().sort((a, b) => Date.parse(b.readAt) - Date.parse(a.readAt))[0]!;
     expect([newest.from <= "2026-11-16", "2026-11-16" <= newest.to, newest.slots]).toEqual([true, true, []]);
+  });
+});
+
+describe("sprint 13D fix round 2, F2: a Google write that a Delete case outlived", () => {
+  const REACHED =
+    "The case was deleted while this Google Calendar change ran, and the change still reached Google Calendar: Added Monday 11/16 1:00 PM to Google Calendar as confirmed. Nothing in the app records it, so it has no Undo. Check the event in Google Calendar and remove or change it there if you do not want it.";
+
+  it("over MCP, answers that the case was deleted and what reached Google, with no undo claim", async () => {
+    const { fake, app } = await connected();
+    await receive(app, "m-monday", MONDAY);
+    // A write that ran past the two-minute limit: Delete case went through
+    // while Google was writing.
+    fake.beforeCalendarWrite = async () => {
+      app.store.eraseCase(KEPT_ON_DELETE, () => {});
+    };
+    const err = await call(app, "calendar_sync_slot", { slot_key: MONDAY_KEY }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CaseDeletedError);
+    expect((err as CaseDeletedError).message).toBe(REACHED);
+    expect(live(fake)).toHaveLength(1);
+    expect(mcpContext(app.store, app, CLOCK()).actions.activity().entries).toEqual([]);
+  });
+
+  it("in the chat, the turn ends with that sentence instead of an answer that says it can be undone", async () => {
+    const { fake, app } = await connected();
+    await receive(app, "m-monday", MONDAY);
+    fake.beforeCalendarWrite = async () => {
+      app.store.eraseCase(KEPT_ON_DELETE, () => {});
+    };
+    const model = sequence(reply(fnCall("calendar_sync_slot", { slot_key: MONDAY_KEY, restore_removed: null })), reply(message("Added. You can undo it.")));
+    const r = await say(agentFor(app, model), app, "Put Monday on my Google Calendar.");
+    expect(r.of("turn.error")).toEqual([{ turnId: expect.any(String), code: "case_deleted", message: REACHED }]);
+    expect(r.text).not.toContain("undo");
   });
 });

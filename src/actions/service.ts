@@ -25,7 +25,7 @@ import type { ReplyService } from "../reply/service.ts";
 import { TEMPLATES, type TemplateId } from "../reply/templates.ts";
 import { restoreTimezone, setTimezone } from "../settings/settings.ts";
 import { ASSISTANT_NAME, EXTERNAL_AGENT_NAME, slotKey, slotLabel } from "../slots/labels.ts";
-import { StaleEditError, type EventStore, type StoredEvent } from "../store/event-log.ts";
+import { CaseDeletedError, StaleEditError, type EventStore, type StoredEvent } from "../store/event-log.ts";
 import { randomUUID } from "node:crypto";
 import type { CalendarUndo, SyncOutcome, WritePlan } from "../google/calendar.ts";
 import { GoogleError, type GoogleErrorCode } from "../google/http.ts";
@@ -60,6 +60,17 @@ export class UndoBlockedError extends Error {
 
 // A Google answer that may or may not have come after a write.
 const ambiguous = (code: GoogleErrorCode | string) => code === "google_unavailable" || code === "google_invalid_response";
+
+// Fix round 2, F2: what a Google Calendar write says when Delete case came
+// first or while it ran.
+const DELETED_BEFORE_GOOGLE = "The case was deleted. Nothing was written to Google Calendar.";
+function deletedDuringWrite(outcome: SyncOutcome, entryFor: (o: SyncOutcome) => { summary: string } | null): CaseDeletedError {
+  const done = outcome.action === "created" || outcome.action === "updated" || outcome.action === "deleted" ? entryFor(outcome) : null;
+  if (!done) return new CaseDeletedError("The case was deleted while this Google Calendar change ran. Nothing was changed in Google Calendar.");
+  return new CaseDeletedError(
+    `The case was deleted while this Google Calendar change ran, and the change still reached Google Calendar: ${done.summary} Nothing in the app records it, so it has no Undo. Check the event in Google Calendar and remove or change it there if you do not want it.`,
+  );
+}
 
 // An action only the person may take, attempted by an agent.
 export class PersonOnlyError extends InvalidRequestError {
@@ -395,8 +406,10 @@ export class CaseActions {
   ): Promise<{ outcome: SyncOutcome; entry: ActivityEntry | null }> {
     const intentId = `gi-${randomUUID()}`;
     let plan = planned;
+    let generation = -1;
     this.#store.inCase(() =>
       this.#store.transaction(() => {
+        generation = this.#store.caseGeneration();
         plan = prepare ? prepare(planned) : planned;
         this.#openIntent({ intent_id: intentId, kind: "write", slot_key: plan.slotKey, actor: by.actor, owner: OWNER, plan, entry_kind: expected.kind, summary: expected.summary });
       }),
@@ -404,6 +417,8 @@ export class CaseActions {
     RUNNING.add(intentId);
     try {
       let outcome: SyncOutcome;
+      // Fix round 2, F2: a write whose case was deleted is not sent.
+      if (this.#store.caseGeneration() !== generation) throw new CaseDeletedError(DELETED_BEFORE_GOOGLE);
       try {
         outcome = await execute(plan);
       } catch (err) {
@@ -412,6 +427,10 @@ export class CaseActions {
         if (!(err instanceof GoogleError) || !ambiguous(err.code)) this.#store.inCase(() => this.#store.transaction(() => this.#closeIntent(intentId, "abandoned", null)));
         throw err;
       }
+      // Fix round 2, F2: a Delete case that came while the write ran erased
+      // its intent, so nothing can record it. Say so, with no Undo, and say
+      // what reached Google so the person can remove it there.
+      if (this.#store.caseGeneration() !== generation) throw deletedDuringWrite(outcome, entryFor);
       let entry: ActivityEntry | null = null;
       let mine = false;
       this.#store.inCase(() =>
@@ -421,7 +440,10 @@ export class CaseActions {
           // it first wrote the entry already, or closed it for a disconnect
           // or another account. Either way nothing is written here.
           if (!this.#isOpen(intentId)) {
-            entry = this.#entryById(intentClosure(this.#store.readStream(GOOGLE_INTENTS_STREAM), intentId)?.entry_id ?? null);
+            const closure = intentClosure(this.#store.readStream(GOOGLE_INTENTS_STREAM), intentId);
+            // Neither open nor closed: the case it was opened in is gone.
+            if (!closure) throw deletedDuringWrite(outcome, entryFor);
+            entry = this.#entryById(closure.entry_id);
             return;
           }
           const d = entryFor(outcome);

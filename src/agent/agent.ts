@@ -286,7 +286,7 @@ export class CaseAgent {
       await this.#store.inCase(() => this.#turn(turnId, input, emit, report), input.generation);
     } catch (err) {
       if (this.#rethrow(err)) throw err;
-      fail(errorCode(err), err instanceof UsageRefusedError ? err.userText : undefined);
+      fail(errorCode(err), err instanceof UsageRefusedError ? err.userText : err instanceof CaseDeletedError && err.detail ? err.detail : undefined);
     } finally {
       this.#busy = false;
       this.#busySince = null;

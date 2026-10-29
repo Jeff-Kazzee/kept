@@ -154,7 +154,7 @@ async function runCall(deps: McpDeps, name: string, args: unknown, generation: n
     const output = sanitize(r.output);
     result = r.ok ? { content: [{ type: "text" as const, text: JSON.stringify(output) }], structuredContent: output } : errorResult(output);
   } catch (err) {
-    if (err instanceof CaseDeletedError) return errorResult(CASE_DELETED);
+    if (err instanceof CaseDeletedError) return errorResult(err.detail ? { ...CASE_DELETED, message: err.detail } : CASE_DELETED);
     if (err instanceof StoreBusyError) {
       [result, outcome] = [errorResult(BUSY), "busy"];
     } else if (err instanceof StaleEditError) {

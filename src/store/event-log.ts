@@ -134,8 +134,12 @@ function prefixMatch(prefixes: readonly string[]): { sql: string; params: Array<
 // The case was deleted after this command read it. Nothing was written.
 export class CaseDeletedError extends Error {
   override name = "CaseDeletedError";
-  constructor() {
-    super("The case was deleted while this was in progress. Nothing was saved.");
+  // A sentence that says more than the default, such as a Google Calendar
+  // change that reached Google after the delete (0017, fix round 2, F2).
+  readonly detail: string | null;
+  constructor(detail: string | null = null) {
+    super(detail ?? "The case was deleted while this was in progress. Nothing was saved.");
+    this.detail = detail;
   }
 }
 
