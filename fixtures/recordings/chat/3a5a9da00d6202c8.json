@@ -1,5 +1,5 @@
 {
-  "key": "be558230c99e72bd",
+  "key": "3a5a9da00d6202c8",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,18 +9,18 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_52",
+        "id": "rs_76",
         "summary": []
       },
       {
         "type": "message",
-        "id": "msg_51",
+        "id": "msg_75",
         "role": "assistant",
         "status": "completed",
         "content": [
           {
             "type": "output_text",
-            "text": "Friday 11/13 9:15 AM overlaps the Team meeting that starts 9:00 AM.",
+            "text": "I accepted 2 claims. You can undo each one in the activity log.",
             "annotations": []
           }
         ]

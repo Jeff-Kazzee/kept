@@ -1,5 +1,5 @@
 {
-  "key": "2c55572278e1e1a1",
+  "key": "12e3779ec452ac6a",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,16 +9,21 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_48",
+        "id": "rs_52",
         "summary": []
       },
       {
-        "type": "function_call",
-        "id": "fc_47",
-        "call_id": "call_47",
-        "name": "check_calendar",
-        "arguments": "{\"date\":\"2026-11-13\",\"time\":\"09:15\"}",
-        "status": "completed"
+        "type": "message",
+        "id": "msg_51",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Friday 11/13 9:15 AM overlaps the Team meeting that starts 9:00 AM.",
+            "annotations": []
+          }
+        ]
       }
     ],
     "usage": {

@@ -1,5 +1,5 @@
 {
-  "key": "c71ff3eaee59ef20",
+  "key": "f25d45bfc541cfc7",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,15 +9,15 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_16",
+        "id": "rs_40",
         "summary": []
       },
       {
         "type": "function_call",
-        "id": "fc_15",
-        "call_id": "call_15",
-        "name": "import_message",
-        "arguments": "{\"text\":\"Hi Dana,\\n\\nThis confirms your appointment on Thursday, November 12 at 10:30 AM at Lantern Hill Clinic, 400 Elm Street, Suite 2. Please bring your new insurance card and arrive 15 minutes early.\\n\\nFront Desk\\nLantern Hill Clinic\",\"channel\":\"email\",\"from\":\"Front Desk, Lantern Hill Clinic\",\"received_at\":\"2026-10-31T09:12:00-06:00\"}",
+        "id": "fc_39",
+        "call_id": "call_39",
+        "name": "get_schedule",
+        "arguments": "{}",
         "status": "completed"
       }
     ],

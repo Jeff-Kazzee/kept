@@ -1,5 +1,5 @@
 {
-  "key": "72948fea1ddf26d7",
+  "key": "8ba1f9ca6f6a1529",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,16 +9,21 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_80",
+        "id": "rs_84",
         "summary": []
       },
       {
-        "type": "function_call",
-        "id": "fc_79",
-        "call_id": "call_79",
-        "name": "get_checklist",
-        "arguments": "{}",
-        "status": "completed"
+        "type": "message",
+        "id": "msg_83",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Bring your new insurance card and arrive 15 minutes early.",
+            "annotations": []
+          }
+        ]
       }
     ],
     "usage": {
