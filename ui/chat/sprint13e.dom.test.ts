@@ -259,3 +259,11 @@ describe("sprint 13E fix round 1, R2: Add it says when the read failed", () => {
     await act(async () => root.unmount());
   });
 });
+
+describe("sprint 13E fix round 2, F6: a refused Add it shows the server's sentence", () => {
+  it("gmail_not_offered reads as the server wrote it, not as a stale edit", () => {
+    const message =
+      "That email was not offered in this case for the Google account connected now, so it was not added. Ask the assistant to check Gmail again. Nothing was saved.";
+    expect(errorSentence(new ApiError(409, { error: "gmail_not_offered", message }))).toBe(message);
+  });
+});

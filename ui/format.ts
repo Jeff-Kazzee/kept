@@ -105,6 +105,8 @@ const NOTHING_SAVED = "Nothing was saved.";
 
 // Codes whose message is shown as the server wrote it.
 const SERVER_SENTENCE_CODES = new Set([
+  // 0018, fix round 2, F6: "Add it" for an email no longer offered.
+  "gmail_not_offered",
   "provider_not_ready",
   "unknown_model",
   "invalid_key",
