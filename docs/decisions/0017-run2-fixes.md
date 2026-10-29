@@ -30,15 +30,17 @@ Changed:
 
 - Each case has a mark: 26 random characters from a to v and 0 to 9, kept
   as one event on the `calendar_case` stream. It is made at the case's
-  first Google Calendar write, inside that write's case command, and Delete
-  case erases it with the rest of the case. (proposed: made at the first
-  write, not when the case starts, so a case that never touches the
+  first Google Calendar write, in the transaction that records the write's
+  intent, and Delete case erases it with the rest of the case. A sync that
+  writes nothing makes none (fix round 1, R2). (proposed: made at the
+  first write, not when the case starts, so a case that never touches the
   calendar holds no mark)
 - The mark joins the inputs of the event id and is a fourth private
   property, `apptCase`. The property lookup asks for all four. An event
   counts as the case's only when its mark matches.
-- A case with no mark yet owns no event. `list` reads the mark after the
-  events, so an event the case made while they were read is its own.
+- A case with no mark yet owns no event, so a plan looks nothing up.
+  `list` reads the mark after the events, so an event the case made while
+  they were read is its own.
 - "A sync never puts back an event the person removed in Google" holds
   within a case: the same case finds its removed event under the same id
   and refuses, as before.
@@ -88,7 +90,8 @@ bullet of 0016, H4. The event's title still names the office.
   request closed before any answer says so.
 - Never a body, a header, a cookie, a query string, a token or an address.
   A path segment that is not a plain id (letters, digits, `.`, `_`, `:`,
-  `-`, at most 80, no `@`) is written as `*`.
+  `-`, at most 80, no `@`) is written as `*`. Fix round 1 replaced this
+  with an allowlist (R4).
 - On by default in local mode, off by default in hosted mode.
   `APP_REQUEST_LOG=1` or `0` turns it on or off. It writes to stdout, so
   the `appt-demo` service's journal holds it.
@@ -100,7 +103,8 @@ bullet of 0016, H4. The event's title still names the office.
 
 Once Delete case finished the page shows "The case was deleted. Its
 messages, facts, replies, chat and activity are erased. Events it added to
-Google Calendar stay there." A failed delete shows only its error.
+Google Calendar stay there." A failed delete shows only its error. Fix
+round 1 (R7) keeps it on the page instead of a toast.
 
 ## E6. Smaller items
 
@@ -114,8 +118,8 @@ Google Calendar stay there." A failed delete shows only its error.
   waits for review, because that place may spell a fuller name. Meanwhile
   the page says "the office" and the activity labels say "the email, Oct
   28, 6:43 PM". A name already made fuller, and a pasted sender, show at
-  once. The reply's greeting and the event's title keep `officeNameOf`.
-  (proposed)
+  once. (proposed) Fix round 1 (R8) uses the same rule for the greeting
+  and the event's title.
 - The horizontal scrollbar. The welcome's decorative scene is 140% of the
   column wide and gave the thread a sideways scrollbar on an empty case. The
   welcome now clips it at its sides. Checked at 1280 and 390 px. The only
@@ -143,6 +147,56 @@ the stored chat are unchanged. `pnpm demo:check --recorded` passes.
 - Delete case leaves the app's events in Google Calendar. A new case adds
   its own, so remove the old ones in Google Calendar before recording, or
   they show as clashes.
-- The schedule may still say "On Google Calendar" for an appointment whose
-  event the person removed in Google. Seen in the browser check, not
-  changed here.
+- The schedule says "Removed in Google Calendar" for an appointment whose
+  event the person removed in Google, once the app has read the calendar
+  since (fix round 1).
+
+## Fix round 1 (2026-10-29)
+
+From the independent review (`findings-r1`) and the writer's own note.
+
+- R1. Delete case is refused while a chat turn of the app runs, or while a
+  Google intent opened in the last two minutes is open, in this process or
+  another: "The assistant or a Google Calendar change is still working.
+  Nothing was deleted. Wait a moment, then delete the case again." (409
+  `case_busy`). A Google write runs before the store commit that records
+  it, so a Delete case in between would leave its event at Google with no
+  record. An intent a stopped process left open longer than two minutes no
+  longer blocks it, so Delete case cannot be stuck. (proposed: two
+  minutes, the existing STALE_INTENT_MS)
+- R2. `plan()` only reads the mark. A case without one plans a create with
+  no event id, and `googleWrite` gives the plan its mark and event id in
+  the transaction that opens the intent, so the intent records them. A
+  sync or removal that writes nothing leaves no mark, and no lookup by
+  property runs for a case without one.
+- R3. The request log leaves out `GET /api/case/version`, the page's
+  2-second poll, unless it fails. It is the only route the page polls.
+- R4. A path segment is kept only when it is one of the app's route words,
+  or an id of the app's own shape where a route takes one: a message
+  (`gmail-…`, `chat-…`, `pasted-<uuid>`, `m1`, with a round), a fact (a
+  message id with `-e1` or `-u1`), a conflict, `q1`, `d1`, a slot key or
+  `a1`. Every other segment is `*`, a secret-looking one included.
+- R5. The import sheet keeps one entry per message, and a later facts card
+  with the same key never takes the first card's place, so a pointer
+  always points at a rendered card.
+- R6. The first facts card's heading carries the anchor id with tabindex
+  -1. "Show the card" scrolls to it and moves focus there, so a screen
+  reader reads "Facts from Lantern Hill Clinic".
+- R7. The Delete case sentence is a status in the Delete case panel, shown
+  while the new, empty case is the one on the page, and gone at the first
+  write in it. It replaces the toast.
+- R8. `officeOf` takes the held-back name (`officeNameShown`). While the
+  page says "the office", the calendar event is titled by its state alone
+  ("Appointment", "Appointment (requested, not confirmed)") and the reply
+  greets "Hello,". The next sync after the name resolves updates the title,
+  with Undo. A draft made before reads as no longer fitting once the name
+  resolves, as for any change of the office's name (0016, N3).
+- Removed in Google Calendar. `GET /api/google` adds `calendarOwn`: for
+  each stored read, its days, when it was read and the slots whose own
+  event it found live. When a read made after the slot's last calendar
+  write or undo covers its date and does not find the event, the agenda
+  row says "Removed in Google Calendar" instead of the Google mark. Without
+  such a read the app's own last write stands.
+
+No recording needs a live rerecord: tool results, the instructions and the
+stored chat are unchanged, and `pnpm demo:check --recorded` passes.

@@ -562,6 +562,10 @@ below. Decisions: `docs/decisions/0017-run2-fixes.md`.
 - [x] E6 The stopped-turn sentence shows once, the account's lowercase name
   never shows for a moment, no sideways scrollbar, and the tentative status
   is checked at the fake Google.
+- [x] Review fix round 1 (0017): Delete case waits for writes, the mark
+  only for a write, a quieter and stricter request log, the facts pointer
+  and its focus, the Delete case status, the held-back name at Google, and
+  "Removed in Google Calendar".
 - [ ] The coordinator's live rerun with Gmail and Google Calendar.
 - [ ] Confirm or change the choices marked proposed in 0017.
 
