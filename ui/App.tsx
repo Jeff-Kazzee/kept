@@ -29,7 +29,7 @@ import { SchedulePanel, TABS, railLabel, waitingCount, type PanelTab } from "./s
 import { slotElementId } from "./schedule/Agenda.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
 import { LAPTOP, TABLET_UP, chipRef, findChip, focusSoon, useMedia, type ChipRef } from "./layout.ts";
-import { CASE_DELETED_TEXT, ConnectionsPage, SettingsPage, UsagePage, ZoneNotice } from "./pages/Settings.tsx";
+import { ConnectionsPage, SettingsPage, UsagePage, ZoneNotice, caseDeletedShown } from "./pages/Settings.tsx";
 import { Avatar } from "./shell/AccountMenu.tsx";
 import { AgentAccessPage, PageFrame } from "./shell/Pages.tsx";
 import { Sidebar, type SideLayout } from "./shell/Sidebar.tsx";
@@ -358,6 +358,8 @@ function Shell({
   const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh());
   const mode = hosted ? "hosted" : "local";
   const [sheetOpen, setSheetOpen] = useState(false);
+  // The generation a Delete case left (0017, fix round 1, R7).
+  const [deletedFrom, setDeletedFrom] = useState<number | null>(null);
   const [railed, setRailed] = useState(false);
   const [tab, setTab] = useState<PanelTab>("schedule");
   const [highlight, setHighlight] = useState<string | null>(null);
@@ -685,7 +687,15 @@ function Shell({
               <PageFrame onBack={back}>
                 {view === "connections" && <ConnectionsPage modelClient={state.modelClient} run={run} />}
                 {view === "access" && <AgentAccessPage onActivity={() => openPanel("activity")} />}
-                {view === "settings" && <SettingsPage version={state.caseVersion} erasePending={state.erasePending} run={run} onCaseDeleted={() => toast("info", CASE_DELETED_TEXT)} />}
+                {view === "settings" && (
+                  <SettingsPage
+                    version={state.caseVersion}
+                    erasePending={state.erasePending}
+                    run={run}
+                    caseDeleted={caseDeletedShown(deletedFrom, state)}
+                    onCaseDeleted={() => setDeletedFrom(state.generation)}
+                  />
+                )}
                 {view === "usage" && <UsagePage run={run} />}
               </PageFrame>
             </section>

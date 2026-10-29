@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { api } from "../api.ts";
 import { installTestDom, mount, TestElement, TestEvent } from "../test-dom.ts";
-import { CASE_DELETED_TEXT, DeleteCasePanel } from "./Settings.tsx";
+import { CASE_DELETED_TEXT, DeleteCasePanel, caseDeletedShown } from "./Settings.tsx";
 
 beforeAll(() => {
   const doc = installTestDom();
@@ -56,5 +56,27 @@ describe("sprint 13D, E5: Delete case says it finished", () => {
     await view.click(view.button("Delete this case and all its data permanently"));
     expect(onDeleted).not.toHaveBeenCalled();
     await view.unmount();
+  });
+});
+
+describe("sprint 13D fix round 1, R7: the Delete case sentence stays on the page", () => {
+  it("renders in the panel while the new case is empty, as a status", async () => {
+    const view = await mount(createElement(DeleteCasePanel, { version: 0, run: async () => {}, deleted: true }));
+    const status = view.container.querySelector('[role="status"]')!;
+    expect(status.textContent).toBe(CASE_DELETED_TEXT);
+    await view.unmount();
+    const before = await mount(createElement(DeleteCasePanel, { version: 4, run: async () => {}, deleted: false }));
+    expect(before.container.textContent).not.toContain("The case was deleted.");
+    await before.unmount();
+  });
+
+  it("shows from the new case's first read until the next thing done in it", () => {
+    // Before the page reads the new case, the old one is still shown.
+    expect(caseDeletedShown(3, { generation: 3, caseVersion: 41 })).toBe(false);
+    // The new, empty case.
+    expect(caseDeletedShown(3, { generation: 4, caseVersion: 0 })).toBe(true);
+    // The next write in it, by the person, the chat or an agent.
+    expect(caseDeletedShown(3, { generation: 4, caseVersion: 1 })).toBe(false);
+    expect(caseDeletedShown(null, { generation: 4, caseVersion: 0 })).toBe(false);
   });
 });

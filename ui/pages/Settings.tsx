@@ -88,7 +88,19 @@ export function ConnectionsPage({ modelClient, run }: { modelClient: string; run
 
 // Settings: the time zone, the theme, what the app is, Delete case, and on
 // the hosted site Delete account.
-export function SettingsPage({ version, erasePending, run, onCaseDeleted }: { version: number; erasePending: boolean; run: Run; onCaseDeleted?: () => void }) {
+export function SettingsPage({
+  version,
+  erasePending,
+  run,
+  caseDeleted = false,
+  onCaseDeleted,
+}: {
+  version: number;
+  erasePending: boolean;
+  run: Run;
+  caseDeleted?: boolean;
+  onCaseDeleted?: () => void;
+}) {
   const { hosted, signedOut } = useAgent();
   return (
     <div className="stack settings">
@@ -107,7 +119,7 @@ export function SettingsPage({ version, erasePending, run, onCaseDeleted }: { ve
         </p>
         <p className="small muted">Appointments are built by code from the accepted facts. Model text never changes an appointment. A clash check assumes a length for each appointment, because messages do not state an end time. The info button beside Appointments shows it.</p>
       </section>
-      <DeleteCasePanel version={version} erasePending={erasePending} run={run} onDeleted={onCaseDeleted} />
+      <DeleteCasePanel version={version} erasePending={erasePending} run={run} deleted={caseDeleted} onDeleted={onCaseDeleted} />
       {hosted && <DeleteAccountPanel run={run} onDeleted={signedOut} />}
     </div>
   );
@@ -580,15 +592,42 @@ function CalendarReadButton({ run, onRead }: { run: Run; onRead: (read: Calendar
 // What the page says once Delete case finished (0017, E5).
 export const CASE_DELETED_TEXT = "The case was deleted. Its messages, facts, replies, chat and activity are erased. Events it added to Google Calendar stay there.";
 
+// Fix round 1, R7: the sentence stays on the page while the new, empty case
+// is the one shown, so until the next thing done in the case. A Delete case
+// is seen by its generation moving on.
+export function caseDeletedShown(deletedFrom: number | null, state: { generation: number; caseVersion: number }): boolean {
+  return deletedFrom !== null && state.generation !== deletedFrom && state.caseVersion === 0;
+}
+
 // Delete case. The only permanent deletion, with its own typed
 // confirmation. No agent can reach it. `onDeleted` runs once it finished.
-export function DeleteCasePanel({ version, erasePending = false, run, onDeleted }: { version: number; erasePending?: boolean; run: Run; onDeleted?: () => void }) {
+export function DeleteCasePanel({
+  version,
+  erasePending = false,
+  run,
+  deleted = false,
+  onDeleted,
+}: {
+  version: number;
+  erasePending?: boolean;
+  run: Run;
+  deleted?: boolean;
+  onDeleted?: () => void;
+}) {
   const [typed, setTyped] = useState("");
   return (
     <section className="card danger-zone">
       <h2>
         <Icon name="trash" size="sm" /> Delete case
       </h2>
+      <div role="status">
+        {deleted && (
+          <p className="notice">
+            <Icon name="check" />
+            <span>{CASE_DELETED_TEXT}</span>
+          </p>
+        )}
+      </div>
       {erasePending && (
         <p className="warn-box" role="alert">
           A deleted case is not cleared from the database file yet, because another program kept the file busy. Close the MCP client or other programs that use it, then run Delete case again.
