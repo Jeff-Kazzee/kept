@@ -20,6 +20,10 @@
 //                      with its problems, to stderr. Only `pnpm demo:check`
 //                      sets it, for its temporary app. Model output about
 //                      the case, never a key.
+//   APP_REQUEST_LOG    1 or 0 turns the request log on or off: one line per
+//                      API request with the method, the path, the status and
+//                      the time, never a body, header, query or address.
+//                      On by default in local mode, off in hosted mode.
 //   APP_ALLOWED_HOSTS  more host names, comma-separated, for a private
 //                      proxy such as Tailscale serve (see hosts.ts)
 //   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
@@ -38,6 +42,7 @@ import { GOOGLE_CALLBACK_PATH } from "./google.ts";
 import { createHostedApp } from "./hosted.ts";
 import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
 import { apiPreamble, secureRequest } from "./http.ts";
+import { requestLogEnabled, requestLogger } from "./request-log.ts";
 import { API_SECURITY_HEADERS, createStaticHandler } from "./static.ts";
 import { createWorkspace, send, serveApi } from "./workspace.ts";
 
@@ -62,6 +67,8 @@ const googleClient = clientFromEnv();
 const serverMetaKey = process.env.MODEL_API_KEY || null;
 
 const server = createServer();
+// 0017, E4: registered first, so it sees every request.
+if (requestLogEnabled(config.mode, process.env.APP_REQUEST_LOG)) server.on("request", requestLogger({ write: (line) => console.log(line) }));
 // The production build, or Vite for development. Vite is loaded only for
 // development, so `pnpm start` does not need it.
 let ui: (req: IncomingMessage, res: ServerResponse) => void;
