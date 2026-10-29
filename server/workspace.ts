@@ -128,7 +128,7 @@ export function createWorkspace(o: WorkspaceOptions) {
   const googleEvents = new GoogleCalendarEvents(googleCalendar);
   const google: GoogleServices = { connection: googleConnection, gmail: new Gmail(googleConnection), calendar: googleCalendar, events: googleEvents };
   const intake = new IntakeService(store, client);
-  const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name, externalCalendar: () => googleEvents.snapshot() });
+  const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name, externalCalendar: () => googleEvents.snapshot(), externalVersion: () => googleEvents.version() });
   const reply = new ReplyService(store, kase, client);
   const records = new RecordsService(store, intake, kase);
   const api = createApi(intake, kase, { settings: auth.source, ready }, reply, { store, records, google });

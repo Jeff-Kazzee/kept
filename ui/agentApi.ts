@@ -5,7 +5,7 @@
 // the server does not have answers 404, and the page says the part is not
 // available in this build.
 import { ApiError, request } from "./api.ts";
-import type { ActivityLog, GoogleStatus, Provider, Settings } from "./contract.ts";
+import type { ActivityLog, CalendarRead, GoogleStatus, Provider, Settings } from "./contract.ts";
 
 export type AgentBackend = {
   // Null when this build has no settings route yet.
@@ -34,8 +34,8 @@ export type AgentBackend = {
   // Answers the status, and whether Google confirmed it revoked the grant.
   googleDisconnect(expectedVersion: number): Promise<GoogleStatus & { revoked: boolean }>;
   // Reads Google Calendar again for the clash checks. Answers how many
-  // events it read.
-  googleCalendarRefresh(): Promise<{ events: number }>;
+  // events it read and, from sprint 13C, when and for which days.
+  googleCalendarRefresh(): Promise<{ events: number; read?: CalendarRead }>;
 };
 
 export type GoogleGrants = { gmail: boolean; calendar: boolean };
@@ -86,7 +86,7 @@ export const realBackend: AgentBackend = {
   google: () => orNull(() => request<GoogleStatus>("GET", "/api/google")),
   googleConnect: (expectedVersion, grants) => request<{ authorizeUrl: string }>("POST", "/api/google/connect", { expectedVersion, ...grants }),
   googleDisconnect: (expectedVersion) => request<GoogleStatus & { revoked: boolean }>("POST", "/api/google/disconnect", { expectedVersion }),
-  googleCalendarRefresh: () => request<{ events: number }>("POST", "/api/google/calendar/refresh", {}),
+  googleCalendarRefresh: () => request<{ events: number; read?: CalendarRead }>("POST", "/api/google/calendar/refresh", {}),
 };
 
 // Where the sign-in page may send the browser: this app's own origin, or

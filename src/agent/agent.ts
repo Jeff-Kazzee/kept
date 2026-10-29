@@ -359,6 +359,7 @@ export class CaseAgent {
         return result;
       },
       turn,
+      calendarReads: new Map(),
     };
     const items: InputItem[] = [...history.map((m) => historyItem(m, log.imported.get(m.id))), { role: "user", content: text }];
     const cards: Card[] = [];

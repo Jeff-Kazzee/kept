@@ -48,6 +48,8 @@ import {
 } from "./types.ts";
 import type { FunctionTool } from "../model/responses.ts";
 import { GOOGLE_TOOLS, GOOGLE_TOOL_NAMES, GOOGLE_WRITE_TOOLS, type GoogleServices } from "../google/tools.ts";
+import type { CalendarReads } from "../google/events.ts";
+import { GoogleError } from "../google/http.ts";
 
 export type ToolServices = {
   intake: IntakeService;
@@ -85,6 +87,10 @@ export type ToolContext = ToolServices & {
   // The chat turn's paste rule and what it imported (0009, D2'). Absent
   // over MCP.
   turn?: ChatTurnState;
+  // The Google Calendar reads of this turn, so a clash check reads each
+  // window at most once a turn (0016, H1). Absent over MCP, where each call
+  // is its own turn.
+  calendarReads?: CalendarReads;
 };
 
 // `paste` is code's reading of the person's message at the start of the
@@ -568,6 +574,26 @@ function gated(spec: ToolSpec<unknown>): ToolSpec<unknown> {
   return { ...spec, run: (ctx, input) => (ctx.turn?.paste ? pasteRefusal() : spec.run(ctx, input)) };
 }
 
+// 0016, H1: with Google Calendar connected, a clash check first makes sure
+// the events it reads cover `date` (or the case's appointments) and were
+// read from Google in the last minute. Returns the GoogleError of a read
+// that failed, or null. Never throws for Google.
+async function freshCalendar(ctx: ToolContext, date: string | null): Promise<GoogleError | null> {
+  const events = ctx.google?.events;
+  if (!events || !ctx.google!.connection.status().calendar) return null;
+  const dates = ctx.kase.view().slots.map((s) => s.date);
+  try {
+    if (date !== null) await events.ensure(date, { dates, today: ctx.today, reads: ctx.calendarReads });
+    else for (const d of [...new Set([...dates, ctx.today])]) await events.ensure(d, { dates, today: ctx.today, reads: ctx.calendarReads });
+    return null;
+  } catch (err) {
+    if (err instanceof GoogleError) return err;
+    return new GoogleError("google_unavailable");
+  }
+}
+
+export const CALENDAR_UNREADABLE = "Google Calendar could not be read right now, so the app cannot say whether that time is free.";
+
 const TOOL_SPECS: ToolSpec<unknown>[] = [
   tool({
     name: "get_schedule",
@@ -580,8 +606,9 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
     parameters: NO_PARAMS,
     input: NoInput,
     readOnly: true,
-    run: (ctx) => {
+    run: async (ctx) => {
       const { intake, kase, records, today, zone } = ctx;
+      const unread = await freshCalendar(ctx, null);
       const view = kase.view();
       const evidence = intake.evidence();
       const archived = kase.archivedKeys();
@@ -608,6 +635,7 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
             reply_templates: view.reply.options.filter((o) => o.slotKey === s.key).map((o) => o.template),
           })),
           calendar_loaded: view.calendar !== null,
+          ...(unread ? { google_calendar: { read: false, error: unread.code, message: `${CALENDAR_UNREADABLE} The clashes shown may be out of date.` } } : {}),
           open_question: view.question ? { question_id: view.question.id, conflict_id: view.question.conflictId } : null,
           questions_version: view.questionsVersion,
           conflicts_waiting: view.waiting,
@@ -774,7 +802,9 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
     },
     input: z.object({ date: DateArg, time: TimeArg.nullable().default(null) }).strict(),
     readOnly: true,
-    run: ({ kase, intake, zone }, input) => {
+    run: async (ctx, input) => {
+      const { kase, intake, zone } = ctx;
+      const unread = await freshCalendar(ctx, input.date);
       const view = kase.view();
       const evidence = intake.evidence();
       const sameDay = view.slots.filter((s) => s.date === input.date);
@@ -786,6 +816,14 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
       const timeNote = gap ? { time_note: `${input.time} does not happen on ${input.date} in ${zone}, because the clock moves forward. It was checked from the first time after the gap.` } : {};
       // Finding 5: the date and time asked about are the model's own words,
       // so they are not facts. Only what the calendar and the case hold is.
+      // H1: Google could not be read. The answer says so, never that the
+      // day is free.
+      if (unread) {
+        return result(
+          { error: unread.code, message: CALENDAR_UNREADABLE, date: input.date, time: input.time, time_zone: zone, appointments_that_day: day, ...timeNote },
+          { ok: false, code: unread.code, slots: sameDay, facts: sameDay.map(slotFact), cards: [{ kind: "notice", text: CALENDAR_UNREADABLE }] },
+        );
+      }
       if (!view.calendar) {
         return result(
           { calendar_loaded: false, date: input.date, time: input.time, time_zone: zone, appointments_that_day: day, ...timeNote },

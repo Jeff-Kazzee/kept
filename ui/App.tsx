@@ -28,7 +28,7 @@ import { SchedulePanel, TABS, railLabel, waitingCount, type PanelTab } from "./s
 import { slotElementId } from "./schedule/Agenda.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
 import { LAPTOP, TABLET_UP, chipRef, findChip, focusSoon, useMedia, type ChipRef } from "./layout.ts";
-import { ConnectionsPage, SettingsPage, UsagePage } from "./pages/Settings.tsx";
+import { ConnectionsPage, SettingsPage, UsagePage, ZoneNotice } from "./pages/Settings.tsx";
 import { Avatar } from "./shell/AccountMenu.tsx";
 import { AgentAccessPage, PageFrame } from "./shell/Pages.tsx";
 import { Sidebar, type SideLayout } from "./shell/Sidebar.tsx";
@@ -358,6 +358,7 @@ function Shell({
   // stays mounted under it, so the chat, its scroll and the draft stay.
   const [view, setView] = useState<View>("case");
   const [folded, setFolded] = useState(readFolded);
+  const device = useMemo(deviceZone, []);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const sheetToggle = useRef<HTMLButtonElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
@@ -611,6 +612,9 @@ function Shell({
             <p className="offline degraded" role="status">
               <Icon name="info" size="sm" /> Some settings could not be read just now. The app shows the last ones it read.
             </p>
+          )}
+          {settings && (
+            <ZoneNotice settings={settings} device={device} run={run} save={(zone) => backend.setTimezone(zone, settings.settingsVersion, "you")} />
           )}
         </div>
         <main className="main">

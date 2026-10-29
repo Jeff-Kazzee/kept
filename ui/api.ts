@@ -86,9 +86,10 @@ export type AppState = {
 };
 
 // The case generation and the highest event number. Any write moves one.
-export type LiveVersion = { generation: number; seq: number };
+// `calendar` moves when the app read Google Calendar again (0016, H1).
+export type LiveVersion = { generation: number; seq: number; calendar?: number };
 
-export const versionChanged = (a: LiveVersion, b: LiveVersion) => a.generation !== b.generation || a.seq !== b.seq;
+export const versionChanged = (a: LiveVersion, b: LiveVersion) => a.generation !== b.generation || a.seq !== b.seq || (a.calendar ?? 0) !== (b.calendar ?? 0);
 
 // An agent is "the assistant" or "an external agent" (0009, A22). Old
 // records keep the name of the grant they came through.

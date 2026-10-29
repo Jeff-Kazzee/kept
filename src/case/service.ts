@@ -86,6 +86,9 @@ export type CaseOptions = {
   model?: string;
   userName?: string | null;
   externalCalendar?: () => { name: string; events: IcsEvent[] } | null;
+  // Moves when the outside calendar's events change, so the page's poll
+  // reloads the case (0016, H1).
+  externalVersion?: () => number;
 };
 
 export class CaseService {
@@ -97,6 +100,7 @@ export class CaseService {
   readonly #model: string;
   readonly #userName: string | null;
   readonly #externalCalendar: () => { name: string; events: IcsEvent[] } | null;
+  readonly #externalVersion: (() => number) | null;
 
   // `client` serves the explanation and question calls. Extraction keeps
   // its own client inside `intake`.
@@ -109,6 +113,7 @@ export class CaseService {
     this.#model = options.model ?? MODEL;
     this.#userName = options.userName ?? null;
     this.#externalCalendar = options.externalCalendar ?? (() => null);
+    this.#externalVersion = options.externalVersion ?? null;
   }
 
   #describeQueue = (_streamId: string, events: StoredEvent[]) => {
@@ -164,8 +169,9 @@ export class CaseService {
   // and the highest event number in the file. Every write by the app, the
   // MCP server or another tab moves one of them, settings and agent calls
   // included.
-  liveVersion(): { generation: number; seq: number } {
-    return { generation: this.#store.caseGeneration(), seq: this.#store.latestSeqExcept([]) };
+  liveVersion(): { generation: number; seq: number; calendar?: number } {
+    const live = { generation: this.#store.caseGeneration(), seq: this.#store.latestSeqExcept([]) };
+    return this.#externalVersion ? { ...live, calendar: this.#externalVersion() } : live;
   }
 
   // Delete case: erases every event of the case, its activity and access

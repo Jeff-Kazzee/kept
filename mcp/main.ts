@@ -62,7 +62,7 @@ const google: GoogleServices = { connection: googleConnection, gmail: new Gmail(
 // inherits it.
 delete process.env.GOOGLE_CLIENT_SECRET;
 const intake = new IntakeService(store, client);
-const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name, externalCalendar: () => googleEvents.snapshot() });
+const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name, externalCalendar: () => googleEvents.snapshot(), externalVersion: () => googleEvents.version() });
 const reply = new ReplyService(store, kase, client);
 const records = new RecordsService(store, intake, kase);
 // J12: a tool that needs the model is refused while no provider is ready.

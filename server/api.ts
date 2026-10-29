@@ -21,6 +21,7 @@ import { SecretsBusyError, SecretsFileError } from "../src/model/providers/secre
 import { NO_PROVIDER_TEXT } from "../src/model/providers/messages.ts";
 import { GoogleError } from "../src/google/http.ts";
 import { GoogleBusyError } from "../src/google/intents.ts";
+import { localDate } from "../src/domain/zone.ts";
 import { SETTINGS_BUSY_TEXT, SETTINGS_UNREADABLE_TEXT } from "./auth.ts";
 import { UsageRefusedError } from "../src/model/usage.ts";
 
@@ -117,7 +118,14 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     ...settingsRoutes(store, actions, options.settings),
     // G-d: a cheap read the page polls to learn that the app, the MCP server
     // or another tab wrote something.
-    ["GET", /^\/api\/case\/version$/, () => kase.liveVersion()],
+    // 0016, H1: it also starts a background read of Google Calendar when
+    // the copy the schedule's clash checks use is more than a minute old.
+    ["GET", /^\/api\/case\/version$/, () => {
+      if (access.google?.events && access.google.connection.status().calendar) {
+        access.google.events.touch(() => ({ dates: kase.view().slots.map((s) => s.date), today: localDate(new Date().toISOString(), kase.timeZone()) }));
+      }
+      return kase.liveVersion();
+    }],
     ["GET", /^\/api\/fixtures$/, () =>
       scenarios.map((s) => ({
         id: s.id,

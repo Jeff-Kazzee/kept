@@ -11,8 +11,11 @@
 //                                 is the one GET /api/google answered (review
 //                                 round 3, finding 8).
 //   POST /api/google/disconnect   { expectedVersion } -> status and { revoked }
-//   POST /api/google/calendar/refresh  {} -> { events }  reads Google Calendar
-//                                 again for the case's clash checks
+//   POST /api/google/calendar/refresh  {} -> { events, read }  reads Google
+//                                 Calendar again for the case's clash checks.
+//                                 `read` is the read's time, count and window
+//                                 (0016, H2), also in GET /api/google as
+//                                 `calendarRead`.
 //   GET  /auth/google/callback    Google sends the browser here. Redirects to
 //                                 /?connected=google, or /?google_error=<code>.
 //
@@ -118,8 +121,9 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
     if (!options.events || !options.caseDates || !connection.status().calendar) return 0;
     const { dates, today } = options.caseDates();
     await options.events.refresh(dates, today);
-    return options.events.snapshot()?.events.length ?? 0;
+    return options.events.status().events;
   };
+  const readStatus = () => (options.events && connection.status().calendar ? { calendarRead: options.events.status() } : {});
 
   const fail = (err: unknown): GoogleRouteResponse => {
     if (err instanceof GoogleError) {
@@ -134,7 +138,7 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
   };
 
   const routes: Record<string, { method: string; run: (req: GoogleRouteRequest) => Promise<GoogleRouteResponse> | GoogleRouteResponse }> = {
-    "/api/google": { method: "GET", run: () => ({ status: 200, body: connection.status() }) },
+    "/api/google": { method: "GET", run: () => ({ status: 200, body: { ...connection.status(), ...readStatus() } }) },
     "/api/google/connect": {
       method: "POST",
       run: (req) => {
@@ -175,7 +179,8 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
       method: "POST",
       run: async (req) => {
         RefreshBody.parse(req.body ?? {});
-        return { status: 200, body: { events: await refreshEvents() } };
+        const events = await refreshEvents();
+        return { status: 200, body: { events, ...(options.events ? { read: options.events.status() } : {}) } };
       },
     },
   };

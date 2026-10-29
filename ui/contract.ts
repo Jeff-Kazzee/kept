@@ -73,6 +73,18 @@ export type GoogleStatus = {
   calendarId: string | null;
   configured: boolean;
   needsReconnect: boolean;
+  // The app's last read of Google Calendar for the clash checks (0016, H2).
+  // Present while the calendar is connected.
+  calendarRead?: CalendarRead;
+};
+
+export type CalendarRead = {
+  readAt: string | null;
+  events: number;
+  from: string | null;
+  to: string | null;
+  days: number;
+  error: { code: string; at: string } | null;
 };
 
 export const GOOGLE_OFF: GoogleStatus = { version: 0, connected: false, email: null, gmail: false, calendar: false, calendarId: null, configured: false, needsReconnect: false };

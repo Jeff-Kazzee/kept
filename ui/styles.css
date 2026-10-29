@@ -1054,3 +1054,5 @@ figure.source { margin: 0; }
   }
   .skeleton-line, .skeleton-block { animation: none !important; }
 }
+.zone-notice { flex-wrap: wrap; text-align: left; }
+.zone-notice .btn { min-height: 0; }

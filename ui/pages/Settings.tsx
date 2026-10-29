@@ -9,8 +9,9 @@ import { safeAuthorizeUrl, type GoogleGrants } from "../agentApi.ts";
 import { googleOrOff, useAgent } from "../agent/AgentContext.tsx";
 import { ModelSelect } from "../agent/ModelPicker.tsx";
 import { api } from "../api.ts";
-import { deviceZone, knownZones, validZone, type Provider, type Settings } from "../contract.ts";
-import { zoneWithShortName } from "../format.ts";
+import { deviceZone, knownZones, validZone, type CalendarRead, type Provider, type Settings } from "../contract.ts";
+import { clockTime, wallNow, zoneWithShortName } from "../format.ts";
+import { dateLabel } from "../../src/slots/labels.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon, type IconName } from "../components/Icon.tsx";
 import { THEME_EVENT, readTheme, saveTheme, type ThemeChoice } from "../theme.ts";
@@ -124,9 +125,41 @@ export function UsagePage({ run }: { run: Run }) {
 const SOURCE_WORDS: Record<Settings["timezoneSource"], string> = {
   you: "Set by you",
   agent: "Set by the assistant",
-  browser: "From this device",
+  browser: "From the first browser that opened the app",
   default: "The app's default",
 };
+
+// 0016, H3: where the zone came from. "From this device" only when this
+// device's zone is the case's zone.
+export function zoneSourceWords(source: Settings["timezoneSource"], zone: string, device: string | null): string {
+  return source === "browser" && device === zone ? "From this device" : SOURCE_WORDS[source];
+}
+
+// 0016, H3: the zone came from a browser or the default and differs from
+// this device's. Null when there is nothing to say.
+export function zoneMismatch(settings: Pick<Settings, "timezone" | "timezoneSource">, device: string | null): string | null {
+  if (!device || device === settings.timezone) return null;
+  return settings.timezoneSource === "browser" || settings.timezoneSource === "default" ? device : null;
+}
+
+// A short notice with one button. The zone changes only when the person
+// presses it.
+export function ZoneNotice({ settings, device, run, save }: { settings: Settings; device: string | null; run: Run; save: (zone: string) => Promise<unknown> }) {
+  const other = zoneMismatch(settings, device);
+  if (!other) return null;
+  const from = settings.timezoneSource === "browser" ? "set by the first browser that opened the app" : "the app's default";
+  return (
+    <div className="offline zone-notice" role="status">
+      <Icon name="globe" size="sm" />
+      <span>
+        Times show in {settings.timezone}, {from}. This device uses {other}.
+      </span>
+      <ActionButton run={run} size="sm" variant="ghost" action={() => save(other)}>
+        Use {other}
+      </ActionButton>
+    </div>
+  );
+}
 
 // The case time zone: a searchable list of every zone this browser knows,
 // and "Use this device's zone". Every time the app shows uses it.
@@ -152,7 +185,7 @@ export function TimeZoneSetting({ run }: { run: Run }) {
     <div className="stack-sm">
       <p className="zone-now">
         <strong>{zoneWithShortName(settings.timezone)}</strong>
-        <span className="small muted"> · {SOURCE_WORDS[settings.timezoneSource]}</span>
+        <span className="small muted"> · {zoneSourceWords(settings.timezoneSource, settings.timezone, device)}</span>
       </p>
       <p className="small muted">Every time in the app uses this zone: the schedule, calendar clashes, the chat and the time a message was received. You or the assistant can change it.</p>
       {settingsAvailable ? (
@@ -472,19 +505,9 @@ export function GoogleSetting({ run }: { run: Run }) {
         <Icon name="user" size="sm" /> Connected as {g.email ?? "a Google account"}
       </p>
       {grantList}
+      {g.calendar && <CalendarReadLine read={g.calendarRead ?? null} />}
       <div className="btn-row">
-        {g.calendar && (
-          <ActionButton
-            run={run}
-            variant="ghost"
-            action={async () => {
-              const { events } = await backend.googleCalendarRefresh();
-              notify(`Read ${events} event${events === 1 ? "" : "s"} from Google Calendar for the clash checks.`);
-            }}
-          >
-            Read the calendar again
-          </ActionButton>
-        )}
+        {g.calendar && <CalendarReadButton run={run} onRead={(read) => read && notify(calendarReadSentence(read))} />}
         {missing && (
           <ActionButton run={run} variant="ghost" action={connect({ gmail: true, calendar: true })}>
             Connect again with both
@@ -495,6 +518,62 @@ export function GoogleSetting({ run }: { run: Run }) {
         </ActionButton>
       </div>
     </div>
+  );
+}
+
+// 0016, H2: when the app last read Google Calendar for the clash checks,
+// how many events it found and for which days. "Read at 6:52 PM, 3 events
+// in the next 31 days."
+export function calendarReadSentence(read: CalendarRead, today = wallNow().slice(0, 10)): string {
+  if (!read.readAt) return "Google Calendar has not been read yet.";
+  const events = `${read.events} event${read.events === 1 ? "" : "s"}`;
+  const days = read.from === today ? `in the next ${read.days} days` : read.from && read.to ? `from ${dateLabel(read.from)} to ${dateLabel(read.to)}` : "";
+  return `Read at ${clockTime(read.readAt)}, ${events} ${days}`.trim() + ".";
+}
+
+const CALENDAR_ERRORS: Record<string, string> = {
+  google_reconnect_needed: "The Google connection expired. Connect it again.",
+  google_scope_missing: "The connection does not include Google Calendar. Connect again with it turned on.",
+  google_not_connected: "Google is not connected.",
+};
+
+export const calendarErrorSentence = (e: { code: string; at: string }) =>
+  `The read at ${clockTime(e.at)} failed. ${CALENDAR_ERRORS[e.code] ?? "Google did not answer. Try again in a moment."}`;
+
+function CalendarReadLine({ read }: { read: CalendarRead | null }) {
+  return (
+    <div className="stack-xs">
+      <p className="small muted" data-testid="calendar-read">
+        <Icon name="calendar" size="sm" /> {read ? calendarReadSentence(read) : "Google Calendar has not been read yet."}
+      </p>
+      {read?.error && (
+        <p className="small warn" role="alert">
+          <Icon name="alert" size="sm" /> {calendarErrorSentence(read.error)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// "Read the calendar again", with its own busy label while it reads.
+function CalendarReadButton({ run, onRead }: { run: Run; onRead: (read: CalendarRead | undefined) => void }) {
+  const { backend } = useAgent();
+  const [reading, setReading] = useState(false);
+  return (
+    <ActionButton
+      run={run}
+      variant="ghost"
+      action={async () => {
+        setReading(true);
+        try {
+          onRead((await backend.googleCalendarRefresh()).read);
+        } finally {
+          setReading(false);
+        }
+      }}
+    >
+      {reading ? "Reading the calendar…" : "Read the calendar again"}
+    </ActionButton>
   );
 }
 
