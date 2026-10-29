@@ -290,16 +290,22 @@ describe("sprint 13C, M3 and M4: what the person reads", () => {
     expect(latest(a).entries[0]!.label).toBe("Added from Gmail: the email from lantern hill, Oct 28, 6:43 PM.");
     expect(latest(a).entries[0]!.summary).toBe("Added message m2 from Gmail (email).");
     const { evidence } = await a.actions.extract(AGENT, m.id, { effort: "low", expectedVersion: m.version });
-    // 0016, C2: once the email's facts give the office's place, every label
-    // names the sender as the case holds it, the earlier ones too.
-    expect(latest(a).entries.map((e) => e.label)).toContain("Added from Gmail: the email from Lantern Hill Clinic, Oct 28, 6:43 PM.");
+    // Fix round 2, N3: a fact still waiting for review names nothing.
+    expect(latest(a).entries.map((e) => e.label)).toContain("Added from Gmail: the email from lantern hill, Oct 28, 6:43 PM.");
+    // 0016, C2: once the office's place is accepted, every label names the
+    // sender as the case holds it, the earlier ones too.
     const confirm = evidence.find((e) => e.claim.claim_type === "confirm")!;
-    a.actions.rejectClaim(AGENT, confirm.id, confirm.version);
-    // The place came from the fact now left out, so the email's own sender
-    // name is used again.
-    expect(latest(a).entries[0]!.label).toMatch(/^Left out the office's confirmation of Thursday 11\/12 10:30 AM, from the email from lantern hill, Oct 28, 6:43 PM\.$/);
+    a.actions.acceptClaim(YOU, confirm.id, confirm.version);
+    expect(latest(a).entries.map((e) => e.label)).toContain("Added from Gmail: the email from Lantern Hill Clinic, Oct 28, 6:43 PM.");
+    expect(latest(a).entries[0]!.label).toBe("Recorded the office's confirmation of Thursday 11/12 10:30 AM, from the email from Lantern Hill Clinic, Oct 28, 6:43 PM.");
+    const other = evidence.find((e) => e.claim.claim_type === "office_request")!;
+    a.actions.rejectClaim(AGENT, other.id, other.version);
+    expect(latest(a).entries[0]!.label).toMatch(/^Left out the office's request \(fact \d of \d\) for your checklist, from the email from Lantern Hill Clinic, Oct 28, 6:43 PM\.$/);
     undoLatest(a, "claim_rejected");
-    expect(latest(a).entries[0]!.label).toMatch(/^Undid: Left out the office's confirmation/);
+    expect(latest(a).entries[0]!.label).toMatch(/^Undid: Left out the office's request/);
+    // Undoing the accepted place names the office by its email name again.
+    undoLatest(a, "claim_accepted");
+    expect(latest(a).entries.map((e) => e.label)).toContain("Added from Gmail: the email from lantern hill, Oct 28, 6:43 PM.");
     for (const e of latest(a).entries) expect(e.label ?? e.summary).not.toMatch(/\bm2\b|front@|\bAccepted\b/);
   });
 

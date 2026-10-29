@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { desiredEvent } from "../src/google/calendar.ts";
 import type { EvidenceView, MessageView } from "../src/intake/events.ts";
 import { slotFields } from "../src/reply/draft.ts";
-import { messageLabel, officeOf, senderName } from "../src/reply/office.ts";
+import { messageLabel, officeNameOf, officeOf, senderKey, senderName } from "../src/reply/office.ts";
 import { renderReply } from "../src/reply/templates.ts";
 import type { SlotView } from "../src/slots/types.ts";
 import { localDateTime } from "../src/domain/zone.ts";
@@ -106,5 +106,35 @@ describe("sprint 13C fix round 1, R6: the office's name is labeled as untrusted"
     const { fields } = slotFields("ask_still_stands", s, { slots: [s], evidence: ev, messages, userName: null, timeZone: ZONE });
     expect(fields.find((f) => f.name === "office_name")!.untrustedLabel).toBe("The office's name, from its message. Untrusted text, shown as data.");
     expect(fields.find((f) => f.name === "date")!.untrustedLabel).toBeUndefined();
+  });
+});
+
+describe("sprint 13C fix round 2, N3: one office, named from accepted facts", () => {
+  it("a place on a fact still waiting for review, or left out, does not name the office", () => {
+    const messages = [message("gmail-1", "lantern hill <front@lanternhill.example>")];
+    const pending = { ...evidence("gmail-1-e1", "gmail-1", "2026-11-12", "10:30", PLACE), status: "pending" } as EvidenceView;
+    const rejected = { ...pending, status: "rejected" } as EvidenceView;
+    expect(officeNameOf(messages[0]!, [pending], messages)).toBe("lantern hill");
+    expect(officeNameOf(messages[0]!, [rejected], messages)).toBe("lantern hill");
+    expect(officeNameOf(messages[0]!, [{ ...pending, status: "accepted" } as EvidenceView], messages)).toBe("Lantern Hill Clinic");
+  });
+
+  it("two sender names at one address are one office, by the address and not the whole sender line", () => {
+    const a = { ...message("gmail-1", "Lantern Hill <Front@LanternHill.example>"), message: { id: "gmail-1", channel: "email", from: "Lantern Hill <Front@LanternHill.example>", received_at: "2026-10-28T10:00:00.000Z", text: "x" } } as MessageView;
+    const b = { ...message("gmail-2", "Front Desk <front@lanternhill.example>"), message: { id: "gmail-2", channel: "email", from: "Front Desk <front@lanternhill.example>", received_at: "2026-10-29T10:00:00.000Z", text: "x" } } as MessageView;
+    const other = { ...message("gmail-3", "Front Desk <desk@otherclinic.example>"), message: { id: "gmail-3", channel: "email", from: "Front Desk <desk@otherclinic.example>", received_at: "2026-10-29T11:00:00.000Z", text: "x" } } as MessageView;
+    const messages = [a, b, other];
+    const ev = [evidence("gmail-1-e1", "gmail-1", "2026-11-12", "10:30", PLACE)];
+    expect(senderKey(a.message.from)).toBe(senderKey(b.message.from));
+    // The place on the first email names the office for both.
+    expect(officeNameOf(a, ev, messages)).toBe("Lantern Hill Clinic");
+    expect(officeNameOf(b, ev, messages)).toBe("Lantern Hill Clinic");
+    // Another address is another office.
+    expect(officeNameOf(other, ev, messages)).toBe("Front Desk");
+    // Without a place, both read by the name on the latest email.
+    expect(officeNameOf(a, [], messages)).toBe("Front Desk");
+    expect(officeNameOf(b, [], messages)).toBe("Front Desk");
+    // The slot's office uses the same name, and the place of the same office.
+    expect(officeOf(slot(["gmail-2-e1"]), [...ev, evidence("gmail-2-e1", "gmail-2", "2026-11-16", "13:00", null)], messages)).toMatchObject({ name: "Lantern Hill Clinic", location: PLACE });
   });
 });

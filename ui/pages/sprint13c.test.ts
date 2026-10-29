@@ -75,7 +75,7 @@ describe("sprint 13C fix round 1: names and ids on the page", () => {
     messageId: "gmail-18f0a1",
     claim: { claim_type: "confirm", slot: { date: "2026-11-12", time: "10:30", location: PLACE }, quote: "This confirms your appointment.", source_type: "office_message", sender_kind: "person", evidence_time: "2026-10-29T00:43:00.000Z", event_time: null, request_item: null },
     origin: "extraction",
-    status: "pending",
+    status: "accepted",
     decidedAt: null,
     answer: null,
   };

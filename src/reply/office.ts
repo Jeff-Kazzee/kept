@@ -50,24 +50,48 @@ export type OfficeOf = {
   location: string | null;
 };
 
-const sameSender = (m: MessageView, messages: MessageView[]) =>
-  new Set(messages.filter((x) => x.sourceType === "office_message" && x.message.from === m.message.from).map((x) => x.id));
+// Fix round 2, N3: one office is one address. The address inside a sender
+// line, or the line itself when it has none, so "Lantern Hill <a@x>" and
+// "Front Desk <a@x>" are the same office.
+export function senderKey(from: string): string {
+  const inside = /<([^<>]+@[^<>]+)>/.exec(from)?.[1];
+  const bare = /^\s*([^\s<>@]+@[^\s<>@]+)\s*$/.exec(from)?.[1];
+  return (inside ?? bare ?? oneLine(from)).trim().toLowerCase();
+}
 
-const placesOf = (ids: Set<string>, evidence: EvidenceView[], ok: (status: string) => boolean) => [
-  ...new Set(evidence.filter((e) => ok(e.status) && e.messageId !== null && ids.has(e.messageId) && e.claim.slot.location).map((e) => oneLine(e.claim.slot.location!))),
-];
+const sameSender = (m: MessageView, messages: MessageView[]) => {
+  const key = senderKey(m.message.from);
+  return messages.filter((x) => x.sourceType === "office_message" && senderKey(x.message.from) === key);
+};
+
+// The places the office's accepted facts give. Only accepted facts name or
+// place the office (fix round 2, N3).
+const acceptedPlaces = (group: MessageView[], evidence: EvidenceView[]) => {
+  const ids = new Set(group.map((x) => x.id));
+  return [...new Set(evidence.filter((e) => e.status === "accepted" && e.messageId !== null && ids.has(e.messageId) && e.claim.slot.location).map((e) => oneLine(e.claim.slot.location!)))];
+};
 
 // 0016, M1 and C2: the name the case holds for the sender of an office
 // message, for every place the page or a reply names it. A pasted sender is
-// the name the person's message gave, kept as it is. A Gmail sender's name
-// is spelled in full by a place its messages give that is not rejected.
-// Null for a message that is not from the office, or a sender with only an
-// address.
+// the name the person's message gave, kept as it is. For Gmail, every
+// message from the same address names one office: the sender name a place
+// of the office's accepted facts spells in full, else the sender name of
+// its latest message. Null for a message that is not from the office, or a
+// sender with only an address.
 export function officeNameOf(m: MessageView, evidence: EvidenceView[], messages: MessageView[]): string | null {
   if (m.sourceType !== "office_message") return null;
-  const name = senderName(m.message.from);
-  if (!name || m.importedFrom !== "gmail") return name;
-  return fullerName(name, placesOf(sameSender(m, messages), evidence, (s) => s !== "rejected"));
+  const own = senderName(m.message.from);
+  if (m.importedFrom !== "gmail") return own;
+  const group = sameSender(m, messages).filter((x) => x.importedFrom === "gmail");
+  if (!group.some((x) => x.id === m.id)) group.push(m);
+  const latestFirst = [...group].sort((a, b) => Date.parse(b.message.received_at) - Date.parse(a.message.received_at));
+  const names = latestFirst.map((x) => senderName(x.message.from)).filter((x): x is string => x !== null);
+  const places = acceptedPlaces(group, evidence);
+  for (const name of names) {
+    const full = fullerName(name, places);
+    if (full !== name) return full;
+  }
+  return names[0] ?? null;
 }
 
 // The office of a slot: the sender of the latest office message on it.
@@ -77,7 +101,7 @@ export function officeOf(slot: SlotView, evidence: EvidenceView[], messages: Mes
     const message = ev?.messageId ? messages.find((m) => m.id === ev.messageId) : undefined;
     if (!ev || !message || message.sourceType !== "office_message") continue;
     // The place the office's accepted facts give, when there is only one.
-    const places = placesOf(sameSender(message, messages), evidence, (s) => s === "accepted");
+    const places = acceptedPlaces(sameSender(message, messages), evidence);
     return {
       name: officeNameOf(message, evidence, messages),
       evidenceId: id,
