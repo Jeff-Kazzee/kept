@@ -260,3 +260,33 @@ describe("sprint 13D fix round 1, R2: the mark is made only for a write that hap
     expect(live(fake)[0]!.id).toBe(opened.plan.eventId);
   });
 });
+
+describe("sprint 13D fix round 1, R8: the event and the greeting wait for the office's name as the page does", () => {
+  it("an event made while the name is held back has no office name, and the next sync after it resolves names it, with Undo", async () => {
+    const { fake, app } = await connected();
+    const m = app.intake.importMessage(
+      { id: "m-both", channel: "email", from: "lantern hill <front@lanternhill.example>", received_at: "2026-10-31T09:12:00-06:00", text: BOTH },
+      { suggested: [], note: "", importedFrom: "gmail" },
+    );
+    await app.intake.extract("m-both", { effort: "minimal", expectedVersion: m.version });
+    // Only Monday, which has no place, is accepted. Thursday's fact gives a
+    // place and still waits, so the office's name is held back.
+    const monday = app.intake.reviewQueue().find((e) => e.claim.slot.date === "2026-11-16")!;
+    app.intake.accept(monday.id, monday.version);
+    const slot = app.kase.view().slots.find((s) => s.key === MONDAY_KEY)!;
+    const ctx = { slots: app.kase.view().slots, evidence: app.intake.evidence(), messages: app.intake.messages(), userName: null, timeZone: app.kase.timeZone() };
+    expect(officeOf(slot, ctx.evidence, ctx.messages).name).toBeNull();
+    // The greeting names no one rather than the account's name.
+    expect(slotFields("ask_still_stands", slot, ctx).fields.find((f) => f.name === "office_name")!.value).toBeNull();
+    await call(app, "calendar_sync_slot", { slot_key: MONDAY_KEY });
+    expect(live(fake)[0]!.summary).toBe("Appointment");
+    // Thursday is accepted: its place spells the office's fuller name.
+    const thursday = app.intake.reviewQueue()[0]!;
+    app.intake.accept(thursday.id, thursday.version);
+    const again = await call(app, "calendar_sync_slot", { slot_key: MONDAY_KEY });
+    expect([again.output.action, again.output.undoable]).toEqual(["updated", true]);
+    expect(live(fake).find((e) => props(e).apptSlotKey === MONDAY_KEY)!.summary).toBe("Lantern Hill Clinic");
+    const after = app.kase.view().slots.find((s) => s.key === MONDAY_KEY)!;
+    expect(slotFields("ask_still_stands", after, { ...ctx, evidence: app.intake.evidence() }).fields.find((f) => f.name === "office_name")!.value).toBe("Lantern Hill Clinic");
+  });
+});

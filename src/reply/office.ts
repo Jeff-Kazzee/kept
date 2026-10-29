@@ -117,7 +117,10 @@ export function officeOf(slot: SlotView, evidence: EvidenceView[], messages: Mes
     const ev = evidence.find((e) => e.id === id);
     const message = ev?.messageId ? messages.find((m) => m.id === ev.messageId) : undefined;
     if (!ev || !message || message.sourceType !== "office_message") continue;
-    return { name: officeNameOf(message, evidence, messages), evidenceId: id, messageId: message.id, location: slot.location };
+    // 0017, fix round 1, R8: the name the page shows, so the reply's
+    // greeting and the calendar event never hold the account's name while
+    // the page holds it back.
+    return { name: officeNameShown(message, evidence, messages), evidenceId: id, messageId: message.id, location: slot.location };
   }
   return { name: null, evidenceId: null, messageId: null, location: slot.location };
 }
