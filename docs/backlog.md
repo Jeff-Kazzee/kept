@@ -544,6 +544,27 @@ below. Decisions: `docs/decisions/0016-live-run-fixes.md`.
 - [ ] The coordinator's live rerun with Gmail and Google Calendar.
 - [ ] Confirm or change the choices marked proposed in 0016.
 
+## Sprint 13D: fixes from the second live Gmail and Calendar run
+
+Branch `sprint/13d-run2-fixes`. The live run 2 on 2026-10-29 found the items
+below. Decisions: `docs/decisions/0017-run2-fixes.md`.
+
+- [x] E1 Each case has its own calendar mark in the event id and the
+  app's private property, so a new case never inherits an earlier case's
+  event, removed or not.
+- [x] E2 The event's place is the slot's own place, as the schedule and
+  the reply show it.
+- [x] E3 A finished answer's start stays in view, and a facts card already
+  in the chat is a one-line pointer.
+- [x] E4 A request log with the method, the path, the status and the time,
+  never a secret. On in local mode, off in hosted mode.
+- [x] E5 Delete case says it finished.
+- [x] E6 The stopped-turn sentence shows once, the account's lowercase name
+  never shows for a moment, no sideways scrollbar, and the tentative status
+  is checked at the fake Google.
+- [ ] The coordinator's live rerun with Gmail and Google Calendar.
+- [ ] Confirm or change the choices marked proposed in 0017.
+
 ## Sprint 14: paid plans with Stripe (deferred until after the hackathon)
 
 Deferred by Jeff on 2026-10-28 (J18 in

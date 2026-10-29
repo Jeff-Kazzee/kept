@@ -99,6 +99,7 @@ Changed:
   messages and are shown as given.
 - The location is the slot's place, or else the one place the office's
   accepted facts give. Two different places give none. (proposed)
+  Replaced by 0017, E2: the location is the slot's own place only.
 - "Edits only events it created" holds: the change is in `desiredEvent`
   only. An event made before this change is updated at the next sync, with
   Undo, because its title differs.
