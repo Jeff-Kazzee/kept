@@ -156,9 +156,15 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       if (!access.google) throw new GoogleError("google_not_configured");
       const account = access.google.connection.gmailAccount();
       if (account === null) throw new GoogleError("google_not_connected");
+      const google = access.google;
       const inCase = () => service.messages().some((x) => x.id === `gmail-${raw}`);
-      if (!addableOffer(store, account, kase.generation(), raw, inCase())) throw new GmailNotOfferedError();
-      const added = await addGmailMessage(actions, service, access.google.gmail, YOU, raw);
+      // The same account, and the offer still there: at the start, and again
+      // after Gmail answered, right before the import (fix round 2, F1).
+      const offered = () => {
+        if (google.connection.gmailAccount() !== account || !addableOffer(store, account, kase.generation(), raw, inCase())) throw new GmailNotOfferedError();
+      };
+      offered();
+      const added = await addGmailMessage(actions, service, google.gmail, YOU, raw, offered);
       // Fix round 2, F3: the offer is used once. An Undo of this import
       // makes it addable again.
       if (added.created) useGmailOffer(store, raw);

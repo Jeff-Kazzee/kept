@@ -556,6 +556,43 @@ describe("sprint 13E fix round 2, F3: offers keep no account id and are used onc
   });
 });
 
+describe("sprint 13E fix round 2, F1: Add it checks the offer again right before it imports", () => {
+  async function raced(during: (google: GoogleServices, fake: FakeGoogle) => Promise<void>) {
+    const { app, fake, google } = await connected();
+    await offerSecond(app);
+    const real = google.gmail;
+    const gmail = {
+      get: async (id: string) => {
+        const m = await real.get(id);
+        await during(google, fake);
+        return m;
+      },
+    } as unknown as GoogleServices["gmail"];
+    const api = createApi(app.intake, app.kase, {}, app.reply, { store: app.store, records: app.records, google: { ...google, gmail } });
+    const before = new CaseActions(app.store, app).activity().entries.length;
+    const res = await api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation: app.kase.generation() });
+    expect(res).toMatchObject({ status: 409, body: { error: "gmail_not_offered" } });
+    expect(app.intake.messages().map((m) => m.id)).toEqual([`gmail-${FIRST.id}`]);
+    expect(new CaseActions(app.store, app).activity().entries).toHaveLength(before);
+    expect(gmailOffers(app.store).map((o) => o.used)).toEqual([false]);
+  }
+
+  it("refuses and writes nothing when another account connects while the email is read", async () => {
+    await raced(async (google, fake) => {
+      fake.account = { sub: "2000002", email: "other.demo@example.com" };
+      const flow = google.connection.startConnect({ expectedVersion: google.connection.status().version, features: { gmail: true, calendar: true }, calendarId: "primary", redirectUri: "http://127.0.0.1:5192/auth/google/callback" });
+      const back = fake.consent(flow.authorizeUrl);
+      await google.connection.finishConnect({ state: back.searchParams.get("state"), code: back.searchParams.get("code"), error: null, cookie: flow.cookie });
+    });
+  });
+
+  it("refuses and writes nothing when Google is disconnected while the email is read", async () => {
+    await raced(async (google) => {
+      await google.connection.disconnect(google.connection.status().version);
+    });
+  });
+});
+
 describe("sprint 13E fix round 1, R2: import and read are one outcome per email", () => {
   async function importCtx(app: Awaited<ReturnType<typeof connected>>["app"], gmail: GoogleServices["gmail"]) {
     return {

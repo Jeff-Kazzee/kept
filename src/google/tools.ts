@@ -253,7 +253,17 @@ export class GmailNotOfferedError extends Error {
 // the message (review round 2, finding 20): one already there, or one
 // another call recorded at the same moment, is not a new import. Shared by
 // gmail_import and the person's "Add it" on a waiting email (0018, H2).
-export async function addGmailMessage(actions: CaseActions, intake: ToolContext["intake"], gmail: Gmail, by: By, raw: string): Promise<{ message: MessageView; created: boolean }> {
+// `check` runs after the email was read from Gmail and right before the
+// import, with no wait between, so a refusal it throws writes nothing (fix
+// round 2, F1).
+export async function addGmailMessage(
+  actions: CaseActions,
+  intake: ToolContext["intake"],
+  gmail: Gmail,
+  by: By,
+  raw: string,
+  check: () => void = () => {},
+): Promise<{ message: MessageView; created: boolean }> {
   const id = gmailMessageId(raw);
   const there = intake.messages().find((m) => m.id === id);
   if (there) return { message: there, created: false };
@@ -262,6 +272,7 @@ export async function addGmailMessage(actions: CaseActions, intake: ToolContext[
   const shaped = toImport(await gmail.get(raw));
   if (shaped.message.text.trim() === "") throw new GmailNotImportedError("empty_message");
   if (shaped.message.text.length > MAX_IMPORT_CHARS) throw new GmailNotImportedError("too_long");
+  check();
   try {
     // Nothing is marked suggested, and it is never an own report.
     return { message: actions.importMessage(by, shaped.message, { suggested: [], note: "", importedFrom: "gmail" }), created: true };
