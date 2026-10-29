@@ -64,7 +64,7 @@ describe("sprint 13C, M2: the name that signs a reply", () => {
     expect(res.status).toBe(200);
     view = res.body as CaseView;
     expect(view.profile).toEqual({ userName: "Sam Rivera", version: 1 });
-    expect(view.reply.draft).toMatchObject({ id: "d2", valid: true });
+    expect(view.reply.draft).toMatchObject({ id: "d1", valid: true, edited: false });
     expect(view.reply.draft!.text.endsWith("Thank you,\nSam Rivera")).toBe(true);
     expect(a.actions.activity().entries[0]).toMatchObject({ kind: "name_given", summary: "Gave the name that signs your replies.", undoable: false });
     expect(JSON.stringify(a.actions.activity())).not.toContain("Sam Rivera");

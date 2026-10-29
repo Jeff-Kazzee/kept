@@ -16,6 +16,7 @@ import { slotLabel, sourceLabel } from "../slots/labels.ts";
 const sourceLabelOf = (c: EvidenceClaim) => sourceLabel(c.source_type, c.agent_name ?? null);
 import type { StoredEvent } from "../store/event-log.ts";
 import type { CaseEvent } from "./events.ts";
+import type { ProfileEvent } from "./service.ts";
 import type { ChatEventData } from "../agent/events.ts";
 import { ACTIVITY_STREAM } from "../activity/events.ts";
 import { SETTINGS_STREAM } from "../settings/events.ts";
@@ -34,7 +35,7 @@ export type HistoryEntry = {
   undone: boolean;
 };
 
-type AnyEvent = MessageEvent | EvidenceEvent | CaseEvent | ReplyEvent | RecordEvent | AccessEvent | ChatEventData;
+type AnyEvent = MessageEvent | EvidenceEvent | CaseEvent | ReplyEvent | RecordEvent | AccessEvent | ChatEventData | ProfileEvent;
 
 const CHAT_OUTCOME = {
   answered: "answer passed the code checks",
@@ -138,6 +139,10 @@ function label(e: StoredEvent): string | null {
       return `Draft ${event.data.draft_id} started: ${TEMPLATES[event.data.template].title}, ${event.data.slot_label}`;
     case "reply_edited":
       return `Draft ${event.data.draft_id} edited`;
+    case "reply_signed":
+      return `Draft ${event.data.draft_id} signed with the name you gave`;
+    case "user_name_given":
+      return "You gave the name that signs your replies";
     case "reply_discarded":
       return `Draft ${event.data.draft_id} discarded${event.data.reason === "replaced" ? " because a new draft replaced it" : event.data.reason === "undone" ? " by an undo" : ""}`;
     case "reply_discard_undone":

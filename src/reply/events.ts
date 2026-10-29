@@ -46,6 +46,10 @@ export type ReplyEvent =
       };
     }
   | { type: "reply_edited"; data: { draft_id: string; text: string } }
+  // 0016, M2: the person gave the name that signs replies. An open,
+  // unedited draft keeps its id and takes the fields and text code built
+  // again with the name.
+  | { type: "reply_signed"; data: { draft_id: string; fields: FieldView[]; text: string } }
   // "by_user" is a discard by the person or an agent. "undone" is an undo of
   // the draft's start in the activity log.
   | { type: "reply_discarded"; data: { draft_id: string; reason: "replaced" | "by_user" | "undone" } }
@@ -133,6 +137,10 @@ export function projectReplies(events: StoredEvent[]): ReplyLog {
     if (event.type === "reply_edited") {
       draft.text = event.data.text;
       draft.edited = true;
+    } else if (event.type === "reply_signed") {
+      draft.fields = event.data.fields;
+      draft.renderedText = event.data.text;
+      draft.text = event.data.text;
     } else if (event.type === "reply_discarded") {
       draft.status = "discarded";
     } else if (event.type === "reply_discard_undone") {

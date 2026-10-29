@@ -160,7 +160,8 @@ export class ReplyService {
 
   // 0016, M2: the person gives the name that signs replies, in this case.
   // An open draft that has no name and was not edited is built again with
-  // it, in the same write, so the card shows the signed text to read back.
+  // it, in the same write, under the same id, so both cards show the
+  // signed text to read back.
   giveName(name: string, expectedVersion: number): CaseView {
     return this.#store.inCase(() => this.#giveName(name, expectedVersion));
   }
@@ -179,17 +180,7 @@ export class ReplyService {
       if (!open || !unnamed) return;
       const built = buildDraft(open.template, open.slotKey, context);
       if (!built.ok) return;
-      const events = draftEvents(log, {
-        template: open.template,
-        slot_key: open.slotKey,
-        slot_label: built.content.slot.label,
-        origin: open.origin,
-        question_id: open.questionId,
-        suggestion_id: open.suggestionId,
-        fields: built.content.fields,
-        declines: built.content.declines,
-        text: built.content.text,
-      });
+      const events: ReplyEvent[] = [{ type: "reply_signed", data: { draft_id: open.id, fields: built.content.fields, text: built.content.text } }];
       this.#store.append(REPLY_STREAM, log.version, events.map(asEvent), this.#describe);
     });
     return this.#kase.view();

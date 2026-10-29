@@ -138,8 +138,9 @@ Changed:
 - Without a name the reply ends "Thank you." and the "Your name" field says
   "Not given yet." with a field and "Sign with this name". Only the person
   can give it (`POST /api/profile/name`). It refuses an address. Giving it
-  builds an open, unedited, unsigned draft again with the name, in the same
-  write, so the card shows the signed text to read back.
+  signs an open, unedited, unsigned draft in the same write: the draft
+  keeps its id and takes the fields and text code builds with the name, so
+  both cards show the signed text to read back (`reply_signed`).
 - The activity entry is "Gave the name that signs your replies." without
   the name, like a note's. It cannot be undone: give another name to change
   it. (proposed)
