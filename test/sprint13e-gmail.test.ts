@@ -35,7 +35,7 @@ const SECOND = { id: "19a002", at: "2026-10-29T00:43:00Z", date: "Wed, 28 Oct 20
 const OTHER = { id: "19b001", at: "2026-10-27T15:00:00Z", date: "Tue, 27 Oct 2026 09:00:00 -0600" };
 const FIRST_TEXT = "Hi Dana,\n\nThis confirms your appointment on Thursday, November 12 at 10:30 AM at Lantern Hill Clinic, 400 Elm Street, Suite 2.\n\nFront Desk";
 const SECOND_TEXT =
-  "Dana, we need to move your Thursday, November 12 10:30 AM visit. We can offer Friday, November 13 at 9:15 AM or Monday, November 16 at 1:00 PM.\n\nFront Desk";
+  "Dana, we need to move your Thursday, November 12 10:30 AM visit. We can offer Friday, November 13 at 9:15 AM or Monday, November 16 at 1:00 PM.\n\nFront Desk, Lantern Hill Clinic";
 const OTHER_TEXT = "Reminder: your cleaning is on Tuesday, November 24 at 8:00 AM.\n\nPine Dental";
 
 const claim = (c: Record<string, unknown>) => ({ location: null, sender_kind: "person", event_time: null, request_item: null, ...c });
@@ -339,12 +339,23 @@ describe("sprint 13E, H3: names and times in the tool outputs", () => {
     const model = sequence(SEARCH(), reply(message("The email from the office sent Wednesday 10/28 6:43 PM is not in your case yet.")));
     const r = await say(agentFor(app, model), app, "What is in my Gmail?");
     expect([r.report.outcome, r.report.problems]).toEqual(["answered", [[]]]);
-    const found = turnOutputs(model.calls[1]!.body.input)[0]!.output.messages;
-    expect(found.map((m: Record<string, unknown>) => [m.office, m.sender_domain, "from" in m])).toEqual([
-      [null, "lanternhill.example", false],
-      [null, "lanternhill.example", false],
+    const output = turnOutputs(model.calls[1]!.body.input)[0]!.output;
+    const found = output.messages as Array<Record<string, unknown>>;
+    expect(found.map((m) => Object.keys(m))).toEqual(
+      found.map(() => ["message_id", "office", "sender_domain", "subject", "sent_at", "sent_label", "body", "body_truncated", "already_imported"]),
+    );
+    expect(found.map((m) => [m.office, m.sender_domain])).toEqual([
+      [null, "lanternhill.example"],
+      [null, "lanternhill.example"],
     ]);
-    expect(JSON.stringify(found.map(({ body: _b, ...rest }: Record<string, unknown>) => rest))).not.toMatch(/lantern hill|front@/);
+    // Fix round 2, F5: the whole output, body included. No address and no
+    // sender line anywhere. The office's name appears only where the email
+    // itself signs it, inside the body, which is labeled message text.
+    const all = JSON.stringify(output);
+    expect(all).not.toMatch(/front@|lantern hill </i);
+    expect(found.map((m) => (m.body as { untrusted_text: string }).untrusted_text.includes("Lantern Hill Clinic"))).toEqual([true, true]);
+    const withoutBodies = JSON.stringify({ ...output, messages: found.map(({ body: _b, ...rest }) => rest) });
+    expect(withoutBodies).not.toMatch(/lantern hill/i);
     // Without the search the same time is not grounded.
     expect(checkAnswer("The email sent Wednesday 10/28 6:43 PM.", { facts: [], statuses: new Set(), today: "2026-11-05" })).toContain("ungrounded");
   });
