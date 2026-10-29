@@ -613,7 +613,9 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
       const evidence = intake.evidence();
       const archived = kase.archivedKeys();
       const settings = timezoneSettings(ctx.store);
-      const clashFacts = view.slots.flatMap((s) => (s.clashes ?? []).map((c) => caseLocal(c.start, zone)));
+      // Fix round 1, R3: when Google could not be read, the stored clashes
+      // may be out of date. They are left out, with their facts.
+      const clashFacts = unread ? [] : view.slots.flatMap((s) => (s.clashes ?? []).map((c) => caseLocal(c.start, zone)));
       return result(
         {
           today: { date: today, label: slotLabel(today, null).replace(", no time", "") },
@@ -631,11 +633,11 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
             record_version: records.record(s.key).version,
             evidence_ids: s.evidenceIds,
             conflict_ids: view.conflicts.filter((c) => c.slotKeys.includes(s.key)).map((c) => c.id),
-            clashes: s.clashes?.map((c) => ({ summary: untrustedText(c.summary), starts: localLabel(caseLocal(c.start, zone)) })) ?? null,
+            clashes: unread ? null : (s.clashes?.map((c) => ({ summary: untrustedText(c.summary), starts: localLabel(caseLocal(c.start, zone)) })) ?? null),
             reply_templates: view.reply.options.filter((o) => o.slotKey === s.key).map((o) => o.template),
           })),
           calendar_loaded: view.calendar !== null,
-          ...(unread ? { google_calendar: { read: false, error: unread.code, message: `${CALENDAR_UNREADABLE} The clashes shown may be out of date.` } } : {}),
+          ...(unread ? { google_calendar: { read: false, error: unread.code, message: `${CALENDAR_UNREADABLE} No clashes are shown until it can be read.` } } : {}),
           open_question: view.question ? { question_id: view.question.id, conflict_id: view.question.conflictId } : null,
           questions_version: view.questionsVersion,
           conflicts_waiting: view.waiting,

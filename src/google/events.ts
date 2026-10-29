@@ -27,8 +27,12 @@ import { GoogleError } from "./http.ts";
 export const GOOGLE_CALENDAR_NAME = "Google Calendar";
 // How old a read may be before a clash check reads Google again.
 export const FRESH_MS = 60_000;
-// The most windows kept. The oldest read goes first.
+// The most windows kept. The oldest read goes first, except a window a chat
+// turn read in the last PIN_MS, so a turn never loses a window it read
+// (fix round 1, R1). HARD_MAX_WINDOWS bounds them all.
 const MAX_WINDOWS = 4;
+const PIN_MS = 5 * 60_000;
+const HARD_MAX_WINDOWS = 16;
 
 const addDays = (date: string, days: number) => {
   const [y, m, d] = date.split("-").map(Number) as [number, number, number];
@@ -47,11 +51,21 @@ export type CalendarReadStatus = {
   error: { code: string; at: string } | null;
 };
 
-// The reads of one chat turn, by window. A failed read stays failed for
-// the rest of the turn.
-export type CalendarReads = Map<string, Promise<void>>;
+// The reads of one chat turn, by window. A read still running is shared. A
+// failed read stays failed for the rest of the turn. A read that worked is
+// read again only when its window is no longer kept or no longer fresh.
+export type CalendarReads = Map<string, { read: Promise<void>; state: "pending" | "ok" | "failed" }>;
 
-const startOf = (e: CalendarEvent) => Date.parse(`${e.start.date}T${e.start.time ?? "00:00"}:00Z`);
+const windowKey = (w: { from: string; to: string }, zone: string) => `${w.from}/${w.to}/${zone}`;
+
+// Whether a newer window holds the day an event starts on. A timed event's
+// instant is compared with the window's bounds. An all-day event is a date,
+// compared with the window's dates in its own zone (fix round 1, R4).
+const holds = (w: Window, e: CalendarEvent) => {
+  if (e.start.time === null) return w.from <= e.start.date && e.start.date <= w.to;
+  const t = Date.parse(`${e.start.date}T${e.start.time}:00Z`);
+  return t >= w.startMs && t < w.endMs;
+};
 
 export class GoogleCalendarEvents {
   readonly #calendar: GoogleCalendar;
@@ -61,6 +75,11 @@ export class GoogleCalendarEvents {
   #last: { window: Window } | null = null;
   #error: { code: string; at: number } | null = null;
   #background: Promise<void> | null = null;
+  // One read per window at a time, shared by refresh, ensure and touch
+  // (fix round 1, R2).
+  readonly #inflight = new Map<string, Promise<void>>();
+  // Windows a chat turn read, kept until the time given.
+  readonly #pins = new Map<string, number>();
   // Moves with every stored read, so the page reloads the case (H1).
   #version = 0;
 
@@ -87,8 +106,7 @@ export class GoogleCalendarEvents {
     newest.forEach((w, i) => {
       for (const e of w.events) {
         if (seen.has(e.id)) continue;
-        const t = startOf(e);
-        if (newest.slice(0, i).some((n) => t >= n.startMs && t < n.endMs)) continue;
+        if (newest.slice(0, i).some((n) => holds(n, e))) continue;
         seen.add(e.id);
         out.push(e);
       }
@@ -107,6 +125,7 @@ export class GoogleCalendarEvents {
     this.#state = null;
     this.#last = null;
     this.#error = null;
+    this.#pins.clear();
   }
 
   // Without a calendar connection: drops what is stored, once.
@@ -149,15 +168,25 @@ export class GoogleCalendarEvents {
     const zone = this.#calendar.timeZone;
     const now = this.#now();
     const covers = (w: { from: string; to: string }) => w.from <= date && date <= w.to;
-    if ((this.#windows() ?? []).some((w) => w.zone === zone && covers(w) && now - w.readAt < FRESH_MS)) return;
+    const kept = this.#windows() ?? [];
+    if (kept.some((w) => w.zone === zone && covers(w) && now - w.readAt < FRESH_MS)) return;
     const primary = GoogleCalendarEvents.caseWindow(scope.dates, scope.today);
     const window = covers(primary) ? primary : { from: date, to: addDays(date, MAX_WINDOW_DAYS - 1) };
-    const key = `${window.from}/${window.to}/${zone}`;
+    const key = windowKey(window, zone);
     const earlier = scope.reads?.get(key);
-    if (earlier) return earlier;
-    const read = this.#read(window);
-    scope.reads?.set(key, read);
-    return read;
+    if (earlier && earlier.state !== "ok") return earlier.read;
+    const entry: { read: Promise<void>; state: "pending" | "ok" | "failed" } = { read: Promise.resolve(), state: "pending" };
+    // A clash check's window is pinned, so the checks after it in the same
+    // turn or call still find it.
+    entry.read = this.#read(window, true).then(
+      () => void (entry.state = "ok"),
+      (err) => {
+        entry.state = "failed";
+        throw err;
+      },
+    );
+    scope.reads?.set(key, entry);
+    return entry.read;
   }
 
   // Reads the case window in the background when its last read is older
@@ -177,7 +206,20 @@ export class GoogleCalendarEvents {
       .finally(() => (this.#background = null));
   }
 
-  async #read(window: { from: string; to: string }): Promise<void> {
+  // One read of a window at a time: a caller that asks while it runs gets
+  // the same read. `pin` keeps the window for PIN_MS.
+  #read(window: { from: string; to: string }, pin = false): Promise<void> {
+    const zone = this.#calendar.timeZone;
+    const key = `${this.#generation}|${this.#calendar.accountKey()}|${windowKey(window, zone)}`;
+    if (pin) this.#pins.set(windowKey(window, zone), this.#now() + PIN_MS);
+    const running = this.#inflight.get(key);
+    if (running) return running;
+    const read = this.#fetch(window).finally(() => this.#inflight.delete(key));
+    this.#inflight.set(key, read);
+    return read;
+  }
+
+  async #fetch(window: { from: string; to: string }): Promise<void> {
     const generation = this.#generation;
     const account = this.#calendar.accountKey();
     if (account === null) return this.#drop();
@@ -190,18 +232,29 @@ export class GoogleCalendarEvents {
       throw err;
     }
     if (generation !== this.#generation || this.#calendar.accountKey() !== account) return;
+    const now = this.#now();
     const stored: Window = {
       ...window,
       zone,
       startMs: wallClockToUtc(window.from, "00:00", zone),
       endMs: wallClockToUtc(addDays(window.to, 1), "00:00", zone),
-      readAt: this.#now(),
+      readAt: now,
       events,
     };
-    const kept = (this.#state?.account === account ? this.#state.windows : []).filter((w) => !(w.from === window.from && w.to === window.to));
-    this.#state = { account, windows: [...kept, stored].sort((a, b) => a.readAt - b.readAt).slice(-MAX_WINDOWS) };
+    const kept = (this.#state?.account === account ? this.#state.windows : []).filter((w) => !(w.from === window.from && w.to === window.to && w.zone === zone));
+    this.#state = { account, windows: this.#keep([...kept, stored], now) };
     this.#last = { window: stored };
     this.#error = null;
     this.#version += 1;
+  }
+
+  // The windows to keep, oldest first: every pinned one, and the newest
+  // others up to MAX_WINDOWS, never more than HARD_MAX_WINDOWS.
+  #keep(windows: Window[], now: number): Window[] {
+    for (const [k, until] of this.#pins) if (until <= now) this.#pins.delete(k);
+    const pinned = (w: Window) => this.#pins.has(windowKey(w, w.zone));
+    const sorted = [...windows].sort((a, b) => a.readAt - b.readAt);
+    const others = sorted.filter((w) => !pinned(w)).slice(-MAX_WINDOWS);
+    return sorted.filter((w) => pinned(w) || others.includes(w)).slice(-HARD_MAX_WINDOWS);
   }
 }

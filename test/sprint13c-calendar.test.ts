@@ -48,7 +48,7 @@ afterEach(() => {
 
 // A connected account, a case with Thursday 11/12 10:30 confirmed, and the
 // first read of the calendar, as Connect does.
-async function connected() {
+async function connected(extra?: Recording) {
   const dir = mkdtempSync(path.join(tmpdir(), "s13c-cal-"));
   dirs.push(dir);
   const fake = new FakeGoogle();
@@ -59,7 +59,7 @@ async function connected() {
   let events: GoogleCalendarEvents | null = null;
   const store = new EventStore(":memory:", CLOCK);
   useZone(store, DEMO_ZONE);
-  const client = RecordedModelClient.withOverrides([recording("m-thu")], RecordedModelClient.fromDirectory());
+  const client = RecordedModelClient.withOverrides([recording("m-thu"), ...(extra ? [extra] : [])], RecordedModelClient.fromDirectory());
   const intake = new IntakeService(store, client, { now: CLOCK });
   const kase = new CaseService(store, intake, client, { now: CLOCK, externalCalendar: () => events?.snapshot() ?? null });
   const calendar = new GoogleCalendar(connection, { timeZone: () => kase.timeZone() });
@@ -91,7 +91,7 @@ describe("sprint 13C, H1: clash checks read Google Calendar live enough", () => 
     expect([r.report.outcome, r.report.problems]).toEqual(["answered", [[]]]);
   });
 
-  it("an event added inside the window is found once the copy is older than a minute, and one turn reads a window once", async () => {
+  it("an event added inside the window is found once the copy is older than a minute, and checks within a minute read a window once", async () => {
     const { fake, app } = await connected();
     fake.addForeignEvent("primary", { summary: "Team standup", start: { dateTime: "2026-11-13T09:00:00-07:00" }, end: { dateTime: "2026-11-13T10:00:00-07:00" } });
     const tool = toolByName("check_calendar")!;
@@ -102,10 +102,16 @@ describe("sprint 13C, H1: clash checks read Google Calendar live enough", () => 
     const before = lists(fake).length;
     const first = await tool.run(ctx, tool.input.parse({ date: "2026-11-13", time: "09:15" }));
     expect(clashNames(first.output)).toEqual(["Team standup"]);
-    fake.now += FRESH_MS + 1;
-    // The same turn: the window is not read again.
+    // The same turn, within the minute: no second read, and the event is
+    // still there (fix round 1, R8).
+    const second = await tool.run(ctx, tool.input.parse({ date: "2026-11-13", time: "09:30" }));
+    expect(clashNames(second.output)).toEqual(["Team standup"]);
     await tool.run(ctx, tool.input.parse({ date: "2026-11-16", time: "13:00" }));
     expect(lists(fake).length).toBe(before + 1);
+    // A minute later, even in the same turn, the window is read again.
+    fake.now += FRESH_MS + 1;
+    expect(clashNames((await tool.run(ctx, tool.input.parse({ date: "2026-11-13", time: "09:15" }))).output)).toEqual(["Team standup"]);
+    expect(lists(fake).length).toBe(before + 2);
     // The schedule view reads the same copy.
     expect(app.kase.view().calendar!.events.map((e) => e.summary)).toContain("Team standup");
   });
@@ -177,5 +183,96 @@ describe("sprint 13C, H4: the event at Google", () => {
     const sent = fake.calls.filter((c) => c.method === "PATCH").at(-1)!;
     expect(JSON.parse(sent.body)).toMatchObject({ status: "tentative", summary: "Lantern Hill Clinic (requested)" });
     expect(fake.calendars.get("primary")!.get(event.id)).toMatchObject({ status: "tentative", summary: "Lantern Hill Clinic (requested)" });
+  });
+});
+
+describe("sprint 13C fix round 1", () => {
+  const FAR = "Hi,\n\nWe can also offer December 20 at 9:00 AM. We can also offer January 30 at 9:00 AM. We can also offer March 10 at 9:00 AM. We can also offer April 20 at 9:00 AM.\n\nLantern Hill Clinic";
+  const offer = (date: string, quote: string) => ({ claim_type: "offer", date, time: "09:00", location: null, quote, sender_kind: "person", event_time: null, request_item: null });
+  const far: Recording = {
+    message_id: "m-far",
+    effort: "any",
+    attempts: [
+      {
+        output: {
+          claims: [
+            offer("2026-12-20", "We can also offer December 20 at 9:00 AM."),
+            offer("2027-01-30", "We can also offer January 30 at 9:00 AM."),
+            offer("2027-03-10", "We can also offer March 10 at 9:00 AM."),
+            offer("2027-04-20", "We can also offer April 20 at 9:00 AM."),
+          ],
+        },
+        usage: { input: 1, cached_input: 0, output: 1, reasoning: 0 },
+        latency_ms: 1,
+      },
+    ],
+  };
+
+  it("R1: five far-apart appointments keep every window a check read, so the first one's clash shows in get_schedule and check_calendar", async () => {
+    const { fake, app } = await connected(far);
+    const m = app.intake.importMessage({ id: "m-far", channel: "email", from: "Lantern Hill Clinic", received_at: "2026-10-31T09:20:00-06:00", text: FAR });
+    await app.intake.extract("m-far", { effort: "minimal", expectedVersion: m.version });
+    for (const e of app.intake.reviewQueue()) app.intake.accept(e.id, e.version);
+    expect(app.kase.view().slots.map((s) => s.date)).toEqual(["2026-11-12", "2026-12-20", "2027-01-30", "2027-03-10", "2027-04-20"]);
+    fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
+    fake.now += FRESH_MS + 1;
+    const ctx = { ...mcpContext(app.store, app, CLOCK()), calendarReads: new Map() };
+    const schedule = toolByName("get_schedule")!;
+    const r = await schedule.run(ctx, schedule.input.parse({}));
+    const thu = (r.output.appointments as Array<{ slot_key: string; clashes: Array<{ summary: { untrusted_text: string } }> | null }>).find((a) => a.slot_key === "2026-11-12T10:30")!;
+    expect(thu.clashes!.map((c) => c.summary.untrusted_text)).toEqual(["Work call"]);
+    // Five windows were read, one per far date and the case window.
+    expect(lists(fake).length).toBeGreaterThanOrEqual(5);
+    const check = toolByName("check_calendar")!;
+    const c = await check.run(ctx, check.input.parse({ date: "2026-11-12", time: "10:30" }));
+    expect(clashNames(c.output)).toEqual(["Work call"]);
+  });
+
+  it("R2: a refresh, a clash check and the poll at the same moment make one list call", async () => {
+    const { fake, app, events } = await connected();
+    fake.now += FRESH_MS + 1;
+    let release!: () => void;
+    fake.listGate = new Promise((r) => (release = r));
+    const before = lists(fake).length;
+    const dates = app.kase.view().slots.map((s) => s.date);
+    const a = events.refresh(dates, "2026-11-05");
+    const b = events.ensure("2026-11-12", { dates, today: "2026-11-05", reads: new Map() });
+    events.touch(() => ({ dates, today: "2026-11-05" }));
+    await new Promise((r) => setImmediate(r));
+    release();
+    fake.listGate = null;
+    await Promise.all([a, b]);
+    expect(lists(fake).length).toBe(before + 1);
+  });
+
+  it("R3: after a failed read, get_schedule shows no stored clash and grounds none", async () => {
+    const { fake, app } = await connected();
+    fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
+    await app.google.events!.refresh(app.kase.view().slots.map((s) => s.date), "2026-11-05");
+    expect(app.kase.view().slots[0]!.clashes!.map((c) => c.summary)).toEqual(["Work call"]);
+    fake.now += FRESH_MS + 1;
+    fake.apiStatus = 503;
+    const schedule = toolByName("get_schedule")!;
+    const r = await schedule.run({ ...mcpContext(app.store, app, CLOCK()), calendarReads: new Map() }, schedule.input.parse({}));
+    expect((r.output.appointments as Array<{ clashes: unknown }>)[0]!.clashes).toBeNull();
+    expect(r.output.google_calendar).toMatchObject({ read: false, error: "google_unavailable" });
+    // The work call's times are not facts the answer may state.
+    expect(r.facts.some((f) => f.date === "2026-11-12" && f.time === "10:00")).toBe(false);
+  });
+
+  it("R4: a newer read drops an all-day event removed at Google on the window's first day, in a zone behind UTC", async () => {
+    const { fake, app, events } = await connected();
+    const dates = app.kase.view().slots.map((s) => s.date);
+    const allDay = fake.addForeignEvent("primary", { summary: "Office closed", start: { date: "2026-11-12" }, end: { date: "2026-11-13" } });
+    // An older window that holds the day, then a newer one that starts on it.
+    fake.now += FRESH_MS + 1;
+    await events.ensure("2026-11-12", { dates: ["2026-11-01"], today: "2026-11-01" });
+    expect(events.snapshot()!.events.map((e) => e.summary)).toContain("Office closed");
+    allDay.status = "cancelled";
+    fake.now += FRESH_MS + 1;
+    await events.ensure("2026-11-12", { dates: ["2026-11-12"], today: "2026-11-12" });
+    expect(app.kase.timeZone()).toBe("America/Denver");
+    expect(events.snapshot()!.events.map((e) => e.summary)).not.toContain("Office closed");
+    expect(dates).toEqual(["2026-11-12"]);
   });
 });
