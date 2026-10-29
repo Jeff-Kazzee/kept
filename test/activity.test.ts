@@ -4,7 +4,7 @@
 // refused with a plain sentence when the entry cannot be undone, was undone
 // already, or a later action depends on it.
 import { describe, expect, it } from "vitest";
-import { CaseActions, PersonOnlyError, UndoBlockedError, YOU, type By } from "../src/actions/service.ts";
+import { CaseActions, PersonOnlyError, UndoBlockedError, YOU, factWords, type By } from "../src/actions/service.ts";
 import { CaseService } from "../src/case/service.ts";
 import { readFixtureText } from "../src/fixtures/load.ts";
 import { RecordedModelClient } from "../src/model/recorded.ts";
@@ -293,6 +293,12 @@ describe("sprint 13C, M3 and M4: what the person reads", () => {
     a.actions.acceptClaim(YOU, move.id, move.version);
     expect(latest(a).entries[0]!.label).toMatch(/^Recorded the office's request to move Thursday 11\/12 10:30 AM, from /);
     expect(latest(a).entries.map((e) => e.label).join(" ")).not.toMatch(/move to/);
+  });
+
+  it("a move fact with and without a date names what moves", () => {
+    const base = { claim_type: "move", source_type: "office_message", slot: { date: "2026-11-12", time: "10:30" } } as unknown as Parameters<typeof factWords>[0];
+    expect(factWords(base)).toBe("the office's request to move Thursday 11/12 10:30 AM");
+    expect(factWords({ ...base, slot: { ...base.slot, date: null, time: null } } as typeof base)).toBe("the office's request to move an appointment");
   });
 
   it("an imported Gmail message, a fact left out and an undo are named without ids, and an offer reads as recorded, not taken", async () => {

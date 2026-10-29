@@ -118,13 +118,15 @@ const FACT_WORDS: Record<EvidenceClaim["claim_type"], string> = {
   clarify: "detail for",
 };
 
-function factWords(c: EvidenceClaim, n: { index: number; of: number } | null = null): string {
+export function factWords(c: EvidenceClaim, n: { index: number; of: number } | null = null): string {
   const whose = c.source_type === "office_message" ? "the office's" : c.source_type === "reported_by_user" ? "your report of the" : "the reported";
   const words = FACT_WORDS[c.claim_type] ?? "fact for";
   // A request item is the office's own words, so it is left out, as in
   // the summary. `n` tells two requests of one message apart.
   if (c.claim_type === "office_request") return `${whose} request${n ? ` (fact ${n.index} of ${n.of})` : ""} for your checklist`;
   const when = c.slot.date === null ? "" : ` ${slotLabel(c.slot.date, c.slot.time)}`;
+  // A move with no date still names what moves.
+  if (!when && c.claim_type === "move") return `${whose} request to move an appointment`;
   return `${whose} ${when ? words : words.replace(/ (of|to|for)$/, "")}${when}`;
 }
 
