@@ -573,6 +573,32 @@ below. Decisions: `docs/decisions/0017-run2-fixes.md`.
 - [ ] The coordinator's live rerun with Gmail and Google Calendar.
 - [ ] Confirm or change the choices marked proposed in 0017.
 
+## Sprint 13E: the opening Gmail step from the third live run
+
+Branch `sprint/13e-gmail-step`. The live run 3 on 2026-10-29 found the
+items below. Decisions: `docs/decisions/0018-gmail-step.md`.
+
+- [x] H1 `gmail_import` takes up to 10 message ids, each imported and
+  logged on its own with its own Undo, and the instructions say to import
+  every matching email.
+- [x] H2 Code adds a card for each matching email a turn found and did not
+  import, with "Add it", the person's import with Undo and no model call.
+- [x] H3 The tools give the office's name as the page shows it and when an
+  email arrived, and the instructions say to name emails by both, never by
+  their first words.
+- [x] H4 The instructions say to name every time the new facts state, or
+  point to the facts card.
+- [x] H5 An Added line for an event since removed in Google Calendar says
+  so and offers no Undo, in the chat and in Activity.
+- [x] H6 A refusal by the app's rules is a step that chose not to act, not
+  one that did not finish.
+- [x] H7 A notice that repeats a receipt is not shown.
+- [x] H8 Noted: Google Calendar shows no tentative marker. No change.
+- [x] The demo story's placeholder chat recordings rewritten with
+  `pnpm demo:recordings`.
+- [ ] The coordinator's live rerun of the Gmail step.
+- [ ] Confirm or change the choices marked proposed in 0018.
+
 ## Sprint 14: paid plans with Stripe (deferred until after the hackathon)
 
 Deferred by Jeff on 2026-10-28 (J18 in
