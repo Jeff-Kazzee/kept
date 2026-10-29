@@ -6,7 +6,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { ReplyView } from "../../src/reply/types.ts";
 import type { AppState } from "../api.ts";
 import { installTestDom, mount } from "../test-dom.ts";
-import { ReplyCard, ReplyPanel } from "./ReplyCard.tsx";
+import { ReplyCard, ReplyPanel, scopeReadback } from "./ReplyCard.tsx";
+import { sessionOwner } from "../App.tsx";
 
 beforeAll(() => {
   installTestDom();
@@ -36,8 +37,8 @@ const draft = {
   createdAt: "2026-11-05T09:00:00.000Z",
 } satisfies ReplyView["draft"];
 
-const reply: ReplyView = { version: 3, options: [], withheld: [], draft, suggestion: null, sent: [] };
-const both = (generation: number) => {
+const reply3: ReplyView = { version: 3, options: [], withheld: [], draft, suggestion: null, sent: [] };
+const both = (generation: number, reply: ReplyView = reply3) => {
   const state = { generation, case: { reply, profile: { userName: null, version: 0 } } } as unknown as AppState;
   return createElement(
     Fragment,
@@ -72,5 +73,34 @@ describe("sprint 13C fix round 1: one readback for both cards", () => {
     expect(after.find('.in-chat input[name="read-date"]').checked).toBe(false);
     expect(after.find('.in-panel input[name="read-date"]').checked).toBe(false);
     await after.unmount();
+  });
+
+  it("H5: a new version of the draft starts the readback empty in both cards", async () => {
+    const ui = await mount(both(11));
+    await ui.click(ui.find('.in-chat input[name="read-date"]'));
+    expect(ui.find('.in-panel input[name="read-date"]').checked).toBe(true);
+    await ui.unmount();
+    const next = await mount(both(11, { ...reply3, version: 4 }));
+    expect(next.find('.in-chat input[name="read-date"]').checked).toBe(false);
+    expect(next.find('.in-panel input[name="read-date"]').checked).toBe(false);
+    await next.unmount();
+  });
+
+  it("N6: a change of session or account clears the ticks in both cards", async () => {
+    const { act } = await import("react");
+    scopeReadback(sessionOwner({ mode: "hosted", signedIn: true, account: { kind: "google", email: "a.demo@example.com", name: null }, balanceMicros: 0, balance: "$0", expiresAt: 0, googleSignIn: true }));
+    const ui = await mount(both(12));
+    await ui.click(ui.find('.in-chat input[name="read-date"]'));
+    expect(ui.find('.in-panel input[name="read-date"]').checked).toBe(true);
+    // The same account again changes nothing.
+    await act(async () => scopeReadback(sessionOwner({ mode: "hosted", signedIn: true, account: { kind: "google", email: "a.demo@example.com", name: null }, balanceMicros: 5, balance: "$0", expiresAt: 1, googleSignIn: true })));
+    expect(ui.find('.in-panel input[name="read-date"]').checked).toBe(true);
+    // Another account in the same tab: the same draft id, version and
+    // generation start with no ticks.
+    await act(async () => scopeReadback(sessionOwner({ mode: "hosted", signedIn: true, account: { kind: "google", email: "b.demo@example.com", name: null }, balanceMicros: 0, balance: "$0", expiresAt: 0, googleSignIn: true })));
+    expect(ui.find('.in-chat input[name="read-date"]').checked).toBe(false);
+    expect(ui.find('.in-panel input[name="read-date"]').checked).toBe(false);
+    await ui.unmount();
+    expect(new Set([sessionOwner(null), sessionOwner({ mode: "local" }), sessionOwner({ mode: "hosted", signedIn: false, googleSignIn: true })]).size).toBe(3);
   });
 });

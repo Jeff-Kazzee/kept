@@ -121,6 +121,18 @@ export function setSharedReadback(key: string, change: (prev: SharedReadback) =>
 
 // The case generation is part of it, so after Delete case a new draft with
 // the same id, version and text starts with no ticks (fix round 1, R5).
+// Fix round 2, N6: the readback belongs to one session. When the page's
+// session or account changes, including a sign-out, it is cleared, so ticks
+// never reach another account's draft in the same tab.
+let readbackOwner: string | null = null;
+export function scopeReadback(owner: string): void {
+  if (owner === readbackOwner) return;
+  readbackOwner = owner;
+  if (sharedReadback === null) return;
+  sharedReadback = null;
+  for (const f of readbackListeners) f();
+}
+
 export const readbackKey = (draft: DraftView, version: number, generation = 0) =>
   [draft.id, version, generation, draft.text, JSON.stringify(draft.fields.map((f) => [f.name, f.value]))].join("|");
 

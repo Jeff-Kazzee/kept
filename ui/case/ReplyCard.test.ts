@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ReplyView } from "../../src/reply/types.ts";
 import type { AppState } from "../api.ts";
-import { ReplyCard, ReplyPanel, readbackDone, readbackKey, setSharedReadback } from "./ReplyCard.tsx";
+import { ReplyCard, ReplyPanel, readbackDone } from "./ReplyCard.tsx";
 import { setCaseZone } from "../format.ts";
 
 // These tests read times as the demo shows them, in the clinic's zone. The
@@ -144,25 +144,5 @@ describe("reply card in the chat", () => {
     expect(sent).toContain("Simulated. Nothing was sent.");
     expect(sent).not.toContain("Approve and send");
     expect(card({ ...base, draft: null })).toContain("This reply draft was discarded or replaced. Nothing was sent.");
-  });
-});
-
-describe("sprint 13C, H5: one readback for both cards", () => {
-  it("a tick in the chat's card shows in the schedule panel's, and approval still needs every field", () => {
-    const state = { case: { reply: base } } as unknown as AppState;
-    setSharedReadback(readbackKey(draft, 1), () => ({ read: { at: 1, names: new Set(["date"]) }, confirmClaim: false }));
-    const chat = renderToStaticMarkup(createElement(ReplyCard, { draftId: "d1", state, run: async () => {} }));
-    const panel = render(base);
-    for (const html of [chat, panel]) {
-      expect(html).toMatch(/aria-label="I read Date" name="read-date" checked=""/);
-      expect(html).not.toMatch(/aria-label="I read Place" name="read-location" checked=""/);
-      expect(html).toContain("1 of 2 fields read.");
-      expect(html).toMatch(/btn-primary" disabled="">Approve and send/);
-    }
-    expect(readbackDone({ at: 1, names: new Set(["date"]) }, draft, 1)).toBe(false);
-    // A new version starts the readback empty in both.
-    expect(render({ ...base, version: 2 })).not.toMatch(/checked=""/);
-    setSharedReadback(readbackKey(draft, 1), () => ({ read: { at: 1, names: new Set(["date", "location"]) }, confirmClaim: false }));
-    expect(render(base)).toMatch(/btn-primary">Approve and send/);
   });
 });

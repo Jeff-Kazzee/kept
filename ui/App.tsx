@@ -7,6 +7,7 @@
 // page opens in the work area in place of the case. The shell reads the
 // case, the settings and the activity together, and gives the settings and
 // activity to every part through AgentContext.
+import { scopeReadback } from "./case/ReplyCard.tsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { realBackend, type AgentBackend } from "./agentApi.ts";
 import { AgentContext, type AgentState } from "./agent/AgentContext.tsx";
@@ -90,6 +91,11 @@ export function Root() {
   return <RootView session={session} notice={notice} setNotice={setNotice} setSession={setSession} toSignIn={toSignIn} />;
 }
 
+// Who the page is open for: local, signed out, or one hosted account. Kept
+// in memory only.
+export const sessionOwner = (s: SessionInfo | null) =>
+  !s ? "none" : s.mode === "local" ? "local" : s.signedIn ? `hosted:${s.account.kind}:${s.account.email ?? s.account.name ?? ""}` : "signed-out";
+
 function RootView({
   session,
   notice,
@@ -103,6 +109,8 @@ function RootView({
   setSession: (s: SessionInfo) => void;
   toSignIn: (text: string | null) => void;
 }) {
+  // Fix round 2, N6: reply ticks belong to this session and account.
+  scopeReadback(sessionOwner(session));
   if (!session) {
     return (
       <main className="loading" aria-busy="true">
