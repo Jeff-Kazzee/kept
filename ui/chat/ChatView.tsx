@@ -15,7 +15,7 @@ import { Icon } from "../components/Icon.tsx";
 import { entriesById, useAgent } from "../agent/AgentContext.tsx";
 import { ModelPicker } from "../agent/ModelPicker.tsx";
 import { Receipts } from "../agent/Receipts.tsx";
-import { DEFAULT_EXTRACTION_EFFORT, emailTime, shortTime } from "../format.ts";
+import { DEFAULT_EXTRACTION_EFFORT, PartlyDoneError, emailTime, reasonOnly, shortTime } from "../format.ts";
 import { ClaimsCard } from "../case/ClaimsCard.tsx";
 import { senderShown } from "../case/Source.tsx";
 import { ExplanationCard, QuestionCard } from "../case/ConflictCards.tsx";
@@ -115,7 +115,8 @@ export function ChatView(props: ChatViewProps) {
   };
 
   // 0017, E3: one full facts card per office message in the thread.
-  const facts = factsCards(imports, chat, new Set(state.messages.map((m) => m.id)));
+  const offers = newestOffers(chat);
+  const facts = factsCards(imports, chat, new Set(state.messages.map((m) => m.id)), offers);
 
   const demo = nextDemoMessage(fixtures, state);
   const demoStarted = state.messages.some((m) => DEMO_IDS.includes(m.id));
@@ -169,6 +170,7 @@ export function ChatView(props: ChatViewProps) {
                 onShowSlot={onShowSlot}
                 onImport={offersImport(m, userTextBefore(chat, i)) ? () => openImport(m.declined ? declinedOriginal(chat, i) : userTextBefore(chat, i)) : undefined}
                 facts={facts}
+                offers={offers}
               />
               {imports
                 .filter((x) => x.after === i + 1)
@@ -177,7 +179,7 @@ export function ChatView(props: ChatViewProps) {
                 ))}
             </div>
           ))}
-          {chat.pending && <PendingItem turn={chat.pending} state={state} run={run} scripted={scripted} onShowSlot={onShowSlot} onImport={() => openImport(chat.pending?.userText ?? "")} facts={facts} />}
+          {chat.pending && <PendingItem turn={chat.pending} state={state} run={run} scripted={scripted} onShowSlot={onShowSlot} onImport={() => openImport(chat.pending?.userText ?? "")} facts={facts} offers={offers} />}
         </div>
       </div>
       <div className="composer-wrap">
@@ -368,9 +370,26 @@ const factsKey = (chatMessageId: string, index: number) => `${chatMessageId}:${i
 // The facts cards of the thread, in the order it shows them: the imports
 // before the first message, then each message and the imports after it,
 // then the turn being streamed.
+// Fix round 1, R4: the newest card offering each email, by its place in
+// the thread. An older card for the same email shows nothing, so one email
+// never has two "Add it" buttons, and an Undo of its import brings back
+// only the newest.
+export function newestOffers(chat: Pick<ChatState, "messages" | "pending">): Set<string> {
+  const newest = new Map<string, string>();
+  const scan = (id: string, cards: Card[]) => cards.forEach((c, j) => c.kind === "gmail_waiting" && newest.set(c.gmailId, factsKey(id, j)));
+  chat.messages.forEach((m) => scan(m.id, m.cards));
+  if (chat.pending) scan(PENDING_MESSAGE, chat.pending.cards);
+  return new Set(newest.values());
+}
+
 // An email a turn offered with "Add it" has its facts card in the same place
 // once it is in the case (`inCase`, 0018, H2).
-export function factsCards(imports: Array<{ messageId: string; after: number }>, chat: Pick<ChatState, "messages" | "pending">, inCase: ReadonlySet<string> = new Set()): Map<string, FactsPlace> {
+export function factsCards(
+  imports: Array<{ messageId: string; after: number }>,
+  chat: Pick<ChatState, "messages" | "pending">,
+  inCase: ReadonlySet<string> = new Set(),
+  offers?: ReadonlySet<string>,
+): Map<string, FactsPlace> {
   const out = new Map<string, FactsPlace>();
   const first = new Map<string, string>();
   const add = (key: string, messageId: string) => {
@@ -389,7 +408,7 @@ export function factsCards(imports: Array<{ messageId: string; after: number }>,
   importsAfter(0);
   const cardFacts = (id: string, c: Card, j: number) => {
     if (c.kind === "claims") add(factsKey(id, j), c.messageId);
-    else if (c.kind === "gmail_waiting" && inCase.has(c.messageId)) add(factsKey(id, j), c.messageId);
+    else if (c.kind === "gmail_waiting" && inCase.has(c.messageId) && (!offers || offers.has(factsKey(id, j)))) add(factsKey(id, j), c.messageId);
   };
   chat.messages.forEach((m, i) => {
     m.cards.forEach((c, j) => cardFacts(m.id, c, j));
@@ -471,6 +490,7 @@ function Extras({
   run,
   onShowSlot,
   facts,
+  offers,
   shownText = null,
 }: {
   messageId: string;
@@ -486,6 +506,9 @@ function Extras({
   run: Run;
   onShowSlot: (k: string, from?: HTMLElement) => void;
   facts?: Map<string, FactsPlace>;
+  // The waiting-email cards that are each email's newest offer (fix round
+  // 1, R4). Without it, every one shows.
+  offers?: ReadonlySet<string>;
 }): ReactNode {
   // A claims card shows its own receipt, so its facts are not repeated
   // as a second one.
@@ -494,7 +517,9 @@ function Extras({
   // show, with its Undo, is not shown again.
   const receipted = new Set(actions.map((e) => e.id));
   const repeats = (c: Card) => c.kind === "notice" && c.activityId !== undefined && receipted.has(c.activityId);
-  const waiting = cards.flatMap((c, i) => (c.kind === "gmail_waiting" ? [{ card: c, place: facts?.get(factsKey(messageId, i)) }] : []));
+  const waiting = cards.flatMap((c, i) =>
+    c.kind === "gmail_waiting" && (!offers || offers.has(factsKey(messageId, i))) ? [{ card: c, place: facts?.get(factsKey(messageId, i)) }] : [],
+  );
   return (
     <>
       <Receipts entries={actions} state={state} skipMessages={withCard} />
@@ -554,12 +579,15 @@ export function waitingText(emails: Array<{ sender: string; when: string }>): st
 function WaitingEmails({ emails, state, run, fresh }: { emails: WaitingEmail[]; state: AppState; run: Run; fresh: boolean }) {
   const inCase = (c: WaitingEmail["card"]) => state.messages.some((m) => m.id === c.messageId);
   const open = emails.filter((e) => !inCase(e.card)).map((e) => ({ ...e, sender: waitingSender(e.card, state), when: emailTime(e.card.receivedAt) }));
-  const add = (gmailId: string) => async () => {
-    const message = await api.addGmail(gmailId);
+  // Fix round 1, R2: a read that fails after the add says so. The email is
+  // in the case, and its facts card offers "Read this message".
+  const add = (e: { card: WaitingEmail["card"]; sender: string; when: string }) => async () => {
+    const message = await api.addGmail(e.card.gmailId);
     try {
       await api.extract(message.id, DEFAULT_EXTRACTION_EFFORT, message.version);
-    } catch {
-      // The facts card offers manual entry for an email that was not read.
+    } catch (err) {
+      const reason = reasonOnly(err);
+      throw new PartlyDoneError(`Added the email from ${e.sender}, ${e.when}, but it was not read.${reason ? ` ${reason}` : ""} Its card has Read this message.`, err);
     }
   };
   return (
@@ -579,7 +607,7 @@ function WaitingEmails({ emails, state, run, fresh }: { emails: WaitingEmail[]; 
             <p>{waitingText(open)}</p>
             {open.length === 1 ? (
               <div>
-                <ActionButton run={run} action={add(open[0]!.card.gmailId)} size="sm" label={`Add the email from ${open[0]!.sender}, ${open[0]!.when}`}>
+                <ActionButton run={run} action={add(open[0]!)} size="sm" label={`Add the email from ${open[0]!.sender}, ${open[0]!.when}`}>
                   <Icon name="plus" size="sm" /> Add it
                 </ActionButton>
               </div>
@@ -590,7 +618,7 @@ function WaitingEmails({ emails, state, run, fresh }: { emails: WaitingEmail[]; 
                     <span>
                       {e.sender}, {e.when}
                     </span>
-                    <ActionButton run={run} action={add(e.card.gmailId)} size="sm" label={`Add the email from ${e.sender}, ${e.when}`}>
+                    <ActionButton run={run} action={add(e)} size="sm" label={`Add the email from ${e.sender}, ${e.when}`}>
                       <Icon name="plus" size="sm" /> Add it
                     </ActionButton>
                   </li>
@@ -613,6 +641,7 @@ function MessageItem({
   onShowSlot,
   onImport,
   facts,
+  offers,
 }: {
   message: ChatMessage;
   state: AppState;
@@ -622,6 +651,7 @@ function MessageItem({
   onShowSlot: (k: string, from?: HTMLElement) => void;
   onImport?: () => void;
   facts?: Map<string, FactsPlace>;
+  offers?: ReadonlySet<string>;
 }) {
   const { activity } = useAgent();
   if (m.role === "user") return <UserBubble text={m.text} at={m.createdAt} />;
@@ -650,6 +680,7 @@ function MessageItem({
         run={run}
         onShowSlot={onShowSlot}
         facts={facts}
+        offers={offers}
       />
     </article>
   );
@@ -663,6 +694,7 @@ function PendingItem({
   onShowSlot,
   onImport,
   facts,
+  offers,
 }: {
   turn: PendingTurn;
   state: AppState;
@@ -671,6 +703,7 @@ function PendingItem({
   onShowSlot: (k: string, from?: HTMLElement) => void;
   onImport: () => void;
   facts?: Map<string, FactsPlace>;
+  offers?: ReadonlySet<string>;
 }) {
   const err = turn.error;
   // ungrounded and model_unavailable: the streamed text is a fixed
@@ -727,6 +760,7 @@ function PendingItem({
           run={run}
           onShowSlot={onShowSlot}
           facts={facts}
+          offers={offers}
         />
         {err?.code === "stopped" && (
           <p className="notice" role="status">

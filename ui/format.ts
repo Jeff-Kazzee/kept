@@ -201,7 +201,27 @@ export function signInReturn(params: URLSearchParams): { kind: "info" | "error";
 
 // What went wrong, as a plain sentence that says nothing was saved. Never
 // shows a raw response body.
+// An action that did part of what it set out to do, such as "Add it" when
+// the email was added and its read failed (0018, fix round 1, R2). Its
+// sentence says what was saved.
+export class PartlyDoneError extends Error {
+  override name = "PartlyDoneError";
+  override readonly cause: unknown;
+  constructor(message: string, cause: unknown) {
+    super(message);
+    this.cause = cause;
+  }
+}
+
+// The reason in an error's sentence, without "Nothing was saved", for a
+// sentence that says what was saved.
+export const reasonOnly = (e: unknown) =>
+  errorSentence(e)
+    .replace(/\s*Nothing (?:was saved|in your case changed|changed)\.?/g, "")
+    .trim();
+
 export function errorSentence(e: unknown): string {
+  if (e instanceof PartlyDoneError) return e.message;
   if (e instanceof ApiError) {
     const code = e.body.error;
     // Undo refused because a later action depends on this one. The

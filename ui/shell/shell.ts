@@ -94,8 +94,11 @@ export const openersFor = (openView: (view: View) => void) => ({
 // when no provider is ready (J12), Usage when the credit ran out (0014).
 export type ToastLink = "connections" | "usage";
 
-export const setupLink = (e: unknown): ToastLink | undefined =>
-  e instanceof ApiError ? (e.body.error === "provider_not_ready" ? "connections" : e.body.error === "credits_exhausted" ? "usage" : undefined) : undefined;
+// A partly done action links as its cause does (0018, fix round 1, R2).
+export const setupLink = (e: unknown): ToastLink | undefined => {
+  const err = e instanceof Error && e.name === "PartlyDoneError" ? e.cause : e;
+  return err instanceof ApiError ? (err.body.error === "provider_not_ready" ? "connections" : err.body.error === "credits_exhausted" ? "usage" : undefined) : undefined;
+};
 
 // Up to two letters: the first and last word of a name, else of the part
 // of an email before the @. Null when there is neither.

@@ -5,12 +5,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { api, type AppState } from "../api.ts";
+import { ApiError, api, type AppState } from "../api.ts";
 import { AgentContext, DEFAULT_AGENT, removedInGoogle, type AgentState } from "../agent/AgentContext.tsx";
 import type { ActivityEntry, ActivityLog } from "../contract.ts";
-import { setCaseZone } from "../format.ts";
+import { PartlyDoneError, errorSentence, setCaseZone } from "../format.ts";
+import { setupLink } from "../shell/shell.ts";
 import { installTestDom, type TestDocument } from "../test-dom.ts";
-import { ChatView, toolSummaryText, waitingText, type ChatViewProps } from "./ChatView.tsx";
+import { ChatView, newestOffers, toolSummaryText, waitingText, type ChatViewProps } from "./ChatView.tsx";
 import type { ChatState } from "./state.ts";
 import type { Card, ChatMessage } from "./types.ts";
 
@@ -199,5 +200,62 @@ describe("sprint 13E, H7: the success line shows once", () => {
     // A notice for an action this answer did not take still shows.
     const other = html(stateWith([]), chatOf([answer([notice], [])]), { activity: log([added]) });
     expect(shownAsNotice(other)).toBe(1);
+  });
+});
+
+describe("sprint 13E fix round 1, R4: one Add it per email across answers", () => {
+  const second = (id: string, cards: Card[]): ChatMessage => ({ ...answer(cards), id });
+  it("shows only the newest card for an email, and after Undo of its import only the newest comes back", () => {
+    const card = waitingCard("19a002", "2026-10-29T00:43:00.000Z");
+    const twice = chatOf([second("a1", [card]), second("a2", [card])]);
+    const once = chatOf([second("a2", [card])]);
+    // The newest is the later answer's card.
+    expect([...newestOffers(twice)]).toHaveLength(1);
+    expect([...newestOffers(twice)][0]!.startsWith("a2")).toBe(true);
+    // One Add it while the email is not in the case.
+    expect(html(stateWith([FIRST]), twice).split("Add it</button>").length - 1).toBe(1);
+    // Added: one facts card, as with a single offer, and no Add it.
+    const added = html(stateWith([FIRST, SECOND]), twice);
+    expect(added).not.toContain("Add it");
+    expect(added).toContain("Facts from");
+    expect(added.split("Facts from").length).toBe(html(stateWith([FIRST, SECOND]), once).split("Facts from").length);
+    // The import undone: the email is out of the case again, and only the
+    // newest card offers it.
+    expect(html(stateWith([FIRST]), twice).split("Add it</button>").length - 1).toBe(1);
+  });
+});
+
+describe("sprint 13E fix round 1, R2: Add it says when the read failed", () => {
+  it("the email is added, and the person is told it was not read and where to read it", async () => {
+    vi.spyOn(api, "addGmail").mockResolvedValue({ ...messageView(SECOND, "x", at), version: 1, status: "imported" } as never);
+    vi.spyOn(api, "extract").mockRejectedValue(new ApiError(422, { error: "provider_not_ready", message: "Set up a model in Connections to read messages. Nothing in your case changed." }));
+    const errors: unknown[] = [];
+    const run: ChatViewProps["run"] = async (a) => {
+      try {
+        await a();
+      } catch (e) {
+        errors.push(e);
+      }
+    };
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const doc = document as unknown as TestDocument;
+    const container = doc.createElement("div");
+    doc.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    await act(async () => root.render(createElement(ChatView, props(stateWith([FIRST]), chatOf([answer([waitingCard("19a002", "2026-10-29T00:43:00.000Z")])]), run))));
+    const button = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Add it"))!;
+    await act(async () => {
+      button.dispatchEvent(new (globalThis as unknown as { Event: new (t: string, i: object) => Event }).Event("click", { bubbles: true }) as never);
+    });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(PartlyDoneError);
+    expect(errorSentence(errors[0])).toBe(
+      "Added the email from Lantern Hill Clinic, Oct 28, 6:43 PM, but it was not read. Set up a model in Connections to read messages. Its card has Read this message.",
+    );
+    expect(errorSentence(errors[0])).not.toContain("Nothing");
+    // The toast still links to Connections.
+    expect(setupLink(errors[0])).toBe("connections");
+    await act(async () => root.unmount());
   });
 });
