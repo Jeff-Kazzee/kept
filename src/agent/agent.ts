@@ -281,7 +281,6 @@ export class CaseAgent {
       return report;
     }
     this.#busy = true;
-    this.#busySince = Date.parse(this.#now());
     try {
       await this.#store.inCase(() => this.#turn(turnId, input, emit, report), input.generation);
     } catch (err) {
@@ -302,6 +301,9 @@ export class CaseAgent {
     const log = this.#log();
     const history = log.messages.slice(-this.#limits.historyMessages);
     const sentAt = this.#now();
+    // The turn's start for Delete case, from the same reading of the clock
+    // (fix round 2, F1).
+    this.#busySince = Date.parse(sentAt);
     const zone = this.#services.kase.timeZone();
     const today = zonedIso(sentAt, zone).slice(0, 10);
     const userId = `cm${input.expectedVersion + 1}`;
