@@ -1,7 +1,7 @@
 // Replies to the office. The user replies only through templates that fix
 // what the reply asserts. Code fills every field, the user reads each one
 // back, and approval sends nothing: the send is simulated and labeled.
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { EDITED_LABEL, SIMULATED_SEND_LABEL } from "../../src/reply/templates.ts";
 import type { DraftView, ReplyView, SentView, SuggestionView } from "../../src/reply/types.ts";
 import { api, type AppState } from "../api.ts";
@@ -99,31 +99,52 @@ export function readbackDone(read: Readback, draft: DraftView, version: number):
   return read.at === version && draft.fields.every((f) => read.names.has(f.name));
 }
 
+// 0016, H5: the draft shows in the chat and in the schedule panel. Both
+// cards read one readback, so a tick in one shows in the other. It belongs
+// to the draft as shown: a new draft, a saved edit, any new version or
+// changed fields start it empty again. Not saved, as before.
+type SharedReadback = { key: string; read: Readback; confirmClaim: boolean };
+let sharedReadback: SharedReadback | null = null;
+const readbackListeners = new Set<() => void>();
+const subscribeReadback = (f: () => void) => {
+  readbackListeners.add(f);
+  return () => void readbackListeners.delete(f);
+};
+const readbackSnapshot = () => sharedReadback;
+
+export function setSharedReadback(key: string, change: (prev: SharedReadback) => Omit<SharedReadback, "key">): void {
+  const prev = sharedReadback?.key === key ? sharedReadback : null;
+  const at = prev?.read.at ?? Number(key.split("|")[1]);
+  sharedReadback = { key, ...change(prev ?? { key, read: { at, names: new Set() }, confirmClaim: false }) };
+  for (const f of readbackListeners) f();
+}
+
+export const readbackKey = (draft: DraftView, version: number) =>
+  [draft.id, version, draft.text, JSON.stringify(draft.fields.map((f) => [f.name, f.value]))].join("|");
+
 export function DraftCard({ draft, version, run }: { draft: DraftView; version: number; run: Run }) {
   const [text, setText] = useState(draft.text);
-  const [read, setRead] = useState<Readback>({ at: version, names: new Set() });
-  const [confirmClaim, setConfirmClaim] = useState(false);
   const uid = useId();
-  const fieldKey = JSON.stringify(draft.fields.map((f) => [f.name, f.value]));
-  // A new draft, a saved edit or any new version resets the local copy, the
-  // readback and the claim confirmation.
+  const key = readbackKey(draft, version);
+  const shared = useSyncExternalStore(subscribeReadback, readbackSnapshot, readbackSnapshot);
+  const mine = shared?.key === key ? shared : null;
+  const read: Readback = mine?.read ?? { at: version, names: new Set() };
+  const confirmClaim = mine?.confirmClaim ?? false;
+  const setConfirmClaim = (on: boolean) => setSharedReadback(key, (p) => ({ read: p.read, confirmClaim: on }));
+  // A new draft or a saved edit resets the local copy of the text.
   useEffect(() => {
     setText(draft.text);
   }, [draft.id, draft.text]);
-  useEffect(() => {
-    setRead({ at: version, names: new Set() });
-    setConfirmClaim(false);
-  }, [draft.id, draft.text, version, fieldKey]);
 
   const unsaved = text !== draft.text;
   const allRead = readbackDone(read, draft, version);
   const ticked = draft.fields.filter((f) => read.at === version && read.names.has(f.name)).length;
   const toggle = (name: string) =>
-    setRead((prev) => {
-      const names = new Set(prev.at === version ? prev.names : []);
+    setSharedReadback(key, (prev) => {
+      const names = new Set(prev.read.at === version ? prev.read.names : []);
       if (names.has(name)) names.delete(name);
       else names.add(name);
-      return { at: version, names };
+      return { read: { at: version, names }, confirmClaim: prev.confirmClaim };
     });
 
   return (
@@ -165,14 +186,11 @@ export function DraftCard({ draft, version, run }: { draft: DraftView; version: 
                     {f.sources.map((s, i) =>
                       s.untrustedLabel ? (
                         <div key={i} className="stack-sm">
-                          {s.evidenceId && <code className="small muted">{s.evidenceId}</code>}
                           <UntrustedBox label={s.untrustedLabel} text={s.text} />
                         </div>
                       ) : (
                         <div key={i} className="source small">
-                          <span>
-                            {s.evidenceId && <code>{s.evidenceId}</code>} {s.text}
-                          </span>
+                          <span>{s.text}</span>
                         </div>
                       ),
                     )}
