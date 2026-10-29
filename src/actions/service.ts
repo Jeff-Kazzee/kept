@@ -109,7 +109,8 @@ const FACT_WORDS: Record<EvidenceClaim["claim_type"], string> = {
   offer: "offer of",
   confirm: "confirmation of",
   cancel: "cancellation of",
-  move: "move to",
+  // A move fact names the time being moved, not the new one (live run 4).
+  move: "request to move",
   reminder: "reminder of",
   office_request: "request",
   request: "request for",

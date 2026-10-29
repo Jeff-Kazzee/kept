@@ -283,6 +283,18 @@ describe("undo of each action", () => {
 });
 
 describe("sprint 13C, M3 and M4: what the person reads", () => {
+  // Live run 4: a move fact names the time being moved, so it must not
+  // read as a move to that time.
+  it("a move fact reads as the office's request to move the old time", async () => {
+    const a = app();
+    const m = a.actions.importMessage(AGENT, fixtureMessage("m3"), { suggested: [], note: "" });
+    const { evidence } = await a.actions.extract(AGENT, m.id, { effort: "low", expectedVersion: m.version });
+    const move = evidence.find((e) => e.claim.claim_type === "move")!;
+    a.actions.acceptClaim(YOU, move.id, move.version);
+    expect(latest(a).entries[0]!.label).toMatch(/^Recorded the office's request to move Thursday 11\/12 10:30 AM, from /);
+    expect(latest(a).entries.map((e) => e.label).join(" ")).not.toMatch(/move to/);
+  });
+
   it("an imported Gmail message, a fact left out and an undo are named without ids, and an offer reads as recorded, not taken", async () => {
     const a = app();
     // The recorded extraction of m2, as if read from Gmail.
