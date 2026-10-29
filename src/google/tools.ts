@@ -36,6 +36,7 @@ import { MAX_WINDOW_DAYS, caseWallClock, type CalendarUndo, type GoogleCalendar,
 import type { GoogleConnection } from "./connection.ts";
 import type { GoogleCalendarEvents } from "./events.ts";
 import { DEFAULT_DAYS, GMAIL_SOURCE, GmailMessageId, MAX_DAYS, MAX_IMPORT_CHARS, SenderAddress, gmailMessageId, toImport, type Gmail } from "./gmail.ts";
+import { calendarCaseMark } from "./case-mark.ts";
 import { GoogleError } from "./http.ts";
 
 export const GOOGLE_TOOL_NAMES = ["gmail_search", "gmail_import", "calendar_list", "calendar_sync_slot", "calendar_remove_slot"] as const;
@@ -169,11 +170,14 @@ async function calendarWrite(ctx: ToolContext, name: "calendar_sync_slot" | "cal
         ctx.by,
         write.plan,
         { kind: expected, summary: syncSummary({ action: write.plan.action, slotKey, status: write.plan.want?.status ?? null, eventId: write.plan.eventId, undo: null }, slot) },
-        () => google.calendar.execute(write),
+        (plan) => google.calendar.execute({ ...write, plan }),
         (o) => {
           const kind = KIND_OF_ACTION[o.action];
           return kind ? { kind, summary: syncSummary(o, slot) } : null;
         },
+        // 0017, fix round 1, R2: the case's first write makes its mark, in
+        // the transaction that records the intent.
+        write.needsMark ? (plan) => google.calendar.markPlan(plan, calendarCaseMark(ctx.store, { create: true }) ?? null) : undefined,
       );
       outcome = done.outcome;
       entry = done.entry;

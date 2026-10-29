@@ -382,24 +382,30 @@ export class CaseActions {
   // then the entry and the closed intent in one transaction. `entryFor`
   // gives the kind and summary of what happened, or null when nothing was
   // written. `expected` is what the plan expects, kept with the intent.
+  // `prepare`, when given, runs in the intent's transaction and gives the
+  // plan that is recorded and executed: a case's first write makes its
+  // calendar mark there (0017, fix round 1, R2).
   async googleWrite(
     by: By,
-    plan: WritePlan,
+    planned: WritePlan,
     expected: { kind: GoogleActivityKind; summary: string },
-    execute: () => Promise<SyncOutcome>,
+    execute: (plan: WritePlan) => Promise<SyncOutcome>,
     entryFor: (outcome: SyncOutcome) => { kind: GoogleActivityKind; summary: string } | null,
+    prepare?: (plan: WritePlan) => WritePlan,
   ): Promise<{ outcome: SyncOutcome; entry: ActivityEntry | null }> {
     const intentId = `gi-${randomUUID()}`;
+    let plan = planned;
     this.#store.inCase(() =>
-      this.#store.transaction(() =>
-        this.#openIntent({ intent_id: intentId, kind: "write", slot_key: plan.slotKey, actor: by.actor, owner: OWNER, plan, entry_kind: expected.kind, summary: expected.summary }),
-      ),
+      this.#store.transaction(() => {
+        plan = prepare ? prepare(planned) : planned;
+        this.#openIntent({ intent_id: intentId, kind: "write", slot_key: plan.slotKey, actor: by.actor, owner: OWNER, plan, entry_kind: expected.kind, summary: expected.summary });
+      }),
     );
     RUNNING.add(intentId);
     try {
       let outcome: SyncOutcome;
       try {
-        outcome = await execute();
+        outcome = await execute(plan);
       } catch (err) {
         // A refusal is certain to have written nothing. A lost answer may
         // have written, so its intent stays open for reconcileGoogle.

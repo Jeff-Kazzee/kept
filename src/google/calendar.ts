@@ -148,7 +148,10 @@ export type WritePlan = {
 };
 
 // The plan and what `execute` needs from the read that made it.
-export type PlannedWrite = { plan: WritePlan; have: RawEvent | null; removed: RawEvent | null; restore: boolean };
+// `needsMark` is true when the case has no mark yet (0017, fix round 1,
+// R2): the plan's event id waits for the mark that `markPlan` gives it, in
+// the transaction that records the write's intent.
+export type PlannedWrite = { plan: WritePlan; have: RawEvent | null; removed: RawEvent | null; restore: boolean; needsMark?: boolean };
 export type Planned = { write: PlannedWrite; outcome: null } | { write: null; outcome: SyncOutcome };
 
 export type SyncOutcome = {
@@ -304,9 +307,9 @@ export class GoogleCalendar {
   readonly #caseMark: (options: { create: boolean }) => CaseMark;
 
   // `timeZone` is the case's time zone (0009, J5), read at each call.
-  // `caseMark` is the case's mark (src/google/case-mark.ts): `list` reads it
-  // without making one, and `plan` makes it at the case's first write.
-  // Without it every case is of the earlier scheme.
+  // `caseMark` is the case's mark (src/google/case-mark.ts). `list` and
+  // `plan` only read it. The case actions make it when a first write is
+  // recorded (markPlan). Without it every case is of the earlier scheme.
   constructor(connection: GoogleConnection, options: { timeZone: () => string; caseMark?: (options: { create: boolean }) => CaseMark }) {
     this.#conn = connection;
     this.#timeZone = options.timeZone;
@@ -467,9 +470,19 @@ export class GoogleCalendar {
   async plan(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean; office?: EventOffice | null } = {}): Promise<Planned> {
     const { calendarId, sub, key } = this.#conn.calendar();
     const restore = options.restoreRemoved === true;
-    // 0017, E1: the case's own mark, made at its first write.
-    const mark = this.#caseMark({ create: true }) ?? null;
+    // 0017, E1: the case's own mark. A case without one owns no event, so
+    // there is nothing to find, and only a write that will happen gets a
+    // mark (fix round 1, R2).
+    const read = this.#caseMark({ create: false });
     const want = desiredEvent(slot, this.#timeZone(), options.office ?? null);
+    if (read === undefined) {
+      if (!want) return { write: null, outcome: { action: "none", slotKey, status: null, eventId: null, undo: null } };
+      return {
+        write: { plan: { account: key, calendarId, slotKey, action: "created", eventId: "", before: null, want }, have: null, removed: null, restore, needsMark: true },
+        outcome: null,
+      };
+    }
+    const mark = read;
     const found = await this.#locate(calendarId, sub, slotKey, mark);
     const have = found.live;
     const base = { account: key, calendarId, slotKey, ...withMark(mark) };
@@ -487,12 +500,22 @@ export class GoogleCalendar {
     return { write: { plan: { ...base, action: "updated", eventId: have!.id, before, want }, have, removed: null, restore }, outcome: null };
   }
 
+  // A plan made before the case had a mark, with the mark and the event id
+  // it gives. Called in the transaction that records the write's intent.
+  markPlan(plan: WritePlan, mark: string | null): WritePlan {
+    const { calendarId, sub, key } = this.#conn.calendar();
+    if (plan.account !== key || plan.calendarId !== calendarId) throw new GoogleError("google_stale");
+    const { mark: _old, ...rest } = plan;
+    return { ...rest, ...withMark(mark), eventId: eventIdFor(sub, calendarId, plan.slotKey, mark) };
+  }
+
   // Writes a planned change at Google and returns what happened, with its
   // undo record.
   async execute(write: PlannedWrite): Promise<SyncOutcome> {
     const { calendarId, sub, key } = this.#conn.calendar();
     const { plan } = write;
     if (plan.account !== key || plan.calendarId !== calendarId) throw new GoogleError("google_stale");
+    if (plan.eventId === "") throw new GoogleError("google_invalid_response");
     const mark = markOf(plan);
     const base = { kind: "google_calendar" as const, account: key, calendarId, slotKey: plan.slotKey, ...withMark(mark) };
     let have = write.have;
@@ -553,9 +576,12 @@ export class GoogleCalendar {
   }
 
   // Plans and writes in one step, for callers that record nothing.
+  // A case without a mark gets one here, as the case actions give it.
   async sync(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean; office?: EventOffice | null } = {}): Promise<SyncOutcome> {
     const planned = await this.plan(slotKey, slot, options);
-    return planned.write ? this.execute(planned.write) : planned.outcome!;
+    if (!planned.write) return planned.outcome!;
+    const plan = planned.write.needsMark ? this.markPlan(planned.write.plan, this.#caseMark({ create: true }) ?? null) : planned.write.plan;
+    return this.execute({ ...planned.write, plan });
   }
 
   // Deletes the slot's event, if the app made one.

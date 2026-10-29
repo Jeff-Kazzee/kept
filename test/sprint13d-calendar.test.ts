@@ -7,8 +7,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { mcpContext } from "../mcp/tools.ts";
 import { toolByName } from "../src/agent/tools.ts";
-import { CaseService } from "../src/case/service.ts";
-import { calendarCaseMark } from "../src/google/case-mark.ts";
+import { CaseService, DeleteBlockedError } from "../src/case/service.ts";
+import { CALENDAR_CASE_STREAM, calendarCaseMark } from "../src/google/case-mark.ts";
 import { CASE_PROPERTY, GoogleCalendar, eventIdFor } from "../src/google/calendar.ts";
 import { GoogleConnection } from "../src/google/connection.ts";
 import { GoogleCalendarEvents } from "../src/google/events.ts";
@@ -188,5 +188,75 @@ describe("sprint 13D, E2: one place for the schedule, the reply and the event", 
     expect(place(MONDAY_KEY)).toBeNull();
     expect(place("2026-11-12T10:30")).toBe(PLACE);
     expect(view.slots.find((s) => s.key === "2026-11-12T10:30")!.location).toBe(PLACE);
+  });
+});
+
+describe("sprint 13D fix round 1, R1: Delete case waits for a Google write and a chat turn", () => {
+  it("is refused while a Google Calendar write is in flight, and the write is recorded with its undo", async () => {
+    const { fake, app } = await connected();
+    await receive(app, "m-monday", MONDAY);
+    let refused: unknown = null;
+    fake.beforeCalendarWrite = async () => {
+      try {
+        app.kase.deleteCase(app.kase.caseVersion(), "DELETE");
+      } catch (err) {
+        refused = err;
+      }
+    };
+    const made = await call(app, "calendar_sync_slot", { slot_key: MONDAY_KEY });
+    expect(refused).toBeInstanceOf(DeleteBlockedError);
+    expect((refused as Error).message).toBe("The assistant or a Google Calendar change is still working. Nothing was deleted. Wait a moment, then delete the case again.");
+    expect([made.ok, made.output.action, made.output.undoable]).toEqual([true, "created", true]);
+    // The case is whole: its appointment and the write's entry are there.
+    expect(app.kase.view().slots.map((s) => s.key)).toContain(MONDAY_KEY);
+    // Once the write is recorded, Delete case runs.
+    expect(app.kase.deleteCase(app.kase.caseVersion(), "DELETE").erased).toBeGreaterThan(0);
+  });
+
+  it("is refused while a chat turn runs, and an intent a stopped process left long ago does not block it", () => {
+    const store = new EventStore(":memory:", () => "2026-11-05T16:00:00.000Z");
+    useZone(store, DEMO_ZONE);
+    const intake = new IntakeService(store, RecordedModelClient.fromDirectory(), { now: CLOCK });
+    const kase = new CaseService(store, intake, RecordedModelClient.fromDirectory(), { now: CLOCK });
+    expect(() => kase.deleteCase(kase.caseVersion(), "DELETE", { turnRunning: () => true })).toThrow(DeleteBlockedError);
+    // Opened an hour before the case's clock by another process that stopped.
+    store.appendSystem("google_intents", [
+      { type: "google_intent_opened", data: { intent_id: "gi-old", kind: "write", slot_key: MONDAY_KEY, actor: "agent", owner: "1:gone", plan: {}, entry_kind: "calendar_event_added", summary: "x" } },
+    ]);
+    expect(kase.deleteCase(kase.caseVersion(), "DELETE", { turnRunning: () => false })).toBeDefined();
+  });
+});
+
+describe("sprint 13D fix round 1, R2: the mark is made only for a write that happens", () => {
+  it("a sync or a removal that writes nothing leaves the case without a mark", async () => {
+    const { fake, app } = await connected();
+    await receive(app, "m-monday", MONDAY);
+    // Nothing to remove: no write, no mark.
+    const removed = await call(app, "calendar_remove_slot", { slot_key: MONDAY_KEY });
+    expect(removed.output.action).toBe("none");
+    // A slot the case does not hold gets no event: no write, no mark.
+    const none = await call(app, "calendar_sync_slot", { slot_key: "2026-11-20T09:00" });
+    expect(none.output.action).toBe("none");
+    expect(app.store.readStream(CALENDAR_CASE_STREAM)).toHaveLength(0);
+    expect(calendarCaseMark(app.store, { create: false })).toBeUndefined();
+    // No lookup by property ran either: a case without a mark owns nothing.
+    expect(fake.calls.filter((c) => c.url.searchParams.has("privateExtendedProperty"))).toHaveLength(0);
+  });
+
+  it("the first write makes the mark in the transaction that records its intent, and the intent carries it", async () => {
+    const { fake, app } = await connected();
+    await receive(app, "m-monday", MONDAY);
+    let markDuringWrite: string | null | undefined = "unset";
+    fake.beforeCalendarWrite = async () => {
+      markDuringWrite = calendarCaseMark(app.store, { create: false });
+    };
+    await call(app, "calendar_sync_slot", { slot_key: MONDAY_KEY });
+    const mark = calendarCaseMark(app.store, { create: false });
+    expect(typeof mark).toBe("string");
+    expect(markDuringWrite).toBe(mark);
+    const opened = app.store.readStream("google_intents").find((e) => e.type === "google_intent_opened")!.data as { plan: { mark?: string; eventId: string } };
+    expect(opened.plan.mark).toBe(mark);
+    expect(opened.plan.eventId).toBe(eventIdFor(FAKE_ACCOUNT.sub, "primary", MONDAY_KEY, mark!));
+    expect(live(fake)[0]!.id).toBe(opened.plan.eventId);
   });
 });
