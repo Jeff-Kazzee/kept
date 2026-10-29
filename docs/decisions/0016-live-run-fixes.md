@@ -39,7 +39,9 @@ Changed:
   (proposed: 60 seconds, four windows)
 - `get_schedule` does the same for the case's dates, so its slot clashes
   are current.
-- One read per window per chat turn. Over MCP each call is its own turn.
+- One read per window at a time, and a chat turn reuses its read while it
+  runs, after it failed, or while its window is still kept and fresh (fix
+  round 1 below).
 - A read keeps the 15 second time limit of every Google call. A failed read
   answers with its code only. `check_calendar` then returns
   `ok: false` with "Google Calendar could not be read right now, so the app
@@ -182,6 +184,48 @@ email from …", so two requests of one message differ without their words.
 - L3. Not changed. The instructions are part of every recorded chat's
   request key, so any change to them needs every recording made again
   live. The calendar steps already show code-written notices with Undo.
+
+## Fix round 1 (2026-10-29)
+
+From the independent review and the coordinator's look at the
+screenshots.
+
+- R1. A window a clash check reads is pinned for five minutes, so the
+  checks after it in a turn, or in one `get_schedule` over five far-apart
+  dates, still find it. Unpinned windows keep the cap of four, and 16 is
+  the most kept. A turn reuses a read that worked only while its window is
+  still kept and fresh, so a minute later it reads again. (proposed: five
+  minutes, 16)
+- R2. `refresh`, `ensure` and the poll's `touch` share one read per window
+  at a time, keyed by the generation, the account, the zone and the
+  window.
+- R3. When Google could not be read, `get_schedule` gives `clashes: null`
+  for every appointment and no clash facts, and says "No clashes are shown
+  until it can be read."
+- R4. An all-day event is held by a newer window when its date falls in
+  the window's dates, in the window's own zone.
+- R5. The readback key holds the case generation.
+- R6. The office field in the readback is labeled "The office's name, from
+  its message. Untrusted text, shown as data."
+- R7. A calendar notice card carries the activity id of its write, and the
+  page matches on it. A notice stored earlier falls back to its words.
+- R8. The per-turn test checks the second answer still names the event,
+  and a DOM test ticks a field in the chat's card and reads the panel's.
+- C1. The facts card, the source lines and the own-report card name the
+  sender without an address. The sender line as the message gives it shows
+  only under "Show the whole message".
+- C2. Every place the page names a sender uses the office name the case
+  holds (`officeNameOf`). An activity label stores a message reference and
+  puts it in words when the entry is read, so an entry made before the
+  office's place was known reads "Lantern Hill Clinic" once it is. The
+  fuller name comes from the places of the sender's facts that are not
+  rejected, so a sender reads by its email name again if that fact is left
+  out. (proposed)
+- C3. The person's lines carry no draft, question, message or evidence
+  id: "Started a reply accepting Monday 11/16 1:00 PM. Nothing is sent
+  until you approve it." The fact cards, the checklist sources, the
+  conflict sources, the agenda details and the sent reply no longer show
+  evidence ids. Summaries keep their ids for the log and the agents.
 
 ## Recordings
 
