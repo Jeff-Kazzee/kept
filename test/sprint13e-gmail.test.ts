@@ -275,8 +275,9 @@ describe("sprint 13E, H2: code offers the found emails the turn did not add", ()
     const activity = (await api({ method: "GET", path: "/api/activity", body: undefined })).body as { activityVersion: number; entries: Array<{ id: string; kind: string; actor: string; undoable: boolean }> };
     expect(activity.entries).toHaveLength(before + 1);
     expect(activity.entries.slice(0, 1).map((e) => [e.kind, e.actor, e.undoable])).toEqual([["gmail_message_imported", "you", true]]);
-    // A second Add finds the same message and logs nothing.
-    expect((await api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation })).status).toBe(200);
+    // Fix round 2, F3: the add used the offer, so a second Add is refused
+    // and logs nothing.
+    expect(await api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation })).toMatchObject({ status: 409, body: { error: "gmail_not_offered" } });
     expect(((await api({ method: "GET", path: "/api/activity", body: undefined })).body as typeof activity).entries).toHaveLength(before + 1);
     // The page then reads it through the extract route, as for a paste.
     const m = app.intake.message(`gmail-${SECOND.id}`);
@@ -531,6 +532,27 @@ describe("sprint 13E fix round 2, F4: Gmail offers drop only when the Gmail acco
     } finally {
       ws.close();
     }
+  });
+});
+
+describe("sprint 13E fix round 2, F3: offers keep no account id and are used once", () => {
+  it("stores a hash of the account, uses the offer on Add it, and an Undo of that import makes it addable again", async () => {
+    const { app, api, fake } = await connected();
+    await offerSecond(app);
+    const stored = JSON.stringify(app.store.readStream("gmail_offers"));
+    expect(stored).not.toContain(fake.account.sub);
+    expect(stored).toMatch(/"account":"[0-9a-f]{32}"/);
+    const add = () => api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation: app.kase.generation() });
+    expect((await add()).status).toBe(200);
+    expect(gmailOffers(app.store).map((o) => [o.gmail_id, o.used])).toEqual([[SECOND.id, true]]);
+    expect((await add()).status).toBe(409);
+    // Undo of the person's import: the card offers it again, and Add works.
+    const actions = new CaseActions(app.store, app);
+    const mine = actions.activity().entries.find((e) => e.kind === "gmail_message_imported" && e.actor === "you")!;
+    await actions.undoEntry(YOU, mine.id, actions.activityVersion());
+    expect(app.intake.messages().map((m) => m.id)).not.toContain(`gmail-${SECOND.id}`);
+    expect((await add()).status).toBe(200);
+    expect(app.intake.messages().map((m) => m.id)).toContain(`gmail-${SECOND.id}`);
   });
 });
 

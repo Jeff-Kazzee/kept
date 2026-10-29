@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { GmailNotImportedError, GmailNotOfferedError, addGmailMessage, type GoogleServices } from "../src/google/tools.ts";
 import { GmailMessageId } from "../src/google/gmail.ts";
-import { offeredIds } from "../src/google/offers.ts";
+import { addableOffer, useGmailOffer } from "../src/google/offers.ts";
 import { CaseActions, UndoBlockedError, YOU } from "../src/actions/service.ts";
 import { DEMO_CALENDAR_NAME, demoCalendarText, loadCalendarAsPerson } from "../src/actions/demo.ts";
 import { CaseService, DeleteBlockedError } from "../src/case/service.ts";
@@ -156,8 +156,13 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       if (!access.google) throw new GoogleError("google_not_configured");
       const account = access.google.connection.gmailAccount();
       if (account === null) throw new GoogleError("google_not_connected");
-      if (!offeredIds(store, account, kase.generation()).has(raw)) throw new GmailNotOfferedError();
-      return (await addGmailMessage(actions, service, access.google.gmail, YOU, raw)).message;
+      const inCase = () => service.messages().some((x) => x.id === `gmail-${raw}`);
+      if (!addableOffer(store, account, kase.generation(), raw, inCase())) throw new GmailNotOfferedError();
+      const added = await addGmailMessage(actions, service, access.google.gmail, YOU, raw);
+      // Fix round 2, F3: the offer is used once. An Undo of this import
+      // makes it addable again.
+      if (added.created) useGmailOffer(store, raw);
+      return added.message;
     }],
     ["POST", /^\/api\/messages\/([^/]+)\/extract$/, (m, body) => {
       const { effort, expectedVersion } = ExtractBody.parse(body);
