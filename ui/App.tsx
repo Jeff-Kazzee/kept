@@ -409,10 +409,12 @@ function Shell({
   // view this mode does not have shows the case.
   const focusTitle = () => focusSoon(() => title.current);
   const openView = (next: View) => {
-    setView(viewIn(mode, next));
+    const to = viewIn(mode, next);
+    setView(to);
     setDrawerOpen(false);
     setSheetOpen(false);
-    focusTitle();
+    // Choosing the view already open leaves focus where it is.
+    if (to !== view) focusTitle();
   };
   const fold = () =>
     setFolded((f) => {
@@ -533,21 +535,8 @@ function Shell({
   return (
     <AgentContext.Provider value={agent}>
       <div className="app" data-panel={sheetOpen ? "open" : "closed"} data-rail={railed ? "folded" : "open"} data-side={layout} data-drawer={drawerOpen ? "open" : "closed"} data-view={view}>
-        <Sidebar
-          mode={mode}
-          layout={layout}
-          view={view}
-          who={who}
-          session={hosted}
-          waiting={waiting}
-          drawerOpen={drawerOpen}
-          inert={inert.sidebar}
-          closeRef={drawerClose}
-          onClose={closeDrawer}
-          onOpen={openView}
-          onSignOut={() => void signOut()}
-        />
-        <button type="button" className="drawer-scrim" aria-label="Close the menu" tabIndex={-1} onClick={closeDrawer} />
+        {/* The top bar comes first in the DOM so Tab meets the fold toggle
+            before the sidebar (review r2). The grid places both. */}
         <header className="topbar" inert={inert.topbar}>
           <button
             ref={menuButton}
@@ -597,6 +586,21 @@ function Shell({
             </button>
           )}
         </header>
+        <Sidebar
+          mode={mode}
+          layout={layout}
+          view={view}
+          who={who}
+          session={hosted}
+          waiting={waiting}
+          drawerOpen={drawerOpen}
+          inert={inert.sidebar}
+          closeRef={drawerClose}
+          onClose={closeDrawer}
+          onOpen={openView}
+          onSignOut={() => void signOut()}
+        />
+        <button type="button" className="drawer-scrim" aria-label="Close the menu" tabIndex={-1} onClick={closeDrawer} />
         <div className="banners">
           {!online && (
             <p className="offline" role="status">

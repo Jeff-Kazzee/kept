@@ -322,7 +322,8 @@ export class TestElement extends TestNode {
     this.dispatchEvent(new TestEvent("focusout", { bubbles: true }));
   }
   click() {
-    if (this.disabled || this.isInert) return;
+    // A browser can't click what it doesn't show.
+    if (this.disabled || this.isInert || !this.shown) return;
     // A radio or a checkbox changes before the click, as in a browser.
     if (this.tagName === "INPUT" && (this.type === "radio" || this.type === "checkbox")) {
       const before = this.checked;
