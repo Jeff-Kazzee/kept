@@ -22,6 +22,7 @@
 // 4. Saves the assistant message with its cards, chips and action ids.
 // Every write runs in the command's case generation, so a turn that
 // crosses a Delete case is refused (G9).
+import { CalendarTurn } from "../google/events.ts";
 import { randomUUID } from "node:crypto";
 import { cleanText } from "../../mcp/sanitize.ts";
 import { DEFAULT_EXTRACTION_EFFORT, type Effort } from "../domain/claim.ts";
@@ -331,6 +332,9 @@ export class CaseAgent {
     // The paste rule, read from the person's message now, and what the turn
     // imports (0009, D2').
     const turn: ChatTurnState = { paste: mayContainPaste(text), imported: [], gmailImported: [] };
+    // 0016 fix round 2: the turn's Google Calendar reads, with their budget.
+    // Released when the turn ends, so its windows may be evicted again.
+    const calendarTurn = new CalendarTurn();
     const ctx: ToolContext = {
       ...this.#services,
       store: this.#store,
@@ -359,7 +363,7 @@ export class CaseAgent {
         return result;
       },
       turn,
-      calendarReads: new Map(),
+      calendarTurn,
     };
     const items: InputItem[] = [...history.map((m) => historyItem(m, log.imported.get(m.id))), { role: "user", content: text }];
     const cards: Card[] = [];
@@ -506,6 +510,8 @@ export class CaseAgent {
       code = stop.code;
       // A usage stop shows its own notice, with the way to Usage (0014).
       if (outcome === "stopped" && code !== "credits_exhausted" && code !== "usage_paused") addCard({ kind: "notice", text: finalText });
+    } finally {
+      this.#services.google?.events?.release(calendarTurn);
     }
     wrote();
 

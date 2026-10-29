@@ -10,7 +10,7 @@ import { toolByName } from "../src/agent/tools.ts";
 import { mcpContext } from "../mcp/tools.ts";
 import { GoogleCalendar } from "../src/google/calendar.ts";
 import { GoogleConnection } from "../src/google/connection.ts";
-import { FRESH_MS, GoogleCalendarEvents } from "../src/google/events.ts";
+import { CalendarTurn, FRESH_MS, GoogleCalendarEvents, TURN_READ_BUDGET } from "../src/google/events.ts";
 import { Gmail } from "../src/google/gmail.ts";
 import type { GoogleServices } from "../src/google/tools.ts";
 import { SecretsStore } from "../src/model/providers/secrets.ts";
@@ -95,7 +95,7 @@ describe("sprint 13C, H1: clash checks read Google Calendar live enough", () => 
     const { fake, app } = await connected();
     fake.addForeignEvent("primary", { summary: "Team standup", start: { dateTime: "2026-11-13T09:00:00-07:00" }, end: { dateTime: "2026-11-13T10:00:00-07:00" } });
     const tool = toolByName("check_calendar")!;
-    const ctx = { ...mcpContext(app.store, app, CLOCK()), calendarReads: new Map() };
+    const ctx = { ...mcpContext(app.store, app, CLOCK()), calendarTurn: new CalendarTurn() };
     // Read less than a minute ago: the copy stands.
     expect(clashNames((await tool.run(ctx, tool.input.parse({ date: "2026-11-13", time: "09:15" }))).output)).toEqual([]);
     fake.now += FRESH_MS + 1;
@@ -121,7 +121,7 @@ describe("sprint 13C, H1: clash checks read Google Calendar live enough", () => 
     fake.now += FRESH_MS + 1;
     fake.apiStatus = 503;
     const tool = toolByName("check_calendar")!;
-    const r = await tool.run({ ...mcpContext(app.store, app, CLOCK()), calendarReads: new Map() }, tool.input.parse({ date: "2026-11-13", time: "09:15" }));
+    const r = await tool.run({ ...mcpContext(app.store, app, CLOCK()), calendarTurn: new CalendarTurn() }, tool.input.parse({ date: "2026-11-13", time: "09:15" }));
     expect(r.ok).toBe(false);
     expect(r.code).toBe("google_unavailable");
     expect(r.output).not.toHaveProperty("clashes_with_time");
@@ -136,7 +136,7 @@ describe("sprint 13C, H1: clash checks read Google Calendar live enough", () => 
     fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
     fake.now += FRESH_MS + 1;
     const tool = toolByName("get_schedule")!;
-    const r = await tool.run({ ...mcpContext(app.store, app, CLOCK()), calendarReads: new Map() }, tool.input.parse({}));
+    const r = await tool.run({ ...mcpContext(app.store, app, CLOCK()), calendarTurn: new CalendarTurn() }, tool.input.parse({}));
     const thu = (r.output.appointments as Array<{ clashes: Array<{ summary: { untrusted_text: string } }> | null }>)[0]!;
     expect(thu.clashes!.map((c) => c.summary.untrusted_text)).toEqual(["Work call"]);
   });
@@ -216,7 +216,7 @@ describe("sprint 13C fix round 1", () => {
     expect(app.kase.view().slots.map((s) => s.date)).toEqual(["2026-11-12", "2026-12-20", "2027-01-30", "2027-03-10", "2027-04-20"]);
     fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
     fake.now += FRESH_MS + 1;
-    const ctx = { ...mcpContext(app.store, app, CLOCK()), calendarReads: new Map() };
+    const ctx = { ...mcpContext(app.store, app, CLOCK()), calendarTurn: new CalendarTurn() };
     const schedule = toolByName("get_schedule")!;
     const r = await schedule.run(ctx, schedule.input.parse({}));
     const thu = (r.output.appointments as Array<{ slot_key: string; clashes: Array<{ summary: { untrusted_text: string } }> | null }>).find((a) => a.slot_key === "2026-11-12T10:30")!;
@@ -236,7 +236,7 @@ describe("sprint 13C fix round 1", () => {
     const before = lists(fake).length;
     const dates = app.kase.view().slots.map((s) => s.date);
     const a = events.refresh(dates, "2026-11-05");
-    const b = events.ensure("2026-11-12", { dates, today: "2026-11-05", reads: new Map() });
+    const b = events.ensure("2026-11-12", { dates, today: "2026-11-05", turn: new CalendarTurn() });
     events.touch(() => ({ dates, today: "2026-11-05" }));
     await new Promise((r) => setImmediate(r));
     release();
@@ -253,7 +253,7 @@ describe("sprint 13C fix round 1", () => {
     fake.now += FRESH_MS + 1;
     fake.apiStatus = 503;
     const schedule = toolByName("get_schedule")!;
-    const r = await schedule.run({ ...mcpContext(app.store, app, CLOCK()), calendarReads: new Map() }, schedule.input.parse({}));
+    const r = await schedule.run({ ...mcpContext(app.store, app, CLOCK()), calendarTurn: new CalendarTurn() }, schedule.input.parse({}));
     expect((r.output.appointments as Array<{ clashes: unknown }>)[0]!.clashes).toBeNull();
     expect(r.output.google_calendar).toMatchObject({ read: false, error: "google_unavailable" });
     // The work call's times are not facts the answer may state.
@@ -274,5 +274,115 @@ describe("sprint 13C fix round 1", () => {
     expect(app.kase.timeZone()).toBe("America/Denver");
     expect(events.snapshot()!.events.map((e) => e.summary)).not.toContain("Office closed");
     expect(dates).toEqual(["2026-11-12"]);
+  });
+});
+
+describe("sprint 13C fix round 2", () => {
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  // Sixteen far-apart offers, 40 days apart from December 20, so with
+  // Thursday 11/12 the case has 17 dates, each in its own window.
+  const farDates = Array.from({ length: 16 }, (_, i) => new Date(Date.UTC(2026, 11, 20 + 40 * i)).toISOString().slice(0, 10));
+  const sentence = (d: string) => `We can also offer ${MONTHS[Number(d.slice(5, 7)) - 1]} ${Number(d.slice(8, 10))}, ${d.slice(0, 4)} at 9:00 AM.`;
+  const TEXT17 = `Hi,\n\n${farDates.map(sentence).join(" ")}\n\nLantern Hill Clinic`;
+  const many: Recording = {
+    message_id: "m-many",
+    effort: "any",
+    attempts: [
+      {
+        output: { claims: farDates.map((d) => ({ claim_type: "offer", date: d, time: "09:00", location: null, quote: sentence(d), sender_kind: "person", event_time: null, request_item: null })) },
+        usage: { input: 1, cached_input: 0, output: 1, reasoning: 0 },
+        latency_ms: 1,
+      },
+    ],
+  };
+  type Appt = { slot_key: string; clashes: Array<{ summary: { untrusted_text: string } }> | null };
+
+  it("N1 and N2: with 17 far-apart dates, the first one's clash is reported, the turn reads Google at most 8 times, and the dates past it are unread, never free", async () => {
+    const { fake, app } = await connected(many);
+    const m = app.intake.importMessage({ id: "m-many", channel: "email", from: "Lantern Hill Clinic", received_at: "2026-10-31T09:20:00-06:00", text: TEXT17 });
+    await app.intake.extract("m-many", { effort: "minimal", expectedVersion: m.version });
+    for (const e of app.intake.reviewQueue()) app.intake.accept(e.id, e.version);
+    expect(new Set(app.kase.view().slots.map((s) => s.date)).size).toBe(17);
+    fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
+    fake.now += FRESH_MS + 1;
+    const before = lists(fake).length;
+    const ctx = { ...mcpContext(app.store, app, CLOCK()), calendarTurn: new CalendarTurn() };
+    const schedule = toolByName("get_schedule")!;
+    const r = await schedule.run(ctx, schedule.input.parse({}));
+    expect(lists(fake).length - before).toBe(TURN_READ_BUDGET);
+    const appts = r.output.appointments as Appt[];
+    expect(appts.find((a) => a.slot_key === "2026-11-12T10:30")!.clashes!.map((c) => c.summary.untrusted_text)).toEqual(["Work call"]);
+    const unread = (r.output.google_calendar as { read: boolean; error: string; unread_dates: string[] });
+    expect(unread).toMatchObject({ read: false, error: "google_read_limit" });
+    // 18 dates with today. The first read covers today and 11/12, each other
+    // read one far date.
+    expect(unread.unread_dates.length).toBe(18 - (TURN_READ_BUDGET + 1));
+    // Every appointment is either checked or marked unread: none past the
+    // budget reads as free.
+    for (const a of appts) {
+      const date = a.slot_key.slice(0, 10);
+      if (unread.unread_dates.includes(date)) expect(a.clashes).toBeNull();
+      else expect(a.clashes).not.toBeNull();
+    }
+    // A later check in the same turn on the first date still finds the
+    // clash, and reads nothing more.
+    const check = toolByName("check_calendar")!;
+    expect(clashNames((await check.run(ctx, check.input.parse({ date: "2026-11-12", time: "10:30" }))).output)).toEqual(["Work call"]);
+    // A date past the budget is answered as unread.
+    const last = await check.run(ctx, check.input.parse({ date: farDates.at(-1)!, time: "09:00" }));
+    expect(last).toMatchObject({ ok: false, code: "google_read_limit" });
+    expect(lists(fake).length - before).toBe(TURN_READ_BUDGET);
+  });
+
+  it("N2: calendar_list twice in a turn reads Google once", async () => {
+    const { fake, app } = await connected();
+    const { googleToolByName } = await import("../src/google/tools.ts");
+    const list = googleToolByName("calendar_list")!;
+    const ctx = { ...mcpContext(app.store, app, CLOCK()), calendarTurn: new CalendarTurn() };
+    const before = lists(fake).length;
+    const a = await list.run(ctx, list.input.parse({ from: "2026-11-12", to: "2026-11-13" }));
+    const b = await list.run(ctx, list.input.parse({ from: "2026-11-12", to: "2026-11-13" }));
+    expect([a.ok, b.ok]).toEqual([true, true]);
+    expect(lists(fake).length - before).toBe(1);
+    // A new turn reads again.
+    await list.run({ ...ctx, calendarTurn: new CalendarTurn() }, list.input.parse({ from: "2026-11-12", to: "2026-11-13" }));
+    expect(lists(fake).length - before).toBe(2);
+  });
+
+  it("R1: a window a turn found fresh is held for the turn, so later reads do not evict it", async () => {
+    const { fake, app, events } = await connected();
+    fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
+    const dates = app.kase.view().slots.map((s) => s.date);
+    await events.refresh(dates, "2026-11-05");
+    const turn = new CalendarTurn();
+    const before = lists(fake).length;
+    // Fresh: held, not read.
+    await events.ensure("2026-11-12", { dates, today: "2026-11-05", turn });
+    expect(lists(fake).length).toBe(before);
+    // Five other windows, read by calls that hold nothing, would push the
+    // case window out of the four kept.
+    for (const d of ["2027-01-01", "2027-03-01", "2027-05-01", "2027-07-01", "2027-09-01"]) await events.ensure(d, { dates, today: "2026-11-05" });
+    expect(events.snapshot()!.events.map((e) => e.summary)).toContain("Work call");
+    events.release(turn);
+    await events.ensure("2027-11-01", { dates, today: "2026-11-05" });
+    expect(events.snapshot()!.events.map((e) => e.summary)).not.toContain("Work call");
+  });
+
+  it("N5: a read the connection outlived marks the date unread, never free", async () => {
+    const { fake, app, events } = await connected();
+    fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
+    fake.now += FRESH_MS + 1;
+    let release!: () => void;
+    fake.listGate = new Promise((r) => (release = r));
+    const check = toolByName("check_calendar")!;
+    const pending = check.run({ ...mcpContext(app.store, app, CLOCK()), calendarTurn: new CalendarTurn() }, check.input.parse({ date: "2026-11-12", time: "10:30" }));
+    await new Promise((r) => setImmediate(r));
+    // A connect starts while the read runs.
+    events.clear();
+    release();
+    fake.listGate = null;
+    const r = await pending;
+    expect(r).toMatchObject({ ok: false, code: "google_stale" });
+    expect(r.output).not.toHaveProperty("clashes_with_time");
   });
 });

@@ -20,6 +20,7 @@ export const GOOGLE_ERROR_CODES = [
   "google_invalid_response",
   "google_stale",
   "google_duplicate",
+  "google_read_limit",
 ] as const;
 export type GoogleErrorCode = (typeof GOOGLE_ERROR_CODES)[number];
 
@@ -36,6 +37,7 @@ export const GOOGLE_ERROR_TEXT: Record<GoogleErrorCode, string> = {
   google_invalid_response: "Google sent an answer the app could not read. Nothing changed.",
   google_stale: "The Google connection changed since the page read it. Reload and try again.",
   google_duplicate: "Google Calendar has more than one event the app made for this appointment. Remove the extra one in Google Calendar, then try again.",
+  google_read_limit: "The app already read Google Calendar as many times as one answer allows, so this date was not checked. Ask about it again.",
 };
 
 // A fixed sentence for one case of a code, chosen by code.

@@ -381,7 +381,8 @@ export const GOOGLE_TOOLS: ToolSpec<unknown>[] = [
       const tz = ctx.zone;
       let events;
       try {
-        events = await google.calendar.list(input);
+        // Fix round 2, N2: a turn reads a window once, within its budget.
+        events = google.events ? await google.events.list(input, ctx.calendarTurn) : await google.calendar.list(input);
       } catch (err) {
         if (err instanceof GoogleError) return failure(err.code, err.message);
         throw err;

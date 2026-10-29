@@ -1462,7 +1462,8 @@ describe("review round 3", () => {
     events.clear();
     release();
     s.fake.listGate = null;
-    await pending;
+    // Fix round 2, N5: the dropped read is not a success.
+    await expect(pending).rejects.toMatchObject({ code: "google_stale" });
     expect(events.snapshot()).toBeNull();
     // A's events, then B connects: they are gone at once, and a failed first
     // fetch for B does not bring them back.

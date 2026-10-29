@@ -48,7 +48,7 @@ import {
 } from "./types.ts";
 import type { FunctionTool } from "../model/responses.ts";
 import { GOOGLE_TOOLS, GOOGLE_TOOL_NAMES, GOOGLE_WRITE_TOOLS, type GoogleServices } from "../google/tools.ts";
-import type { CalendarReads } from "../google/events.ts";
+import { CalendarTurn } from "../google/events.ts";
 import { GoogleError } from "../google/http.ts";
 
 export type ToolServices = {
@@ -90,7 +90,7 @@ export type ToolContext = ToolServices & {
   // The Google Calendar reads of this turn, so a clash check reads each
   // window at most once a turn (0016, H1). Absent over MCP, where each call
   // is its own turn.
-  calendarReads?: CalendarReads;
+  calendarTurn?: CalendarTurn;
 };
 
 // `paste` is code's reading of the person's message at the start of the
@@ -575,21 +575,30 @@ function gated(spec: ToolSpec<unknown>): ToolSpec<unknown> {
 }
 
 // 0016, H1: with Google Calendar connected, a clash check first makes sure
-// the events it reads cover `date` (or the case's appointments) and were
-// read from Google in the last minute. Returns the GoogleError of a read
-// that failed, or null. Never throws for Google.
-async function freshCalendar(ctx: ToolContext, date: string | null): Promise<GoogleError | null> {
+// the events it reads cover each date and were read from Google in the
+// last minute. Returns the dates that could not be read, each with its
+// GoogleError: a failed read, a connection that changed (N5) or the turn's
+// read budget (N1, N2). Never throws for Google. The dates go nearest
+// first, so the budget covers the soonest ones. Without a chat turn (over
+// MCP) the call is its own turn.
+async function freshCalendar(ctx: ToolContext, dates: string[]): Promise<Map<string, GoogleError>> {
+  const unread = new Map<string, GoogleError>();
   const events = ctx.google?.events;
-  if (!events || !ctx.google!.connection.status().calendar) return null;
-  const dates = ctx.kase.view().slots.map((s) => s.date);
+  if (!events || !ctx.google!.connection.status().calendar) return unread;
+  const slotDates = ctx.kase.view().slots.map((s) => s.date);
+  const turn = ctx.calendarTurn ?? new CalendarTurn();
   try {
-    if (date !== null) await events.ensure(date, { dates, today: ctx.today, reads: ctx.calendarReads });
-    else for (const d of [...new Set([...dates, ctx.today])]) await events.ensure(d, { dates, today: ctx.today, reads: ctx.calendarReads });
-    return null;
-  } catch (err) {
-    if (err instanceof GoogleError) return err;
-    return new GoogleError("google_unavailable");
+    for (const d of [...new Set(dates)].sort()) {
+      try {
+        await events.ensure(d, { dates: slotDates, today: ctx.today, turn });
+      } catch (err) {
+        unread.set(d, err instanceof GoogleError ? err : new GoogleError("google_unavailable"));
+      }
+    }
+  } finally {
+    if (!ctx.calendarTurn) events.release(turn);
   }
+  return unread;
 }
 
 export const CALENDAR_UNREADABLE = "Google Calendar could not be read right now, so the app cannot say whether that time is free.";
@@ -608,14 +617,18 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
     readOnly: true,
     run: async (ctx) => {
       const { intake, kase, records, today, zone } = ctx;
-      const unread = await freshCalendar(ctx, null);
+      const unreadDates = await freshCalendar(ctx, [today, ...kase.view().slots.map((s) => s.date)]);
+      const unread = unreadDates.size > 0 ? [...unreadDates.values()][0]! : null;
+      // Fix round 1, R3 and round 2, N1: an appointment on a date Google
+      // could not be read for shows no clash, and grounds none.
+      const unreadOn = (date: string) => unreadDates.has(date);
       const view = kase.view();
       const evidence = intake.evidence();
       const archived = kase.archivedKeys();
       const settings = timezoneSettings(ctx.store);
       // Fix round 1, R3: when Google could not be read, the stored clashes
       // may be out of date. They are left out, with their facts.
-      const clashFacts = unread ? [] : view.slots.flatMap((s) => (s.clashes ?? []).map((c) => caseLocal(c.start, zone)));
+      const clashFacts = view.slots.flatMap((s) => (unreadOn(s.date) ? [] : (s.clashes ?? []).map((c) => caseLocal(c.start, zone))));
       return result(
         {
           today: { date: today, label: slotLabel(today, null).replace(", no time", "") },
@@ -633,11 +646,20 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
             record_version: records.record(s.key).version,
             evidence_ids: s.evidenceIds,
             conflict_ids: view.conflicts.filter((c) => c.slotKeys.includes(s.key)).map((c) => c.id),
-            clashes: unread ? null : (s.clashes?.map((c) => ({ summary: untrustedText(c.summary), starts: localLabel(caseLocal(c.start, zone)) })) ?? null),
+            clashes: unreadOn(s.date) ? null : (s.clashes?.map((c) => ({ summary: untrustedText(c.summary), starts: localLabel(caseLocal(c.start, zone)) })) ?? null),
             reply_templates: view.reply.options.filter((o) => o.slotKey === s.key).map((o) => o.template),
           })),
           calendar_loaded: view.calendar !== null,
-          ...(unread ? { google_calendar: { read: false, error: unread.code, message: `${CALENDAR_UNREADABLE} No clashes are shown until it can be read.` } } : {}),
+          ...(unread
+            ? {
+                google_calendar: {
+                  read: false,
+                  error: unread.code,
+                  unread_dates: [...unreadDates.keys()],
+                  message: `${CALENDAR_UNREADABLE} No clashes are shown for these dates until it can be read.`,
+                },
+              }
+            : {}),
           open_question: view.question ? { question_id: view.question.id, conflict_id: view.question.conflictId } : null,
           questions_version: view.questionsVersion,
           conflicts_waiting: view.waiting,
@@ -806,7 +828,7 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
     readOnly: true,
     run: async (ctx, input) => {
       const { kase, intake, zone } = ctx;
-      const unread = await freshCalendar(ctx, input.date);
+      const unread = (await freshCalendar(ctx, [input.date])).get(input.date) ?? null;
       const view = kase.view();
       const evidence = intake.evidence();
       const sameDay = view.slots.filter((s) => s.date === input.date);

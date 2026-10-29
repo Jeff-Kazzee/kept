@@ -10,8 +10,15 @@
 // check first calls `ensure` for its date: when no window read in the last
 // FRESH_MS covers the date, it reads the case window when that covers the
 // date, else a window that starts at the date. A newer window replaces the
-// events an older one held for the same days. Each read is shared by every
-// check of one chat turn (`reads`), so a turn reads a window at most once.
+// events an older one held for the same days.
+//
+// Fix round 2 (N1, N2): each chat turn, or each MCP call, has a
+// CalendarTurn. It holds every window the turn read or found fresh, so none
+// of them is evicted while the turn runs, and it allows at most
+// TURN_READ_BUDGET reads of Google. A date that would need a read past the
+// budget is answered as unread (google_read_limit), never as free.
+// calendar_list goes through the same turn, so a window listed twice in a
+// turn is read once.
 //
 // Review round 3, finding 6: the events belong to one account and calendar,
 // and to one generation. `clear`, which a disconnect and the start of a
@@ -27,12 +34,14 @@ import { GoogleError } from "./http.ts";
 export const GOOGLE_CALENDAR_NAME = "Google Calendar";
 // How old a read may be before a clash check reads Google again.
 export const FRESH_MS = 60_000;
-// The most windows kept. The oldest read goes first, except a window a chat
-// turn read in the last PIN_MS, so a turn never loses a window it read
-// (fix round 1, R1). HARD_MAX_WINDOWS bounds them all.
+// The most windows kept that no running turn holds. The oldest read goes
+// first. A window a running turn holds is never dropped: the turns' read
+// budgets bound them.
 const MAX_WINDOWS = 4;
-const PIN_MS = 5 * 60_000;
-const HARD_MAX_WINDOWS = 16;
+// Google reads one turn may start (proposed in 0016).
+export const TURN_READ_BUDGET = 8;
+// A turn that was never released stops holding its windows after this.
+const TURN_MAX_MS = 15 * 60_000;
 
 const addDays = (date: string, days: number) => {
   const [y, m, d] = date.split("-").map(Number) as [number, number, number];
@@ -51,10 +60,27 @@ export type CalendarReadStatus = {
   error: { code: string; at: string } | null;
 };
 
-// The reads of one chat turn, by window. A read still running is shared. A
-// failed read stays failed for the rest of the turn. A read that worked is
-// read again only when its window is no longer kept or no longer fresh.
-export type CalendarReads = Map<string, { read: Promise<void>; state: "pending" | "ok" | "failed" }>;
+// The calendar reads of one chat turn or MCP call. A read still running is
+// shared. A failed read stays failed for the rest of the turn. A read that
+// worked is read again only when its window is no longer kept or no longer
+// fresh. `held` names the windows the turn read or found fresh.
+export class CalendarTurn {
+  readonly budget: number;
+  // Set on the clock of the events the first time the turn holds a window.
+  startedAt: number | null = null;
+  reads = 0;
+  readonly windows = new Map<string, { read: Promise<void>; state: "pending" | "ok" | "failed" }>();
+  readonly lists = new Map<string, Promise<CalendarEvent[]>>();
+  readonly held = new Set<string>();
+  constructor(budget = TURN_READ_BUDGET) {
+    this.budget = budget;
+  }
+  // Counts one read, or throws google_read_limit past the budget.
+  spend(): void {
+    if (this.reads >= this.budget) throw new GoogleError("google_read_limit");
+    this.reads += 1;
+  }
+}
 
 const windowKey = (w: { from: string; to: string }, zone: string) => `${w.from}/${w.to}/${zone}`;
 
@@ -78,8 +104,8 @@ export class GoogleCalendarEvents {
   // One read per window at a time, shared by refresh, ensure and touch
   // (fix round 1, R2).
   readonly #inflight = new Map<string, Promise<void>>();
-  // Windows a chat turn read, kept until the time given.
-  readonly #pins = new Map<string, number>();
+  // The turns running now. Their windows are never evicted.
+  readonly #turns = new Set<CalendarTurn>();
   // Moves with every stored read, so the page reloads the case (H1).
   #version = 0;
 
@@ -125,7 +151,7 @@ export class GoogleCalendarEvents {
     this.#state = null;
     this.#last = null;
     this.#error = null;
-    this.#pins.clear();
+    this.#turns.clear();
   }
 
   // Without a calendar connection: drops what is stored, once.
@@ -160,33 +186,62 @@ export class GoogleCalendarEvents {
     await this.#read(GoogleCalendarEvents.caseWindow(dates, today));
   }
 
+  // The turn is done: its windows may be evicted again.
+  release(turn: CalendarTurn): void {
+    this.#turns.delete(turn);
+  }
+
+  #hold(turn: CalendarTurn | undefined, key: string): void {
+    if (!turn) return;
+    turn.held.add(key);
+    turn.startedAt ??= this.#now();
+    this.#turns.add(turn);
+  }
+
   // Makes sure a window read in the last FRESH_MS covers `date`, reading
-  // one when none does. Throws the GoogleError of a failed read. Does
-  // nothing without a calendar connection.
-  async ensure(date: string, scope: { dates: string[]; today: string; reads?: CalendarReads }): Promise<void> {
+  // one when none does, and holds that window for the turn (fix round 2,
+  // R1). Throws the GoogleError of a failed read, google_read_limit past
+  // the turn's budget, and google_stale when the connection changed while
+  // it read. Does nothing without a calendar connection.
+  async ensure(date: string, scope: { dates: string[]; today: string; turn?: CalendarTurn }): Promise<void> {
     if (this.#calendar.accountKey() === null) return this.#drop();
+    const { turn } = scope;
     const zone = this.#calendar.timeZone;
     const now = this.#now();
     const covers = (w: { from: string; to: string }) => w.from <= date && date <= w.to;
-    const kept = this.#windows() ?? [];
-    if (kept.some((w) => w.zone === zone && covers(w) && now - w.readAt < FRESH_MS)) return;
+    const fresh = (this.#windows() ?? []).find((w) => w.zone === zone && covers(w) && now - w.readAt < FRESH_MS);
+    if (fresh) return this.#hold(turn, windowKey(fresh, zone));
     const primary = GoogleCalendarEvents.caseWindow(scope.dates, scope.today);
     const window = covers(primary) ? primary : { from: date, to: addDays(date, MAX_WINDOW_DAYS - 1) };
     const key = windowKey(window, zone);
-    const earlier = scope.reads?.get(key);
+    const earlier = turn?.windows.get(key);
     if (earlier && earlier.state !== "ok") return earlier.read;
+    turn?.spend();
+    this.#hold(turn, key);
     const entry: { read: Promise<void>; state: "pending" | "ok" | "failed" } = { read: Promise.resolve(), state: "pending" };
-    // A clash check's window is pinned, so the checks after it in the same
-    // turn or call still find it.
-    entry.read = this.#read(window, true).then(
+    entry.read = this.#read(window).then(
       () => void (entry.state = "ok"),
       (err) => {
         entry.state = "failed";
         throw err;
       },
     );
-    scope.reads?.set(key, entry);
+    turn?.windows.set(key, entry);
     return entry.read;
+  }
+
+  // calendar_list's read: Google's events in a window, stored nowhere
+  // (review round 3, finding 5). A turn reads each window once and counts
+  // it against its budget (fix round 2, N2).
+  list(window: { from: string; to: string }, turn?: CalendarTurn): Promise<CalendarEvent[]> {
+    if (!turn) return this.#calendar.list(window);
+    const key = windowKey(window, this.#calendar.timeZone);
+    const earlier = turn.lists.get(key);
+    if (earlier) return earlier;
+    turn.spend();
+    const read = this.#calendar.list(window);
+    turn.lists.set(key, read);
+    return read;
   }
 
   // Reads the case window in the background when its last read is older
@@ -207,11 +262,10 @@ export class GoogleCalendarEvents {
   }
 
   // One read of a window at a time: a caller that asks while it runs gets
-  // the same read. `pin` keeps the window for PIN_MS.
-  #read(window: { from: string; to: string }, pin = false): Promise<void> {
+  // the same read.
+  #read(window: { from: string; to: string }): Promise<void> {
     const zone = this.#calendar.timeZone;
     const key = `${this.#generation}|${this.#calendar.accountKey()}|${windowKey(window, zone)}`;
-    if (pin) this.#pins.set(windowKey(window, zone), this.#now() + PIN_MS);
     const running = this.#inflight.get(key);
     if (running) return running;
     const read = this.#fetch(window).finally(() => this.#inflight.delete(key));
@@ -231,7 +285,9 @@ export class GoogleCalendarEvents {
       if (generation === this.#generation) this.#error = { code: err instanceof GoogleError ? err.code : "google_unavailable", at: this.#now() };
       throw err;
     }
-    if (generation !== this.#generation || this.#calendar.accountKey() !== account) return;
+    // Fix round 2, N5: a read the connection outlived is not a success.
+    // Nothing is stored, and the caller treats the date as unread.
+    if (generation !== this.#generation || this.#calendar.accountKey() !== account) throw new GoogleError("google_stale");
     const now = this.#now();
     const stored: Window = {
       ...window,
@@ -248,13 +304,13 @@ export class GoogleCalendarEvents {
     this.#version += 1;
   }
 
-  // The windows to keep, oldest first: every pinned one, and the newest
-  // others up to MAX_WINDOWS, never more than HARD_MAX_WINDOWS.
+  // The windows to keep, oldest first: every one a running turn holds, and
+  // the newest others up to MAX_WINDOWS.
   #keep(windows: Window[], now: number): Window[] {
-    for (const [k, until] of this.#pins) if (until <= now) this.#pins.delete(k);
-    const pinned = (w: Window) => this.#pins.has(windowKey(w, w.zone));
+    for (const t of this.#turns) if (t.startedAt !== null && now - t.startedAt > TURN_MAX_MS) this.#turns.delete(t);
+    const held = (w: Window) => [...this.#turns].some((t) => t.held.has(windowKey(w, w.zone)));
     const sorted = [...windows].sort((a, b) => a.readAt - b.readAt);
-    const others = sorted.filter((w) => !pinned(w)).slice(-MAX_WINDOWS);
-    return sorted.filter((w) => pinned(w) || others.includes(w)).slice(-HARD_MAX_WINDOWS);
+    const others = sorted.filter((w) => !held(w)).slice(-MAX_WINDOWS);
+    return sorted.filter((w) => held(w) || others.includes(w));
   }
 }
