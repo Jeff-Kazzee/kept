@@ -47,6 +47,12 @@ export function shortTime(iso: string, zone = caseZone): string {
   return `${p.weekday}, ${p.month} ${p.day}, ${p.hour}:${p.minute} ${p.dayPeriod} ${p.timeZoneName}`;
 }
 
+// "Oct 28, 6:43 PM", for an email named by when it arrived (0018, H2).
+export function emailTime(iso: string, zone = caseZone): string {
+  const p = parts(formatter("short", zone), Date.parse(iso));
+  return `${p.month} ${p.day}, ${p.hour}:${p.minute} ${p.dayPeriod}`;
+}
+
 // "10:02 AM", for a timeline row under its day.
 export function clockTime(iso: string, zone = caseZone): string {
   const p = parts(formatter("short", zone), Date.parse(iso));

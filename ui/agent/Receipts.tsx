@@ -8,7 +8,7 @@ import { Icon } from "../components/Icon.tsx";
 import type { ActivityEntry } from "../contract.ts";
 import { entryText } from "../../src/activity/types.ts";
 import { senderShown } from "../case/Source.tsx";
-import { canUndo, useAgent } from "./AgentContext.tsx";
+import { canUndo, removedInGoogle, useAgent } from "./AgentContext.tsx";
 
 export type ReceiptGroup = { key: string; text: string; entries: ActivityEntry[]; messageId: string | null };
 
@@ -51,13 +51,14 @@ export function groupReceipts(entries: ActivityEntry[], state: Pick<AppState, "e
 }
 
 export function Receipts({ entries, state, skipMessages }: { entries: ActivityEntry[]; state: AppState; skipMessages?: ReadonlySet<string> }) {
+  const { activity, google } = useAgent();
   const groups = groupReceipts(entries, state).filter((g) => g.messageId === null || !skipMessages?.has(g.messageId));
   if (groups.length === 0) return null;
   return (
     <ul className="receipts" aria-label="What the assistant did">
       {groups.map((g) => (
         <li key={g.key}>
-          <Receipt text={g.text} entries={g.entries} />
+          <Receipt text={g.text} entries={g.entries} gone={g.entries.length === 1 && removedInGoogle(activity, google?.calendarOwn, g.entries[0]!)} />
         </li>
       ))}
     </ul>
@@ -66,18 +67,21 @@ export function Receipts({ entries, state, skipMessages }: { entries: ActivityEn
 
 // One receipt line. Shows Undo while any of its entries can be undone,
 // "Undone" once all are, and the plain reason when Undo was refused.
-export function Receipt({ text, entries, quiet = false }: { text: string; entries: ActivityEntry[]; quiet?: boolean }) {
+// `gone`: the Google Calendar event it added is already removed in Google
+// Calendar, so it says so and offers no Undo (0018, H5).
+export function Receipt({ text, entries, quiet = false, gone = false }: { text: string; entries: ActivityEntry[]; quiet?: boolean; gone?: boolean }) {
   const undone = entries.length > 0 && entries.every((e) => e.undone);
   return (
-    <div className={`receipt${undone ? " is-undone" : ""}${quiet ? " is-quiet" : ""}`}>
+    <div className={`receipt${undone || gone ? " is-undone" : ""}${quiet ? " is-quiet" : ""}`}>
       <span className="receipt-mark" aria-hidden="true">
-        <Icon name={undone ? "undo" : "check"} size="sm" />
+        <Icon name={undone ? "undo" : gone ? "google" : "check"} size="sm" />
       </span>
       <span className="receipt-text">
         {text}
         {undone && <span className="muted"> · Undone</span>}
+        {gone && !undone && <span className="muted"> · Since removed in Google Calendar</span>}
       </span>
-      <UndoButton entries={entries} label={`Undo: ${text}`} />
+      {!gone && <UndoButton entries={entries} label={`Undo: ${text}`} />}
       <BlockedReason entries={entries} />
     </div>
   );

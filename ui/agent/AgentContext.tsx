@@ -119,6 +119,17 @@ export function googleEventState(log: ActivityLog | null, seen: CalendarOwnSeen[
   return newest && !newest.slots.includes(slot.key) ? "removed" : "on";
 }
 
+// 0018, H5: true when this entry added or updated the app's event, it is
+// the slot's latest Google Calendar action in effect, and the same read
+// that shows "Removed in Google Calendar" no longer finds the event. Its
+// Undo has nothing left to reverse.
+export function removedInGoogle(log: ActivityLog | null, seen: CalendarOwnSeen[] | undefined, entry: ActivityEntry): boolean {
+  if ((entry.kind !== CALENDAR_KINDS.added && entry.kind !== CALENDAR_KINDS.updated) || entry.undone || entry.target?.type !== "slot") return false;
+  const key = entry.target.id;
+  const last = log?.entries.find((e) => CALENDAR.has(e.kind) && e.target?.type === "slot" && e.target.id === key && !e.undone);
+  return last?.id === entry.id && googleEventState(log, seen, { key, date: key.slice(0, 10) }) === "removed";
+}
+
 export function onGoogleCalendar(log: ActivityLog | null, slotKey: string): boolean {
   const last = log?.entries.find((e) => CALENDAR.has(e.kind) && e.target?.type === "slot" && e.target.id === slotKey && !e.undone);
   return last !== undefined && last.kind !== CALENDAR_KINDS.removed;

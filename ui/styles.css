@@ -583,6 +583,9 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
 
 /* Receipts: what the agent did, with Undo. They arrive with a gentle
    stagger. */
+/* 0018, H2: emails a turn found and did not add, each with Add it. */
+.waiting-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-1); }
+.waiting-list > li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-2); }
 .receipts { display: grid; gap: var(--s-1); }
 .receipts > li { animation: rise var(--slow) var(--ease) both; }
 .receipts > li:nth-child(2) { animation-delay: 40ms; }

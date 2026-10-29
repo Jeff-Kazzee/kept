@@ -4,7 +4,7 @@
 // reason when Undo is refused.
 import { entryText } from "../../src/activity/types.ts";
 import { dateLabel } from "../../src/slots/labels.ts";
-import { ACTOR_WORDS, useAgent } from "../agent/AgentContext.tsx";
+import { ACTOR_WORDS, removedInGoogle, useAgent } from "../agent/AgentContext.tsx";
 import { BlockedReason, UndoButton } from "../agent/Receipts.tsx";
 import type { ChecklistItem, HistoryEntry } from "../api.ts";
 import { Fox } from "../components/Art.tsx";
@@ -95,6 +95,7 @@ const ACTOR_ICONS: Record<ActivityActor, IconName> = { agent: "sparkle", you: "u
 
 // The activity, newest first, grouped by day on the case's clock.
 export function ActivityPanel({ entries }: { entries: ActivityEntry[] }) {
+  const { activity, google } = useAgent();
   if (entries.length === 0) {
     return (
       <div className="empty">
@@ -123,25 +124,30 @@ export function ActivityPanel({ entries }: { entries: ActivityEntry[] }) {
         <section key={day} className="stack-sm" aria-label={dateLabel(day)}>
           <h3 className="day-head">{dateLabel(day)}</h3>
           <ol className="activity">
-            {list.map((e) => (
-              <li key={e.id} className={`activity-row${e.undone ? " is-undone" : ""}`}>
-                <span className={`avatar avatar-${e.actor}`} aria-hidden="true">
-                  <Icon name={ACTOR_ICONS[e.actor]} size="sm" />
-                </span>
-                <div className="activity-body">
-                  <p className="activity-text">{entryText(e)}</p>
-                  <p className="activity-meta">
-                    <span>{ACTOR_WORDS[e.actor]}</span>
-                    <time dateTime={e.at} title={shortTime(e.at)}>
-                      {clockTime(e.at)}
-                    </time>
-                    {e.undone && <span>Undone{e.undoneAt ? ` ${clockTime(e.undoneAt)}` : ""}</span>}
-                  </p>
-                  <BlockedReason entries={[e]} />
-                </div>
-                <UndoButton entries={[e]} label={`Undo: ${entryText(e)}`} />
-              </li>
-            ))}
+            {list.map((e) => {
+              // 0018, H5: an event the person removed in Google since.
+              const gone = removedInGoogle(activity, google?.calendarOwn, e);
+              return (
+                <li key={e.id} className={`activity-row${e.undone ? " is-undone" : ""}`}>
+                  <span className={`avatar avatar-${e.actor}`} aria-hidden="true">
+                    <Icon name={ACTOR_ICONS[e.actor]} size="sm" />
+                  </span>
+                  <div className="activity-body">
+                    <p className="activity-text">{entryText(e)}</p>
+                    <p className="activity-meta">
+                      <span>{ACTOR_WORDS[e.actor]}</span>
+                      <time dateTime={e.at} title={shortTime(e.at)}>
+                        {clockTime(e.at)}
+                      </time>
+                      {e.undone && <span>Undone{e.undoneAt ? ` ${clockTime(e.undoneAt)}` : ""}</span>}
+                      {gone && <span>Since removed in Google Calendar</span>}
+                    </p>
+                    <BlockedReason entries={[e]} />
+                  </div>
+                  {!gone && <UndoButton entries={[e]} label={`Undo: ${entryText(e)}`} />}
+                </li>
+              );
+            })}
           </ol>
         </section>
       ))}

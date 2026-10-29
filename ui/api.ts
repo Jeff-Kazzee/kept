@@ -166,6 +166,9 @@ export const api = {
   fixtures: () => request<FixtureScenario[]>("GET", "/api/fixtures"),
   calendar: () => request<{ name: string; text: string }>("GET", "/api/fixtures/calendar"),
   addMessage: (m: Omit<Message, "id"> & { id?: string }) => request<MessageView>("POST", "/api/messages", m),
+  // 0018, H2: "Add it" on an email a chat turn found and did not add.
+  // Answers the message, which the page then reads through extract.
+  addGmail: (gmailId: string) => request<MessageView>("POST", `/api/gmail/${encodeURIComponent(gmailId)}/add`, {}),
   extract: (id: string, effort: Effort, expectedVersion: number) =>
     request("POST", `/api/messages/${encodeURIComponent(id)}/extract`, { effort, expectedVersion }),
   manual: (id: string, expectedVersion: number, claim: unknown) =>

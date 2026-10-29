@@ -9,13 +9,13 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { Mark, RidgeScene } from "../components/Art.tsx";
 import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
 import { usageStopText } from "../../src/model/usage-text.ts";
-import type { AppState, FixtureScenario } from "../api.ts";
-import type { Run } from "../components/ActionButton.tsx";
+import { api, type AppState, type FixtureScenario } from "../api.ts";
+import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { entriesById, useAgent } from "../agent/AgentContext.tsx";
 import { ModelPicker } from "../agent/ModelPicker.tsx";
 import { Receipts } from "../agent/Receipts.tsx";
-import { shortTime } from "../format.ts";
+import { DEFAULT_EXTRACTION_EFFORT, emailTime, shortTime } from "../format.ts";
 import { ClaimsCard } from "../case/ClaimsCard.tsx";
 import { senderShown } from "../case/Source.tsx";
 import { ExplanationCard, QuestionCard } from "../case/ConflictCards.tsx";
@@ -115,7 +115,7 @@ export function ChatView(props: ChatViewProps) {
   };
 
   // 0017, E3: one full facts card per office message in the thread.
-  const facts = factsCards(imports, chat);
+  const facts = factsCards(imports, chat, new Set(state.messages.map((m) => m.id)));
 
   const demo = nextDemoMessage(fixtures, state);
   const demoStarted = state.messages.some((m) => DEMO_IDS.includes(m.id));
@@ -368,7 +368,9 @@ const factsKey = (chatMessageId: string, index: number) => `${chatMessageId}:${i
 // The facts cards of the thread, in the order it shows them: the imports
 // before the first message, then each message and the imports after it,
 // then the turn being streamed.
-export function factsCards(imports: Array<{ messageId: string; after: number }>, chat: Pick<ChatState, "messages" | "pending">): Map<string, FactsPlace> {
+// An email a turn offered with "Add it" has its facts card in the same place
+// once it is in the case (`inCase`, 0018, H2).
+export function factsCards(imports: Array<{ messageId: string; after: number }>, chat: Pick<ChatState, "messages" | "pending">, inCase: ReadonlySet<string> = new Set()): Map<string, FactsPlace> {
   const out = new Map<string, FactsPlace>();
   const first = new Map<string, string>();
   const add = (key: string, messageId: string) => {
@@ -385,11 +387,15 @@ export function factsCards(imports: Array<{ messageId: string; after: number }>,
   };
   const importsAfter = (n: number) => imports.filter((x) => x.after === n).forEach((x) => add(`import:${x.messageId}`, x.messageId));
   importsAfter(0);
+  const cardFacts = (id: string, c: Card, j: number) => {
+    if (c.kind === "claims") add(factsKey(id, j), c.messageId);
+    else if (c.kind === "gmail_waiting" && inCase.has(c.messageId)) add(factsKey(id, j), c.messageId);
+  };
   chat.messages.forEach((m, i) => {
-    m.cards.forEach((c, j) => c.kind === "claims" && add(factsKey(m.id, j), c.messageId));
+    m.cards.forEach((c, j) => cardFacts(m.id, c, j));
     importsAfter(i + 1);
   });
-  chat.pending?.cards.forEach((c, j) => c.kind === "claims" && add(factsKey(PENDING_MESSAGE, j), c.messageId));
+  chat.pending?.cards.forEach((c, j) => cardFacts(PENDING_MESSAGE, c, j));
   return out;
 }
 
@@ -484,6 +490,11 @@ function Extras({
   // A claims card shows its own receipt, so its facts are not repeated
   // as a second one.
   const withCard = new Set(cards.flatMap((c) => (c.kind === "claims" ? [c.messageId] : [])));
+  // 0018, H7: a notice that states an action the receipts above already
+  // show, with its Undo, is not shown again.
+  const receipted = new Set(actions.map((e) => e.id));
+  const repeats = (c: Card) => c.kind === "notice" && c.activityId !== undefined && receipted.has(c.activityId);
+  const waiting = cards.flatMap((c, i) => (c.kind === "gmail_waiting" ? [{ card: c, place: facts?.get(factsKey(messageId, i)) }] : []));
   return (
     <>
       <Receipts entries={actions} state={state} skipMessages={withCard} />
@@ -509,9 +520,85 @@ function Extras({
         </div>
       )}
       {cards.map((c, i) =>
-        c.kind === "notice" && shownText !== null && c.text.trim() === shownText ? null : (
+        (c.kind === "notice" && shownText !== null && c.text.trim() === shownText) || repeats(c) || c.kind === "gmail_waiting" ? null : (
           <CardView key={i} card={c} state={state} run={run} fresh={fresh} actions={actions} place={facts?.get(factsKey(messageId, i))} />
         ),
+      )}
+      {waiting.length > 0 && <WaitingEmails emails={waiting} state={state} run={run} fresh={fresh} />}
+    </>
+  );
+}
+
+type WaitingEmail = { card: Extract<Card, { kind: "gmail_waiting" }>; place?: FactsPlace };
+
+// 0018, H2: how the page names the sender of an email offered with "Add it":
+// as it names a message in the case from the same sender, else by the name
+// code gave when the turn ended, else "the office".
+export function waitingSender(card: WaitingEmail["card"], state: Pick<AppState, "evidence" | "messages">): string {
+  const same = card.sameSenderAs ? state.messages.find((m) => m.id === card.sameSenderAs) : undefined;
+  return same ? senderShown(same, state) : (card.office ?? "the office");
+}
+
+// "1 more email from Lantern Hill Clinic, Oct 28, 6:43 PM, isn't in your
+// case yet."
+export function waitingText(emails: Array<{ sender: string; when: string }>): string {
+  if (emails.length === 1) return `1 more email from ${emails[0]!.sender}, ${emails[0]!.when}, isn't in your case yet.`;
+  const senders = new Set(emails.map((e) => e.sender));
+  return `${emails.length} more emails${senders.size === 1 ? ` from ${emails[0]!.sender}` : ""} aren't in your case yet.`;
+}
+
+// 0018, H2: the emails a turn's Gmail search found and did not add, written
+// by code. "Add it" is the person's import, with its Undo, and the page then
+// reads the email as it reads a paste. An email in the case shows its facts
+// card here instead.
+function WaitingEmails({ emails, state, run, fresh }: { emails: WaitingEmail[]; state: AppState; run: Run; fresh: boolean }) {
+  const inCase = (c: WaitingEmail["card"]) => state.messages.some((m) => m.id === c.messageId);
+  const open = emails.filter((e) => !inCase(e.card)).map((e) => ({ ...e, sender: waitingSender(e.card, state), when: emailTime(e.card.receivedAt) }));
+  const add = (gmailId: string) => async () => {
+    const message = await api.addGmail(gmailId);
+    try {
+      await api.extract(message.id, DEFAULT_EXTRACTION_EFFORT, message.version);
+    } catch {
+      // The facts card offers manual entry for an email that was not read.
+    }
+  };
+  return (
+    <>
+      {emails
+        .filter((e) => inCase(e.card))
+        .map((e) => {
+          const id = e.card.messageId;
+          const m = state.messages.find((x) => x.id === id)!;
+          return <FactsCard key={id} messageId={id} evidenceIds={[...m.evidenceIds, ...m.manualEvidenceIds]} state={state} run={run} fresh={fresh} place={e.place} />;
+        })}
+      {open.length > 0 && (
+        <div className="notice waiting-emails" role="note">
+          <Icon name="message" />
+          <div className="stack-sm">
+            <span className="model-tag">Written by code</span>
+            <p>{waitingText(open)}</p>
+            {open.length === 1 ? (
+              <div>
+                <ActionButton run={run} action={add(open[0]!.card.gmailId)} size="sm" label={`Add the email from ${open[0]!.sender}, ${open[0]!.when}`}>
+                  <Icon name="plus" size="sm" /> Add it
+                </ActionButton>
+              </div>
+            ) : (
+              <ul className="waiting-list">
+                {open.map((e) => (
+                  <li key={e.card.gmailId}>
+                    <span>
+                      {e.sender}, {e.when}
+                    </span>
+                    <ActionButton run={run} action={add(e.card.gmailId)} size="sm" label={`Add the email from ${e.sender}, ${e.when}`}>
+                      <Icon name="plus" size="sm" /> Add it
+                    </ActionButton>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
       )}
     </>
   );
@@ -709,11 +796,11 @@ function ToolLines({ tools }: { tools: ToolLine[] }) {
   return (
     <ul className="tool-lines">
       {tools.map((t) => (
-        <li key={t.callId} className={`tool-line${t.ok === false ? " is-failed" : ""}`}>
-          {t.ok === null ? <span className="spinner" aria-hidden="true" /> : t.ok ? <Icon name="check" size="sm" /> : <Icon name="alert" size="sm" />}
+        <li key={t.callId} className={`tool-line${t.ok === false && !t.declined ? " is-failed" : ""}`}>
+          {t.ok === null ? <span className="spinner" aria-hidden="true" /> : t.ok ? <Icon name="check" size="sm" /> : <Icon name={t.declined ? "info" : "alert"} size="sm" />}
           <span>
             {t.label}
-            {t.ok === false && ". It did not finish."}
+            {t.ok === false && (t.declined ? ". It chose not to act." : ". It did not finish.")}
           </span>
         </li>
       ))}
@@ -722,10 +809,14 @@ function ToolLines({ tools }: { tools: ToolLine[] }) {
 }
 
 // A finished turn's tool lines, folded into one line that opens them.
+// A step that chose not to act by a rule is not one that did not finish
+// (0018, H6).
 export function toolSummaryText(tools: ToolLine[]): string {
-  const failed = tools.filter((t) => t.ok === false).length;
+  const failed = tools.filter((t) => t.ok === false && !t.declined).length;
+  const declined = tools.filter((t) => t.ok === false && t.declined).length;
   const steps = `${tools.length} step${tools.length === 1 ? "" : "s"}`;
-  return failed > 0 ? `Worked through ${steps}, ${failed} did not finish` : `Worked through ${steps}`;
+  const parts = [failed > 0 ? `${failed} did not finish` : null, declined > 0 ? `${declined} chose not to act` : null].filter(Boolean);
+  return [`Worked through ${steps}`, ...parts].join(", ");
 }
 
 function ToolSummary({ tools }: { tools: ToolLine[] }) {
@@ -839,6 +930,9 @@ export function CardView({ card, state, run, fresh = false, actions = [], place 
       return <ReplyCard draftId={card.draftId} state={state} run={run} />;
     case "own_report":
       return <OwnReportCard messageId={card.messageId} state={state} run={run} />;
+    case "gmail_waiting":
+      // Shown together by WaitingEmails.
+      return null;
     case "notice": {
       // Matched by the activity id. A notice stored before ids were carried
       // falls back to its words.

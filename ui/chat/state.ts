@@ -8,7 +8,8 @@
 import type { ActivityEntry } from "../contract.ts";
 import type { Card, ChatEvent, ChatLog, ChatMessage, FactChip } from "./types.ts";
 
-export type ToolLine = { callId: string; label: string; ok: boolean | null };
+// `declined`: the step chose not to act, by a rule (0018, H6).
+export type ToolLine = { callId: string; label: string; ok: boolean | null; declined?: boolean };
 
 export type PendingTurn = {
   turnId: string | null;
@@ -85,7 +86,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         case "tool.started":
           return { ...state, pending: { ...p, tools: [...p.tools, { callId: e.data.callId, label: e.data.label, ok: null }] } };
         case "tool.finished":
-          return { ...state, pending: { ...p, tools: p.tools.map((t) => (t.callId === e.data.callId ? { ...t, ok: e.data.ok } : t)) } };
+          return { ...state, pending: { ...p, tools: p.tools.map((t) => (t.callId === e.data.callId ? { ...t, ok: e.data.ok, ...(e.data.declined ? { declined: true } : {}) } : t)) } };
         case "card":
           return { ...state, pending: { ...p, cards: [...p.cards, e.data.card] } };
         case "facts":
