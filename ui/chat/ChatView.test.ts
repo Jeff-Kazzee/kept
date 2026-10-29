@@ -335,3 +335,17 @@ describe("chat view", () => {
     expect(html).toMatch(/aria-pressed="true"[^>]*>.*Muse Spark 1\.3<small>Lower cost<\/small>/);
   });
 });
+
+describe("sprint 13C, L1: a code-written notice after Undo", () => {
+  it("shows that the action it states was undone", async () => {
+    const { CardView } = await import("./ChatView.tsx");
+    const text = "Added Monday 11/16 1:00 PM to Google Calendar as tentative.";
+    const entry: ActivityEntry = { id: "a9", at: "2026-11-05T10:00:00.000-07:00", actor: "agent", kind: "calendar_event_added", summary: text, target: { type: "slot", id: "2026-11-16T13:00" }, undoable: false, undone: true };
+    const state = {} as AppState;
+    const before = renderToStaticMarkup(createElement(CardView, { card: { kind: "notice", text }, state, run: async () => {}, actions: [{ ...entry, undone: false, undoable: true }] }));
+    expect(before).not.toContain("Undone");
+    const after = renderToStaticMarkup(createElement(CardView, { card: { kind: "notice", text }, state, run: async () => {}, actions: [entry] }));
+    expect(after).toContain(`<s>${text}</s>`);
+    expect(after).toContain("Undone. The activity list shows the undo.");
+  });
+});

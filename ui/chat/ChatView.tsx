@@ -394,7 +394,7 @@ function Extras({
         </div>
       )}
       {cards.map((c, i) => (
-        <CardView key={i} card={c} state={state} run={run} fresh={fresh} />
+        <CardView key={i} card={c} state={state} run={run} fresh={fresh} actions={actions} />
       ))}
     </>
   );
@@ -682,7 +682,9 @@ export function turnErrorText(err: { code: string; message: string }): string {
   }
 }
 
-export function CardView({ card, state, run, fresh = false }: { card: Card; state: AppState; run: Run; fresh?: boolean }) {
+// `actions` are the turn's activity entries. A notice that states one of
+// them shows when it was undone (0016, L1).
+export function CardView({ card, state, run, fresh = false, actions = [] }: { card: Card; state: AppState; run: Run; fresh?: boolean; actions?: ActivityEntry[] }) {
   switch (card.kind) {
     case "claims":
       return <ClaimsCard messageId={card.messageId} evidenceIds={card.evidenceIds} state={state} run={run} fresh={fresh} />;
@@ -694,15 +696,21 @@ export function CardView({ card, state, run, fresh = false }: { card: Card; stat
       return <ReplyCard draftId={card.draftId} state={state} run={run} />;
     case "own_report":
       return <OwnReportCard messageId={card.messageId} state={state} run={run} />;
-    case "notice":
+    case "notice": {
+      const undone = actions.some((e) => e.undone && e.summary === card.text);
       return (
-        <div className="notice" role="note">
-          <Icon name="info" />
+        <div className={`notice${undone ? " is-undone" : ""}`} role="note">
+          <Icon name={undone ? "undo" : "info"} />
           <div className="stack-sm">
             <span className="model-tag">Written by code</span>
-            <p>{card.text}</p>
+            <p>
+              {undone ? <s>{card.text}</s> : card.text}
+              {undone && <span className="sr-only"> (undone)</span>}
+            </p>
+            {undone && <p className="small">Undone. The activity list shows the undo.</p>}
           </div>
         </div>
       );
+    }
   }
 }

@@ -649,8 +649,10 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
 .composer-inner > .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 0 48px 2px 0; mask-image: linear-gradient(to right, black calc(100% - 48px), transparent); }
 .composer-inner > .chips .chip { flex: none; }
 
+/* 0016, L2: the pill sits in the composer's own row, above the
+   suggestions, so it never covers the last message's slot chips. */
 .new-pill {
-  position: absolute; left: 50%; bottom: calc(100% + var(--s-1)); transform: translateX(-50%);
+  justify-self: center;
   display: inline-flex; align-items: center; gap: var(--s-half); min-height: var(--touch); padding: 0 var(--s-2);
   border: 1px solid var(--accent-line); border-radius: var(--radius-pill);
   background: var(--surface); color: var(--accent-text); font-size: var(--text-sm); font-weight: 600;
@@ -1056,3 +1058,4 @@ figure.source { margin: 0; }
 }
 .zone-notice { flex-wrap: wrap; text-align: left; }
 .zone-notice .btn { min-height: 0; }
+.notice.is-undone s { color: var(--text-2); text-decoration-thickness: 1px; }
