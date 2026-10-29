@@ -131,10 +131,12 @@ export function createWorkspace(o: WorkspaceOptions) {
   const kase = new CaseService(store, intake, client, { externalCalendar: () => googleEvents.snapshot(), externalVersion: () => googleEvents.version() });
   const reply = new ReplyService(store, kase, client);
   const records = new RecordsService(store, intake, kase);
-  const api = createApi(intake, kase, { settings: auth.source, ready }, reply, { store, records, google });
+  // Delete case waits for a running chat turn (0017, R1).
+  let agent: CaseAgent | null = null;
+  const api = createApi(intake, kase, { settings: auth.source, ready, turnRunning: () => agent?.busy ?? false }, reply, { store, records, google });
   // The case agent (0007).
   const chat = createChat(
-    new CaseAgent(store, { intake, kase, reply, records, google }, client, {
+    (agent = new CaseAgent(store, { intake, kase, reply, records, google }, client, {
       messageIdFor: defaultMessageId,
       ready,
       ...(o.hosted ? { admit: o.hosted.admit } : {}),
@@ -147,7 +149,7 @@ export function createWorkspace(o: WorkspaceOptions) {
         : {}),
       // Codes only: no key, headers or message text.
       onCallError: (e) => log(`Chat model call ${e.call} (${e.kind}) failed: HTTP ${e.status ?? "none"}, type ${e.type ?? "none"}, code ${e.code ?? "none"}.`),
-    }),
+    })),
   );
   // Closes the open Google intents when the connection changes.
   const googleActions = new CaseActions(store, { intake, kase, reply, records, google });

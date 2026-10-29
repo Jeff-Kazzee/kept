@@ -28,6 +28,7 @@ import { REPLY_STREAM, draftEvents, projectReplies, type ReplyLog } from "../rep
 import { replyView } from "../reply/view.ts";
 import { buildChecklist } from "./checklist.ts";
 import { DELETE_CONFIRMATION } from "./constants.ts";
+import { GOOGLE_INTENTS_STREAM, RUNNING, STALE_INTENT_MS, openIntents } from "../google/intents.ts";
 import { caseHistory, type HistoryEntry } from "./history.ts";
 import {
   CALENDAR_STREAM,
@@ -47,6 +48,15 @@ export const MAX_CALENDAR_CHARS = 60_000;
 // Delete case keeps the settings stream, such as the time zone. Every other
 // event in the file is case data and is erased, the activity log included.
 // Streams from before sprint 8 (grants, proposals) are erased too.
+// Delete case refused because the assistant or a Google Calendar change is
+// still working (0017, fix round 1, R1). Nothing was deleted.
+export class DeleteBlockedError extends Error {
+  override name = "DeleteBlockedError";
+  constructor() {
+    super("The assistant or a Google Calendar change is still working. Nothing was deleted. Wait a moment, then delete the case again.");
+  }
+}
+
 export const KEPT_ON_DELETE = [SETTINGS_STREAM] as const;
 
 // 0016, M2: the name the person gave in this case to sign replies. It is a
@@ -197,15 +207,28 @@ export class CaseService {
   // logs, and clears them from the file on disk. Settings stay.
   // App only, after the user types the confirmation. No MCP tool calls it.
   // The version check runs in the same transaction as the delete.
-  deleteCase(expectedVersion: number, confirmation: string): { erased: number } {
-    return this.#store.inCase(() => this.#deleteCase(expectedVersion, confirmation));
+  // `turnRunning` says whether a chat turn of this app is running now.
+  deleteCase(expectedVersion: number, confirmation: string, options: { turnRunning?: () => boolean } = {}): { erased: number } {
+    return this.#store.inCase(() => this.#deleteCase(expectedVersion, confirmation, options.turnRunning ?? (() => false)));
   }
 
-  #deleteCase(expectedVersion: number, confirmation: string): { erased: number } {
+  #deleteCase(expectedVersion: number, confirmation: string, turnRunning: () => boolean): { erased: number } {
     if (confirmation !== DELETE_CONFIRMATION) throw new InvalidRequestError(`Type ${DELETE_CONFIRMATION} to confirm.`);
+    // 0017, fix round 1, R1: a write at Google runs before the store commit
+    // that records it, so Delete case meanwhile would leave its event at
+    // Google with no record. Delete case waits for a running chat turn and
+    // for every Google change still in progress, in this process or
+    // another. An intent left open longer than STALE_INTENT_MS by a process
+    // that stopped no longer blocks it.
+    if (turnRunning()) throw new DeleteBlockedError();
     const erased = this.#store.eraseCase(KEPT_ON_DELETE, () => {
       const current = this.caseVersion();
       if (current !== expectedVersion) throw new StaleEditError("case", expectedVersion, current, { version: current });
+      const now = Date.parse(this.#now());
+      const inProgress = openIntents(this.#store.readStream(GOOGLE_INTENTS_STREAM)).some(
+        (i) => RUNNING.has(i.intent_id) || now - Date.parse(i.openedAt) <= STALE_INTENT_MS,
+      );
+      if (inProgress) throw new DeleteBlockedError();
     });
     return { erased };
   }

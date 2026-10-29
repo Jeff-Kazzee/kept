@@ -207,6 +207,11 @@ export class CaseAgent {
   readonly #admit: () => void;
   #busy = false;
 
+  // Whether a turn is running now. Delete case waits for it (0017, R1).
+  get busy(): boolean {
+    return this.#busy;
+  }
+
   constructor(store: EventStore, services: ToolServices, client: ToolModelClient, options: AgentOptions = {}) {
     this.#store = store;
     this.#services = services;

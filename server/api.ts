@@ -7,7 +7,7 @@ import { z } from "zod";
 import type { GoogleServices } from "../src/google/tools.ts";
 import { CaseActions, UndoBlockedError, YOU } from "../src/actions/service.ts";
 import { DEMO_CALENDAR_NAME, demoCalendarText, loadCalendarAsPerson } from "../src/actions/demo.ts";
-import { CaseService } from "../src/case/service.ts";
+import { CaseService, DeleteBlockedError } from "../src/case/service.ts";
 import { Channel, DEFAULT_EXTRACTION_EFFORT, Effort } from "../src/domain/claim.ts";
 import { OutOfScopeError } from "../src/domain/scope.ts";
 import { loadScenarios } from "../src/fixtures/load.ts";
@@ -68,7 +68,9 @@ const UndoBody = z.object({ expectedVersion: Version, version: Version }).strict
 // `settings`: the provider part of the settings (sprint 10, server/auth.ts).
 // `ready`: whether the chosen provider can take a call (J12). Without it
 // every model step runs.
-export type ApiOptions = { settings?: ProviderSource; ready?: () => boolean };
+// `turnRunning`: whether a chat turn is running, which Delete case waits
+// for (0017, fix round 1, R1).
+export type ApiOptions = { settings?: ProviderSource; ready?: () => boolean; turnRunning?: () => boolean };
 
 // J12: the routes that call the model. With no provider ready each answers
 // 422 provider_not_ready with the fixed sentence, and writes nothing.
@@ -180,7 +182,7 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     // reaches it.
     ["POST", /^\/api\/case\/delete$/, (_m, body) => {
       const { expectedVersion, confirmation } = DeleteCaseBody.parse(body);
-      return kase.deleteCase(expectedVersion, confirmation);
+      return kase.deleteCase(expectedVersion, confirmation, { turnRunning: options.turnRunning });
     }],
     ["POST", /^\/api\/records\/([^/]+)\/archive$/, (m, body) =>
       actions.archive(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),
@@ -255,6 +257,7 @@ export function toErrorResponse(err: unknown): ApiResponse {
   // An Undo of a Google Calendar entry (0012): another change for the same
   // appointment is in progress, or Google refused or did not answer. The
   // messages are fixed sentences, never Google's body or a token.
+  if (err instanceof DeleteBlockedError) return { status: 409, body: { error: "case_busy", message: err.message } };
   if (err instanceof GoogleBusyError) return { status: 409, body: { error: "google_busy", message: err.message } };
   if (err instanceof GoogleError) {
     const status = err.code === "google_unavailable" || err.code === "google_not_configured" ? 503 : err.code === "google_stale" ? 409 : 502;
