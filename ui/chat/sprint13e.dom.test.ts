@@ -118,7 +118,7 @@ describe("sprint 13E, H2: an email the turn did not add", () => {
   });
 
   it("Add it adds the email, then reads it through the extract route, with no chat turn", async () => {
-    const add = vi.spyOn(api, "addGmail").mockResolvedValue({ ...(messageView(SECOND, "x", at) as never), version: 1, status: "imported" });
+    const add = vi.spyOn(api, "addGmail").mockResolvedValue({ ...messageView(SECOND, "x", at), version: 1, status: "imported" } as never);
     const extract = vi.spyOn(api, "extract").mockResolvedValue({} as never);
     const send = vi.fn(async () => {});
     const { act } = await import("react");
