@@ -112,8 +112,12 @@ describe("M1 and M2: negation in the claim's own clause and context", () => {
 });
 
 describe("M3: the agent names the message it applied", () => {
+  // 0018, H3 and H4: by the office's name and when it arrived, never by
+  // its first words, and with every time its claims state.
   it("its instructions say to name the message after an import", () => {
-    expect(AGENT_INSTRUCTIONS).toContain("After you import a message, name it by its sender or its first words, and say which appointments its claims changed.");
+    expect(AGENT_INSTRUCTIONS).toContain("Refer to an email by its sender and its sent_label or received_label, never by quoting its words.");
+    expect(AGENT_INSTRUCTIONS).toContain("After you import messages, name every date and time their claims state, or say that the facts card lists them, and say which appointments the claims you accepted changed.");
+    expect(AGENT_INSTRUCTIONS).not.toContain("first words");
   });
 });
 

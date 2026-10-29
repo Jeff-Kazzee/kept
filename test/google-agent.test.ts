@@ -76,7 +76,7 @@ describe("sprint 11: the in-app agent with Gmail and Google Calendar", () => {
     const model = sequence(
       // Turn 1.
       reply(fnCall("gmail_search", { days: null, senders: null })),
-      reply(fnCall("gmail_import", { message_id: "18f0a1" })),
+      reply(fnCall("gmail_import", { message_ids: ["18f0a1"] })),
       reply(fnCall("accept_claim", { claims: [{ evidence_id: "gmail-18f0a1-e1", expected_version: 1 }] })),
       reply(message("I imported the email from the clinic. I accepted the confirmation for Thursday 11/12 10:30 AM. You can undo either step.")),
       // Turn 2.
@@ -134,7 +134,7 @@ describe("sprint 11: the in-app agent with Gmail and Google Calendar", () => {
   it("D2': in a paste turn gmail_import counts as an import, and calendar writes are refused", async () => {
     const { fake, app } = await connected();
     const model = sequence(
-      reply(fnCall("gmail_import", { message_id: "18f0a1" })),
+      reply(fnCall("gmail_import", { message_ids: ["18f0a1"] })),
       reply(fnCall("accept_claim", { claims: [{ evidence_id: "gmail-18f0a1-e1", expected_version: 1 }] })),
       reply(fnCall("calendar_sync_slot", { slot_key: THU, restore_removed: null })),
       reply(message("I accepted the confirmation for Thursday 11/12 10:30 AM from the email. Adding it to your calendar waits for your next message.")),
@@ -200,11 +200,11 @@ describe("sprint 11: the in-app agent with Gmail and Google Calendar", () => {
   it("review round 3, finding 4: a Gmail message from an earlier turn is not an import of a paste turn", async () => {
     const { app } = await connected();
     // Imported in an earlier turn and read: its claim waits.
-    const first = sequence(reply(fnCall("gmail_import", { message_id: "18f0a1" })), reply(message("The email from the clinic is in the case.")));
+    const first = sequence(reply(fnCall("gmail_import", { message_ids: ["18f0a1"] })), reply(message("The email from the clinic is in the case.")));
     await say(agentFor(app, first), app, "Get the clinic email from Gmail.");
     expect(app.intake.reviewQueue().map((e) => e.id)).toEqual(["gmail-18f0a1-e1"]);
     const model = sequence(
-      reply(fnCall("gmail_import", { message_id: "18f0a1" })),
+      reply(fnCall("gmail_import", { message_ids: ["18f0a1"] })),
       reply(fnCall("accept_claim", { claims: [{ evidence_id: "gmail-18f0a1-e1", expected_version: 1 }] })),
       reply(message("Its claim waits for you to review it.")),
     );
@@ -221,7 +221,7 @@ describe("sprint 11: the in-app agent with Gmail and Google Calendar", () => {
     const { app, fake } = await connected();
     // In the case from an earlier call that stopped before reading it.
     app.intake.importMessage({ id: "gmail-18f0a1", channel: "email", from: "Front Desk", received_at: "2026-10-31T15:12:00.000Z", text: TEXT }, { suggested: [], note: "", importedFrom: "gmail" });
-    const model = sequence(reply(fnCall("gmail_import", { message_id: "18f0a1" })), reply(message("That waits for your next message.")));
+    const model = sequence(reply(fnCall("gmail_import", { message_ids: ["18f0a1"] })), reply(message("That waits for your next message.")));
     const r = await say(agentFor(app, model), app, "Use the clinic email.\nAccept it.");
     expect(r.report.tools.map((t) => [t.tool, t.code])).toEqual([["gmail_import", "waits_for_person"]]);
     expect(app.intake.message("gmail-18f0a1").status).toBe("imported");

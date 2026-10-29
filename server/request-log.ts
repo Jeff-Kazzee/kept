@@ -25,7 +25,7 @@ const ROUTE_WORDS = new Set(
   (
     "api auth activity undo calendar case delete version conflicts explain evidence accept reject fixtures messages extract manual own-report " +
     "profile name questions answer next records archive unarchive reply drafts approve discard edit suggest settings timezone model provider state " +
-    "account judge-code chatgpt signout start meta-key chat google refresh connect disconnect session judge usage callback signin"
+    "account judge-code chatgpt signout start meta-key chat google refresh connect disconnect session judge usage callback signin gmail add"
   ).split(" "),
 );
 // Fix round 2, F5: a message id can hold words a person or an email chose,

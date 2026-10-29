@@ -17,7 +17,14 @@ export type Card =
   | { kind: "explanation"; conflictId: string } // checked explanation
   // Code-written. `activityId` names the action the notice states, so the
   // page can show when it was undone (0016, R7).
-  | { kind: "notice"; text: string; activityId?: string };
+  | { kind: "notice"; text: string; activityId?: string }
+  // 0018, H2: an email the turn's Gmail search found and did not import,
+  // written by code. `gmailId` is Gmail's id for "Add it", and `messageId`
+  // the message's id once it is in the case. `office` is the
+  // office's name as the page showed it when the turn ended, null for "the
+  // office". `sameSenderAs` is a message in the case from the same sender,
+  // so the page names the office as it names that message.
+  | { kind: "gmail_waiting"; gmailId: string; messageId: string; receivedAt: string; office: string | null; sameSenderAs: string | null };
 
 export type FactChip = {
   slotKey: string; // "2026-11-16T13:00"
@@ -67,7 +74,8 @@ export type ChatErrorCode = (typeof CHAT_ERROR_CODES)[number];
 export type ChatEvent =
   | { event: "turn.started"; data: { turnId: string; userMessageId: string } }
   | { event: "tool.started"; data: { turnId: string; callId: string; tool: string; label: string } }
-  | { event: "tool.finished"; data: { turnId: string; callId: string; ok: boolean } }
+  // `declined`: the tool chose not to act, by a rule (0018, H6).
+  | { event: "tool.finished"; data: { turnId: string; callId: string; ok: boolean; declined?: boolean } }
   | { event: "card"; data: { turnId: string; card: Card } }
   | { event: "action"; data: { turnId: string; entry: ActivityEntry } }
   | { event: "facts"; data: { turnId: string; chips: FactChip[] } }

@@ -47,7 +47,7 @@ import {
   type Card,
 } from "./types.ts";
 import type { FunctionTool } from "../model/responses.ts";
-import { GOOGLE_TOOLS, GOOGLE_TOOL_NAMES, GOOGLE_WRITE_TOOLS, type GoogleServices } from "../google/tools.ts";
+import { GOOGLE_TOOLS, GOOGLE_TOOL_NAMES, GOOGLE_WRITE_TOOLS, officeOut, officeShown, type GoogleServices } from "../google/tools.ts";
 import { CalendarTurn } from "../google/events.ts";
 import { GoogleError } from "../google/http.ts";
 
@@ -97,7 +97,11 @@ export type ToolContext = ToolServices & {
 // turn (mayContainPaste). `imported` holds the lines this turn imported,
 // and `gmailImported` the Gmail messages it imported (0012), which count as
 // imports too.
-export type ChatTurnState = { paste: boolean; imported: ImportedLines[]; gmailImported?: string[] };
+// `gmailFound` holds what each gmail_search of the turn found, and
+// `gmailRefused` the emails gmail_import refused for good, so code can
+// offer the found emails the turn did not import (0018, H2).
+export type GmailFound = { senders: boolean; emails: Array<{ id: string; from: string; sentAt: string; alreadyImported: boolean }> };
+export type ChatTurnState = { paste: boolean; imported: ImportedLines[]; gmailImported?: string[]; gmailFound?: GmailFound[]; gmailRefused?: string[] };
 
 // 0009, D2': the person's message may contain a paste when it has a line
 // break, is longer than 280 characters, or starts a line with a sender-like
@@ -128,6 +132,9 @@ export type ToolResult = {
   statuses: Status[];
   // True when the whole schedule was read.
   scheduleRead?: boolean;
+  // True when the tool chose not to act, by a rule, such as not adding back
+  // an event the person removed in Google Calendar (0018, H6). Still not ok.
+  declined?: boolean;
 };
 
 export type ToolSpec<I> = {
@@ -471,11 +478,17 @@ function decideClaims(decision: "accept" | "reject") {
       return { kind: "claims", messageId, evidenceIds: [...m.evidenceIds, ...m.manualEvidenceIds] };
     });
     const all = decided.length === input.claims.length;
+    // 0018, H3: each office message's name as the page shows it now.
+    const offices = [...byMessage.keys()].flatMap((id) => {
+      const m = ctx.intake.message(id);
+      return m.sourceType === "office_message" ? [{ message_id: id, office: officeOut(officeShown(ctx, { id, from: m.message.from, receivedAt: m.message.received_at })) }] : [];
+    });
     return result(
       {
         results: done,
         decided: decided.length,
         refused: input.claims.length - decided.length,
+        offices,
         note: `${decision === "accept" ? "Accepted" : "Rejected"} claims change the schedule at once. The person can undo each one from the activity log.`,
       },
       {
@@ -1374,6 +1387,8 @@ async function importMessage(ctx: ToolContext, input: { text: string; channel: s
         channel: message.message.channel,
         source_type: message.sourceType,
         from: untrustedText(message.message.from),
+        // 0018, H3: the name the page shows, null for "the office".
+        office: message.sourceType === "office_message" ? officeOut(officeShown(ctx, { id, from: message.message.from, receivedAt: message.message.received_at })) : null,
         received_at: message.message.received_at,
         suggested: message.sourceSuggested,
       },

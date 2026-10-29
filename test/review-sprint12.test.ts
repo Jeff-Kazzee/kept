@@ -93,7 +93,7 @@ describe("review round 1, finding 2: MCP tools that need the model are refused b
       ["import_message", { text: m.text, channel: "sms", from: m.from, received_at: m.received_at }],
       ["explain_conflict", { conflict_id: "c-1" }],
       ["ask_next_question", {}],
-      ["gmail_import", { message_id: "18f0a1" }],
+      ["gmail_import", { message_ids: ["18f0a1"] }],
     ];
     for (const [name, args] of calls) {
       const r = (await callTool(deps, name, args)) as { isError?: boolean; content: Array<{ text: string }> };
