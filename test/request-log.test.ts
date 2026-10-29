@@ -26,12 +26,12 @@ async function serve(lines: string[]) {
         setTimeout(() => res.end("event: turn.done\ndata: {}\n\n"), 30);
         return;
       }
-      if (path === "/api/slow") {
+      if (path === "/api/reply/suggest") {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         res.write("event: text.delta\ndata: {}\n\n");
         return;
       }
-      if (path === "/api/fail") {
+      if (path === "/api/usage" || (path === "/api/case/version" && req.headers["x-fail"])) {
         res.statusCode = 503;
         res.end(JSON.stringify({ error: SECRETS[0] }));
         return;
@@ -69,7 +69,7 @@ describe("sprint 13D, E4: the request log", () => {
     await call(port, "POST", "/api/chat", JSON.stringify({ text: SECRETS[6] }));
     await call(port, "GET", `/auth/google/callback?code=${encodeURIComponent(SECRETS[4])}&state=${SECRETS[5]}`);
     await call(port, "POST", `/api/messages/${encodeURIComponent(SECRETS[1])}/extract`);
-    await call(port, "POST", "/api/fail");
+    await call(port, "POST", "/api/usage");
     // Not an API request: the page and its files are not logged.
     await call(port, "GET", "/assets/index.js");
     await settle();
@@ -79,7 +79,7 @@ describe("sprint 13D, E4: the request log", () => {
     expect(lines[2]).toMatch(/^request POST \/api\/chat 200 stream, started \d+ ms, done at \d+ ms$/);
     expect(lines[3]).toMatch(/^request GET \/auth\/google\/callback 200 \d+ ms$/);
     expect(lines[4]).toMatch(/^request POST \/api\/messages\/\*\/extract 200 \d+ ms$/);
-    expect(lines[5]).toMatch(/^request POST \/api\/fail 503 \d+ ms$/);
+    expect(lines[5]).toMatch(/^request POST \/api\/usage 503 \d+ ms$/);
     const all = lines.join("\n");
     for (const s of SECRETS) expect(all).not.toContain(s);
     for (const s of ["token", "@", "session", "Bearer", "code=", "?", "Cookie"]) expect(all).not.toContain(s);
@@ -88,20 +88,56 @@ describe("sprint 13D, E4: the request log", () => {
   it("says when the client closed a stream before it was done", async () => {
     const lines: string[] = [];
     const port = await serve(lines);
-    await call(port, "POST", "/api/slow", "", 20);
+    await call(port, "POST", "/api/reply/suggest", "", 20);
     await settle();
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/^request POST \/api\/slow 200 stream, started \d+ ms, closed by the client at \d+ ms$/);
+    expect(lines[0]).toMatch(/^request POST \/api\/reply\/suggest 200 stream, started \d+ ms, closed by the client at \d+ ms$/);
   });
 
-  it("keeps plain ids in a path and writes every other segment as *", () => {
+  it("keeps the app's route words and its own ids where a route takes one, and writes every other segment as * (fix round 1, R4)", () => {
     expect(loggedPath("/api/evidence/gmail-18f0a1-e1/accept?x=1")).toBe("/api/evidence/gmail-18f0a1-e1/accept");
-    expect(loggedPath("/api/records/2026-11-16T13:00/archive")).toBe("/api/records/2026-11-16T13:00/archive");
+    expect(loggedPath("/api/evidence/m2-r2-u1/reject")).toBe("/api/evidence/m2-r2-u1/reject");
+    expect(loggedPath("/api/records/2026-11-16T13%3A00/archive")).toBe("/api/records/2026-11-16T13:00/archive");
+    expect(loggedPath("/api/messages/chat-3f9a2c/extract")).toBe("/api/messages/chat-3f9a2c/extract");
+    expect(loggedPath("/api/messages/pasted-0b6f2c1e-8d3a-4f7b-9c2e-5a1d3e4f6a7b/manual")).toBe("/api/messages/pasted-0b6f2c1e-8d3a-4f7b-9c2e-5a1d3e4f6a7b/manual");
+    expect(loggedPath("/api/conflicts/both-held-20261112-1030_20261116-1300/explain")).toBe("/api/conflicts/both-held-20261112-1030_20261116-1300/explain");
+    expect(loggedPath("/api/questions/q2/answer")).toBe("/api/questions/q2/answer");
+    expect(loggedPath("/api/reply/drafts/d3/approve")).toBe("/api/reply/drafts/d3/approve");
+    expect(loggedPath("/api/activity/a17/undo")).toBe("/api/activity/a17/undo");
     expect(loggedPath("/api/messages/dana%40example.com/extract")).toBe("/api/messages/*/extract");
     expect(loggedPath("/api/messages/a@b.example/extract")).toBe("/api/messages/*/extract");
-    expect(loggedPath(`/api/x/${"a".repeat(81)}`)).toBe("/api/x/*");
-    expect(loggedPath("/api/x#frag")).toBe("/api/x");
+    expect(loggedPath(`/api/x/${"a".repeat(81)}`)).toBe("/api/*/*");
+    expect(loggedPath("/api/x#frag")).toBe("/api/*");
     expect(loggedPath("/index.html")).toBeNull();
+  });
+
+  it("writes a secret-looking segment as *, wherever it sits", () => {
+    // Plain letters, digits and hyphens, the shape the earlier rule kept.
+    const secret = "judge-7Kq2-Xv9P-t0kEn-a1b2c3";
+    expect(loggedPath(`/api/messages/${secret}/extract`)).toBe("/api/messages/*/extract");
+    expect(loggedPath(`/api/session/${secret}`)).toBe("/api/session/*");
+    expect(loggedPath(`/api/${secret}/state`)).toBe("/api/*/state");
+    expect(loggedPath(`/api/records/${secret}/archive`)).toBe("/api/records/*/archive");
+    expect(loggedPath(`/api/evidence/gmail-${secret}-e1/accept`)).toBe("/api/evidence/*/accept");
+    expect(loggedPath("/api/messages/%E0%A4%A/extract")).toBe("/api/messages/*/extract");
+  });
+
+  it("leaves out the page's 2-second poll unless it fails (fix round 1, R3)", async () => {
+    const lines: string[] = [];
+    const port = await serve(lines);
+    for (let i = 0; i < 5; i++) await call(port, "GET", "/api/case/version");
+    await call(port, "GET", "/api/state");
+    await new Promise<void>((resolve) => {
+      const req = request({ host: "127.0.0.1", port, method: "GET", path: "/api/case/version", headers: { "x-fail": "1" } }, (res) => {
+        res.resume();
+        res.on("end", () => resolve());
+      });
+      req.end();
+    });
+    await settle();
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^request GET \/api\/state 200 \d+ ms$/);
+    expect(lines[1]).toMatch(/^request GET \/api\/case\/version 503 \d+ ms$/);
   });
 
   it("is on by default in local mode and off in hosted mode, and one setting changes either", () => {

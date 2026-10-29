@@ -3,16 +3,43 @@
 // milliseconds. For an event stream the line gives the status the stream
 // started with, when it started and when it was done, or that the client
 // closed it first. Nothing else: never a body, a header, a cookie, a query
-// string, a token or an email address. A path segment that is not a plain
-// id is written as "*", so an address or a token put into a path cannot
-// reach the log either.
+// string, a token or an email address. A path segment that is not one of
+// the app's route words, or an id of the app's own shape where a route
+// takes one, is written as "*", so an address or a token put into a path
+// cannot reach the log either. The page's 2-second poll is left out unless
+// it fails.
 //
 // On by default in local mode, off by default in hosted mode.
 // APP_REQUEST_LOG=1 or 0 turns it on or off in either mode.
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 const LOGGED = ["/api/", "/auth/"];
-const PLAIN_SEGMENT = /^[A-Za-z0-9._:-]{1,80}$/;
+// Fix round 1, R3: the page asks GET /api/case/version every 2 seconds. Its
+// answers are not logged unless they fail, so the log keeps the requests a
+// person made.
+const POLLS = new Set(["GET /api/case/version"]);
+// Fix round 1, R4: the words of the app's own routes. Any other segment is
+// "*", unless it sits where a route takes an id and has the shape of an id
+// the app makes.
+const ROUTE_WORDS = new Set(
+  (
+    "api auth activity undo calendar case delete version conflicts explain evidence accept reject fixtures messages extract manual own-report " +
+    "profile name questions answer next records archive unarchive reply drafts approve discard edit suggest settings timezone model provider state " +
+    "account judge-code chatgpt signout start meta-key chat google refresh connect disconnect session judge usage callback signin"
+  ).split(" "),
+);
+const MESSAGE = String.raw`(?:gmail-[A-Za-z0-9]{1,40}|chat-[a-z0-9]{1,40}|pasted-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|m\d{1,3})(?:-r\d{1,3})?`;
+const EVIDENCE = String.raw`${MESSAGE}-[eu]\d{1,3}`;
+const SLOT = String.raw`\d{8}(?:-\d{4})?`;
+const ID_AFTER: Record<string, RegExp> = {
+  messages: new RegExp(`^${MESSAGE}$`),
+  evidence: new RegExp(`^${EVIDENCE}$`),
+  conflicts: new RegExp(`^(?:[a-z]+(?:-[a-z]+)*-${SLOT}(?:_${SLOT})*(?:-change)?|ambiguous-date-${EVIDENCE})$`),
+  questions: /^q\d{1,4}$/,
+  drafts: /^d\d{1,4}$/,
+  records: /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?$/,
+  activity: /^a\d{1,6}$/,
+};
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
 
 export function requestLogEnabled(mode: "local" | "hosted", setting: string | undefined): boolean {
@@ -21,13 +48,26 @@ export function requestLogEnabled(mode: "local" | "hosted", setting: string | un
   return mode === "local";
 }
 
-// The path as the log writes it: no query string or fragment, and every
-// segment that is not a plain id replaced by "*".
+// The path as the log writes it: no query string or fragment, the app's
+// route words as they are, an id of the app's own shape where the route
+// takes one, and "*" for every other segment.
 export function loggedPath(url: string | undefined): string | null {
   const raw = (url ?? "/").split(/[?#]/, 1)[0]!;
   if (!LOGGED.some((p) => raw.startsWith(p))) return null;
-  const parts = raw.split("/").map((s, i) => (i === 0 || s === "" || (PLAIN_SEGMENT.test(s) && !s.includes("@")) ? s : "*"));
-  return parts.join("/").slice(0, 200);
+  const parts = raw.split("/");
+  const out = parts.map((s, i) => {
+    if (i === 0 || s === "") return s;
+    if (ROUTE_WORDS.has(s)) return s;
+    const shape = ID_AFTER[parts[i - 1]!];
+    let decoded = s;
+    try {
+      decoded = decodeURIComponent(s);
+    } catch {
+      return "*";
+    }
+    return shape && shape.test(decoded) ? decoded : "*";
+  });
+  return out.join("/").slice(0, 200);
 }
 
 export type RequestLogOptions = { write: (line: string) => void; now?: () => number };
@@ -71,6 +111,7 @@ export function requestLogger(options: RequestLogOptions): (req: IncomingMessage
       const ms = Math.round(now() - start);
       const status = headStatus ?? (res.headersSent ? res.statusCode : null);
       const type = headType || String(res.getHeader("content-type") ?? "");
+      if (POLLS.has(`${method} ${path}`) && status !== null && status < 400) return;
       if (status === null) {
         options.write(`request ${method} ${path} closed before an answer, ${ms} ms`);
       } else if (type.startsWith("text/event-stream")) {
