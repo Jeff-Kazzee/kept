@@ -22,7 +22,7 @@ import { RecordsService } from "../src/records/service.ts";
 import { ReplyService } from "../src/reply/service.ts";
 import { CLOCK, agentFor, fnCall, message, reply, say, sequence, turnOutputs } from "./agent-helpers.ts";
 import { DEMO_ZONE, useZone } from "./helpers.ts";
-import { FAKE_CLIENT, FakeGoogle } from "./google-fake.ts";
+import { FAKE_CLIENT, FakeGoogle, syncThroughActions } from "./google-fake.ts";
 
 const TEXT = "Hi,\n\nThis confirms your appointment on Thursday, November 12 at 10:30 AM at Lantern Hill Clinic, 400 Elm Street, Suite 2.\n\nFront Desk\nLantern Hill Clinic";
 const CONFIRM = {
@@ -179,7 +179,7 @@ describe("sprint 13C, H4: the event at Google", () => {
     expect(event).toMatchObject({ summary: "Lantern Hill Clinic", status: "confirmed", location: "Lantern Hill Clinic, 400 Elm Street, Suite 2" });
     // The same event while requested: Google records it as tentative.
     const thu = { ...app.kase.view().slots[0]!, state: "requested" as const };
-    await app.google.calendar.sync(thu.key, thu, { office: { name: "Lantern Hill Clinic" } });
+    await syncThroughActions(mcpContext(app.store, app, CLOCK()).actions, app.google.calendar, thu.key, thu, { office: { name: "Lantern Hill Clinic" } });
     const sent = fake.calls.filter((c) => c.method === "PATCH").at(-1)!;
     expect(JSON.parse(sent.body)).toMatchObject({ status: "tentative", summary: "Lantern Hill Clinic (requested)" });
     expect(fake.calendars.get("primary")!.get(event.id)).toMatchObject({ status: "tentative", summary: "Lantern Hill Clinic (requested)" });

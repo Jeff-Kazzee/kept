@@ -6,6 +6,10 @@
 // global fetch stays blocked.
 import { createHash } from "node:crypto";
 import type { FetchLike } from "../src/google/http.ts";
+import type { CaseActions } from "../src/actions/service.ts";
+import type { EventOffice, GoogleCalendar, SyncAction, SyncOutcome } from "../src/google/calendar.ts";
+import { KIND_OF_ACTION } from "../src/google/tools.ts";
+import type { SlotView } from "../src/slots/types.ts";
 import { CALENDAR_SCOPE, GMAIL_SCOPE } from "../src/google/oauth.ts";
 
 export const FAKE_CLIENT = { clientId: "demo-client.apps.googleusercontent.com", clientSecret: "demo-client-secret" };
@@ -323,4 +327,25 @@ export function gmailMessage(
       parts,
     },
   };
+}
+
+// A calendar write as the app's tools make it: plan, then
+// CaseActions.googleWrite with its intent and entry, then execute (0017, fix
+// round 2, F7, which removed GoogleCalendar.sync).
+export async function syncThroughActions(
+  actions: CaseActions,
+  calendar: GoogleCalendar,
+  slotKey: string,
+  slot: SlotView | null,
+  options: { restoreRemoved?: boolean; office?: EventOffice | null } = {},
+): Promise<SyncOutcome> {
+  const planned = await calendar.plan(slotKey, slot, options);
+  if (!planned.write) return planned.outcome!;
+  const write = planned.write;
+  const entry = (o: { action: SyncAction }) => {
+    const kind = KIND_OF_ACTION[o.action];
+    return kind ? { kind, summary: `Test ${o.action} ${slotKey}.` } : null;
+  };
+  const done = await actions.googleWrite({ actor: "you" }, write.plan, entry(write.plan)!, (plan) => calendar.execute({ ...write, plan }), entry, write.needsMark ? (plan) => calendar.markPlan(plan, null) : undefined);
+  return done.outcome;
 }

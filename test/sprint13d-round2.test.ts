@@ -26,3 +26,13 @@ describe("sprint 13D fix round 2, F1: a hung turn holds Delete case back for at 
     expect(TURN_STALE_MS).toBe(5 * 60_000);
   });
 });
+
+describe("sprint 13D fix round 2, F7: no Google Calendar write without a record", () => {
+  it("GoogleCalendar has no sync or remove that writes outside CaseActions.googleWrite", async () => {
+    const { GoogleCalendar } = await import("../src/google/calendar.ts");
+    const methods = Object.getOwnPropertyNames(GoogleCalendar.prototype);
+    expect(methods).not.toContain("sync");
+    expect(methods).not.toContain("remove");
+    expect(methods).toEqual(expect.arrayContaining(["plan", "execute", "markPlan", "undo"]));
+  });
+});

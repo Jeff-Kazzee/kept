@@ -575,19 +575,8 @@ export class GoogleCalendar {
     return live && sameFields(fields!, plan.before!) ? { state: "not_applied" } : { state: "diverged" };
   }
 
-  // Plans and writes in one step, for callers that record nothing.
-  // A case without a mark gets one here, as the case actions give it.
-  async sync(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean; office?: EventOffice | null } = {}): Promise<SyncOutcome> {
-    const planned = await this.plan(slotKey, slot, options);
-    if (!planned.write) return planned.outcome!;
-    const plan = planned.write.needsMark ? this.markPlan(planned.write.plan, this.#caseMark({ create: true }) ?? null) : planned.write.plan;
-    return this.execute({ ...planned.write, plan });
-  }
-
-  // Deletes the slot's event, if the app made one.
-  async remove(slotKey: string): Promise<SyncOutcome> {
-    return this.sync(slotKey, null);
-  }
+  // There is no write without a record (0017, fix round 2, F7): every
+  // write goes plan, then CaseActions.googleWrite, then execute.
 
   // Whether an undo already happened at Google, read without writing, for
   // an undo intent whose result was not recorded.

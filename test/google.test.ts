@@ -29,7 +29,7 @@ import { RecordedModelClient, type Recording } from "../src/model/recorded.ts";
 import { findClashes } from "../src/slots/clash.ts";
 import type { SlotView } from "../src/slots/types.ts";
 import { EventStore, StoreBusyError, type NewEvent } from "../src/store/event-log.ts";
-import { FAKE_ACCOUNT, FAKE_CLIENT, FakeGoogle, gmailMessage } from "./google-fake.ts";
+import { FAKE_ACCOUNT, FAKE_CLIENT, FakeGoogle, gmailMessage, syncThroughActions } from "./google-fake.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -566,7 +566,7 @@ describe("Calendar: one event per slot, only the app's own, every write undoable
     // The slot is confirmed, so make the event tentative by hand through a
     // slot view with another state.
     const slot = { ...c.kase.view().slots[0]!, state: "requested" as const };
-    const outcome = await c.ctx.google.calendar.sync(slot.key, slot);
+    const outcome = await syncThroughActions(c.ctx.actions, c.ctx.google.calendar, slot.key, slot);
     expect(outcome).toMatchObject({ action: "updated", status: "tentative" });
     expect(primary(s)[0]).toMatchObject({ status: "tentative", summary: "Appointment (requested, not confirmed)" });
     await undoGoogleActivity(c.ctx, outcome.undo!);
@@ -933,7 +933,7 @@ describe("review round 1", () => {
     };
     const slot = { ...c.kase.view().slots[0]!, state: "requested" as const };
     const calendar = new GoogleCalendar(new GoogleConnection({ client: FAKE_CLIENT, store: s.secrets, fetch: s.fake.fetch, now: () => s.fake.now }), { timeZone: () => ZONE });
-    const outcome = await calendar.sync(slot.key, slot);
+    const outcome = await syncThroughActions(c.ctx.actions, calendar, slot.key, slot);
     expect(outcome).toMatchObject({ action: "updated", status: "tentative", eventId: event.id });
     expect(primary(s)).toHaveLength(1);
   });
@@ -1126,7 +1126,7 @@ describe("review round 2", () => {
     const before = JSON.stringify(primary(s));
     const sent = writes(s).length;
     const slot = { ...c.kase.view().slots[0]!, state: "requested" as const };
-    expect(await c.ctx.google.calendar.sync(SLOT, slot).catch((e) => e)).toMatchObject({ code: "google_duplicate" });
+    expect(await syncThroughActions(c.ctx.actions, c.ctx.google.calendar, SLOT, slot).catch((e) => e)).toMatchObject({ code: "google_duplicate" });
     expect(writes(s)).toHaveLength(sent);
     expect(JSON.stringify(primary(s))).toBe(before);
   });
@@ -1178,7 +1178,7 @@ describe("review round 2", () => {
     const sent = writes(s).length;
     s.fake.omitEtags = true;
     const slot = { ...c.kase.view().slots[0]!, state: "requested" as const };
-    expect(await c.ctx.google.calendar.sync(SLOT, slot).catch((e) => e)).toMatchObject({ code: "google_changed" });
+    expect(await syncThroughActions(c.ctx.actions, c.ctx.google.calendar, SLOT, slot).catch((e) => e)).toMatchObject({ code: "google_changed" });
     expect((await c.run("calendar_remove_slot", { slot_key: SLOT })).code).toBe("google_changed");
     expect(writes(s)).toHaveLength(sent);
     expect(live(s)).toHaveLength(1);
