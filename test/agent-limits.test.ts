@@ -98,16 +98,28 @@ describe("G8: limits", () => {
     expect(r.text).toBe(MALFORMED_TEXT);
   });
 
-  it("stops after eight tool calls with a notice", async () => {
+  it("stops after twelve tool calls with a notice", async () => {
     const app = await demoCase();
     const model = fault("tool-limit");
     const r = await say(agentFor(app, model), app, "Check everything");
-    expect(r.report.tools).toHaveLength(8);
-    expect(model.calls).toHaveLength(9);
+    expect(r.report.tools).toHaveLength(12);
+    expect(model.calls).toHaveLength(13);
     expect(r.report.outcome).toBe("stopped");
     expect(r.text).toBe(TOOL_LIMIT_TEXT);
     expect(r.of("card").map((c) => c.card)).toEqual([{ kind: "notice", text: TOOL_LIMIT_TEXT }]);
-    expect(r.of("tool.started")).toHaveLength(8);
+    expect(r.of("tool.started")).toHaveLength(12);
+  });
+
+  // 2026-10-29: the live Gmail run's first step needed nine tool calls and
+  // stopped at the old limit of eight.
+  it("answers after ten tool calls", async () => {
+    const app = await demoCase();
+    const calls = Array.from({ length: 10 }, () => reply(fnCall("get_schedule", {})));
+    const model = sequence(...calls, reply(message("I read your schedule.")));
+    const r = await say(agentFor(app, model), app, "Check everything");
+    expect(r.report.tools).toHaveLength(10);
+    expect(r.report.outcome).toBe("answered");
+    expect(r.text).toBe("I read your schedule.");
   });
 
   it("stops when the turn's tokens pass the guard", async () => {

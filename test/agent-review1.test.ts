@@ -326,7 +326,7 @@ describe("finding 11: no 'nothing changed' after a tool wrote", () => {
     const app = await demoCase();
     const model = sequence(
       reply(fnCall("start_reply", { template: "accept_offer", slot_key: "2026-11-16T13:00", expected_version: 0 })),
-      ...Array.from({ length: 8 }, () => reply(fnCall("get_schedule", {}))),
+      ...Array.from({ length: 12 }, () => reply(fnCall("get_schedule", {}))),
     );
     const r = await say(agentFor(app, model), app, "Move me to Monday");
     expect(r.report.outcome).toBe("stopped");

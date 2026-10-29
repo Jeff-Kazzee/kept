@@ -245,3 +245,13 @@ From the second independent review (`findings-r2`).
   until the assistant or the person syncs that appointment again.
 
 No recording needs a live rerecord. `pnpm demo:check --recorded` passes.
+
+## After sprint 13D: the tool-call limit (coordinator, 2026-10-29)
+
+In live run 2 the first chat step ("Check my Gmail for messages from
+Lantern Hill Clinic and update my schedule.") read the schedule, searched
+Gmail, imported two emails, accepted facts, hit one stale fact version and
+listed open questions. It asked for a ninth tool call, met the limit of
+eight (G8, 0007, raised from 6 to 8 in sprint 8) and ended with "I stopped
+before finishing. Check the cards above." The limit is now 12 tool calls
+per turn. The turn's token cap (80,000) still bounds the cost.

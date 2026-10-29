@@ -68,8 +68,11 @@ export const DEFAULT_AGENT_EFFORT: Effort = "low";
 export const DEFAULT_LIMITS = {
   // G8, raised from 6 to 8 in sprint 8 because the agent now acts: a
   // paste is an import and an accept, and a question is an ask and an
-  // answer.
-  maxToolCalls: 8,
+  // answer. Raised to 12 on 2026-10-29: the live Gmail run's first step
+  // ("check my Gmail and update my schedule") read the schedule, searched,
+  // imported two emails, accepted their facts and hit one stale version,
+  // and stopped at 8. The turn's token cap still bounds the cost.
+  maxToolCalls: 12,
   maxMalformedCalls: 1,
   maxTurnTokens: 80_000,
   historyMessages: 20,
