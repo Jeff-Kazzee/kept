@@ -28,6 +28,11 @@
 // by a sync (review round 2, finding 15). The sync reports it, and only an
 // Undo or a sync the person asked for (`restoreRemoved`) puts it back.
 //
+// Each case has its own mark (0017, E1, src/google/case-mark.ts). It joins
+// the id's inputs and the properties, so an event an earlier case made, or
+// removed, is never this case's. An event or record without a mark is of the
+// earlier scheme, and only a case that kept that scheme reads it as its own.
+//
 // Every write returns an undo record. Undo reverses the write at Google:
 // it deletes an event the app created, puts back the fields an update
 // changed, or puts a deleted event back. It finds the event by the id in
@@ -55,6 +60,7 @@ export const CALENDAR_API = "https://www.googleapis.com/calendar/v3";
 export const APP_PROPERTY = "apptAssistant";
 export const SLOT_PROPERTY = "apptSlotKey";
 export const ACCOUNT_PROPERTY = "apptAccount";
+export const CASE_PROPERTY = "apptCase";
 // The most events the property lookup reads for one slot. More than one
 // verified event is an error the person resolves in Google Calendar.
 export const MAX_PROPERTY_MATCHES = 10;
@@ -75,12 +81,13 @@ export type EventFields = {
 
 // Google accepts a client-chosen event id of 5 to 1024 characters from
 // a to v and 0 to 9 (base32hex). The id is "appt" and the base32hex of a
-// SHA-256 over the namespace, the account, the calendar and the slot key,
-// 56 characters.
+// SHA-256 over the namespace, the account, the calendar, the slot key and
+// the case's mark when it has one, 56 characters. Without a mark the id is
+// the one the earlier scheme gave.
 const BASE32HEX = "0123456789abcdefghijklmnopqrstuv";
 
-export function eventIdFor(sub: string, calendarId: string, slotKey: string): string {
-  const bytes = createHash("sha256").update([ID_NAMESPACE, sub, calendarId, slotKey].join("\u0000")).digest();
+export function eventIdFor(sub: string, calendarId: string, slotKey: string, mark: string | null = null): string {
+  const bytes = createHash("sha256").update([ID_NAMESPACE, sub, calendarId, slotKey, ...(mark === null ? [] : [mark])].join("\u0000")).digest();
   let bits = 0;
   let value = 0;
   let out = "appt";
@@ -115,6 +122,8 @@ export type CalendarUndo = {
   account: string;
   calendarId: string;
   slotKey: string;
+  // The case's mark (0017, E1). Absent in a record of the earlier scheme.
+  mark?: string;
   action: "created" | "updated" | "deleted";
   eventId: string;
   // The event's ETag after the write, null after a delete.
@@ -131,6 +140,7 @@ export type WritePlan = {
   account: string;
   calendarId: string;
   slotKey: string;
+  mark?: string;
   action: "created" | "updated" | "deleted";
   eventId: string;
   before: EventFields | null;
@@ -206,12 +216,14 @@ const SUMMARY: Record<EventFields["status"], (s: SlotView, office: string | null
   confirmed: (_s, office) => office ?? "Appointment",
 };
 
-// The office as the case holds it (src/reply/office.ts).
-export type EventOffice = { name: string | null; location: string | null };
+// The office as the case holds it (src/reply/office.ts). Its place is not
+// the event's: that is the slot's own (0017, E2).
+export type EventOffice = { name: string | null };
 
 // The event the slot should have, or null when it should have none. Every
-// word is written by code, except the office's name and place, which come
-// from the office's messages and are shown in the calendar as given.
+// word is written by code, except the office's name and the slot's place,
+// which come from the office's messages and are shown in the calendar as
+// given.
 export function desiredEvent(slot: SlotView | null, timeZone: string, office: EventOffice | null = null): EventFields | null {
   const status = slot ? STATUS[slot.state] : undefined;
   if (!slot || !status) return null;
@@ -228,7 +240,9 @@ export function desiredEvent(slot: SlotView | null, timeZone: string, office: Ev
       `Added by the appointment change assistant for ${slotLabel(slot.date, slot.time)}. ` +
       (status === "confirmed" ? "The office confirmed it." : "The office has not confirmed it yet.") +
       " The app updates this event when the appointment changes. Edits made here are not read back.",
-    location: clean(office?.location ?? slot.location ?? "", 300),
+    // 0017, E2: the slot's own place, as the schedule and the reply show it.
+    // Without one the event has no location.
+    location: clean(slot.location ?? "", 300),
     status,
     start,
     end,
@@ -258,20 +272,28 @@ function sameFields(a: EventFields, b: EventFields): boolean {
   );
 }
 
-const properties = (slotKey: string, sub: string) => ({ private: { [APP_PROPERTY]: "1", [SLOT_PROPERTY]: slotKey, [ACCOUNT_PROPERTY]: sub } });
+// The case's mark: a string, null for a case of the earlier scheme, or
+// undefined when the case has none yet and so owns no event.
+export type CaseMark = string | null | undefined;
+const markOf = (r: { mark?: string }): string | null => r.mark ?? null;
+const withMark = (mark: string | null) => (mark === null ? {} : { mark });
 
-const withProperties = (fields: EventFields, slotKey: string, sub: string) => ({
+const properties = (slotKey: string, sub: string, mark: string | null) => ({
+  private: { [APP_PROPERTY]: "1", [SLOT_PROPERTY]: slotKey, [ACCOUNT_PROPERTY]: sub, ...(mark === null ? {} : { [CASE_PROPERTY]: mark }) },
+});
+
+const withProperties = (fields: EventFields, slotKey: string, sub: string, mark: string | null) => ({
   ...fields,
   transparency: "opaque",
-  extendedProperties: properties(slotKey, sub),
+  extendedProperties: properties(slotKey, sub, mark),
 });
 
 // A patch body. It sends the app's properties again, so a restored or
 // edited event keeps them (review round 2, finding 13). Timed and all-day
 // values replace each other, so the other field is cleared.
-const patchBody = (f: EventFields, slotKey: string, sub: string) => ({
+const patchBody = (f: EventFields, slotKey: string, sub: string, mark: string | null) => ({
   ...f,
-  extendedProperties: properties(slotKey, sub),
+  extendedProperties: properties(slotKey, sub, mark),
   start: f.start.date ? { date: f.start.date, dateTime: null } : { dateTime: f.start.dateTime, timeZone: f.start.timeZone, date: null },
   end: f.end.date ? { date: f.end.date, dateTime: null } : { dateTime: f.end.dateTime, timeZone: f.end.timeZone, date: null },
 });
@@ -279,11 +301,16 @@ const patchBody = (f: EventFields, slotKey: string, sub: string) => ({
 export class GoogleCalendar {
   readonly #conn: GoogleConnection;
   readonly #timeZone: () => string;
+  readonly #caseMark: (options: { create: boolean }) => CaseMark;
 
   // `timeZone` is the case's time zone (0009, J5), read at each call.
-  constructor(connection: GoogleConnection, options: { timeZone: () => string }) {
+  // `caseMark` is the case's mark (src/google/case-mark.ts): `list` reads it
+  // without making one, and `plan` makes it at the case's first write.
+  // Without it every case is of the earlier scheme.
+  constructor(connection: GoogleConnection, options: { timeZone: () => string; caseMark?: (options: { create: boolean }) => CaseMark }) {
     this.#conn = connection;
     this.#timeZone = options.timeZone;
+    this.#caseMark = options.caseMark ?? (() => null);
   }
 
   get timeZone(): string {
@@ -317,7 +344,7 @@ export class GoogleCalendar {
     url.searchParams.set("orderBy", "startTime");
     url.searchParams.set("timeZone", tz);
     url.searchParams.set("maxResults", "250");
-    const out: CalendarEvent[] = [];
+    const out: Array<CalendarEvent & { raw: RawEvent }> = [];
     for (let page = 0; page < 4; page++) {
       const res = await this.#call(url.toString());
       if (res.status !== 200) throw apiError(res.status, res.body);
@@ -335,13 +362,17 @@ export class GoogleCalendar {
           start,
           end: icsTime(e.data.end),
           allDay: start.time === null,
-          slotKey: ownSlot(sub, e.data),
+          slotKey: null,
+          raw: e.data,
         });
       }
       if (!parsed.data.nextPageToken) break;
       url.searchParams.set("pageToken", parsed.data.nextPageToken);
     }
-    return out;
+    // Read after the events, so an event this case made while they were
+    // read counts as its own (0017, E1).
+    const mark = this.#caseMark({ create: false });
+    return out.map(({ raw, ...e }) => ({ ...e, slotKey: ownSlot(sub, raw, mark) }));
   }
 
   // The event with this id, deleted ones included, or null.
@@ -357,12 +388,12 @@ export class GoogleCalendar {
   // The slot's live event and, when there is none, its removed one. The
   // event at the slot's id comes first. Without a live one there, one
   // bounded lookup by property finds a verified event under another id.
-  async #locate(calendarId: string, sub: string, slotKey: string): Promise<{ live: RawEvent | null; removed: RawEvent | null }> {
-    const atId = await this.#get(calendarId, eventIdFor(sub, calendarId, slotKey));
-    if (atId && ownSlot(sub, atId) !== slotKey) throw new GoogleError("google_not_app_event");
+  async #locate(calendarId: string, sub: string, slotKey: string, mark: string | null): Promise<{ live: RawEvent | null; removed: RawEvent | null }> {
+    const atId = await this.#get(calendarId, eventIdFor(sub, calendarId, slotKey, mark));
+    if (atId && ownSlot(sub, atId, mark) !== slotKey) throw new GoogleError("google_not_app_event");
     if (atId && atId.status !== "cancelled") return { live: atId, removed: null };
     const url = new URL(this.#events(calendarId));
-    for (const [k, v] of Object.entries(properties(slotKey, sub).private)) url.searchParams.append("privateExtendedProperty", `${k}=${v}`);
+    for (const [k, v] of Object.entries(properties(slotKey, sub, mark).private)) url.searchParams.append("privateExtendedProperty", `${k}=${v}`);
     url.searchParams.set("maxResults", String(MAX_PROPERTY_MATCHES));
     const res = await this.#call(url.toString());
     if (res.status !== 200) throw apiError(res.status, res.body);
@@ -370,7 +401,7 @@ export class GoogleCalendar {
     if (!parsed.success) throw new GoogleError("google_invalid_response");
     const verified = (parsed.data.items ?? []).flatMap((item) => {
       const e = RawEvent.safeParse(item);
-      return e.success && e.data.status !== "cancelled" && ownSlot(sub, e.data) === slotKey ? [e.data] : [];
+      return e.success && e.data.status !== "cancelled" && ownSlot(sub, e.data, mark) === slotKey ? [e.data] : [];
     });
     if (verified.length > 1 || parsed.data.nextPageToken) throw new GoogleError("google_duplicate");
     return { live: verified[0] ?? null, removed: atId };
@@ -379,20 +410,20 @@ export class GoogleCalendar {
   // Creates the slot's event under its id. When Google already has that id
   // (409), the event there is read: a live one of the app's is returned
   // with `existed`, a removed one is put back only when `restore` is set.
-  async #insert(calendarId: string, sub: string, slotKey: string, fields: EventFields, restore: boolean): Promise<{ event: RawEvent; existed: boolean }> {
-    const id = eventIdFor(sub, calendarId, slotKey);
+  async #insert(calendarId: string, sub: string, slotKey: string, mark: string | null, fields: EventFields, restore: boolean): Promise<{ event: RawEvent; existed: boolean }> {
+    const id = eventIdFor(sub, calendarId, slotKey, mark);
     const res = await this.#call(this.#events(calendarId), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, ...withProperties(fields, slotKey, sub) }),
+      body: JSON.stringify({ id, ...withProperties(fields, slotKey, sub, mark) }),
     });
     if (res.status === 409) {
       const there = await this.#get(calendarId, id);
       if (!there) throw new GoogleError("google_changed");
-      if (ownSlot(sub, there) !== slotKey) throw new GoogleError("google_not_app_event");
+      if (ownSlot(sub, there, mark) !== slotKey) throw new GoogleError("google_not_app_event");
       if (there.status !== "cancelled") return { event: there, existed: true };
       if (!restore) throw new GoogleError("google_changed", null, "removed");
-      return { event: await this.#patch(calendarId, sub, slotKey, there, there.etag, fields), existed: false };
+      return { event: await this.#patch(calendarId, sub, slotKey, mark, there, there.etag, fields), existed: false };
     }
     if (res.status !== 200) throw apiError(res.status, res.body);
     const e = RawEvent.safeParse(res.body);
@@ -402,17 +433,17 @@ export class GoogleCalendar {
 
   // Patches the app's event, with its properties, only under its ETag, and
   // checks that the answer is still the app's event for the slot.
-  async #patch(calendarId: string, sub: string, slotKey: string, e: RawEvent, etag: string | undefined, fields: EventFields): Promise<RawEvent> {
+  async #patch(calendarId: string, sub: string, slotKey: string, mark: string | null, e: RawEvent, etag: string | undefined, fields: EventFields): Promise<RawEvent> {
     if (!etag) throw new GoogleError("google_changed");
     const res = await this.#call(`${this.#events(calendarId)}/${encodeURIComponent(e.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", "If-Match": etag },
-      body: JSON.stringify(patchBody(fields, slotKey, sub)),
+      body: JSON.stringify(patchBody(fields, slotKey, sub, mark)),
     });
     if (res.status !== 200) throw apiError(res.status, res.body);
     const out = RawEvent.safeParse(res.body);
     if (!out.success) throw new GoogleError("google_invalid_response");
-    if (out.data.id !== e.id || ownSlot(sub, out.data) !== slotKey) throw new GoogleError("google_not_app_event");
+    if (out.data.id !== e.id || ownSlot(sub, out.data, mark) !== slotKey) throw new GoogleError("google_not_app_event");
     return out.data;
   }
 
@@ -436,15 +467,17 @@ export class GoogleCalendar {
   async plan(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean; office?: EventOffice | null } = {}): Promise<Planned> {
     const { calendarId, sub, key } = this.#conn.calendar();
     const restore = options.restoreRemoved === true;
+    // 0017, E1: the case's own mark, made at its first write.
+    const mark = this.#caseMark({ create: true }) ?? null;
     const want = desiredEvent(slot, this.#timeZone(), options.office ?? null);
-    const found = await this.#locate(calendarId, sub, slotKey);
+    const found = await this.#locate(calendarId, sub, slotKey, mark);
     const have = found.live;
-    const base = { account: key, calendarId, slotKey };
+    const base = { account: key, calendarId, slotKey, ...withMark(mark) };
     if (!have && !want) return { write: null, outcome: { action: "none", slotKey, status: null, eventId: null, undo: null } };
     if (!have && want) {
       if (found.removed && !restore) throw new GoogleError("google_changed", null, "removed");
       return {
-        write: { plan: { ...base, action: "created", eventId: found.removed?.id ?? eventIdFor(sub, calendarId, slotKey), before: null, want }, have: null, removed: found.removed, restore },
+        write: { plan: { ...base, action: "created", eventId: found.removed?.id ?? eventIdFor(sub, calendarId, slotKey, mark), before: null, want }, have: null, removed: found.removed, restore },
         outcome: null,
       };
     }
@@ -460,13 +493,14 @@ export class GoogleCalendar {
     const { calendarId, sub, key } = this.#conn.calendar();
     const { plan } = write;
     if (plan.account !== key || plan.calendarId !== calendarId) throw new GoogleError("google_stale");
-    const base = { kind: "google_calendar" as const, account: key, calendarId, slotKey: plan.slotKey };
+    const mark = markOf(plan);
+    const base = { kind: "google_calendar" as const, account: key, calendarId, slotKey: plan.slotKey, ...withMark(mark) };
     let have = write.have;
     if (plan.action === "created") {
       const want = plan.want!;
       const made = write.removed
-        ? { event: await this.#patch(calendarId, sub, plan.slotKey, write.removed, write.removed.etag, want), existed: false }
-        : await this.#insert(calendarId, sub, plan.slotKey, want, write.restore);
+        ? { event: await this.#patch(calendarId, sub, plan.slotKey, mark, write.removed, write.removed.etag, want), existed: false }
+        : await this.#insert(calendarId, sub, plan.slotKey, mark, want, write.restore);
       if (!made.existed) {
         return {
           action: "created",
@@ -485,7 +519,7 @@ export class GoogleCalendar {
       return { action: "deleted", slotKey: plan.slotKey, status: null, eventId: have!.id, undo: { ...base, action: "deleted", eventId: have!.id, etagAfter: null, before } };
     }
     if (sameFields(before, plan.want)) return { action: "unchanged", slotKey: plan.slotKey, status: plan.want.status, eventId: have!.id, undo: null };
-    const updated = await this.#patch(calendarId, sub, plan.slotKey, have!, have!.etag, plan.want);
+    const updated = await this.#patch(calendarId, sub, plan.slotKey, mark, have!, have!.etag, plan.want);
     return {
       action: "updated",
       slotKey: plan.slotKey,
@@ -503,10 +537,10 @@ export class GoogleCalendar {
     const { calendarId, sub, key } = this.#conn.calendar();
     if (plan.account !== key || plan.calendarId !== calendarId) return { state: "diverged" };
     const e = await this.#get(calendarId, plan.eventId);
-    if (e && ownSlot(sub, e) !== plan.slotKey) return { state: "diverged" };
+    if (e && ownSlot(sub, e, markOf(plan)) !== plan.slotKey) return { state: "diverged" };
     const live = e !== null && e.status !== "cancelled";
     const fields = live ? fieldsOf(e!) : null;
-    const base = { kind: "google_calendar" as const, account: key, calendarId, slotKey: plan.slotKey, eventId: plan.eventId };
+    const base = { kind: "google_calendar" as const, account: key, calendarId, slotKey: plan.slotKey, ...withMark(markOf(plan)), eventId: plan.eventId };
     if (plan.action === "deleted") {
       if (!live) return { state: "applied", undo: { ...base, action: "deleted", etagAfter: null, before: plan.before } };
       return sameFields(fields!, plan.before!) ? { state: "not_applied" } : { state: "diverged" };
@@ -535,7 +569,7 @@ export class GoogleCalendar {
     const { calendarId, sub, key } = this.#conn.calendar();
     if (u.account !== key || u.calendarId !== calendarId) return "diverged";
     const current = await this.#get(calendarId, u.eventId);
-    if (current && ownSlot(sub, current) !== u.slotKey) return "diverged";
+    if (current && ownSlot(sub, current, markOf(u)) !== u.slotKey) return "diverged";
     const live = current !== null && current.status !== "cancelled";
     if (u.action === "created") return live ? (current!.etag === u.etagAfter ? "not_reversed" : "diverged") : "reversed";
     if (u.action === "deleted") return live ? (u.before && sameFields(fieldsOf(current!), u.before) ? "reversed" : "diverged") : "not_reversed";
@@ -554,8 +588,9 @@ export class GoogleCalendar {
   async undo(u: CalendarUndo): Promise<{ action: SyncAction; eventId: string | null }> {
     const { calendarId, sub, key } = this.#conn.calendar();
     if (u.account !== key || u.calendarId !== calendarId) throw new GoogleError("google_not_app_event");
+    const mark = markOf(u);
     const current = await this.#get(calendarId, u.eventId);
-    if (current && ownSlot(sub, current) !== u.slotKey) throw new GoogleError("google_not_app_event");
+    if (current && ownSlot(sub, current, mark) !== u.slotKey) throw new GoogleError("google_not_app_event");
     const live = current !== null && current.status !== "cancelled";
     if (u.action === "deleted") {
       if (!u.before) throw new GoogleError("google_invalid_response");
@@ -564,12 +599,12 @@ export class GoogleCalendar {
       if (live) throw new GoogleError("google_changed");
       // The slot got a new event since the delete, so putting the old one
       // back would make two.
-      if ((await this.#locate(calendarId, sub, u.slotKey)).live) throw new GoogleError("google_changed");
+      if ((await this.#locate(calendarId, sub, u.slotKey, mark)).live) throw new GoogleError("google_changed");
       if (current) {
-        const restored = await this.#patch(calendarId, sub, u.slotKey, current, current.etag, u.before);
+        const restored = await this.#patch(calendarId, sub, u.slotKey, mark, current, current.etag, u.before);
         return { action: "created", eventId: restored.id };
       }
-      const { event, existed } = await this.#insert(calendarId, sub, u.slotKey, u.before, true);
+      const { event, existed } = await this.#insert(calendarId, sub, u.slotKey, mark, u.before, true);
       if (existed) throw new GoogleError("google_changed");
       return { action: "created", eventId: event.id };
     }
@@ -586,17 +621,21 @@ export class GoogleCalendar {
       return { action: "deleted", eventId: u.eventId };
     }
     if (!u.before) throw new GoogleError("google_invalid_response");
-    const restored = await this.#patch(calendarId, sub, u.slotKey, current!, u.etagAfter, u.before);
+    const restored = await this.#patch(calendarId, sub, u.slotKey, mark, current!, u.etagAfter, u.before);
     return { action: "updated", eventId: restored.id };
   }
 }
 
-// The slot key when the event is the app's for this account, otherwise
-// null: the app's mark, a slot key and the account all match.
-function ownSlot(sub: string, e: RawEvent): string | null {
+// The slot key when the event is the app's for this account and case,
+// otherwise null: the app's mark, a slot key, the account and the case's
+// mark all match. A case of the earlier scheme (null) owns only events
+// without a case mark. A case with no mark yet owns none.
+function ownSlot(sub: string, e: RawEvent, mark: CaseMark): string | null {
+  if (mark === undefined) return null;
   const props = e.extendedProperties?.private;
   const slotKey = props?.[APP_PROPERTY] === "1" ? props[SLOT_PROPERTY] : undefined;
-  return slotKey !== undefined && props?.[ACCOUNT_PROPERTY] === sub ? slotKey : null;
+  if (slotKey === undefined || props?.[ACCOUNT_PROPERTY] !== sub) return null;
+  return (props[CASE_PROPERTY] ?? null) === mark ? slotKey : null;
 }
 
 // A calendar time as a wall-clock fact in the case time zone.

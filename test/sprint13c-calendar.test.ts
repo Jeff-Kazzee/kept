@@ -179,7 +179,7 @@ describe("sprint 13C, H4: the event at Google", () => {
     expect(event).toMatchObject({ summary: "Lantern Hill Clinic", status: "confirmed", location: "Lantern Hill Clinic, 400 Elm Street, Suite 2" });
     // The same event while requested: Google records it as tentative.
     const thu = { ...app.kase.view().slots[0]!, state: "requested" as const };
-    await app.google.calendar.sync(thu.key, thu, { office: { name: "Lantern Hill Clinic", location: thu.location } });
+    await app.google.calendar.sync(thu.key, thu, { office: { name: "Lantern Hill Clinic" } });
     const sent = fake.calls.filter((c) => c.method === "PATCH").at(-1)!;
     expect(JSON.parse(sent.body)).toMatchObject({ status: "tentative", summary: "Lantern Hill Clinic (requested)" });
     expect(fake.calendars.get("primary")!.get(event.id)).toMatchObject({ status: "tentative", summary: "Lantern Hill Clinic (requested)" });

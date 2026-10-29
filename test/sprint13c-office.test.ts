@@ -54,7 +54,8 @@ describe("sprint 13C, M1: the office's name", () => {
     const messages = [message("gmail-1", "lantern hill <front@lanternhill.example>"), message("gmail-2", "lantern hill <front@lanternhill.example>")];
     const ev = [evidence("gmail-1-e1", "gmail-1", "2026-11-12", "10:30", PLACE), evidence("gmail-2-e1", "gmail-2", "2026-11-16", "13:00", null)];
     const s = slot(["gmail-2-e1"]);
-    expect(officeOf(s, ev, messages)).toEqual({ name: "Lantern Hill Clinic", evidenceId: "gmail-2-e1", messageId: "gmail-2", location: PLACE });
+    // 0017, E2: the slot has no place of its own, so the office has none here.
+    expect(officeOf(s, ev, messages)).toEqual({ name: "Lantern Hill Clinic", evidenceId: "gmail-2-e1", messageId: "gmail-2", location: null });
     const { fields } = slotFields("ask_still_stands", s, { slots: [s], evidence: ev, messages, userName: null, timeZone: ZONE });
     const office = fields.find((f) => f.name === "office_name")!;
     expect(office.value).toBe("Lantern Hill Clinic");
@@ -71,9 +72,11 @@ describe("sprint 13C, M1: the office's name", () => {
     expect(officeOf(slot(["m-1-e1"]), ev, messages).name).toBe("Lantern Hill");
   });
 
-  it("the place is the slot's, else the one place the office gave, never a guess between two", () => {
+  it("the place is the slot's own, never one the office gave for another time (0017, E2)", () => {
     const messages = [message("gmail-1", "lantern hill <a@b.example>")];
-    const two = [evidence("gmail-1-e1", "gmail-1", "2026-11-12", "10:30", PLACE), evidence("gmail-1-e2", "gmail-1", "2026-11-13", "09:15", "Annex, 12 Oak Road")];
+    const one = [evidence("gmail-1-e1", "gmail-1", "2026-11-12", "10:30", PLACE)];
+    const two = [...one, evidence("gmail-1-e2", "gmail-1", "2026-11-13", "09:15", "Annex, 12 Oak Road")];
+    expect(officeOf(slot(["gmail-1-e1"]), one, messages).location).toBeNull();
     expect(officeOf(slot(["gmail-1-e1"]), two, messages).location).toBeNull();
     expect(officeOf(slot(["gmail-1-e1"], "requested", "Room 4"), two, messages).location).toBe("Room 4");
   });
@@ -87,9 +90,11 @@ describe("sprint 13C, M3: a message's label", () => {
 });
 
 describe("sprint 13C, H4: the calendar event", () => {
-  it("names the office and the state, and holds the office's place", () => {
-    const office = { name: "Lantern Hill Clinic", location: PLACE };
-    expect(desiredEvent(slot(["e"], "requested"), ZONE, office)).toMatchObject({ summary: "Lantern Hill Clinic (requested)", status: "tentative", location: PLACE });
+  it("names the office and the state, and holds the slot's own place", () => {
+    const office = { name: "Lantern Hill Clinic" };
+    expect(desiredEvent(slot(["e"], "requested", PLACE), ZONE, office)).toMatchObject({ summary: "Lantern Hill Clinic (requested)", status: "tentative", location: PLACE });
+    // 0017, E2: a slot without a place gives an event without one.
+    expect(desiredEvent(slot(["e"], "requested"), ZONE, office)).toMatchObject({ location: "" });
     expect(desiredEvent(slot(["e"], "change_proposed"), ZONE, office)).toMatchObject({ summary: "Lantern Hill Clinic (change proposed)", status: "tentative" });
     expect(desiredEvent(slot(["e"], "confirmed"), ZONE, office)).toMatchObject({ summary: "Lantern Hill Clinic", status: "confirmed" });
     expect(desiredEvent(slot(["e"], "offered"), ZONE, office)).toBeNull();
@@ -134,8 +139,9 @@ describe("sprint 13C fix round 2, N3: one office, named from accepted facts", ()
     // Without a place, both read by the name on the latest email.
     expect(officeNameOf(a, [], messages)).toBe("Front Desk");
     expect(officeNameOf(b, [], messages)).toBe("Front Desk");
-    // The slot's office uses the same name, and the place of the same office.
-    expect(officeOf(slot(["gmail-2-e1"]), [...ev, evidence("gmail-2-e1", "gmail-2", "2026-11-16", "13:00", null)], messages)).toMatchObject({ name: "Lantern Hill Clinic", location: PLACE });
+    // The slot's office uses the same name. Its place is the slot's own,
+    // none here (0017, E2).
+    expect(officeOf(slot(["gmail-2-e1"]), [...ev, evidence("gmail-2-e1", "gmail-2", "2026-11-16", "13:00", null)], messages)).toMatchObject({ name: "Lantern Hill Clinic", location: null });
   });
 });
 

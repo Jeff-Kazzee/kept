@@ -15,6 +15,7 @@ import { CaseAgent, replacedAnswerLine } from "../src/agent/agent.ts";
 import { defaultMessageId } from "../src/agent/tools.ts";
 import { CaseService } from "../src/case/service.ts";
 import { localDate } from "../src/domain/zone.ts";
+import { calendarCaseMark } from "../src/google/case-mark.ts";
 import { GoogleCalendar } from "../src/google/calendar.ts";
 import { GoogleConnection } from "../src/google/connection.ts";
 import { GoogleCalendarEvents } from "../src/google/events.ts";
@@ -123,7 +124,7 @@ export function createWorkspace(o: WorkspaceOptions) {
   // works in the case's time zone, and the events it last read join the
   // case's clash checks.
   const googleConnection = new GoogleConnection({ client: o.googleClient, store: secrets, ...(o.googleFetch ? { fetch: o.googleFetch } : {}) });
-  const googleCalendar = new GoogleCalendar(googleConnection, { timeZone: () => kase.timeZone() });
+  const googleCalendar = new GoogleCalendar(googleConnection, { timeZone: () => kase.timeZone(), caseMark: (o) => calendarCaseMark(store, o) });
   const googleEvents = new GoogleCalendarEvents(googleCalendar);
   const google: GoogleServices = { connection: googleConnection, gmail: new Gmail(googleConnection), calendar: googleCalendar, events: googleEvents };
   const intake = new IntakeService(store, client);

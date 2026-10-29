@@ -45,8 +45,8 @@ export type OfficeOf = {
   // The office message the name comes from, for its source line.
   evidenceId: string | null;
   messageId: string | null;
-  // The slot's place, or the one place the office's accepted facts give
-  // when the slot has none.
+  // The slot's own place from accepted evidence, the one the schedule and
+  // the reply show (0017, E2). Never the office's other places.
   location: string | null;
 };
 
@@ -100,14 +100,7 @@ export function officeOf(slot: SlotView, evidence: EvidenceView[], messages: Mes
     const ev = evidence.find((e) => e.id === id);
     const message = ev?.messageId ? messages.find((m) => m.id === ev.messageId) : undefined;
     if (!ev || !message || message.sourceType !== "office_message") continue;
-    // The place the office's accepted facts give, when there is only one.
-    const places = acceptedPlaces(sameSender(message, messages), evidence);
-    return {
-      name: officeNameOf(message, evidence, messages),
-      evidenceId: id,
-      messageId: message.id,
-      location: slot.location ?? (places.length === 1 ? places[0]! : null),
-    };
+    return { name: officeNameOf(message, evidence, messages), evidenceId: id, messageId: message.id, location: slot.location };
   }
   return { name: null, evidenceId: null, messageId: null, location: slot.location };
 }

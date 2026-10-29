@@ -24,6 +24,7 @@ import { ReplyService } from "../src/reply/service.ts";
 import { EventStore } from "../src/store/event-log.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { createMcpServer } from "./server.ts";
+import { calendarCaseMark } from "../src/google/case-mark.ts";
 import { GoogleCalendar } from "../src/google/calendar.ts";
 import { GoogleConnection, clientFromEnv } from "../src/google/connection.ts";
 import { GoogleCalendarEvents } from "../src/google/events.ts";
@@ -54,7 +55,7 @@ try {
   console.error(`Could not finish clearing a deleted case from the database file: ${err instanceof Error ? err.message : String(err)}`);
 }
 const googleConnection = new GoogleConnection({ client: clientFromEnv(), store: secrets });
-const googleCalendar = new GoogleCalendar(googleConnection, { timeZone: () => kase.timeZone() });
+const googleCalendar = new GoogleCalendar(googleConnection, { timeZone: () => kase.timeZone(), caseMark: (o) => calendarCaseMark(store, o) });
 const googleEvents = new GoogleCalendarEvents(googleCalendar);
 const google: GoogleServices = { connection: googleConnection, gmail: new Gmail(googleConnection), calendar: googleCalendar, events: googleEvents };
 // The secret is in the connection object now. Nothing this process starts
