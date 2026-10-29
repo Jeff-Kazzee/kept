@@ -20,7 +20,7 @@ const ORIGIN_LABELS: Record<DraftView["origin"], string> = {
 // The reply card: the draft while it is open, then its simulated send.
 export function ReplyCard({ draftId, state, run }: { draftId: string; state: AppState; run: Run }) {
   const reply = state.case.reply;
-  if (reply.draft?.id === draftId) return <DraftCard draft={reply.draft} version={reply.version} profileVersion={state.case.profile?.version ?? 0} run={run} />;
+  if (reply.draft?.id === draftId) return <DraftCard draft={reply.draft} version={reply.version} generation={state.generation} profileVersion={state.case.profile?.version ?? 0} run={run} />;
   const sent = reply.sent.find((s) => s.draftId === draftId);
   if (sent) return <SentCard sent={sent} />;
   return (
@@ -32,10 +32,10 @@ export function ReplyCard({ draftId, state, run }: { draftId: string; state: App
 
 // The reply section of the Schedule tab: the open draft, the templates the
 // user can pick by hand, and the replies already approved.
-export function ReplyPanel({ reply, run, profileVersion = 0 }: { reply: ReplyView; run: Run; profileVersion?: number }) {
+export function ReplyPanel({ reply, run, profileVersion = 0, generation = 0 }: { reply: ReplyView; run: Run; profileVersion?: number; generation?: number }) {
   return (
     <div className="stack">
-      {reply.draft && <DraftCard draft={reply.draft} version={reply.version} profileVersion={profileVersion} run={run} />}
+      {reply.draft && <DraftCard draft={reply.draft} version={reply.version} generation={generation} profileVersion={profileVersion} run={run} />}
       {reply.suggestion && <SuggestionNotice suggestion={reply.suggestion} />}
       {(reply.options.length > 0 || reply.withheld.length > 0) && (
         <details className="stack-sm">
@@ -119,13 +119,15 @@ export function setSharedReadback(key: string, change: (prev: SharedReadback) =>
   for (const f of readbackListeners) f();
 }
 
-export const readbackKey = (draft: DraftView, version: number) =>
-  [draft.id, version, draft.text, JSON.stringify(draft.fields.map((f) => [f.name, f.value]))].join("|");
+// The case generation is part of it, so after Delete case a new draft with
+// the same id, version and text starts with no ticks (fix round 1, R5).
+export const readbackKey = (draft: DraftView, version: number, generation = 0) =>
+  [draft.id, version, generation, draft.text, JSON.stringify(draft.fields.map((f) => [f.name, f.value]))].join("|");
 
-export function DraftCard({ draft, version, profileVersion = 0, run }: { draft: DraftView; version: number; profileVersion?: number; run: Run }) {
+export function DraftCard({ draft, version, generation = 0, profileVersion = 0, run }: { draft: DraftView; version: number; generation?: number; profileVersion?: number; run: Run }) {
   const [text, setText] = useState(draft.text);
   const uid = useId();
-  const key = readbackKey(draft, version);
+  const key = readbackKey(draft, version, generation);
   const shared = useSyncExternalStore(subscribeReadback, readbackSnapshot, readbackSnapshot);
   const mine = shared?.key === key ? shared : null;
   const read: Readback = mine?.read ?? { at: version, names: new Set() };
