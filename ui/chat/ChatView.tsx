@@ -453,9 +453,14 @@ function Extras({
   run,
   onShowSlot,
   facts,
+  shownText = null,
 }: {
   messageId: string;
   fresh?: boolean;
+  // The code-written sentence the answer already shows as its notice. A
+  // stopped turn also stores it as a notice card, which is shown once
+  // (0017, E6).
+  shownText?: string | null;
   cards: Card[];
   chips: FactChip[];
   actions: ActivityEntry[];
@@ -491,9 +496,11 @@ function Extras({
           })}
         </div>
       )}
-      {cards.map((c, i) => (
-        <CardView key={i} card={c} state={state} run={run} fresh={fresh} actions={actions} place={facts?.get(factsKey(messageId, i))} />
-      ))}
+      {cards.map((c, i) =>
+        c.kind === "notice" && shownText !== null && c.text.trim() === shownText ? null : (
+          <CardView key={i} card={c} state={state} run={run} fresh={fresh} actions={actions} place={facts?.get(factsKey(messageId, i))} />
+        ),
+      )}
     </>
   );
 }
@@ -534,7 +541,17 @@ function MessageItem({
           {m.text && <p className="assistant-text">{m.text}</p>}
         </>
       )}
-      <Extras messageId={m.id} cards={m.cards} chips={m.chips} actions={entriesById(activity, m.actions ?? [])} state={state} run={run} onShowSlot={onShowSlot} facts={facts} />
+      <Extras
+        messageId={m.id}
+        shownText={!m.declined && isCodeSentence(m.text) ? m.text.trim() : null}
+        cards={m.cards}
+        chips={m.chips}
+        actions={entriesById(activity, m.actions ?? [])}
+        state={state}
+        run={run}
+        onShowSlot={onShowSlot}
+        facts={facts}
+      />
     </article>
   );
 }
@@ -600,7 +617,18 @@ function PendingItem({
             )}
           </>
         )}
-        <Extras messageId={PENDING_MESSAGE} fresh cards={turn.cards} chips={turn.chips} actions={turn.actions} state={state} run={run} onShowSlot={onShowSlot} facts={facts} />
+        <Extras
+          messageId={PENDING_MESSAGE}
+          fresh
+          shownText={codeText}
+          cards={turn.cards}
+          chips={turn.chips}
+          actions={turn.actions}
+          state={state}
+          run={run}
+          onShowSlot={onShowSlot}
+          facts={facts}
+        />
         {err?.code === "stopped" && (
           <p className="notice" role="status">
             <Icon name="stop" />

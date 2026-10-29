@@ -4,7 +4,7 @@
 import { untrustedLabel } from "../../src/domain/untrusted.ts";
 import { sourceLabel } from "../../src/slots/labels.ts";
 import type { AppState, EvidenceView, MessageView } from "../api.ts";
-import { officeNameOf, senderName } from "../../src/reply/office.ts";
+import { officeNameOf, officeNameShown, senderName } from "../../src/reply/office.ts";
 import { UntrustedBox } from "../components/Untrusted.tsx";
 import { channelWord, claimWord, shortTime } from "../format.ts";
 
@@ -59,8 +59,13 @@ export function claimSlotText(c: EvidenceView["claim"]): string {
 // 0016, C1 and C2: the sender as the page names it: the office by the name
 // the case holds for it, never an email address. The full sender line
 // shows only with the whole message.
+// While the office's name may still change (0017, E6, officeNameShown), an
+// email is "the office" for a moment rather than its account's name.
 export function senderShown(m: MessageView, state: Pick<AppState, "evidence" | "messages">): string {
-  return officeNameOf(m, state.evidence, state.messages) ?? senderName(m.message.from) ?? "an unknown sender";
+  const shown = officeNameShown(m, state.evidence, state.messages);
+  if (shown !== null) return shown;
+  if (m.importedFrom === "gmail" && m.sourceType === "office_message" && officeNameOf(m, state.evidence, state.messages) !== null) return "the office";
+  return senderName(m.message.from) ?? "an unknown sender";
 }
 
 // One evidence item as a source card.

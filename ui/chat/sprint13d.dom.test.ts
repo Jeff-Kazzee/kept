@@ -1,12 +1,14 @@
 // Sprint 13D, E3 (0017): a finished answer is in view, and a facts card
 // already in the chat is not shown again in full.
 import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { AppState } from "../api.ts";
 import { installTestDom, TestElement, type TestDocument } from "../test-dom.ts";
 import { ChatView, factsCards, followTop, type ChatViewProps } from "./ChatView.tsx";
 import type { ChatState } from "./state.ts";
 import type { ChatMessage } from "./types.ts";
+import { PARTIAL_TEXT } from "../../src/agent/types.ts";
 
 beforeAll(() => {
   installTestDom();
@@ -217,5 +219,36 @@ describe("sprint 13D, E3: one full facts card per office message", () => {
       ["a2:1", { anchor: "facts-1", repeat: true }],
       ["pending:0", { anchor: "facts-2", repeat: true }],
     ]);
+  });
+});
+
+describe("sprint 13D, E6: the page shows each thing once and never the account's name for a moment", () => {
+  it("a stopped turn's sentence shows once, stored or streamed", async () => {
+    const stored = answer("a1", PARTIAL_TEXT, [{ kind: "notice", text: PARTIAL_TEXT }]);
+    const view = await mountChat(chatOf([question("u1", "Accept the facts"), stored]));
+    expect(view.container.textContent.split(PARTIAL_TEXT)).toHaveLength(2);
+    await view.rerender(chatOf([question("u1", "Accept the facts")], { ...streaming(PARTIAL_TEXT)!, status: "ended", cards: [{ kind: "notice", text: PARTIAL_TEXT }] }));
+    expect(view.container.textContent.split(PARTIAL_TEXT)).toHaveLength(2);
+    await view.unmount();
+  });
+
+  it("another notice of the same turn still shows", async () => {
+    const stored = answer("a1", PARTIAL_TEXT, [{ kind: "notice", text: "Added Monday 11/16 1:00 PM to Google Calendar as tentative." }]);
+    const view = await mountChat(chatOf([stored]));
+    expect(view.container.textContent).toContain("Added Monday 11/16 1:00 PM to Google Calendar as tentative.");
+    await view.unmount();
+  });
+
+  it("an email whose place waits for review is from the office, not from its account's name", async () => {
+    const lower = { ...state, messages: [{ ...state.messages[0]!, message: { ...state.messages[0]!.message, from: "lantern hill <front@lanternhill.example>" } }] } as AppState;
+    const withPlace = { ...lower, evidence: [{ ...lower.evidence[0]!, claim: { ...lower.evidence[0]!.claim, slot: { date: "2026-11-16", time: "13:00", location: "Lantern Hill Clinic, 400 Elm Street" } } }] } as AppState;
+    const html = (st: AppState) => renderToStaticMarkup(createElement(ChatView, { ...props(chatOf([answer("a1", "Added.", [claims])])), state: st }));
+    expect(html(withPlace)).toContain("Facts from the office");
+    // Only the sender line under "Show the whole message" gives the account's
+    // name, as the message has it (0016, C1).
+    expect(html(withPlace).split("lantern hill")).toHaveLength(2);
+    expect(html(withPlace)).toContain("<pre>lantern hill &lt;front@lanternhill.example&gt;</pre>");
+    const accepted = { ...withPlace, evidence: [{ ...withPlace.evidence[0]!, status: "accepted" }] } as AppState;
+    expect(html(accepted)).toContain("Facts from Lantern Hill Clinic");
   });
 });

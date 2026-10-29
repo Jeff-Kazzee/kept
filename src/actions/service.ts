@@ -16,7 +16,7 @@ import type { CaseService } from "../case/service.ts";
 import type { CaseView, ConflictView } from "../case/types.ts";
 import type { Effort, EvidenceClaim, Message } from "../domain/claim.ts";
 import { localDateTime, zonedIso } from "../domain/zone.ts";
-import { messageLabel, officeNameOf } from "../reply/office.ts";
+import { messageLabel, officeNameShown } from "../reply/office.ts";
 import type { EvidenceView, MessageView } from "../intake/events.ts";
 import { InvalidRequestError, NotFoundError, type ImportSource, type IntakeService, type ManualClaimInput } from "../intake/service.ts";
 import { actorFor, type RecordView } from "../records/events.ts";
@@ -279,7 +279,7 @@ export class CaseActions {
     const wall = (iso: string) => (Number.isFinite(Date.parse(iso)) ? localDateTime(Date.parse(iso), zone) : null);
     return (id) => {
       const m = messages.find((x) => x.id === id);
-      return m ? messageLabel(m, wall, officeNameOf(m, evidence, messages) ?? null) : "a message no longer in the case";
+      return m ? messageLabel(m, wall, officeNameShown(m, evidence, messages)) : "a message no longer in the case";
     };
   }
 

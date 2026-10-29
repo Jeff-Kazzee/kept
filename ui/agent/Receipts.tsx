@@ -7,7 +7,7 @@ import type { AppState } from "../api.ts";
 import { Icon } from "../components/Icon.tsx";
 import type { ActivityEntry } from "../contract.ts";
 import { entryText } from "../../src/activity/types.ts";
-import { officeNameOf, senderName } from "../../src/reply/office.ts";
+import { senderShown } from "../case/Source.tsx";
 import { canUndo, useAgent } from "./AgentContext.tsx";
 
 export type ReceiptGroup = { key: string; text: string; entries: ActivityEntry[]; messageId: string | null };
@@ -45,7 +45,7 @@ export function groupReceipts(entries: ActivityEntry[], state: Pick<AppState, "e
     }
     g.entries.push(e);
     const accepted = g.entries.filter((x) => x.kind === "claim_accepted").length;
-    g.text = claimsReceiptText(accepted, g.entries.length - accepted, officeNameOf(message, state.evidence, state.messages) ?? senderName(message.message.from) ?? undefined);
+    g.text = claimsReceiptText(accepted, g.entries.length - accepted, senderShown(message, state));
   }
   return groups;
 }

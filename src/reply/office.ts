@@ -5,7 +5,7 @@
 import { timeLabel } from "../slots/labels.ts";
 
 // The parts of the case views these read, so the page can use them too.
-type MessageView = { id: string; sourceType: string; importedFrom?: string; message: { channel: string; from: string; received_at: string } };
+type MessageView = { id: string; sourceType: string; importedFrom?: string; status?: string; message: { channel: string; from: string; received_at: string } };
 type EvidenceView = { id: string; status: string; messageId: string | null; claim: { slot: { location: string | null } } };
 type SlotView = { evidenceIds: string[]; location: string | null };
 
@@ -92,6 +92,23 @@ export function officeNameOf(m: MessageView, evidence: EvidenceView[], messages:
     if (full !== name) return full;
   }
   return names[0] ?? null;
+}
+
+// 0017, E6: the office's name as the page and the activity labels show it
+// now. For Gmail, while one of the office's messages is not read yet or one
+// of its facts that gives a place waits for review, the name may still
+// become the fuller one that place spells, so it is null until then and the
+// page names no one rather than show the email account's name for a moment.
+// A name already made fuller, and a pasted sender, show at once.
+export function officeNameShown(m: MessageView, evidence: EvidenceView[], messages: MessageView[]): string | null {
+  const name = officeNameOf(m, evidence, messages);
+  if (name === null || m.importedFrom !== "gmail") return name;
+  const group = sameSender(m, messages).filter((x) => x.importedFrom === "gmail");
+  if (!group.some((x) => x.id === m.id)) group.push(m);
+  if (!group.some((x) => senderName(x.message.from) === name)) return name;
+  const ids = new Set(group.map((x) => x.id));
+  const waiting = group.some((x) => x.status === "imported") || evidence.some((e) => e.status === "pending" && e.messageId !== null && ids.has(e.messageId) && e.claim.slot.location);
+  return waiting ? null : name;
 }
 
 // The office of a slot: the sender of the latest office message on it.

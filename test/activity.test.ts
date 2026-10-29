@@ -287,11 +287,14 @@ describe("sprint 13C, M3 and M4: what the person reads", () => {
     const a = app();
     // The recorded extraction of m2, as if read from Gmail.
     const m = a.actions.importMessage(AGENT, { ...fixtureMessage("m2"), from: "lantern hill <front@lanternhill.example>", received_at: "2026-10-29T00:43:00.000Z" }, { suggested: [], note: "", importedFrom: "gmail" });
-    expect(latest(a).entries[0]!.label).toBe("Added from Gmail: the email from lantern hill, Oct 28, 6:43 PM.");
+    // 0017, E6: not read yet, the office's name may still change, so the
+    // label names no one rather than the account's name for a moment.
+    expect(latest(a).entries[0]!.label).toBe("Added from Gmail: the email, Oct 28, 6:43 PM.");
     expect(latest(a).entries[0]!.summary).toBe("Added message m2 from Gmail (email).");
     const { evidence } = await a.actions.extract(AGENT, m.id, { effort: "low", expectedVersion: m.version });
-    // Fix round 2, N3: a fact still waiting for review names nothing.
-    expect(latest(a).entries.map((e) => e.label)).toContain("Added from Gmail: the email from lantern hill, Oct 28, 6:43 PM.");
+    // Fix round 2, N3: a fact still waiting for review names nothing. While
+    // its place waits, the account's name is not shown either (0017, E6).
+    expect(latest(a).entries.map((e) => e.label)).toContain("Added from Gmail: the email, Oct 28, 6:43 PM.");
     // 0016, C2: once the office's place is accepted, every label names the
     // sender as the case holds it, the earlier ones too.
     const confirm = evidence.find((e) => e.claim.claim_type === "confirm")!;
@@ -303,8 +306,13 @@ describe("sprint 13C, M3 and M4: what the person reads", () => {
     expect(latest(a).entries[0]!.label).toMatch(/^Left out the office's request \(fact \d of \d\) for your checklist, from the email from Lantern Hill Clinic, Oct 28, 6:43 PM\.$/);
     undoLatest(a, "claim_rejected");
     expect(latest(a).entries[0]!.label).toMatch(/^Undid: Left out the office's request/);
-    // Undoing the accepted place names the office by its email name again.
+    // Undoing the accepted place puts the fact back to wait for review, so
+    // the office is not named until it is decided again.
     undoLatest(a, "claim_accepted");
+    expect(latest(a).entries.map((e) => e.label)).toContain("Added from Gmail: the email, Oct 28, 6:43 PM.");
+    // Left out, the place names nothing: the office reads by its email name.
+    const back = a.intake.evidence().find((e) => e.id === confirm.id)!;
+    a.actions.rejectClaim(YOU, back.id, back.version);
     expect(latest(a).entries.map((e) => e.label)).toContain("Added from Gmail: the email from lantern hill, Oct 28, 6:43 PM.");
     for (const e of latest(a).entries) expect(e.label ?? e.summary).not.toMatch(/\bm2\b|front@|\bAccepted\b/);
   });
