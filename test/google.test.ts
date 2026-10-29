@@ -541,7 +541,7 @@ describe("Calendar: one event per slot, only the app's own, every write undoable
     const c = await confirmedCase(s);
     const r = await c.run("calendar_sync_slot", { slot_key: "2026-11-12T10:30" });
     expect(r.output).toMatchObject({ action: "created", event_status: "confirmed", undoable: true });
-    expect(r.cards).toEqual([{ kind: "notice", text: "Added Thursday 11/12 10:30 AM to Google Calendar as confirmed." }]);
+    expect(r.cards).toEqual([{ kind: "notice", text: "Added Thursday 11/12 10:30 AM to Google Calendar as confirmed.", activityId: "a2" }]);
     const [event] = primary(s);
     expect(event).toMatchObject({ status: "confirmed", summary: "Front Desk, Lantern Hill Clinic", location: "Lantern Hill Clinic, 400 Elm Street, Suite 2", extendedProperties: { private: { [APP_PROPERTY]: "1", [SLOT_PROPERTY]: "2026-11-12T10:30" } } });
     expect((event!.start as any).dateTime).toBe("2026-11-12T17:30:00.000Z");

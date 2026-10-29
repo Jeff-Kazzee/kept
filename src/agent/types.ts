@@ -15,7 +15,9 @@ export type Card =
   | { kind: "reply"; draftId: string } // readback and approve: the person only
   | { kind: "own_report"; messageId: string } // "Record this as your own report?" Yes or No: the person only
   | { kind: "explanation"; conflictId: string } // checked explanation
-  | { kind: "notice"; text: string }; // code-written
+  // Code-written. `activityId` names the action the notice states, so the
+  // page can show when it was undone (0016, R7).
+  | { kind: "notice"; text: string; activityId?: string };
 
 export type FactChip = {
   slotKey: string; // "2026-11-16T13:00"

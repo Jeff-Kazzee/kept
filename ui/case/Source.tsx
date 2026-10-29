@@ -3,7 +3,8 @@
 // agent's own statement, so it stays in a labeled untrusted box.
 import { untrustedLabel } from "../../src/domain/untrusted.ts";
 import { sourceLabel } from "../../src/slots/labels.ts";
-import type { AppState, EvidenceView } from "../api.ts";
+import type { AppState, EvidenceView, MessageView } from "../api.ts";
+import { officeNameOf, senderName } from "../../src/reply/office.ts";
 import { UntrustedBox } from "../components/Untrusted.tsx";
 import { channelWord, claimWord, shortTime } from "../format.ts";
 
@@ -45,7 +46,7 @@ export function UntrustedText({ label, text }: { label: string; text: string }) 
 }
 
 export function AgentQuote({ item }: { item: EvidenceView }) {
-  return <UntrustedText label={`${item.id} · words from ${item.claim.agent_name ?? "an agent"}`} text={item.claim.quote ?? ""} />;
+  return <UntrustedText label={`Words from ${item.claim.agent_name ?? "an agent"}`} text={item.claim.quote ?? ""} />;
 }
 
 // The slot a claim names, in words: "Thursday 11/12 10:30 AM · 400 Elm Street".
@@ -55,10 +56,17 @@ export function claimSlotText(c: EvidenceView["claim"]): string {
   return parts.join(" · ");
 }
 
+// 0016, C1 and C2: the sender as the page names it: the office by the name
+// the case holds for it, never an email address. The full sender line
+// shows only with the whole message.
+export function senderShown(m: MessageView, state: Pick<AppState, "evidence" | "messages">): string {
+  return officeNameOf(m, state.evidence, state.messages) ?? senderName(m.message.from) ?? "an unknown sender";
+}
+
 // One evidence item as a source card.
 export function SourceQuote({ id, state }: { id: string; state: AppState }) {
   const item = state.evidence.find((e) => e.id === id);
-  if (!item) return <div className="source">Evidence {id} is no longer in the case.</div>;
+  if (!item) return <div className="source">This fact is no longer in the case.</div>;
   const c = item.claim;
   const message = state.messages.find((m) => m.id === item.messageId);
   return (
@@ -69,12 +77,9 @@ export function SourceQuote({ id, state }: { id: string; state: AppState }) {
         </span>
         {message && (
           <span>
-            {message.message.from} · {channelWord(message.message.channel)} · {shortTime(message.message.received_at)}
+            {senderShown(message, state)} · {channelWord(message.message.channel)} · {shortTime(message.message.received_at)}
           </span>
         )}
-        <span>
-          <code>{id}</code>
-        </span>
         {state.case.staleEvidenceIds.includes(id) && <span className="warn">Possibly stale</span>}
       </figcaption>
       {c.quote ? item.origin === "agent" ? <AgentQuote item={item} /> : <blockquote className="quote">“{c.quote}”</blockquote> : <span className="muted">No quote.</span>}

@@ -16,7 +16,7 @@ import type { CaseService } from "../case/service.ts";
 import type { CaseView, ConflictView } from "../case/types.ts";
 import type { Effort, EvidenceClaim, Message } from "../domain/claim.ts";
 import { localDateTime, zonedIso } from "../domain/zone.ts";
-import { messageLabel } from "../reply/office.ts";
+import { messageLabel, officeNameOf } from "../reply/office.ts";
 import type { EvidenceView, MessageView } from "../intake/events.ts";
 import { InvalidRequestError, NotFoundError, type ImportSource, type IntakeService, type ManualClaimInput } from "../intake/service.ts";
 import { actorFor, type RecordView } from "../records/events.ts";
@@ -116,6 +116,22 @@ function factWords(c: EvidenceClaim, n: { index: number; of: number } | null = n
   return `${whose} ${when ? words : words.replace(/ (of|to|for)$/, "")}${when}`;
 }
 
+// 0016, C2: a message in a label is stored as this reference and put in
+// words when the entry is read, so it names the sender as the case holds
+// it then, as "the email from Lantern Hill Clinic, Oct 28, 6:43 PM".
+const msgRef = (id: string) => `{{message:${id}}}`;
+const MSG_REF = /\{\{message:([^}]+)\}\}/g;
+
+// 0016, C3: a reply in words, without its draft id. "accepting Monday 11/16
+// 1:00 PM".
+const REPLY_WORDS: Record<TemplateId, (slot: string) => string> = {
+  accept_offer: (slot) => `accepting ${slot}`,
+  decline_offer: (slot) => `declining ${slot}`,
+  ask_still_stands: (slot) => `asking whether ${slot} still stands`,
+  keep_original: (slot) => `keeping ${slot}`,
+};
+const replyWords = (template: string, slot: string) => (REPLY_WORDS[template as TemplateId] ?? ((x: string) => `for ${x}`))(slot);
+
 // "the offer for Thursday 11/12 10:30 AM". Only code's words: a request
 // item or a place is message text, so it is left out.
 function claimWords(c: EvidenceClaim): string {
@@ -179,7 +195,8 @@ export class CaseActions {
   activity(): ActivityView {
     const log = projectActivity(this.#store.readStream(ACTIVITY_STREAM));
     const zone = this.#kase.timeZone();
-    return { activityVersion: log.version, entries: log.records.map((r) => activityEntry(r, (iso) => zonedIso(iso, zone))).reverse() };
+    const resolve = this.#resolver();
+    return { activityVersion: log.version, entries: log.records.map((r) => resolve(activityEntry(r, (iso) => zonedIso(iso, zone)))).reverse() };
   }
 
   activityVersion(): number {
@@ -204,7 +221,7 @@ export class CaseActions {
     };
     const [stored] = this.#store.appendSystem(ACTIVITY_STREAM, [{ type: "activity_recorded", data }]);
     const record: ActivityRecord = { ...data, seq: stored!.seq, recordedAt: stored!.recordedAt, undoneAt: null, undoneBy: null };
-    return activityEntry(record, (iso) => this.#kase.zoned(iso));
+    return this.#resolver()(activityEntry(record, (iso) => this.#kase.zoned(iso)));
   }
 
   // A synchronous action: the command and its entry in one transaction.
@@ -244,10 +261,26 @@ export class CaseActions {
     return i < 0 || ids.length < 2 ? null : { index: i + 1, of: ids.length };
   }
 
-  // "the email from Lantern Hill Clinic, Oct 28, 6:43 PM" (0016, M3).
-  #messageWords(m: MessageView): string {
+  // Puts the message references of a label in words (0016, C2). A message
+  // no longer in the case is "a message no longer in the case".
+  #resolver(): (e: ActivityEntry) => ActivityEntry {
+    let words: ((id: string) => string) | null = null;
+    return (e) => {
+      if (!e.label || !e.label.includes("{{message:")) return e;
+      words ??= this.#messageWords();
+      return { ...e, label: e.label.replace(MSG_REF, (_, id: string) => words!(id)) };
+    };
+  }
+
+  #messageWords(): (id: string) => string {
     const zone = this.#kase.timeZone();
-    return messageLabel(m, (iso) => (Number.isFinite(Date.parse(iso)) ? localDateTime(Date.parse(iso), zone) : null));
+    const messages = this.#intake.messages();
+    const evidence = this.#intake.evidence();
+    const wall = (iso: string) => (Number.isFinite(Date.parse(iso)) ? localDateTime(Date.parse(iso), zone) : null);
+    return (id) => {
+      const m = messages.find((x) => x.id === id);
+      return m ? messageLabel(m, wall, officeNameOf(m, evidence, messages) ?? null) : "a message no longer in the case";
+    };
   }
 
   #agentName(by: By): string | null {
@@ -277,7 +310,7 @@ export class CaseActions {
         // shows for it (0012, G19). Its undo is the same.
         kind: gmail ? "gmail_message_imported" : "message_imported",
         summary: gmail ? `Added message ${m.id} from Gmail (email).` : `Added message ${m.id} (${m.message.channel.replaceAll("_", " ")}).`,
-        label: gmail ? `Added from Gmail: ${this.#messageWords(m)}.` : `Added ${this.#messageWords(m)}.`,
+        label: gmail ? `Added from Gmail: ${msgRef(m.id)}.` : `Added ${msgRef(m.id)}.`,
         target: { type: "message", id: m.id },
         undo: { kind: "message_import", message_id: m.id },
       }),
@@ -491,7 +524,7 @@ export class CaseActions {
         const m = this.#intake.message(messageId);
         const n = m.evidenceIds.length;
         const found = m.status === "manual_entry_needed" ? "The facts need entering by hand." : n === 0 ? "No appointment facts were found." : `${n === 1 ? "1 fact was" : `${n} facts were`} found.`;
-        return { kind: "message_read", summary: `Read message ${messageId}. ${found}`, label: `Read ${this.#messageWords(m)}. ${found}`, target: { type: "message", id: messageId }, undo: null, whyNot: NOT_UNDOABLE.extract };
+        return { kind: "message_read", summary: `Read message ${messageId}. ${found}`, label: `Read ${msgRef(m.id)}. ${found}`, target: { type: "message", id: messageId }, undo: null, whyNot: NOT_UNDOABLE.extract };
       },
     );
   }
@@ -504,7 +537,7 @@ export class CaseActions {
       (e) => ({
         kind: "claim_entered",
         summary: `Entered ${claimWords(e.claim)} by hand for message ${messageId}.`,
-        label: `Entered ${claimWords(e.claim)} by hand, for ${this.#messageWords(this.#intake.message(messageId))}.`,
+        label: `Entered ${claimWords(e.claim)} by hand, for ${msgRef(messageId)}.`,
         target: { type: "claim", id: e.id },
         undo: null,
         whyNot: NOT_UNDOABLE.manual,
@@ -519,7 +552,7 @@ export class CaseActions {
     return this.#act(by, () => this.#intake.decideOwnReport(messageId, answer, expectedVersion), (m) => ({
       kind: "own_report_recorded",
       summary: answer === "yes" ? `Recorded message ${m.id} as your own report.` : `Kept message ${m.id} as a message, not your own report.`,
-      label: answer === "yes" ? `Recorded ${this.#messageWords(m)} as your own report.` : `Kept ${this.#messageWords(m)} as a message, not your own report.`,
+      label: answer === "yes" ? `Recorded ${msgRef(m.id)} as your own report.` : `Kept ${msgRef(m.id)} as a message, not your own report.`,
       target: { type: "message", id: m.id },
       undo: { kind: "own_report", message_id: m.id },
     }));
@@ -556,7 +589,7 @@ export class CaseActions {
       (e) => ({
         kind: decision === "accept" ? "claim_accepted" : "claim_rejected",
         summary: `${decision === "accept" ? "Accepted" : "Rejected"} ${claimWords(e.claim)}${e.messageId ? ` from message ${e.messageId}` : ""}.`,
-        label: `${decision === "accept" ? "Recorded" : "Left out"} ${factWords(e.claim, this.#factNumber(e))}${e.messageId ? `, from ${this.#messageWords(this.#intake.message(e.messageId))}` : ""}.`,
+        label: `${decision === "accept" ? "Recorded" : "Left out"} ${factWords(e.claim, this.#factNumber(e))}${e.messageId ? `, from ${msgRef(e.messageId)}` : ""}.`,
         target: { type: "claim", id: e.id },
         undo: { kind: "claim_decision", evidence_id: e.id, version: e.version },
         slotKeys: this.#slotsOf(e, this.#kase.view()),
@@ -608,6 +641,7 @@ export class CaseActions {
         return {
           kind: "question_asked",
           summary: `Asked question ${q.id} about ${listLabels(slots)}.`,
+          label: `Asked you the question about ${listLabels(slots)}.`,
           target: { type: "question", id: q.id },
           undo: { kind: "question_ask", question_id: q.id },
           slotKeys: slots,
@@ -632,6 +666,7 @@ export class CaseActions {
         return {
           kind: "question_answered",
           summary: `Answered question ${questionId} about ${listLabels(conflict?.slotKeys ?? [])}${draft ? `, which started reply draft ${draft}` : ""}.`,
+          label: `Answered the question about ${listLabels(conflict?.slotKeys ?? [])}${draft ? ", which started a reply" : ""}.`,
           target: { type: "question", id: questionId },
           undo: {
             kind: "question_answer",
@@ -709,6 +744,7 @@ export class CaseActions {
       return {
         kind: "draft_started",
         summary: `Started reply draft ${d.id} (${TEMPLATES[d.template as TemplateId].title}) for ${d.slotLabel}. Nothing is sent until you approve it.`,
+        label: `Started a reply ${replyWords(d.template, d.slotLabel)}. Nothing is sent until you approve it.`,
         target: { type: "draft", id: d.id },
         undo: { kind: "draft_start", draft_id: d.id },
         slotKeys: [d.slotKey],
@@ -727,6 +763,7 @@ export class CaseActions {
           ? {
               kind: "draft_started",
               summary: `Started reply draft ${d.id} (${TEMPLATES[d.template as TemplateId].title}) for ${d.slotLabel} from the model's pick. Nothing is sent until you approve it.`,
+              label: `Started a reply ${replyWords(d.template, d.slotLabel)}, from the model's pick. Nothing is sent until you approve it.`,
               target: { type: "draft", id: d.id },
               undo: { kind: "draft_start", draft_id: d.id },
               slotKeys: [d.slotKey],
@@ -741,6 +778,7 @@ export class CaseActions {
     return this.#act(by, () => this.#reply.edit(draftId, text, expectedVersion), () => ({
       kind: "draft_edited",
       summary: `Edited the text of reply draft ${draftId}.`,
+      label: "Edited the text of the reply.",
       target: { type: "draft", id: draftId },
       undo: null,
       whyNot: NOT_UNDOABLE.edit,
@@ -765,6 +803,7 @@ export class CaseActions {
     return this.#act(by, () => this.#reply.discard(draftId, expectedVersion), () => ({
       kind: "draft_discarded",
       summary: `Discarded reply draft ${draftId}${slot ? ` for ${keyLabel(slot)}` : ""}.`,
+      label: `Discarded the reply${slot ? ` for ${keyLabel(slot)}` : ""}.`,
       target: { type: "draft", id: draftId },
       undo: { kind: "draft_discard", draft_id: draftId },
       slotKeys: slot ? [slot] : [],
@@ -778,6 +817,7 @@ export class CaseActions {
     return this.#act(by, () => this.#reply.approve(draftId, confirmedFields, expectedVersion, options), () => ({
       kind: "reply_approved",
       summary: `Approved reply draft ${draftId}${slot ? ` for ${keyLabel(slot)}` : ""}. The send was simulated. Nothing left the app.`,
+      label: `Approved the reply${slot ? ` for ${keyLabel(slot)}` : ""}. The send was simulated. Nothing left the app.`,
       target: { type: "draft", id: draftId },
       undo: null,
       whyNot: NOT_UNDOABLE.approve,

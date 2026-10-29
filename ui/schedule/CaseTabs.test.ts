@@ -37,8 +37,9 @@ describe("sprint 5 panels", () => {
       }),
     );
     expect(html).toContain("<strong>Bring new insurance card</strong>");
-    expect(html).toContain("<span>“Please bring your new insurance card”</span><span class=\"source-meta\">office message · <code>m2-e2</code></span>");
-    expect(html).toContain("<span>No quote.</span><span class=\"source-meta\">reported by you · <code>p-1-1</code></span>");
+    expect(html).toContain("<span>“Please bring your new insurance card”</span><span class=\"source-meta\">office message</span>");
+    expect(html).not.toContain("m2-e2");
+    expect(html).toContain("<span>No quote.</span><span class=\"source-meta\">reported by you</span>");
     expect(html).not.toMatch(/model output/i);
     expect(renderToStaticMarkup(createElement(ChecklistPanel, { items: [] }))).toContain("Nothing yet.");
   });

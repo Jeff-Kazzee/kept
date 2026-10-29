@@ -71,7 +71,7 @@ function officeName(slot: SlotView, ctx: ReplyContext): { value: string; source:
   if (!office.name || !message) return null;
   const zone = ctx.timeZone ?? "UTC";
   const wall = (iso: string) => (Number.isFinite(Date.parse(iso)) ? localDateTime(Date.parse(iso), zone) : null);
-  return { value: office.name, source: { kind: "evidence", evidenceId: office.evidenceId, text: `Sender of ${messageLabel(message, wall)}` } };
+  return { value: office.name, source: { kind: "evidence", evidenceId: office.evidenceId, text: `Sender of ${messageLabel(message, wall, office.name)}` } };
 }
 
 // An evidence item as a field source. The quote of an agent's confirmed
@@ -107,7 +107,11 @@ export function slotFields(template: TemplateId, slot: SlotView, ctx: ReplyConte
     .map(evidenceSource);
   const alternatives = template === "keep_original" ? proposedAlternatives(slot, ctx.slots) : [];
   const all: Record<FieldName, FieldView> = {
-    office_name: field("office_name", office?.value ?? null, office?.value ?? null, office ? [office.source] : []),
+    // 0016, R6: the office's name comes from its messages, so the readback
+    // labels it as untrusted text, as an agent-only place is.
+    office_name: office
+      ? { ...field("office_name", office.value, office.value, [office.source]), untrustedLabel: untrustedLabel("The office's name, from its message") }
+      : field("office_name", null, null, []),
     date: field("date", slot.date, dateLabel(slot.date), [slotSource]),
     time: field("time", slot.time, slot.time === null ? null : timeLabel(slot.time), [slotSource]),
     location: agentOnly(

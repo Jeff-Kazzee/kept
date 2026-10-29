@@ -50,27 +50,36 @@ export type OfficeOf = {
   location: string | null;
 };
 
+const sameSender = (m: MessageView, messages: MessageView[]) =>
+  new Set(messages.filter((x) => x.sourceType === "office_message" && x.message.from === m.message.from).map((x) => x.id));
+
+const placesOf = (ids: Set<string>, evidence: EvidenceView[], ok: (status: string) => boolean) => [
+  ...new Set(evidence.filter((e) => ok(e.status) && e.messageId !== null && ids.has(e.messageId) && e.claim.slot.location).map((e) => oneLine(e.claim.slot.location!))),
+];
+
+// 0016, M1 and C2: the name the case holds for the sender of an office
+// message, for every place the page or a reply names it. A pasted sender is
+// the name the person's message gave, kept as it is. A Gmail sender's name
+// is spelled in full by a place its messages give that is not rejected.
+// Null for a message that is not from the office, or a sender with only an
+// address.
+export function officeNameOf(m: MessageView, evidence: EvidenceView[], messages: MessageView[]): string | null {
+  if (m.sourceType !== "office_message") return null;
+  const name = senderName(m.message.from);
+  if (!name || m.importedFrom !== "gmail") return name;
+  return fullerName(name, placesOf(sameSender(m, messages), evidence, (s) => s !== "rejected"));
+}
+
 // The office of a slot: the sender of the latest office message on it.
 export function officeOf(slot: SlotView, evidence: EvidenceView[], messages: MessageView[]): OfficeOf {
   for (const id of [...slot.evidenceIds].reverse()) {
     const ev = evidence.find((e) => e.id === id);
     const message = ev?.messageId ? messages.find((m) => m.id === ev.messageId) : undefined;
     if (!ev || !message || message.sourceType !== "office_message") continue;
-    const sender = message.message.from;
-    // Every accepted fact from messages of the same sender.
-    const ids = new Set(messages.filter((m) => m.sourceType === "office_message" && m.message.from === sender).map((m) => m.id));
-    const places = [
-      ...new Set(
-        evidence
-          .filter((e) => e.status === "accepted" && e.messageId !== null && ids.has(e.messageId) && e.claim.slot.location)
-          .map((e) => oneLine(e.claim.slot.location!)),
-      ),
-    ];
-    const name = senderName(sender);
-    // A pasted sender is the name the person's message gave, kept as it is.
-    const full = name && message.importedFrom === "gmail" ? fullerName(name, places) : name;
+    // The place the office's accepted facts give, when there is only one.
+    const places = placesOf(sameSender(message, messages), evidence, (s) => s === "accepted");
     return {
-      name: full,
+      name: officeNameOf(message, evidence, messages),
       evidenceId: id,
       messageId: message.id,
       location: slot.location ?? (places.length === 1 ? places[0]! : null),
@@ -90,11 +99,11 @@ const CHANNEL_WORDS: Record<string, string> = {
 };
 
 // "the email from Lantern Hill Clinic, Oct 28, 6:43 PM", in the case's
-// zone. `wall` turns an instant into its date and time there. Never the
-// message id or an address.
-export function messageLabel(m: MessageView, wall: (iso: string) => { date: string; time: string } | null): string {
+// zone. `wall` turns an instant into its date and time there. `who` is the
+// sender's name as the case holds it (officeNameOf), or the sender line's
+// name without it. Never the message id or an address.
+export function messageLabel(m: MessageView, wall: (iso: string) => { date: string; time: string } | null, who: string | null = m.sourceType === "office_message" ? senderName(m.message.from) : null): string {
   const what = CHANNEL_WORDS[m.message.channel] ?? "the message";
-  const who = m.sourceType === "office_message" ? senderName(m.message.from) : null;
   const at = wall(m.message.received_at);
   const when = at ? `${MONTHS[Number(at.date.slice(5, 7)) - 1]} ${Number(at.date.slice(8, 10))}, ${timeLabel(at.time)}` : null;
   return [`${what}${who ? ` from ${who}` : ""}`, when].filter(Boolean).join(", ");

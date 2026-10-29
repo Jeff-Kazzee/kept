@@ -290,11 +290,40 @@ describe("sprint 13C, M3 and M4: what the person reads", () => {
     expect(latest(a).entries[0]!.label).toBe("Added from Gmail: the email from lantern hill, Oct 28, 6:43 PM.");
     expect(latest(a).entries[0]!.summary).toBe("Added message m2 from Gmail (email).");
     const { evidence } = await a.actions.extract(AGENT, m.id, { effort: "low", expectedVersion: m.version });
+    // 0016, C2: once the email's facts give the office's place, every label
+    // names the sender as the case holds it, the earlier ones too.
+    expect(latest(a).entries.map((e) => e.label)).toContain("Added from Gmail: the email from Lantern Hill Clinic, Oct 28, 6:43 PM.");
     const confirm = evidence.find((e) => e.claim.claim_type === "confirm")!;
     a.actions.rejectClaim(AGENT, confirm.id, confirm.version);
+    // The place came from the fact now left out, so the email's own sender
+    // name is used again.
     expect(latest(a).entries[0]!.label).toMatch(/^Left out the office's confirmation of Thursday 11\/12 10:30 AM, from the email from lantern hill, Oct 28, 6:43 PM\.$/);
     undoLatest(a, "claim_rejected");
     expect(latest(a).entries[0]!.label).toMatch(/^Undid: Left out the office's confirmation/);
     for (const e of latest(a).entries) expect(e.label ?? e.summary).not.toMatch(/\bm2\b|front@|\bAccepted\b/);
+  });
+
+  it("C3: replies, questions and drafts are named without their ids", async () => {
+    const a = app();
+    await addAndAccept(a, "m1");
+    await addAndAccept(a, "m2");
+    await addAndAccept(a, "m3");
+    const offered = a.kase.view().slots.find((s) => s.state === "offered")!;
+    expect(offered).toBeDefined();
+    {
+      a.actions.startReply(AGENT, "accept_offer", offered.key, a.kase.view().reply.version);
+      expect(latest(a).entries[0]!.label).toBe(`Started a reply accepting ${offered.label}. Nothing is sent until you approve it.`);
+      expect(latest(a).entries[0]!.summary).toMatch(/^Started reply draft d1 /);
+      const d = a.kase.view().reply.draft!;
+      a.actions.discardDraft(YOU, d.id, a.kase.view().reply.version);
+      expect(latest(a).entries[0]!.label).toBe(`Discarded the reply for ${offered.label}.`);
+    }
+    expect(a.kase.view().conflicts.length).toBeGreaterThan(0);
+    {
+      await a.actions.askNext(AGENT, a.kase.view().questionsVersion);
+      expect(latest(a).entries[0]!.label).toMatch(/^Asked you the question about /);
+    }
+    // No internal id in any line the person reads.
+    for (const e of latest(a).entries) expect(e.label ?? e.summary).not.toMatch(/\b(d\d+|q\d+|m\d+(-e\d+)?|\d{4}-\d{2}-\d{2}T\d{2}:\d{2})\b/);
   });
 });

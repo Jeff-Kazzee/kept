@@ -50,3 +50,57 @@ describe("sprint 13C, H3: the time zone's source", () => {
     expect(renderToStaticMarkup(createElement(ZoneNotice, { settings: { ...utc, timezoneSource: "you" }, device: "America/Denver", run, save: async () => {} }))).toBe("");
   });
 });
+
+describe("sprint 13C fix round 1: names and ids on the page", () => {
+  const PLACE = "Lantern Hill Clinic, 400 Elm Street, Suite 2";
+  const message = {
+    id: "gmail-18f0a1",
+    version: 2,
+    message: { id: "gmail-18f0a1", channel: "email", from: "lantern hill <front@lanternhill.example>", received_at: "2026-10-29T00:43:00.000Z", text: "Hi,\n\nThis confirms your appointment." },
+    sourceType: "office_message",
+    sourceSuggested: [],
+    sourceNote: null,
+    agentName: null,
+    ownReport: null,
+    importedFrom: "gmail",
+    status: "extracted",
+    attempts: [],
+    rejections: [],
+    evidenceIds: ["gmail-18f0a1-e1"],
+    manualEvidenceIds: [],
+  };
+  const evidence = {
+    id: "gmail-18f0a1-e1",
+    version: 1,
+    messageId: "gmail-18f0a1",
+    claim: { claim_type: "confirm", slot: { date: "2026-11-12", time: "10:30", location: PLACE }, quote: "This confirms your appointment.", source_type: "office_message", sender_kind: "person", evidence_time: "2026-10-29T00:43:00.000Z", event_time: null, request_item: null },
+    origin: "extraction",
+    status: "pending",
+    decidedAt: null,
+    answer: null,
+  };
+
+  it("C1 and C2: the facts card names the office as the case holds it, and the address shows only with the whole message", async () => {
+    const { ClaimsCard } = await import("../case/ClaimsCard.tsx");
+    const state = { messages: [message], evidence: [evidence], case: { staleEvidenceIds: [] } } as never;
+    const html = withAgent({}, createElement(ClaimsCard, { messageId: "gmail-18f0a1", evidenceIds: ["gmail-18f0a1-e1"], state, run }));
+    expect(html).toContain('aria-label="Facts from Lantern Hill Clinic"');
+    expect(html).toContain("Facts from Lantern Hill Clinic</span>");
+    // The address appears once, inside "Show the whole message".
+    const at = html.indexOf("front@lanternhill.example");
+    expect(html.split("front@lanternhill.example")).toHaveLength(2);
+    expect(html.lastIndexOf("<summary", at)).toBeGreaterThan(html.lastIndexOf("</details>", at));
+    expect(html.slice(html.lastIndexOf("<summary", at), at)).toContain("Show the whole message");
+    expect(html).not.toContain("gmail-18f0a1-e1 ·");
+  });
+
+  it("R7: an undone notice is matched by its activity id, so an equal notice of another action stays", async () => {
+    const { CardView } = await import("../chat/ChatView.tsx");
+    const text = "Added Monday 11/16 1:00 PM to Google Calendar as tentative.";
+    const entry = (id: string, undone: boolean) => ({ id, at: "2026-11-05T10:00:00.000-07:00", actor: "agent" as const, kind: "calendar_event_added", summary: text, target: null, undoable: !undone, undone });
+    const actions = [entry("a1", true), entry("a2", false)];
+    const render = (activityId: string) => renderToStaticMarkup(createElement(CardView, { card: { kind: "notice", text, activityId }, state: {} as never, run, actions }));
+    expect(render("a1")).toContain("Undone. The activity list shows the undo.");
+    expect(render("a2")).not.toContain("Undone");
+  });
+});

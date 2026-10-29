@@ -697,7 +697,9 @@ export function CardView({ card, state, run, fresh = false, actions = [] }: { ca
     case "own_report":
       return <OwnReportCard messageId={card.messageId} state={state} run={run} />;
     case "notice": {
-      const undone = actions.some((e) => e.undone && e.summary === card.text);
+      // Matched by the activity id. A notice stored before ids were carried
+      // falls back to its words.
+      const undone = actions.some((e) => e.undone && (card.activityId ? e.id === card.activityId : e.summary === card.text));
       return (
         <div className={`notice${undone ? " is-undone" : ""}`} role="note">
           <Icon name={undone ? "undo" : "info"} />

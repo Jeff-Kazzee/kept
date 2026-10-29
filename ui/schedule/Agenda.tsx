@@ -260,7 +260,7 @@ function StateQuote({ id, state }: { id: string | null; state: AppState }) {
   if (item.origin === "agent") return <AgentQuote item={item} />;
   return (
     <blockquote className="source quote small">
-      “{quote}” <code className="muted">{id}</code>
+      “{quote}”
     </blockquote>
   );
 }

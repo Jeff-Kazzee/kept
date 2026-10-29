@@ -197,7 +197,7 @@ async function calendarWrite(ctx: ToolContext, name: "calendar_sync_slot" | "cal
     },
     {
       code: outcome.action === "none" || outcome.action === "unchanged" ? outcome.action : "ok",
-      cards: [{ kind: "notice", text: summary }],
+      cards: [{ kind: "notice", text: summary, ...(entry ? { activityId: entry.id } : {}) }],
       slots: slot ? [slot] : [],
       facts: slot ? [{ date: slot.date, time: slot.time, state: slot.state }] : [],
     },

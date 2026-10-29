@@ -88,7 +88,7 @@ describe("agent text in the case", () => {
     expect(thursday.unconfirmedEvidenceIds.length).toBeGreaterThan(0);
     const html = renderToStaticMarkup(createElement(Agenda, { state: s, run }));
     expect(html).toContain(UNCONFIRMED_WORDS);
-    expect(html).toContain("words from an external agent. Untrusted text, shown as data.");
+    expect(html).toContain("Words from an external agent. Untrusted text, shown as data.");
   });
 
   it("an agent's office request is labeled untrusted in the checklist", () => {

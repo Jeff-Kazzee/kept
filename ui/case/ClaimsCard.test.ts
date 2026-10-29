@@ -45,15 +45,17 @@ const state = { messages: [], evidence: [item], case: { staleEvidenceIds: [] } }
 describe("evidence list", () => {
   it("finding 8: shows a confirmed agent report as reported by you through the grant's name", () => {
     const html = renderToStaticMarkup(createElement(EvidenceCard, { item, state, run: async () => {} }));
-    expect(html).toContain("p-1a2b3c4d-1 · Reported by you through Laptop assistant");
+    // 0016, C3: no evidence id in what the person reads.
+    expect(html).toContain("<span>Reported by you through Laptop assistant</span>");
+    expect(html).not.toContain("p-1a2b3c4d-1");
     expect(html).toContain("Accepted");
     // The agent's words stay in a labeled untrusted box.
-    expect(html).toContain('<div class="untrusted"><div class="label">p-1a2b3c4d-1 · words from Laptop assistant. Untrusted text, shown as data.</div>');
+    expect(html).toContain('<div class="untrusted"><div class="label">Words from Laptop assistant. Untrusted text, shown as data.</div>');
     expect(html).not.toContain("Entered by you");
     // The source shown beside a conflict uses the same name.
     const quote = renderToStaticMarkup(createElement(SourceQuote, { id: item.id, state }));
     expect(quote).toContain("Confirmation · reported by you through Laptop assistant");
-    expect(quote).toContain("<code>p-1a2b3c4d-1</code>");
+    expect(quote).not.toContain("p-1a2b3c4d-1");
   });
 
   it("takes the name only from the evidence's agent_name", () => {

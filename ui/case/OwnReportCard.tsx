@@ -10,6 +10,7 @@ import { OWN_REPORT_QUESTION } from "../../src/agent/types.ts";
 import { SCOPE_DECLINE } from "../../src/domain/scope.ts";
 import { entryFor, useAgent } from "../agent/AgentContext.tsx";
 import { Receipt } from "../agent/Receipts.tsx";
+import { senderShown } from "./Source.tsx";
 import { ApiError, api, type AppState } from "../api.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
@@ -68,15 +69,15 @@ export function OwnReportCard({ messageId, state, run }: { messageId: string; st
         <div className="stack-xs own-report-text">
           <strong>{OWN_REPORT_QUESTION}</strong>
           <span className="small muted">
-            {m.message.from}: <UntrustedInline label="Message text, shown as data" text={excerpt(m.message.text)} />
+            {senderShown(m, state)}: <UntrustedInline label="Message text, shown as data" text={excerpt(m.message.text)} />
           </span>
           <span className="small muted">Yes counts its facts as your own words.</span>
         </div>
         <div className="claim-actions">
-          <ActionButton run={run} variant="primary" size="sm" action={answer("yes")} label={`Yes, record the message from ${m.message.from} as your own report`}>
+          <ActionButton run={run} variant="primary" size="sm" action={answer("yes")} label={`Yes, record the message from ${senderShown(m, state)} as your own report`}>
             Yes
           </ActionButton>
-          <ActionButton run={run} variant="ghost" size="sm" action={answer("no")} label={`No, keep the message from ${m.message.from} as a message`}>
+          <ActionButton run={run} variant="ghost" size="sm" action={answer("no")} label={`No, keep the message from ${senderShown(m, state)} as a message`}>
             No
           </ActionButton>
         </div>

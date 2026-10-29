@@ -43,16 +43,12 @@ export function ChecklistPanel({ items }: { items: ChecklistItem[] }) {
               s.untrustedLabel && s.quote ? (
                 <div key={s.evidenceId} className="stack-sm">
                   <UntrustedBox label={s.untrustedLabel} text={s.quote} />
-                  <span className="source-meta">
-                    {s.sourceLabel} · <code>{s.evidenceId}</code>
-                  </span>
+                  <span className="source-meta">{s.sourceLabel}</span>
                 </div>
               ) : (
                 <div key={s.evidenceId} className="source">
                   <span>{s.quote ? `“${s.quote}”` : "No quote."}</span>
-                  <span className="source-meta">
-                    {s.sourceLabel} · <code>{s.evidenceId}</code>
-                  </span>
+                  <span className="source-meta">{s.sourceLabel}</span>
                 </div>
               ),
             )}

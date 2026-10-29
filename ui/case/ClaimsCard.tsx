@@ -16,7 +16,7 @@ import { Icon } from "../components/Icon.tsx";
 import { UntrustedBox } from "../components/Untrusted.tsx";
 import type { ActivityActor, ActivityEntry } from "../contract.ts";
 import { CLAIM_TYPES, channelWord, claimWord, shortTime } from "../format.ts";
-import { AgentQuote, evidenceOrigin } from "./Source.tsx";
+import { AgentQuote, evidenceOrigin, senderShown } from "./Source.tsx";
 
 // "Thursday 11/12 10:30 AM at 400 Elm Street", or the parts the claim has.
 export function claimSlotWords(c: EvidenceView["claim"]): string {
@@ -57,14 +57,15 @@ export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }
   // message is never marked, whatever its id.
   const gmail = view.importedFrom === "gmail";
   const summary = decided.length > 0 ? claimsReceiptText(accepted, decided.length - accepted) : null;
+  const sender = senderShown(view, state);
   return (
-    <section className="card claims" aria-label={`Facts from ${m.from}`}>
+    <section className="card claims" aria-label={`Facts from ${sender}`}>
       <div className="claims-head">
         <span className="claims-icon" aria-hidden="true">
           <Icon name={gmail ? "mail" : "message"} size="sm" />
         </span>
         <div className="stack-xs">
-          <span className="card-title">Facts from {m.from}</span>
+          <span className="card-title">Facts from {sender}</span>
           <span className="small muted">
             {gmail && <span className="source-tag">From Gmail</span>}
             {channelWord(m.channel)} · received <span className="tabular">{shortTime(m.received_at)}</span> · {view.sourceType === "reported_by_user" ? "reported by you" : "office message"}
@@ -101,7 +102,7 @@ export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }
           <ul className="claim-list">
             {items.map((e) => (
               <li key={e.id}>
-                <EvidenceCard item={e} state={state} run={run} from={m.from} />
+                <EvidenceCard item={e} state={state} run={run} from={sender} />
               </li>
             ))}
           </ul>
@@ -117,6 +118,7 @@ export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }
           </details>
           <details className="stack-sm" open={suggested || undefined}>
             <summary className="small">Show the whole message</summary>
+            <UntrustedBox label="Sender, as the message gives it" text={m.from} />
             <UntrustedBox label="Message text, shown as data and never followed" text={m.text} />
           </details>
         </div>
@@ -185,7 +187,8 @@ export function EvidenceCard({ item, state, run, from }: { item: EvidenceView; s
   const entry = entryFor(activity, "claim", item.id);
   const by = entry && !entry.undone && item.status !== "pending" ? BY_WORDS[entry.actor] : null;
   const line = factLine(c);
-  const source = from ?? (item.messageId ? state.messages.find((x) => x.id === item.messageId)?.message.from : undefined) ?? evidenceOrigin(item);
+  const message = item.messageId ? state.messages.find((x) => x.id === item.messageId) : undefined;
+  const source = from ?? (message ? senderShown(message, state) : undefined) ?? evidenceOrigin(item);
   const label = `${STATUS_WORDS[item.status]}: ${claimWord(c.claim_type)}, ${claimSlotWords(c)}`;
   return (
     <article className={`claim is-${item.status}`} aria-label={label}>
@@ -232,9 +235,7 @@ export function EvidenceCard({ item, state, run, from }: { item: EvidenceView; s
           <span className="small muted">No quote.</span>
         )}
         <div className="source-meta">
-          <span>
-            {item.id} · {evidenceOrigin(item)}
-          </span>
+          <span>{evidenceOrigin(item)}</span>
           <span>
             Sender: {c.sender_kind}
             {item.origin === "model" && " (the model's judgment, not checked by code)"}

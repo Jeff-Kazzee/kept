@@ -75,7 +75,7 @@ export function SentCard({ sent }: { sent: SentView }) {
       </div>
       <p className="small muted">
         Approved {shortTime(sent.approvedAt)}
-        {sent.evidenceIds.length > 0 && ` · recorded as ${sent.evidenceIds.join(", ")}`}
+        {sent.evidenceIds.length > 0 && ` · recorded in your case`}
       </p>
       {sent.edited && <p className="warn">{EDITED_LABEL}</p>}
       {sent.claims === "not_confirmed" && <p className="warn">No appointment change was recorded. You edited the text and did not confirm what it asserts.</p>}
