@@ -31,7 +31,10 @@ import { AppointmentId } from "../records/inputs.ts";
 import { officeNameShown, officeOf, senderKey } from "../reply/office.ts";
 import { slotLabel } from "../slots/labels.ts";
 import type { SlotView } from "../slots/types.ts";
-import { StaleEditError } from "../store/event-log.ts";
+import { CaseDeletedError, StaleEditError, StoreBusyError } from "../store/event-log.ts";
+import { BudgetError } from "../model/meter.ts";
+import { ModelCallError } from "../model/client.ts";
+import { UsageRefusedError } from "../model/usage.ts";
 import { MAX_WINDOW_DAYS, caseWallClock, type CalendarUndo, type GoogleCalendar, type SyncAction, type SyncOutcome } from "./calendar.ts";
 import type { GoogleConnection } from "./connection.ts";
 import type { GoogleCalendarEvents } from "./events.ts";
@@ -235,6 +238,15 @@ export class GmailNotImportedError extends Error {
   }
 }
 
+// "Add it" for an email no chat turn offered for the account connected now
+// and this case (fix round 1, R1).
+export class GmailNotOfferedError extends Error {
+  override name = "GmailNotOfferedError";
+  constructor() {
+    super("That email was not offered in this case for the Google account connected now, so it was not added. Ask the assistant to check Gmail again. Nothing was saved.");
+  }
+}
+
 // Reads one Gmail message and adds it to the case as an office message,
 // with its activity entry and Undo, the same import as a paste. It does not
 // read the message's claims. `created` is true only when this call recorded
@@ -276,12 +288,49 @@ export function officeShown(ctx: Pick<ToolContext, "intake">, email: { id: strin
 
 export const officeOut = (name: string | null) => (name === null ? null : untrustedText(name));
 
+// Fix round 1, R3: an email's sender as the Gmail tools give it to the
+// model. The office's name as the page shows it, or null for "the office",
+// and the domain of the sender's address. Never the sender line's display
+// name, so the model cannot name the office before the page does.
+function senderOut(from: string, office: string | null): { office: { untrusted_text: string } | null; sender_domain: string | null } {
+  const domain = /@([A-Za-z0-9.-]{1,190})>?\s*$/.exec(from.trim())?.[1]?.toLowerCase() ?? null;
+  return { office: officeOut(office), sender_domain: domain };
+}
+
 // The time an email arrived, in the case's zone, as a fact the answer may
 // name (0018, H3).
 const receivedFact = (iso: string, timeZone: string): Fact => caseWallClock({ date: iso.slice(0, 10), time: iso.slice(11, 16), tzid: null, utc: true }, timeZone);
 
-// One message of gmail_import: added, then read, with its claims card.
+// Errors that end the whole turn, as they do for every tool: the case was
+// deleted, the store is busy, or the turn's token or usage limit stopped
+// it. Any other error of one email is that email's result (fix round 1,
+// R2).
+const endsTurn = (err: unknown) => err instanceof CaseDeletedError || err instanceof StoreBusyError || err instanceof BudgetError || err instanceof UsageRefusedError;
+
+// Why an email that is in the case was not read, in a fixed sentence.
+function notReadReason(err: unknown): { code: string; reason: string } {
+  if (err instanceof OutOfScopeError) return { code: "out_of_scope", reason: "it reads as clinical content" };
+  if (err instanceof InvalidRequestError) return { code: "invalid_request", reason: "the app refused to read it" };
+  if (err instanceof ModelCallError) return { code: "model_unavailable", reason: "the model did not answer" };
+  if (err instanceof StaleEditError) return { code: "stale_edit", reason: "it changed while it was read" };
+  if (err instanceof GoogleError) return { code: err.code, reason: "Google did not answer" };
+  return { code: "server_error", reason: "the read did not finish" };
+}
+
+// One message of gmail_import: added, then read, with its claims card. Its
+// result says what happened to it, so the tool's output agrees with the
+// activity log: refused (nothing added), added and read, or added and not
+// read (fix round 1, R2).
 async function importOne(ctx: ToolContext, google: GoogleServices, raw: string): Promise<ToolResult> {
+  try {
+    return await importOneUnguarded(ctx, google, raw);
+  } catch (err) {
+    if (endsTurn(err)) throw err;
+    return result({ message_id: raw, error: "server_error", message: "The app could not finish this email. The activity list shows whether it was added." }, { ok: false, code: "server_error" });
+  }
+}
+
+async function importOneUnguarded(ctx: ToolContext, google: GoogleServices, raw: string): Promise<ToolResult> {
   const { intake } = ctx;
   const id = gmailMessageId(raw);
   const entries: ActivityEntry[] = [];
@@ -291,21 +340,6 @@ async function importOne(ctx: ToolContext, google: GoogleServices, raw: string):
   let created: boolean;
   try {
     ({ message, created } = await addGmailMessage(ctx.actions, intake, google.gmail, by, raw));
-    // D2': only a message this call imported counts as an import of the
-    // turn, so its claims may be reviewed in a paste turn (review round 3,
-    // finding 4). A message from an earlier turn is not read in a paste
-    // turn: reading it would be another write.
-    if (created) ctx.turn?.gmailImported?.push(id);
-    else if (ctx.turn?.paste && message.status === "imported") return fail("waits_for_person", PASTE_TURN_NOTICE);
-    if (message.status === "imported") {
-      // Reading a new message is part of adding it, as for a paste. A
-      // message that was already in the case and never read is read now as
-      // its own action.
-      const m = message;
-      if (created) await intake.extract(id, { effort: ctx.extractionEffort ?? DEFAULT_EXTRACTION_EFFORT, expectedVersion: m.version });
-      else await ctx.actions.extract(by, id, { effort: ctx.extractionEffort ?? DEFAULT_EXTRACTION_EFFORT, expectedVersion: m.version });
-      message = intake.message(id);
-    }
   } catch (err) {
     // 0018, H2: an email refused for what it holds is not offered again.
     const refused = (error: string, text: string) => (ctx.turn?.gmailRefused?.push(raw), fail(error, text));
@@ -315,35 +349,58 @@ async function importOne(ctx: ToolContext, google: GoogleServices, raw: string):
     if (err instanceof InvalidRequestError) return refused("invalid_request", err.message);
     throw err;
   }
+  // D2': only a message this call imported counts as an import of the turn,
+  // so its claims may be reviewed in a paste turn (review round 3, finding
+  // 4). A message from an earlier turn is not read in a paste turn: reading
+  // it would be another write.
+  if (created) ctx.turn?.gmailImported?.push(id);
+  else if (ctx.turn?.paste && message.status === "imported") return fail("waits_for_person", PASTE_TURN_NOTICE);
+  let unread: { code: string; reason: string } | null = null;
+  if (message.status === "imported") {
+    // Reading a new message is part of adding it, as for a paste. A message
+    // that was already in the case and never read is read now as its own
+    // action. A read that fails leaves the message in the case, unread.
+    const m = message;
+    try {
+      if (created) await intake.extract(id, { effort: ctx.extractionEffort ?? DEFAULT_EXTRACTION_EFFORT, expectedVersion: m.version });
+      else await ctx.actions.extract(by, id, { effort: ctx.extractionEffort ?? DEFAULT_EXTRACTION_EFFORT, expectedVersion: m.version });
+    } catch (err) {
+      if (endsTurn(err)) throw err;
+      unread = notReadReason(err);
+    }
+    message = intake.message(id);
+  }
   const ids = [...message.evidenceIds, ...message.manualEvidenceIds];
   const evidence = intake.evidence().filter((e) => ids.includes(e.id));
   const status = created ? "imported" : "already_imported";
+  const code = unread ? "not_read" : status === "already_imported" ? "already_imported" : "ok";
   return result(
     {
       message_id: raw,
       status,
       extraction: message.status,
+      ...(unread ? { not_read: unread.code } : {}),
       source: {
         name: GMAIL_SOURCE,
         channel: message.message.channel,
         source_type: message.sourceType,
-        from: untrustedText(message.message.from),
-        office: officeOut(officeShown(ctx, { id, from: message.message.from, receivedAt: message.message.received_at })),
+        ...senderOut(message.message.from, officeShown(ctx, { id, from: message.message.from, receivedAt: message.message.received_at })),
         received_at: message.message.received_at,
         received_label: sentLabel(message.message.received_at, ctx.zone),
         suggested: message.sourceSuggested,
       },
       claims: evidence.map(evidenceItem),
       activity: activityOut(entries[0] ?? null, ctx.actions),
-      note:
-        message.status === "manual_entry_needed"
+      note: unread
+        ? `The email is in the case, but it was not read because ${unread.reason}. Its card lets the person read it again or enter its facts by hand.`
+        : message.status === "manual_entry_needed"
           ? "Extraction failed the code checks twice. The card lets the person enter the claims by hand."
           : "Each claim passed the quote and date checks and waits for review. Accept the ones the email states with accept_claim, or leave them for the person.",
     },
     {
       cards: [{ kind: "claims", messageId: id, evidenceIds: ids }],
       facts: [...claimFacts(evidence), receivedFact(message.message.received_at, ctx.zone)],
-      code: status === "already_imported" ? "already_imported" : "ok",
+      code,
     },
   );
 }
@@ -353,8 +410,9 @@ async function importOne(ctx: ToolContext, google: GoogleServices, raw: string):
 // the person can add. An email matches when its search named senders, when
 // it is from the sender of an email the turn imported, or when the turn
 // imported none. (proposed) An email gmail_import refused for what it holds
-// is not offered.
-export function waitingEmails(ctx: Pick<ToolContext, "intake" | "turn">): Card[] {
+// is not offered, nor one an earlier answer still offers (`offered`, fix
+// round 1, R4).
+export function waitingEmails(ctx: Pick<ToolContext, "intake" | "turn">, offered: ReadonlySet<string> = new Set()): Card[] {
   const turn = ctx.turn;
   if (!turn?.gmailFound?.length) return [];
   const messages = ctx.intake.messages();
@@ -367,7 +425,7 @@ export function waitingEmails(ctx: Pick<ToolContext, "intake" | "turn">): Card[]
   for (const search of turn.gmailFound) {
     for (const e of search.emails) {
       const id = gmailMessageId(e.id);
-      if (seen.has(e.id) || e.alreadyImported || inCase.has(id) || refused.has(e.id)) continue;
+      if (seen.has(e.id) || e.alreadyImported || inCase.has(id) || refused.has(e.id) || offered.has(e.id)) continue;
       const key = senderKey(e.from);
       if (!search.senders && importedNow.length > 0 && !importedSenders.has(key)) continue;
       seen.add(e.id);
@@ -384,7 +442,7 @@ export const GOOGLE_TOOLS: ToolSpec<unknown>[] = [
     label: "Searching your email",
     description:
       `Search the person's Gmail, read only, for likely appointment emails from the last days (1 to ${MAX_DAYS}, default ${DEFAULT_DAYS}), optionally only from the given sender addresses. ` +
-      "The app builds the search itself. Returns each message's id, sender, the office's name as the app shows it, subject, sent time and plain text. Nothing is imported: call gmail_import with the message_ids for the person to review their claims." +
+      "The app builds the search itself. Returns each message's id, the office's name as the app shows it (null while the app calls it the office), the sender's address domain, subject, sent time and plain text. Nothing is imported: call gmail_import with the message_ids for the person to review their claims." +
       UNTRUSTED,
     parameters: {
       type: "object",
@@ -426,8 +484,7 @@ export const GOOGLE_TOOLS: ToolSpec<unknown>[] = [
           days,
           messages: found.map((m) => ({
             message_id: m.id,
-            from: untrustedText(m.from),
-            office: officeOut(officeShown(ctx, { id: gmailMessageId(m.id), from: m.from, receivedAt: m.sentAt })),
+            ...senderOut(m.from, officeShown(ctx, { id: gmailMessageId(m.id), from: m.from, receivedAt: m.sentAt })),
             subject: untrustedText(m.subject),
             sent_at: m.sentAt,
             sent_label: sentLabel(m.sentAt, ctx.zone),
@@ -478,6 +535,7 @@ export const GOOGLE_TOOLS: ToolSpec<unknown>[] = [
         {
           results: done.map((r) => r.output),
           imported: done.filter((r) => r.code === "ok").length,
+          imported_not_read: done.filter((r) => r.code === "not_read").length,
           already_imported: done.filter((r) => r.code === "already_imported").length,
           refused: done.filter((r) => !r.ok).length,
         },

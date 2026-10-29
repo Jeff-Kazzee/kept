@@ -437,6 +437,17 @@ export class GoogleConnection {
     return res;
   }
 
+  // The account of a usable Gmail connection, or null (0018, fix round 1,
+  // R1).
+  gmailAccount(): string | null {
+    try {
+      return this.#connection("gmail").sub;
+    } catch (err) {
+      if (err instanceof GoogleError) return null;
+      throw err;
+    }
+  }
+
   // `sub|calendarId` of a usable calendar connection, or null.
   accountKey(): string | null {
     try {

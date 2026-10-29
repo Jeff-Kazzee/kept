@@ -4,8 +4,9 @@
 // so it is an activity entry like the agent's.
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { GmailNotImportedError, addGmailMessage, type GoogleServices } from "../src/google/tools.ts";
+import { GmailNotImportedError, GmailNotOfferedError, addGmailMessage, type GoogleServices } from "../src/google/tools.ts";
 import { GmailMessageId } from "../src/google/gmail.ts";
+import { offeredIds } from "../src/google/offers.ts";
 import { CaseActions, UndoBlockedError, YOU } from "../src/actions/service.ts";
 import { DEMO_CALENDAR_NAME, demoCalendarText, loadCalendarAsPerson } from "../src/actions/demo.ts";
 import { CaseService, DeleteBlockedError } from "../src/case/service.ts";
@@ -147,10 +148,15 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     // person's import, with its activity entry and Undo, the same as
     // gmail_import's. No model call: the page then reads it through the
     // extract route, as for a paste. Answers the message.
+    // Only an email a chat turn offered for the account connected now and
+    // this case (fix round 1, R1).
     ["POST", /^\/api\/gmail\/([^/]+)\/add$/, async (m, body) => {
       EmptyBody.parse(body ?? {});
       const raw = GmailMessageId.parse(decodeURIComponent(m[1]!));
       if (!access.google) throw new GoogleError("google_not_configured");
+      const account = access.google.connection.gmailAccount();
+      if (account === null) throw new GoogleError("google_not_connected");
+      if (!offeredIds(store, account, kase.generation()).has(raw)) throw new GmailNotOfferedError();
       return (await addGmailMessage(actions, service, access.google.gmail, YOU, raw)).message;
     }],
     ["POST", /^\/api\/messages\/([^/]+)\/extract$/, (m, body) => {
@@ -288,6 +294,7 @@ export function toErrorResponse(err: unknown): ApiResponse {
   }
   if (err instanceof OutOfScopeError) return { status: 422, body: { error: "out_of_scope", message: err.message } };
   if (err instanceof GmailNotImportedError) return { status: 422, body: { error: err.code, message: err.message } };
+  if (err instanceof GmailNotOfferedError) return { status: 409, body: { error: "gmail_not_offered", message: err.message } };
   if (err instanceof NotFoundError) return { status: 404, body: { error: "not_found", message: err.message } };
   if (err instanceof CaseDeletedError) return { status: 409, body: { error: "case_deleted", message: err.message } };
   if (err instanceof CompactionError) return { status: 503, body: { error: "compaction_incomplete", message: err.message } };

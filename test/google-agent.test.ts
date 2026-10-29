@@ -93,7 +93,10 @@ describe("sprint 11: the in-app agent with Gmail and Google Calendar", () => {
       ["accept_claim", "ok"],
     ]);
     const search = turnOutputs(model.calls[1]!.body.input).find((o) => o.name === "gmail_search")!.output;
-    expect(search.messages[0]).toMatchObject({ message_id: "18f0a1", from: { untrusted_text: "Front Desk, Lantern Hill Clinic <front@lanternhill.example>" } });
+    // Fix round 1, R3 (0018): the office as the page names it, null while
+    // held back, and the address domain, never the sender line's name.
+    expect(search.messages[0]).toMatchObject({ message_id: "18f0a1", office: null, sender_domain: "lanternhill.example" });
+    expect(search.messages[0]).not.toHaveProperty("from");
     expect(first.of("action").map((a) => [a.entry.kind, a.entry.actor, a.entry.target?.id])).toEqual([
       ["gmail_message_imported", "agent", "gmail-18f0a1"],
       ["claim_accepted", "agent", "gmail-18f0a1-e1"],

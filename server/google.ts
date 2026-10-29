@@ -108,7 +108,8 @@ export type GoogleRoutesOptions = {
   events?: GoogleCalendarEvents;
   caseDates?: () => { dates: string[]; today: string };
   // Called after a disconnect, and after a connect that names another
-  // account or calendar, to close the open Google intents (CaseActions).
+  // account or calendar, to close the open Google intents (CaseActions) and
+  // drop the Gmail offers (0018).
   onConnectionChange?: (reason: "disconnected" | "account_changed") => void;
 };
 
@@ -220,9 +221,12 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
       const clear = [flowCookie(port, "", true, 0), flowCookie(port, "", false, 0)];
       const cookie = (secure: boolean) => cookieOf(cookieHeader, flowCookieName(port, secure));
       try {
-        const before = connection.accountKey();
+        // The Gmail account counts too, for a connection without the
+        // calendar (0018, fix round 1, R1).
+        const account = () => `${connection.accountKey()}|${connection.gmailAccount()}`;
+        const before = account();
         await connection.finishConnect({ state: q.get("state"), code: q.get("code"), error: q.get("error"), cookie });
-        if (connection.accountKey() !== before) options.onConnectionChange?.("account_changed");
+        if (account() !== before) options.onConnectionChange?.("account_changed");
         // The clash checks read the new calendar. A failure here leaves them
         // as they were, and the connect still stands.
         await refreshEvents().catch(() => {});

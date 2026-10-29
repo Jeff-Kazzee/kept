@@ -415,7 +415,8 @@ describe("Gmail tools: text is untrusted and goes through the paste checks", () 
     const r = await c.run("gmail_search", { days: null, senders: null });
     expect(r.ok).toBe(true);
     const msg = (r.output.messages as any[])[0];
-    expect(msg).toMatchObject({ message_id: "18f0a1", from: { untrusted_text: "Front Desk, Lantern Hill Clinic <front@lanternhill.example>" }, subject: { untrusted_text: "Appointment confirmation" }, already_imported: false });
+    expect(msg).toMatchObject({ message_id: "18f0a1", office: null, sender_domain: "lanternhill.example", subject: { untrusted_text: "Appointment confirmation" }, already_imported: false });
+    expect(msg).not.toHaveProperty("from");
     expect(msg.body.untrusted_text).toContain("This confirms your appointment");
     expect(c.intake.messages()).toHaveLength(0);
     // A read writes no activity entry.

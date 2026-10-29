@@ -6,8 +6,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { OutOfScopeError } from "../src/domain/scope.ts";
 import { createApi } from "../server/api.ts";
+import { createWorkspace } from "../server/workspace.ts";
+import { gmailOffers, recordGmailOffers } from "../src/google/offers.ts";
+import { BudgetError } from "../src/model/meter.ts";
 import { loggedPath } from "../server/request-log.ts";
 import { CaseActions, YOU } from "../src/actions/service.ts";
 import { checkAnswer } from "../src/agent/grounding.ts";
@@ -16,7 +20,7 @@ import { GoogleCalendar } from "../src/google/calendar.ts";
 import { GoogleConnection } from "../src/google/connection.ts";
 import { GoogleCalendarEvents } from "../src/google/events.ts";
 import { Gmail } from "../src/google/gmail.ts";
-import { MAX_GMAIL_IMPORTS, googleToolByName, type GoogleServices } from "../src/google/tools.ts";
+import { MAX_GMAIL_IMPORTS, addGmailMessage, googleToolByName, type GoogleServices } from "../src/google/tools.ts";
 import { SecretsStore } from "../src/model/providers/secrets.ts";
 import { RecordedModelClient, type Recording } from "../src/model/recorded.ts";
 import { EventStore } from "../src/store/event-log.ts";
@@ -91,6 +95,7 @@ recordings.push({ ...recordings[0]!, message_id: "m-thu" });
 
 const dirs: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -118,6 +123,15 @@ async function connected(options: { other?: boolean } = {}) {
 }
 
 const waiting = (cards: Card[]) => cards.filter((c) => c.kind === "gmail_waiting");
+
+// A turn that imports the first email and leaves the second, so code
+// offers the second with "Add it".
+async function offerSecond(app: Awaited<ReturnType<typeof connected>>["app"]) {
+  const model = sequence(SEARCH(), reply(fnCall("gmail_import", { message_ids: [FIRST.id] })), reply(message("I imported one email from the office.")));
+  const r = await say(agentFor(app, model), app, "Check my Gmail.");
+  expect(waiting(r.report.cards).map((c) => (c as { gmailId: string }).gmailId)).toEqual([SECOND.id]);
+  return r;
+}
 const SEARCH = () => reply(fnCall("gmail_search", { days: null, senders: null }));
 
 describe("sprint 13E, H1: one ask imports every matching email", () => {
@@ -247,6 +261,11 @@ describe("sprint 13E, H2: code offers the found emails the turn did not add", ()
 
   it("Add it is the person's import: logged, undoable, no model call, and the page reads it afterwards", async () => {
     const { app, api } = await connected();
+    await offerSecond(app);
+    // The turn's own import is undone, so the activity holds only Add it.
+    const turnActions = new CaseActions(app.store, app);
+    await turnActions.undoEntry(YOU, turnActions.activity().entries.find((e) => e.kind === "gmail_message_imported")!.id, turnActions.activityVersion());
+    const before = turnActions.activity().entries.length;
     const generation = app.kase.generation();
     const res = await api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation });
     expect(res.status).toBe(200);
@@ -254,10 +273,11 @@ describe("sprint 13E, H2: code offers the found emails the turn did not add", ()
     // Not read yet: no model call was made.
     expect(app.intake.evidence()).toEqual([]);
     const activity = (await api({ method: "GET", path: "/api/activity", body: undefined })).body as { activityVersion: number; entries: Array<{ id: string; kind: string; actor: string; undoable: boolean }> };
-    expect(activity.entries.map((e) => [e.kind, e.actor, e.undoable])).toEqual([["gmail_message_imported", "you", true]]);
+    expect(activity.entries).toHaveLength(before + 1);
+    expect(activity.entries.slice(0, 1).map((e) => [e.kind, e.actor, e.undoable])).toEqual([["gmail_message_imported", "you", true]]);
     // A second Add finds the same message and logs nothing.
     expect((await api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation })).status).toBe(200);
-    expect(((await api({ method: "GET", path: "/api/activity", body: undefined })).body as typeof activity).entries).toHaveLength(1);
+    expect(((await api({ method: "GET", path: "/api/activity", body: undefined })).body as typeof activity).entries).toHaveLength(before + 1);
     // The page then reads it through the extract route, as for a paste.
     const m = app.intake.message(`gmail-${SECOND.id}`);
     expect((await api({ method: "POST", path: `/api/messages/gmail-${SECOND.id}/extract`, body: { expectedVersion: m.version }, generation })).status).toBe(200);
@@ -267,7 +287,8 @@ describe("sprint 13E, H2: code offers the found emails the turn did not add", ()
     ]);
     // Undo removes it.
     const now = (await api({ method: "GET", path: "/api/activity", body: undefined })).body as typeof activity;
-    const undone = await api({ method: "POST", path: `/api/activity/${now.entries.at(-1)!.id}/undo`, body: { expectedVersion: now.activityVersion }, generation });
+    const added = now.entries.find((e) => e.kind === "gmail_message_imported" && e.actor === "you")!;
+    const undone = await api({ method: "POST", path: `/api/activity/${added.id}/undo`, body: { expectedVersion: now.activityVersion }, generation });
     expect(undone.status).toBe(200);
     expect(app.intake.messages()).toEqual([]);
   });
@@ -307,14 +328,23 @@ describe("sprint 13E, H3: names and times in the tool outputs", () => {
     expect(after.messages.map((m: { office: unknown }) => m.office)).toEqual([{ untrusted_text: "Lantern Hill Clinic" }, { untrusted_text: "Lantern Hill Clinic" }]);
     expect(JSON.stringify([before.messages.map((m: { office: unknown }) => m.office), accepted.offices])).not.toContain("@");
     // The import gives the received label too.
-    expect(outputs[1]!.output.results[0].source).toMatchObject({ office: null, received_label: "Wednesday 10/28 6:41 PM" });
+    expect(outputs[1]!.output.results[0].source).toMatchObject({ office: null, sender_domain: "lanternhill.example", received_label: "Wednesday 10/28 6:41 PM" });
+    expect(outputs[1]!.output.results[0].source).not.toHaveProperty("from");
   });
 
   it("an answer that names an email by its sender and sent time passes the checks", async () => {
     const { app } = await connected();
-    const model = sequence(SEARCH(), reply(message("The email from Lantern Hill Clinic sent Wednesday 10/28 6:43 PM is not in your case yet.")));
+    // Fix round 1, R3: while office is null the page says "the office", and
+    // the search gives no sender name to copy.
+    const model = sequence(SEARCH(), reply(message("The email from the office sent Wednesday 10/28 6:43 PM is not in your case yet.")));
     const r = await say(agentFor(app, model), app, "What is in my Gmail?");
     expect([r.report.outcome, r.report.problems]).toEqual(["answered", [[]]]);
+    const found = turnOutputs(model.calls[1]!.body.input)[0]!.output.messages;
+    expect(found.map((m: Record<string, unknown>) => [m.office, m.sender_domain, "from" in m])).toEqual([
+      [null, "lanternhill.example", false],
+      [null, "lanternhill.example", false],
+    ]);
+    expect(JSON.stringify(found.map(({ body: _b, ...rest }: Record<string, unknown>) => rest))).not.toMatch(/lantern hill|front@/);
     // Without the search the same time is not grounded.
     expect(checkAnswer("The email sent Wednesday 10/28 6:43 PM.", { facts: [], statuses: new Set(), today: "2026-11-05" })).toContain("ungrounded");
   });
@@ -361,5 +391,163 @@ describe("sprint 13E, H5 and H6: an event removed in Google Calendar", () => {
     const { fake: _f, ...rest } = await connected();
     const r2 = await say(agentFor({ ...rest.app, google: undefined } as never, bad), rest.app, "Put it on my calendar.");
     expect(r2.of("tool.finished")[0]).not.toHaveProperty("declined");
+  });
+});
+
+describe("sprint 13E fix round 1, R1: Add it imports only what code offered", () => {
+  it("refuses an id no turn offered, and imports nothing", async () => {
+    const { app, api } = await connected();
+    const res = await api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation: app.kase.generation() });
+    expect(res).toMatchObject({ status: 409, body: { error: "gmail_not_offered" } });
+    expect(app.intake.messages()).toEqual([]);
+    expect(new CaseActions(app.store, app).activity().entries).toEqual([]);
+    // Found by a search but not offered: the turn imported it.
+    await offerSecond(app);
+    await new CaseActions(app.store, app).undoEntry(YOU, new CaseActions(app.store, app).activity().entries.find((e) => e.kind === "gmail_message_imported")!.id, new CaseActions(app.store, app).activityVersion());
+    expect((await api({ method: "POST", path: `/api/gmail/${FIRST.id}/add`, body: {}, generation: app.kase.generation() })).status).toBe(409);
+    expect((await api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation: app.kase.generation() })).status).toBe(200);
+  });
+
+  it("refuses an id offered before Delete case", async () => {
+    const { app, api } = await connected();
+    await offerSecond(app);
+    expect(gmailOffers(app.store)).toHaveLength(1);
+    app.kase.deleteCase(app.kase.caseVersion(), "DELETE");
+    expect(gmailOffers(app.store)).toEqual([]);
+    const res = await api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation: app.kase.generation() });
+    expect(res).toMatchObject({ status: 409, body: { error: "gmail_not_offered" } });
+    expect(app.intake.messages()).toEqual([]);
+  });
+
+  it("refuses an id offered under another Google account", async () => {
+    const { app, api, fake, google } = await connected();
+    await offerSecond(app);
+    // The same id in another mailbox, after the person connects as someone else.
+    fake.account = { sub: "2000002", email: "other.demo@example.com" };
+    const flow = google.connection.startConnect({ expectedVersion: google.connection.status().version, features: { gmail: true, calendar: true }, calendarId: "primary", redirectUri: "http://127.0.0.1:5192/auth/google/callback" });
+    const back = fake.consent(flow.authorizeUrl);
+    await google.connection.finishConnect({ state: back.searchParams.get("state"), code: back.searchParams.get("code"), error: null, cookie: flow.cookie });
+    expect(google.connection.gmailAccount()).toBe("2000002");
+    const res = await api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation: app.kase.generation() });
+    expect(res).toMatchObject({ status: 409, body: { error: "gmail_not_offered" } });
+    expect(app.intake.messages().map((m) => m.id)).toEqual([`gmail-${FIRST.id}`]);
+  });
+
+  it("the app drops every offer on a disconnect and on a connect as another account", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "sprint13e-ws-"));
+    dirs.push(dir);
+    const fake = new FakeGoogle();
+    const ws = createWorkspace({ dbPath: path.join(dir, "app.sqlite"), secretsPath: path.join(dir, "app-secrets.sqlite"), port: 5197, extraHosts: [], googleClient: FAKE_CLIENT, googleFetch: fake.fetch, serverMetaKey: null });
+    try {
+      const host = "127.0.0.1:5197";
+      const route = (p: string, body: unknown) => ws.googleRoutes.api({ method: "POST", path: p, body, generation: ws.kase.generation(), host, secure: false });
+      const connect = async () => {
+        const started = await route("/api/google/connect", { expectedVersion: ws.googleConnection.status().version });
+        const back = fake.consent((started.body as { authorizeUrl: string }).authorizeUrl);
+        await ws.googleRoutes.callback(back, started.setCookie!.split(";")[0]!);
+      };
+      const offer = () => recordGmailOffers(ws.store, [{ gmail_id: SECOND.id, account: ws.googleConnection.gmailAccount()!, generation: ws.kase.generation() }]);
+      await connect();
+      offer();
+      expect(gmailOffers(ws.store)).toHaveLength(1);
+      expect((await route("/api/google/disconnect", { expectedVersion: ws.googleConnection.status().version })).status).toBe(200);
+      expect(gmailOffers(ws.store)).toEqual([]);
+      await connect();
+      offer();
+      // The same account again keeps them. Another account drops them.
+      await connect();
+      expect(gmailOffers(ws.store)).toHaveLength(1);
+      fake.account = { sub: "2000002", email: "other.demo@example.com" };
+      await connect();
+      expect(gmailOffers(ws.store)).toEqual([]);
+      // Code's bookkeeping, not a line of the case history.
+      expect(ws.kase.history().some((h) => h.streamId === "gmail_offers")).toBe(false);
+    } finally {
+      ws.close();
+    }
+  });
+});
+
+describe("sprint 13E fix round 1, R2: import and read are one outcome per email", () => {
+  async function importCtx(app: Awaited<ReturnType<typeof connected>>["app"], gmail: GoogleServices["gmail"]) {
+    return {
+      ...app,
+      google: { ...app.google, gmail },
+      actions: new CaseActions(app.store, app),
+      by: { actor: "agent" as const },
+      userText: "Import them.",
+      sentAt: CLOCK(),
+      zone: app.kase.timeZone(),
+      today: "2026-11-05",
+      messageIdFor: () => "x",
+      turn: { paste: false, imported: [], gmailImported: [], gmailFound: [], gmailRefused: [] as string[] },
+    };
+  }
+
+  it("an email added whose read fails is reported added and not read, the activity agrees, and an unexpected error is one email's result", async () => {
+    const { app, fake } = await connected();
+    // The read of this one is refused after the email was added.
+    email(fake, { id: "19a0nr", at: FIRST.at, date: FIRST.date }, "Your visit on Friday, November 13 at 9:15 AM is set.");
+    const extract = app.intake.extract.bind(app.intake);
+    vi.spyOn(app.intake, "extract").mockImplementation((id, o) => (id === "gmail-19a0nr" ? Promise.reject(new OutOfScopeError()) : extract(id, o)));
+    const real = app.google.gmail;
+    const gmail = { get: async (id: string) => (id === "19a0bx" ? Promise.reject(new Error("unexpected")) : real.get(id)) } as unknown as GoogleServices["gmail"];
+    const ctx = await importCtx(app, gmail);
+    const run = googleToolByName("gmail_import")!;
+    const r = await run.run(ctx as never, run.input.parse({ message_ids: ["19a0nr", "19a0bx", FIRST.id] }));
+    const out = r.output as { results: Array<Record<string, unknown>>; imported: number; imported_not_read: number; refused: number };
+    expect([r.ok, r.code]).toEqual([true, "partial"]);
+    expect(out.results.map((x) => [x.message_id, x.status ?? null, x.extraction ?? null, x.not_read ?? x.error ?? null])).toEqual([
+      ["19a0nr", "imported", "imported", "out_of_scope"],
+      ["19a0bx", null, null, "server_error"],
+      [FIRST.id, "imported", "claims_pending", null],
+    ]);
+    expect([out.imported, out.imported_not_read, out.refused]).toEqual([1, 1, 1]);
+    expect(String(out.results[0]!.note)).toContain("it was not read because it reads as clinical content");
+    // The activity says what the output says: two emails added.
+    const entries = ctx.actions.activity().entries.filter((e) => e.kind === "gmail_message_imported");
+    expect(entries.map((e) => e.target?.id).sort()).toEqual(["gmail-19a001", "gmail-19a0nr"]);
+    expect(ctx.turn.gmailRefused).toEqual([]);
+    // Its card is there, unread, so the person can read it again.
+    expect(r.cards).toContainEqual({ kind: "claims", messageId: "gmail-19a0nr", evidenceIds: [] });
+  });
+
+  it("an error that ends the turn still ends it", async () => {
+    const { app } = await connected();
+    const gmail = { get: async () => Promise.reject(new BudgetError()) } as unknown as GoogleServices["gmail"];
+    const run = googleToolByName("gmail_import")!;
+    await expect(run.run((await importCtx(app, gmail)) as never, run.input.parse({ message_ids: [FIRST.id] }))).rejects.toBeInstanceOf(BudgetError);
+  });
+});
+
+describe("sprint 13E fix round 1, R4: one offer per email across turns", () => {
+  it("a later search does not offer an email an earlier answer still offers, and after Undo of its import none is offered twice", async () => {
+    const { app } = await connected();
+    await offerSecond(app);
+    const again = sequence(SEARCH(), reply(message("Nothing new.")));
+    const r = await say(agentFor(app, again), app, "Check my Gmail again.");
+    expect(waiting(r.report.cards)).toEqual([]);
+    expect(gmailOffers(app.store).map((o) => o.gmail_id)).toEqual([SECOND.id]);
+  });
+});
+
+describe("sprint 13E fix round 1, R5: only the tool says it chose not to act", () => {
+  it("the paste rule's refusal is declined, and gmail_import's waits_for_person for an unread email is not", async () => {
+    const { app } = await connected();
+    // In the case and never read, from an earlier step.
+    await addGmailMessage(new CaseActions(app.store, app), app.intake, app.google.gmail, YOU, SECOND.id);
+    const paste = sequence(
+      reply(fnCall("calendar_sync_slot", { slot_key: "2026-11-12T10:30", restore_removed: null })),
+      reply(fnCall("gmail_import", { message_ids: [SECOND.id] })),
+      reply(message("Both wait for your next message.")),
+    );
+    const r = await say(agentFor(app, paste), app, "Use the clinic email.\nAlso add it to my calendar.");
+    expect(r.report.tools).toEqual([
+      { tool: "calendar_sync_slot", ok: false, code: "waits_for_person" },
+      { tool: "gmail_import", ok: false, code: "waits_for_person" },
+    ]);
+    const finished = r.of("tool.finished");
+    expect(finished[0]).toMatchObject({ ok: false, declined: true });
+    expect(finished[1]).not.toHaveProperty("declined");
   });
 });

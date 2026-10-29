@@ -24,6 +24,7 @@
 // crosses a Delete case is refused (G9).
 import { CalendarTurn } from "../google/events.ts";
 import { waitingEmails } from "../google/tools.ts";
+import { GMAIL_OFFERS_STREAM, offeredIds, recordGmailOffers } from "../google/offers.ts";
 import { randomUUID } from "node:crypto";
 import { cleanText } from "../../mcp/sanitize.ts";
 import { DEFAULT_EXTRACTION_EFFORT, type Effort } from "../domain/claim.ts";
@@ -345,7 +346,7 @@ export class CaseAgent {
     emit({ event: "turn.started", data: { turnId, userMessageId: userId } });
     // Finding 11: what the case held when the turn started, apart from the
     // chat, the settings and the two logs, to tell whether a tool wrote.
-    const keep = [CHAT_STREAM, SETTINGS_STREAM, ACCESS_LOG_STREAM, ACTIVITY_STREAM];
+    const keep = [CHAT_STREAM, SETTINGS_STREAM, ACCESS_LOG_STREAM, ACTIVITY_STREAM, GMAIL_OFFERS_STREAM];
     const seqAtStart = this.#store.latestSeqExcept(keep);
     const wrote = () => (report.wrote ||= this.#store.latestSeqExcept(keep) > seqAtStart);
 
@@ -474,9 +475,10 @@ export class CaseAgent {
             }
             report.tools.push({ tool: name, ok: result.ok, code: result.code });
             items.push({ type: "function_call_output", call_id: fc.call_id, output: JSON.stringify(result.output) });
-            // 0018, H6: a refusal by the app's rules is a step that chose
-            // not to act, not one that failed.
-            const declined = !result.ok && (result.declined === true || result.code === "waits_for_person");
+            // 0018, H6: a tool that says it chose not to act, by a rule, is
+            // not a step that failed. Only the tool says so (fix round 1,
+            // R5).
+            const declined = !result.ok && result.declined === true;
             emit({ event: "tool.finished", data: { turnId, callId: fc.call_id, ok: result.ok, ...(declined ? { declined } : {}) } });
             // G8: one retry for a malformed call.
             if (malformed > this.#limits.maxMalformedCalls) throw new TurnStop("stopped", MALFORMED_TEXT, null);
@@ -540,8 +542,20 @@ export class CaseAgent {
     }
     wrote();
     // 0018, H2: the emails the turn found and did not add, as cards the
-    // person can act on, whatever the model did.
-    if (outcome !== "declined") waitingEmails(ctx).forEach(addCard);
+    // person can act on, whatever the model did. Each offer is recorded
+    // with the account and the case generation, and only an offered email
+    // can be added (fix round 1, R1). An email an earlier answer still
+    // offers is not offered again (R4).
+    // The connection is read only after a turn that searched Gmail.
+    const gmailAccount = outcome !== "declined" && turn.gmailFound!.length > 0 ? (this.#services.google?.connection.gmailAccount() ?? null) : null;
+    if (gmailAccount !== null) {
+      const offered = waitingEmails(ctx, offeredIds(this.#store, gmailAccount, input.generation));
+      recordGmailOffers(
+        this.#store,
+        offered.flatMap((c) => (c.kind === "gmail_waiting" ? [{ gmail_id: c.gmailId, account: gmailAccount, generation: input.generation }] : [])),
+      );
+      offered.forEach(addCard);
+    }
 
     const chips = chipsFor(slots, outcome === "answered" ? finalText : null, ctx.today);
     const answerId = `cm${chatVersion + 1}`;

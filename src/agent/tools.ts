@@ -577,7 +577,8 @@ const PASTE_TURN_REFUSED: ReadonlySet<string> = new Set([
   ...GOOGLE_WRITE_TOOLS,
 ]);
 
-const pasteRefusal = (): ToolResult => failure("waits_for_person", PASTE_TURN_NOTICE, { cards: [{ kind: "notice", text: PASTE_TURN_NOTICE }] });
+// A step that chose not to act, by the paste rule (0018, H6).
+const pasteRefusal = (): ToolResult => ({ ...failure("waits_for_person", PASTE_TURN_NOTICE, { cards: [{ kind: "notice", text: PASTE_TURN_NOTICE }] }), declined: true });
 
 // For a tool that writes only sometimes: the refusal in a paste turn.
 const writeRefusal = (ctx: ToolContext): ToolResult | null => (ctx.turn?.paste ? pasteRefusal() : null);

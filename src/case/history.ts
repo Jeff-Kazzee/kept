@@ -20,11 +20,14 @@ import type { ProfileEvent } from "./service.ts";
 import type { ChatEventData } from "../agent/events.ts";
 import { ACTIVITY_STREAM } from "../activity/events.ts";
 import { SETTINGS_STREAM } from "../settings/events.ts";
+import { GMAIL_OFFERS_STREAM } from "../google/offers.ts";
 
 // Streams the history leaves out: settings, the activity log, which says
 // the same things in its own words, and streams from before sprint 8.
 const LEFT_OUT = ["grant:", "proposal:"];
-const leftOut = (streamId: string) => streamId === SETTINGS_STREAM || streamId === ACTIVITY_STREAM || LEFT_OUT.some((p) => streamId.startsWith(p));
+// The Gmail offers are code's bookkeeping for "Add it" (0018).
+const leftOut = (streamId: string) =>
+  streamId === SETTINGS_STREAM || streamId === ACTIVITY_STREAM || streamId === GMAIL_OFFERS_STREAM || LEFT_OUT.some((p) => streamId.startsWith(p));
 
 export type HistoryEntry = {
   seq: number;
