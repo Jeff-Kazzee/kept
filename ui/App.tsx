@@ -29,7 +29,7 @@ import { SchedulePanel, TABS, railLabel, waitingCount, type PanelTab } from "./s
 import { slotElementId } from "./schedule/Agenda.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
 import { LAPTOP, TABLET_UP, chipRef, findChip, focusSoon, useMedia, type ChipRef } from "./layout.ts";
-import { ConnectionsPage, SettingsPage, UsagePage, ZoneNotice } from "./pages/Settings.tsx";
+import { CASE_DELETED_TEXT, ConnectionsPage, SettingsPage, UsagePage, ZoneNotice } from "./pages/Settings.tsx";
 import { Avatar } from "./shell/AccountMenu.tsx";
 import { AgentAccessPage, PageFrame } from "./shell/Pages.tsx";
 import { Sidebar, type SideLayout } from "./shell/Sidebar.tsx";
@@ -685,7 +685,7 @@ function Shell({
               <PageFrame onBack={back}>
                 {view === "connections" && <ConnectionsPage modelClient={state.modelClient} run={run} />}
                 {view === "access" && <AgentAccessPage onActivity={() => openPanel("activity")} />}
-                {view === "settings" && <SettingsPage version={state.caseVersion} erasePending={state.erasePending} run={run} />}
+                {view === "settings" && <SettingsPage version={state.caseVersion} erasePending={state.erasePending} run={run} onCaseDeleted={() => toast("info", CASE_DELETED_TEXT)} />}
                 {view === "usage" && <UsagePage run={run} />}
               </PageFrame>
             </section>

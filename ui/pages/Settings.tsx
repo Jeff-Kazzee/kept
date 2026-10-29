@@ -88,7 +88,7 @@ export function ConnectionsPage({ modelClient, run }: { modelClient: string; run
 
 // Settings: the time zone, the theme, what the app is, Delete case, and on
 // the hosted site Delete account.
-export function SettingsPage({ version, erasePending, run }: { version: number; erasePending: boolean; run: Run }) {
+export function SettingsPage({ version, erasePending, run, onCaseDeleted }: { version: number; erasePending: boolean; run: Run; onCaseDeleted?: () => void }) {
   const { hosted, signedOut } = useAgent();
   return (
     <div className="stack settings">
@@ -107,7 +107,7 @@ export function SettingsPage({ version, erasePending, run }: { version: number; 
         </p>
         <p className="small muted">Appointments are built by code from the accepted facts. Model text never changes an appointment. A clash check assumes a length for each appointment, because messages do not state an end time. The info button beside Appointments shows it.</p>
       </section>
-      <DeleteCasePanel version={version} erasePending={erasePending} run={run} />
+      <DeleteCasePanel version={version} erasePending={erasePending} run={run} onDeleted={onCaseDeleted} />
       {hosted && <DeleteAccountPanel run={run} onDeleted={signedOut} />}
     </div>
   );
@@ -577,9 +577,12 @@ function CalendarReadButton({ run, onRead }: { run: Run; onRead: (read: Calendar
   );
 }
 
+// What the page says once Delete case finished (0017, E5).
+export const CASE_DELETED_TEXT = "The case was deleted. Its messages, facts, replies, chat and activity are erased. Events it added to Google Calendar stay there.";
+
 // Delete case. The only permanent deletion, with its own typed
-// confirmation. No agent can reach it.
-export function DeleteCasePanel({ version, erasePending = false, run }: { version: number; erasePending?: boolean; run: Run }) {
+// confirmation. No agent can reach it. `onDeleted` runs once it finished.
+export function DeleteCasePanel({ version, erasePending = false, run, onDeleted }: { version: number; erasePending?: boolean; run: Run; onDeleted?: () => void }) {
   const [typed, setTyped] = useState("");
   return (
     <section className="card danger-zone">
@@ -607,6 +610,7 @@ export function DeleteCasePanel({ version, erasePending = false, run }: { versio
           action={async () => {
             await api.deleteCase(version, typed);
             setTyped("");
+            onDeleted?.();
           }}
         >
           Delete this case and all its data permanently. This cannot be undone.
