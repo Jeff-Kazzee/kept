@@ -163,12 +163,9 @@ export function createWorkspace(o: WorkspaceOptions) {
     onCallbackError: (code) => log(`Google connect failed: ${code}.`),
     events: googleEvents,
     caseDates,
-    onConnectionChange: (reason) => {
-      googleActions.closeGoogleIntents(reason);
-      // 0018, fix round 1, R1: no email offered under the old connection
-      // can be added.
-      dropGmailOffers(store, reason);
-    },
+    onConnectionChange: (reason) => googleActions.closeGoogleIntents(reason),
+    // 0018: no email offered under the old account can be added.
+    onGmailAccountChange: (reason) => dropGmailOffers(store, reason),
   });
 
   return {

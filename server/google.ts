@@ -108,9 +108,11 @@ export type GoogleRoutesOptions = {
   events?: GoogleCalendarEvents;
   caseDates?: () => { dates: string[]; today: string };
   // Called after a disconnect, and after a connect that names another
-  // account or calendar, to close the open Google intents (CaseActions) and
-  // drop the Gmail offers (0018).
+  // account or calendar, to close the open Google intents (CaseActions).
   onConnectionChange?: (reason: "disconnected" | "account_changed") => void;
+  // Called after a disconnect, and after a connect as another Google
+  // account, to drop the Gmail offers (0018, fix round 2, F4).
+  onGmailAccountChange?: (reason: "disconnected" | "account_changed") => void;
 };
 
 export function createGoogleRoutes(options: GoogleRoutesOptions) {
@@ -173,6 +175,7 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
         // Review round 4, item 3: open Google intents end with the
         // connection they were made for.
         options.onConnectionChange?.("disconnected");
+        options.onGmailAccountChange?.("disconnected");
         return { status: 200, body: { ...connection.status(), revoked } };
       },
     },
@@ -221,12 +224,13 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
       const clear = [flowCookie(port, "", true, 0), flowCookie(port, "", false, 0)];
       const cookie = (secure: boolean) => cookieOf(cookieHeader, flowCookieName(port, secure));
       try {
-        // The Gmail account counts too, for a connection without the
-        // calendar (0018, fix round 1, R1).
-        const account = () => `${connection.accountKey()}|${connection.gmailAccount()}`;
-        const before = account();
+        const before = connection.accountKey();
+        // Fix round 2, F4: the Gmail offers go only when the account
+        // itself changes, not the calendar or a reconnect of the same one.
+        const accountBefore = connection.storedAccount();
         await connection.finishConnect({ state: q.get("state"), code: q.get("code"), error: q.get("error"), cookie });
-        if (account() !== before) options.onConnectionChange?.("account_changed");
+        if (connection.accountKey() !== before) options.onConnectionChange?.("account_changed");
+        if (connection.storedAccount() !== accountBefore) options.onGmailAccountChange?.("account_changed");
         // The clash checks read the new calendar. A failure here leaves them
         // as they were, and the connect still stands.
         await refreshEvents().catch(() => {});

@@ -448,6 +448,13 @@ export class GoogleConnection {
     }
   }
 
+  // The account of the stored connection, also one that needs reconnecting,
+  // or null. A reconnect of the same account keeps it (fix round 2, F4).
+  storedAccount(): string | null {
+    const { stored, damaged } = this.#state();
+    return damaged ? null : (stored.connection?.sub ?? null);
+  }
+
   // `sub|calendarId` of a usable calendar connection, or null.
   accountKey(): string | null {
     try {

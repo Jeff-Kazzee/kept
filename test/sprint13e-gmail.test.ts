@@ -479,6 +479,61 @@ describe("sprint 13E fix round 1, R1: Add it imports only what code offered", ()
   });
 });
 
+describe("sprint 13E fix round 2, F4: Gmail offers drop only when the Gmail account changes", () => {
+  function workspace() {
+    const dir = mkdtempSync(path.join(tmpdir(), "sprint13e-f4-"));
+    dirs.push(dir);
+    const fake = new FakeGoogle();
+    const ws = createWorkspace({ dbPath: path.join(dir, "app.sqlite"), secretsPath: path.join(dir, "app-secrets.sqlite"), port: 5197, extraHosts: [], googleClient: FAKE_CLIENT, googleFetch: fake.fetch, serverMetaKey: null });
+    const route = (p: string, body: unknown) => ws.googleRoutes.api({ method: "POST", path: p, body, generation: ws.kase.generation(), host: "127.0.0.1:5197", secure: false });
+    const connect = async (options: Record<string, unknown> = {}) => {
+      const started = await route("/api/google/connect", { expectedVersion: ws.googleConnection.status().version, ...options });
+      const back = fake.consent((started.body as { authorizeUrl: string }).authorizeUrl);
+      await ws.googleRoutes.callback(back, started.setCookie!.split(";")[0]!);
+    };
+    const offer = () => recordGmailOffers(ws.store, [{ gmail_id: SECOND.id, account: ws.googleConnection.gmailAccount()!, generation: ws.kase.generation() }]);
+    return { fake, ws, connect, offer };
+  }
+
+  it("keeps them when only the calendar changes, and when the same account reconnects after it expired", async () => {
+    const { fake, ws, connect, offer } = workspace();
+    try {
+      await connect();
+      offer();
+      await connect({ calendarId: "work@group.calendar.google.com" });
+      expect(ws.googleConnection.accountKey()).toBe(`${fake.account.sub}|work@group.calendar.google.com`);
+      expect(gmailOffers(ws.store)).toHaveLength(1);
+      // Google refuses the grant: the connection needs reconnecting.
+      fake.access.clear();
+      fake.refreshFails = "invalid_grant";
+      await new Gmail(ws.googleConnection).search({ days: 30, senders: [] }).catch(() => {});
+      expect(ws.googleConnection.status().needsReconnect).toBe(true);
+      fake.refreshFails = null;
+      await connect();
+      expect(ws.googleConnection.gmailAccount()).toBe(fake.account.sub);
+      expect(gmailOffers(ws.store)).toHaveLength(1);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it("drops them when a Gmail-only connection reconnects as another account", async () => {
+    const { fake, ws, connect, offer } = workspace();
+    try {
+      await connect({ gmail: true, calendar: false });
+      expect(ws.googleConnection.accountKey()).toBeNull();
+      offer();
+      expect(gmailOffers(ws.store)).toHaveLength(1);
+      fake.account = { sub: "2000002", email: "other.demo@example.com" };
+      await connect({ gmail: true, calendar: false });
+      expect(ws.googleConnection.gmailAccount()).toBe("2000002");
+      expect(gmailOffers(ws.store)).toEqual([]);
+    } finally {
+      ws.close();
+    }
+  });
+});
+
 describe("sprint 13E fix round 1, R2: import and read are one outcome per email", () => {
   async function importCtx(app: Awaited<ReturnType<typeof connected>>["app"], gmail: GoogleServices["gmail"]) {
     return {
