@@ -292,7 +292,7 @@ export const officeOut = (name: string | null) => (name === null ? null : untrus
 // model. The office's name as the page shows it, or null for "the office",
 // and the domain of the sender's address. Never the sender line's display
 // name, so the model cannot name the office before the page does.
-function senderOut(from: string, office: string | null): { office: { untrusted_text: string } | null; sender_domain: string | null } {
+export function senderOut(from: string, office: string | null): { office: { untrusted_text: string } | null; sender_domain: string | null } {
   const domain = /@([A-Za-z0-9.-]{1,190})>?\s*$/.exec(from.trim())?.[1]?.toLowerCase() ?? null;
   return { office: officeOut(office), sender_domain: domain };
 }

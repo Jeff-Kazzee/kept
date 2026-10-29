@@ -24,7 +24,7 @@ import { MAX_GMAIL_IMPORTS, addGmailMessage, googleToolByName, type GoogleServic
 import { SecretsStore } from "../src/model/providers/secrets.ts";
 import { RecordedModelClient, type Recording } from "../src/model/recorded.ts";
 import { EventStore } from "../src/store/event-log.ts";
-import { CLOCK, agentFor, fnCall, message, reply, say, sequence, services, turnOutputs } from "./agent-helpers.ts";
+import { CLOCK, agentFor, fixtureMessage, fnCall, message, reply, say, sequence, services, turnOutputs } from "./agent-helpers.ts";
 import { FAKE_CLIENT, FakeGoogle, gmailMessage } from "./google-fake.ts";
 
 // Two emails from one office, as in run 3. The account's display name is
@@ -549,5 +549,23 @@ describe("sprint 13E fix round 1, R5: only the tool says it chose not to act", (
     const finished = r.of("tool.finished");
     expect(finished[0]).toMatchObject({ ok: false, declined: true });
     expect(finished[1]).not.toHaveProperty("declined");
+  });
+});
+
+describe("sprint 13E fix round 2, F2: the paste import gives no sender line", () => {
+  it("import_message returns the office as the page names it and the address domain, never the address or the sender line", async () => {
+    const app = services(new EventStore(":memory:", CLOCK));
+    const m1 = fixtureMessage("m1");
+    const from = "lantern hill <front@lanternhill.example>";
+    const model = sequence(reply(fnCall("import_message", { text: m1.text, channel: "sms", from, received_at: null })), reply(message("Imported.")));
+    const r = await say(agentFor(app, model), app, `From: ${from}\n\n${m1.text}`);
+    expect(r.report.tools).toEqual([{ tool: "import_message", ok: true, code: "ok" }]);
+    // The sender was kept, as the person's paste named it.
+    expect(app.intake.message("m1").message.from).toBe(from);
+    const out = turnOutputs(model.calls[1]!.body.input).find((o) => o.name === "import_message")!.output;
+    expect(out.source).not.toHaveProperty("from");
+    // The name the page shows for a pasted sender is the paste's own name.
+    expect(out.source).toMatchObject({ office: { untrusted_text: "lantern hill" }, sender_domain: "lanternhill.example" });
+    expect(JSON.stringify(out)).not.toMatch(/front@|<front/);
   });
 });

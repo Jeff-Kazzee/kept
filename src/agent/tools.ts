@@ -47,7 +47,7 @@ import {
   type Card,
 } from "./types.ts";
 import type { FunctionTool } from "../model/responses.ts";
-import { GOOGLE_TOOLS, GOOGLE_TOOL_NAMES, GOOGLE_WRITE_TOOLS, officeOut, officeShown, type GoogleServices } from "../google/tools.ts";
+import { GOOGLE_TOOLS, GOOGLE_TOOL_NAMES, GOOGLE_WRITE_TOOLS, officeOut, officeShown, senderOut, type GoogleServices } from "../google/tools.ts";
 import { CalendarTurn } from "../google/events.ts";
 import { GoogleError } from "../google/http.ts";
 
@@ -1387,9 +1387,9 @@ async function importMessage(ctx: ToolContext, input: { text: string; channel: s
       source: {
         channel: message.message.channel,
         source_type: message.sourceType,
-        from: untrustedText(message.message.from),
-        // 0018, H3: the name the page shows, null for "the office".
-        office: message.sourceType === "office_message" ? officeOut(officeShown(ctx, { id, from: message.message.from, receivedAt: message.message.received_at })) : null,
+        // 0018, H3 and fix round 2, F2: the name the page shows (null for
+        // "the office") and the address domain, never the sender line.
+        ...senderOut(message.message.from, message.sourceType === "office_message" ? officeShown(ctx, { id, from: message.message.from, receivedAt: message.message.received_at }) : null),
         received_at: message.message.received_at,
         suggested: message.sourceSuggested,
       },
