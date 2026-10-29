@@ -200,3 +200,48 @@ From the independent review (`findings-r1`) and the writer's own note.
 
 No recording needs a live rerecord: tool results, the instructions and the
 stored chat are unchanged, and `pnpm demo:check --recorded` passes.
+
+## Fix round 2 (2026-10-29)
+
+From the second independent review (`findings-r2`).
+
+- F1. The running-turn flag has a start time, taken from the turn's own
+  first reading of the clock. A turn running longer than `TURN_STALE_MS`
+  no longer holds Delete case back, so a turn that never ends cannot block
+  it for good. (proposed: five minutes) The turn itself is not stopped:
+  its later writes are refused by the case generation, as before.
+- F2. `googleWrite` notes the case generation when it opens the intent. A
+  write whose case is gone before it starts is not sent ("The case was
+  deleted. Nothing was written to Google Calendar."). After the write, a
+  deleted case, or an intent that is neither open nor closed, ends the
+  call with no Undo claim. When the change reached Google the sentence
+  names it: "The case was deleted while this Google Calendar change ran,
+  and the change still reached Google Calendar: Added Monday 11/16 1:00
+  PM to Google Calendar as confirmed. Nothing in the app records it, so it
+  has no Undo. Check the event in Google Calendar and remove or change it
+  there if you do not want it." The chat turn and MCP pass it on.
+- F3. A read of the calendar records whether it was complete: false when
+  Google still had a page after the fourth. `calendarOwn` leaves out
+  incomplete reads, so "Removed in Google Calendar" never comes from a
+  read that may have missed the event.
+- F4. Delete case clears the stored calendar reads, so `calendarOwn` and
+  the clash copy no longer carry the erased case's appointment keys. The
+  next read fills them again.
+- F5. The request log writes every message id and fact id as `*`, because
+  a message id can hold words a person or an email chose. The ids it keeps
+  are made by the server from numbers and dates: `q1`, `d1`, `a1`, slot
+  keys and conflict ids of the app's own kinds.
+- F6. When the first facts card's message is no longer in the case, the
+  pointer says "This message is no longer in the case." and offers no
+  button.
+- F7. `GoogleCalendar.sync()` and `remove()` wrote with no intent or entry
+  and nothing in the app called them. They are gone. Every write goes
+  plan, `CaseActions.googleWrite`, execute. Their tests use a helper that
+  does the same.
+- F8. Kept as it is: an event made while the office's name is held back
+  keeps its title ("Appointment", "Appointment (requested, not
+  confirmed)") until the next sync of that appointment, which updates it
+  with Undo. Accepting a fact does not start a sync, so the title can stay
+  until the assistant or the person syncs that appointment again.
+
+No recording needs a live rerecord. `pnpm demo:check --recorded` passes.

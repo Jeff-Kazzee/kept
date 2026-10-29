@@ -566,6 +566,10 @@ below. Decisions: `docs/decisions/0017-run2-fixes.md`.
   only for a write, a quieter and stricter request log, the facts pointer
   and its focus, the Delete case status, the held-back name at Google, and
   "Removed in Google Calendar".
+- [x] Review fix round 2 (0017): a bound on a hung turn, a Google write
+  that a Delete case outlived, complete reads only, cleared reads on Delete
+  case, message ids out of the log, the pointer to a gone message, no write
+  without a record.
 - [ ] The coordinator's live rerun with Gmail and Google Calendar.
 - [ ] Confirm or change the choices marked proposed in 0017.
 
