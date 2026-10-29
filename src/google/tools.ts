@@ -185,8 +185,11 @@ async function calendarWrite(ctx: ToolContext, name: "calendar_sync_slot" | "cal
       outcome = planned.outcome;
     }
   } catch (err) {
-    // 0018, H6: an event the person removed is left out on purpose.
-    if (err instanceof GoogleError && err.variant === "removed") return { ...failure(err.code, err.message), declined: true };
+    // 0018, H6: an event the person removed is left out on purpose. The
+    // answer may name the appointment it left out, as after a sync.
+    if (err instanceof GoogleError && err.variant === "removed") {
+      return { ...failure(err.code, err.message), declined: true, slots: slot ? [slot] : [], facts: slot ? [{ date: slot.date, time: slot.time, state: slot.state }] : [] };
+    }
     if (err instanceof GoogleError) return failure(err.code, err.message);
     if (err instanceof GoogleBusyError) return failure("google_busy", err.message);
     throw err;

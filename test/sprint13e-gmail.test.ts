@@ -352,6 +352,10 @@ describe("sprint 13E, H5 and H6: an event removed in Google Calendar", () => {
     const r = await say(agentFor(app, model), app, "Put the Thursday appointment on my Google Calendar.");
     expect(r.report.tools).toEqual([{ tool: "calendar_sync_slot", ok: false, code: "google_changed" }]);
     expect(r.of("tool.finished")).toMatchObject([{ ok: false, declined: true }]);
+    // The answer may name the appointment it left out.
+    expect(r.report.outcome).toBe("answered");
+    const named = sequence(reply(fnCall("calendar_sync_slot", { slot_key: "2026-11-12T10:30", restore_removed: null })), reply(message("Thursday 11/12 10:30 AM was removed in Google Calendar, so I did not add it back.")));
+    expect((await say(agentFor(app, named), app, "Put it on my Google Calendar.")).report.problems).toEqual([[]]);
     // A failure for another reason is not marked.
     const bad = sequence(reply(fnCall("calendar_sync_slot", { slot_key: "2026-11-12T10:30", restore_removed: null })), reply(message("That did not work.")));
     const { fake: _f, ...rest } = await connected();
