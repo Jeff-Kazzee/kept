@@ -540,6 +540,7 @@ below. Decisions: `docs/decisions/0016-live-run-fixes.md`.
 - [x] L1 A chat notice shows that its action was undone.
 - [x] L2 The "New messages" pill stays clear of the slot chips.
 - [x] L3 The prompt is unchanged (0016 says why).
+- [x] Review fix rounds 1 and 2 (0016).
 - [ ] The coordinator's live rerun with Gmail and Google Calendar.
 - [ ] Confirm or change the choices marked proposed in 0016.
 

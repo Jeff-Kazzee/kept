@@ -40,8 +40,8 @@ Changed:
 - `get_schedule` does the same for the case's dates, so its slot clashes
   are current.
 - One read per window at a time, and a chat turn reuses its read while it
-  runs, after it failed, or while its window is still kept and fresh (fix
-  round 1 below).
+  runs, after it failed, or while its window is still kept and fresh. Each
+  turn has a budget of Google reads (fix rounds 1 and 2 below).
 - A read keeps the 15 second time limit of every Google call. A failed read
   answers with its code only. `check_calendar` then returns
   `ok: false` with "Google Calendar could not be read right now, so the app
@@ -226,6 +226,42 @@ screenshots.
   until you approve it." The fact cards, the checklist sources, the
   conflict sources, the agenda details and the sent reply no longer show
   evidence ids. Summaries keep their ids for the log and the agents.
+
+## Fix round 2 (2026-10-29)
+
+- N1, N2 and R1. Each chat turn has a CalendarTurn, and an MCP call gets
+  its own. It allows 8 Google reads, `check_calendar`, `get_schedule` and
+  `calendar_list` together (proposed: 8). Every window the turn read, or
+  found fresh without reading, is held until the turn ends, and a held
+  window is never evicted. The hard cap of 16 is gone: the budget bounds
+  what a turn holds. A turn not released stops holding after 15 minutes.
+  `get_schedule` checks dates nearest first. A date past the budget is
+  unread with `google_read_limit`: its appointments show `clashes: null`,
+  ground no clash, and are listed in `google_calendar.unread_dates`.
+  `check_calendar` on such a date answers that the calendar could not be
+  read. `calendar_list` reads a window once per turn and still stores
+  nothing (review round 3, finding 5).
+- N5. A read that a connect, a disconnect or an account change outlived
+  throws `google_stale`. Nothing is stored, and the date is unread.
+- N3. The office's fuller name comes only from accepted facts, as its
+  place does. Gmail messages are grouped by the address inside the sender
+  line, so "Lantern Hill <a@x>" and "Front Desk <a@x>" are one office: the
+  name an accepted place spells in full, else the name on the latest
+  email from that address. Pasted senders are unchanged.
+- N3, the event at Google. Rejecting or undoing the fact that gave the
+  fuller name changes the name everywhere the page and a new draft show
+  it, and makes an open draft no longer fit. The Google Calendar event
+  keeps its title, because nothing syncs on a review. The next
+  `calendar_sync_slot` for that appointment plans the event again,
+  finds the title differs and updates it, with Undo. This is the existing
+  behavior and is kept.
+- N4. The agenda says "A reminder for this time may be out of date."
+  without evidence ids, and a reply field source with no quote reads
+  "From the message that set this time".
+- N6. The page clears the shared readback when its session or account
+  changes, a sign-out included.
+- R8. The readback tests are mounted DOM tests only
+  (`ui/case/ReplyCard.dom.test.ts`).
 
 ## Recordings
 
