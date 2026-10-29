@@ -2,9 +2,12 @@
 // reply's greeting and the calendar event's title, its place, and a plain
 // label for one of its messages. Code builds each from the office's own
 // messages and the accepted facts. Pure functions, safe in the browser.
-import type { EvidenceView, MessageView } from "../intake/events.ts";
 import { timeLabel } from "../slots/labels.ts";
-import type { SlotView } from "../slots/types.ts";
+
+// The parts of the case views these read, so the page can use them too.
+type MessageView = { id: string; sourceType: string; importedFrom?: string; message: { channel: string; from: string; received_at: string } };
+type EvidenceView = { id: string; status: string; messageId: string | null; claim: { slot: { location: string | null } } };
+type SlotView = { evidenceIds: string[]; location: string | null };
 
 // Imported text such as a sender name is shown on one line and cut.
 const MAX_NAME_CHARS = 120;

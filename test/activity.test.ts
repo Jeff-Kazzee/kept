@@ -81,7 +81,20 @@ describe("activity entries", () => {
       "Added message m2 (email).",
     ]);
     // No message text, note text or request item in any summary.
-    expect(JSON.stringify(log)).not.toMatch(/parking|insurance|Lantern/i);
+    expect(JSON.stringify(log.entries.map((e) => e.summary))).not.toMatch(/parking|insurance|Lantern/i);
+    // 0016, M3 and M4: the words the person sees name the message by its
+    // sender and time, never by id, and say a fact was recorded. Still no
+    // message text or request item.
+    expect(log.entries.map((e) => e.label ?? e.summary)).toEqual([
+      "Added a note to Thursday 11/12 10:30 AM.",
+      "Recorded the office's request (fact 3 of 3) for your checklist, from the email from Front Desk, Lantern Hill Clinic, Oct 31, 9:12 AM.",
+      "Recorded the office's request (fact 2 of 3) for your checklist, from the email from Front Desk, Lantern Hill Clinic, Oct 31, 9:12 AM.",
+      "Recorded the office's confirmation of Thursday 11/12 10:30 AM, from the email from Front Desk, Lantern Hill Clinic, Oct 31, 9:12 AM.",
+      "Read the email from Front Desk, Lantern Hill Clinic, Oct 31, 9:12 AM. 3 facts were found.",
+      "Added the email from Front Desk, Lantern Hill Clinic, Oct 31, 9:12 AM.",
+    ]);
+    expect(JSON.stringify(log)).not.toMatch(/parking|insurance/i);
+    expect(log.entries.map((e) => e.label ?? "").join(" ")).not.toMatch(/\bm2\b/);
     expect(log.entries[0]!.at).toBe("2026-11-06T10:00:00.000-07:00");
     expect(log.entries.find((e) => e.kind === "message_read")).toMatchObject({ undoable: false, undone: false });
   });
@@ -266,5 +279,22 @@ describe("undo of each action", () => {
     expect(blocked(() => a.actions.undo(YOU, log.entries[1]!.id, after.activityVersion))).toBe("This was already undone.");
     expect(() => a.actions.undo(YOU, "a99", after.activityVersion)).toThrow(/No activity entry a99/);
     expect(a.kase.timeZone()).toBe("America/Denver");
+  });
+});
+
+describe("sprint 13C, M3 and M4: what the person reads", () => {
+  it("an imported Gmail message, a fact left out and an undo are named without ids, and an offer reads as recorded, not taken", async () => {
+    const a = app();
+    // The recorded extraction of m2, as if read from Gmail.
+    const m = a.actions.importMessage(AGENT, { ...fixtureMessage("m2"), from: "lantern hill <front@lanternhill.example>", received_at: "2026-10-29T00:43:00.000Z" }, { suggested: [], note: "", importedFrom: "gmail" });
+    expect(latest(a).entries[0]!.label).toBe("Added from Gmail: the email from lantern hill, Oct 28, 6:43 PM.");
+    expect(latest(a).entries[0]!.summary).toBe("Added message m2 from Gmail (email).");
+    const { evidence } = await a.actions.extract(AGENT, m.id, { effort: "low", expectedVersion: m.version });
+    const confirm = evidence.find((e) => e.claim.claim_type === "confirm")!;
+    a.actions.rejectClaim(AGENT, confirm.id, confirm.version);
+    expect(latest(a).entries[0]!.label).toMatch(/^Left out the office's confirmation of Thursday 11\/12 10:30 AM, from the email from lantern hill, Oct 28, 6:43 PM\.$/);
+    undoLatest(a, "claim_rejected");
+    expect(latest(a).entries[0]!.label).toMatch(/^Undid: Left out the office's confirmation/);
+    for (const e of latest(a).entries) expect(e.label ?? e.summary).not.toMatch(/\bm2\b|front@|\bAccepted\b/);
   });
 });

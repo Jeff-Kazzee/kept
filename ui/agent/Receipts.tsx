@@ -6,6 +6,8 @@ import { useState } from "react";
 import type { AppState } from "../api.ts";
 import { Icon } from "../components/Icon.tsx";
 import type { ActivityEntry } from "../contract.ts";
+import { entryText } from "../../src/activity/types.ts";
+import { senderName } from "../../src/reply/office.ts";
 import { canUndo, useAgent } from "./AgentContext.tsx";
 
 export type ReceiptGroup = { key: string; text: string; entries: ActivityEntry[]; messageId: string | null };
@@ -32,7 +34,7 @@ export function groupReceipts(entries: ActivityEntry[], state: Pick<AppState, "e
     const messageId = evidence?.messageId ?? null;
     const message = messageId ? state.messages.find((m) => m.id === messageId) : undefined;
     if (!evidence || !message) {
-      groups.push({ key: e.id, text: e.summary, entries: [e], messageId: null });
+      groups.push({ key: e.id, text: entryText(e), entries: [e], messageId: null });
       continue;
     }
     let g = byMessage.get(message.id);
@@ -43,7 +45,7 @@ export function groupReceipts(entries: ActivityEntry[], state: Pick<AppState, "e
     }
     g.entries.push(e);
     const accepted = g.entries.filter((x) => x.kind === "claim_accepted").length;
-    g.text = claimsReceiptText(accepted, g.entries.length - accepted, message.message.from);
+    g.text = claimsReceiptText(accepted, g.entries.length - accepted, senderName(message.message.from) ?? undefined);
   }
   return groups;
 }

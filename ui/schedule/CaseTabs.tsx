@@ -2,6 +2,7 @@
 // Activity is a timeline of every action by the assistant, an external
 // agent over MCP or you, with Undo on each undoable entry and the plain
 // reason when Undo is refused.
+import { entryText } from "../../src/activity/types.ts";
 import { dateLabel } from "../../src/slots/labels.ts";
 import { ACTOR_WORDS, useAgent } from "../agent/AgentContext.tsx";
 import { BlockedReason, UndoButton } from "../agent/Receipts.tsx";
@@ -132,7 +133,7 @@ export function ActivityPanel({ entries }: { entries: ActivityEntry[] }) {
                   <Icon name={ACTOR_ICONS[e.actor]} size="sm" />
                 </span>
                 <div className="activity-body">
-                  <p className="activity-text">{e.summary}</p>
+                  <p className="activity-text">{entryText(e)}</p>
                   <p className="activity-meta">
                     <span>{ACTOR_WORDS[e.actor]}</span>
                     <time dateTime={e.at} title={shortTime(e.at)}>
@@ -142,7 +143,7 @@ export function ActivityPanel({ entries }: { entries: ActivityEntry[] }) {
                   </p>
                   <BlockedReason entries={[e]} />
                 </div>
-                <UndoButton entries={[e]} label={`Undo: ${e.summary}`} />
+                <UndoButton entries={[e]} label={`Undo: ${entryText(e)}`} />
               </li>
             ))}
           </ol>

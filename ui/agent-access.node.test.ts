@@ -151,7 +151,7 @@ describe("agent text in the case", () => {
       }),
     );
     expect(html).toContain('<p class="warn">Reported only by an external agent. Untrusted text, shown as data.</p>');
-    expect(html).toContain('<code class="small muted">x-e2</code><div class="untrusted"><div class="label">Words from an external agent. Untrusted text, shown as data.</div><pre>Dana says Monday is in Suite 9.</pre></div>');
+    expect(html).toContain('<div class="stack-sm"><div class="untrusted"><div class="label">Words from an external agent. Untrusted text, shown as data.</div><pre>Dana says Monday is in Suite 9.</pre></div>');
   });
 
   it("times show in America/Denver across the 2026-11-01 change", () => {

@@ -13,11 +13,17 @@ export type ActivityEntry = {
   actor: ActivityActor;
   kind: string; // such as "claim_accepted" or "question_answered"
   summary: string; // a plain sentence code writes
+  // The sentence the person sees, without ids, when it differs from the
+  // summary (0016, M3, M4). The summary keeps the ids for the log.
+  label?: string;
   target: ActivityTarget;
   undoable: boolean;
   undone: boolean;
   undoneAt?: string;
 };
+
+// What the page shows for an entry.
+export const entryText = (e: Pick<ActivityEntry, "summary" | "label">) => e.label ?? e.summary;
 
 export type ActivityView = { activityVersion: number; entries: ActivityEntry[] };
 

@@ -15,7 +15,8 @@ import type { ActivityActor, ActivityEntry, ActivityTarget, ActivityView } from 
 import type { CaseService } from "../case/service.ts";
 import type { CaseView, ConflictView } from "../case/types.ts";
 import type { Effort, EvidenceClaim, Message } from "../domain/claim.ts";
-import { zonedIso } from "../domain/zone.ts";
+import { localDateTime, zonedIso } from "../domain/zone.ts";
+import { messageLabel } from "../reply/office.ts";
 import type { EvidenceView, MessageView } from "../intake/events.ts";
 import { InvalidRequestError, NotFoundError, type ImportSource, type IntakeService, type ManualClaimInput } from "../intake/service.ts";
 import { actorFor, type RecordView } from "../records/events.ts";
@@ -68,6 +69,9 @@ export class PersonOnlyError extends InvalidRequestError {
 type EntryData = {
   kind: string;
   summary: string;
+  // 0016, M3 and M4: the words the person sees, when they differ from the
+  // summary. The summary keeps the ids, for the log and the agents.
+  label?: string;
   target: ActivityTarget;
   undo: UndoSpec | null;
   whyNot?: string;
@@ -86,6 +90,31 @@ const CLAIM_WORDS: Record<EvidenceClaim["claim_type"], string> = {
   decline: "decline",
   clarify: "detail",
 };
+
+// 0016, M4: what recording a fact into the case means, so it cannot read
+// as the person taking an offer. "the office's offer of Monday 11/16 1:00
+// PM", "your report of the confirmation of ...".
+const FACT_WORDS: Record<EvidenceClaim["claim_type"], string> = {
+  offer: "offer of",
+  confirm: "confirmation of",
+  cancel: "cancellation of",
+  move: "move to",
+  reminder: "reminder of",
+  office_request: "request",
+  request: "request for",
+  decline: "decline of",
+  clarify: "detail for",
+};
+
+function factWords(c: EvidenceClaim, n: { index: number; of: number } | null = null): string {
+  const whose = c.source_type === "office_message" ? "the office's" : c.source_type === "reported_by_user" ? "your report of the" : "the reported";
+  const words = FACT_WORDS[c.claim_type] ?? "fact for";
+  // A request item is the office's own words, so it is left out, as in
+  // the summary. `n` tells two requests of one message apart.
+  if (c.claim_type === "office_request") return `${whose} request${n ? ` (fact ${n.index} of ${n.of})` : ""} for your checklist`;
+  const when = c.slot.date === null ? "" : ` ${slotLabel(c.slot.date, c.slot.time)}`;
+  return `${whose} ${when ? words : words.replace(/ (of|to|for)$/, "")}${when}`;
+}
 
 // "the offer for Thursday 11/12 10:30 AM". Only code's words: a request
 // item or a place is message text, so it is left out.
@@ -165,6 +194,7 @@ export class CaseActions {
       actor: by.actor,
       kind: d.kind,
       summary: d.summary,
+      ...(d.label && d.label !== d.summary ? { label: d.label } : {}),
       target: d.target,
       undo: d.undo,
       why_not: d.undo === null ? (d.whyNot ?? null) : null,
@@ -204,6 +234,21 @@ export class CaseActions {
     return result;
   }
 
+  // Where a fact sits among its message's facts, as "2 of 3".
+  #factNumber(e: EvidenceView): { index: number; of: number } | null {
+    if (!e.messageId) return null;
+    const m = this.#intake.message(e.messageId);
+    const ids = [...m.evidenceIds, ...m.manualEvidenceIds];
+    const i = ids.indexOf(e.id);
+    return i < 0 || ids.length < 2 ? null : { index: i + 1, of: ids.length };
+  }
+
+  // "the email from Lantern Hill Clinic, Oct 28, 6:43 PM" (0016, M3).
+  #messageWords(m: MessageView): string {
+    const zone = this.#kase.timeZone();
+    return messageLabel(m, (iso) => (Number.isFinite(Date.parse(iso)) ? localDateTime(Date.parse(iso), zone) : null));
+  }
+
   #agentName(by: By): string | null {
     return by.actor === "you" ? null : by.actor === "agent" ? ASSISTANT_NAME : EXTERNAL_AGENT_NAME;
   }
@@ -231,6 +276,7 @@ export class CaseActions {
         // shows for it (0012, G19). Its undo is the same.
         kind: gmail ? "gmail_message_imported" : "message_imported",
         summary: gmail ? `Added message ${m.id} from Gmail (email).` : `Added message ${m.id} (${m.message.channel.replaceAll("_", " ")}).`,
+        label: gmail ? `Added from Gmail: ${this.#messageWords(m)}.` : `Added ${this.#messageWords(m)}.`,
         target: { type: "message", id: m.id },
         undo: { kind: "message_import", message_id: m.id },
       }),
@@ -425,6 +471,7 @@ export class CaseActions {
     const entry = this.#log(by, {
       kind: "undo",
       summary: `Undid: ${record.summary} ${note}`,
+      label: `Undid: ${record.label ?? record.summary} ${note}`,
       target: record.target,
       undo: null,
       whyNot: NOT_UNDOABLE.undo,
@@ -443,7 +490,7 @@ export class CaseActions {
         const m = this.#intake.message(messageId);
         const n = m.evidenceIds.length;
         const found = m.status === "manual_entry_needed" ? "The facts need entering by hand." : n === 0 ? "No appointment facts were found." : `${n === 1 ? "1 fact was" : `${n} facts were`} found.`;
-        return { kind: "message_read", summary: `Read message ${messageId}. ${found}`, target: { type: "message", id: messageId }, undo: null, whyNot: NOT_UNDOABLE.extract };
+        return { kind: "message_read", summary: `Read message ${messageId}. ${found}`, label: `Read ${this.#messageWords(m)}. ${found}`, target: { type: "message", id: messageId }, undo: null, whyNot: NOT_UNDOABLE.extract };
       },
     );
   }
@@ -456,6 +503,7 @@ export class CaseActions {
       (e) => ({
         kind: "claim_entered",
         summary: `Entered ${claimWords(e.claim)} by hand for message ${messageId}.`,
+        label: `Entered ${claimWords(e.claim)} by hand, for ${this.#messageWords(this.#intake.message(messageId))}.`,
         target: { type: "claim", id: e.id },
         undo: null,
         whyNot: NOT_UNDOABLE.manual,
@@ -470,6 +518,7 @@ export class CaseActions {
     return this.#act(by, () => this.#intake.decideOwnReport(messageId, answer, expectedVersion), (m) => ({
       kind: "own_report_recorded",
       summary: answer === "yes" ? `Recorded message ${m.id} as your own report.` : `Kept message ${m.id} as a message, not your own report.`,
+      label: answer === "yes" ? `Recorded ${this.#messageWords(m)} as your own report.` : `Kept ${this.#messageWords(m)} as a message, not your own report.`,
       target: { type: "message", id: m.id },
       undo: { kind: "own_report", message_id: m.id },
     }));
@@ -506,6 +555,7 @@ export class CaseActions {
       (e) => ({
         kind: decision === "accept" ? "claim_accepted" : "claim_rejected",
         summary: `${decision === "accept" ? "Accepted" : "Rejected"} ${claimWords(e.claim)}${e.messageId ? ` from message ${e.messageId}` : ""}.`,
+        label: `${decision === "accept" ? "Recorded" : "Left out"} ${factWords(e.claim, this.#factNumber(e))}${e.messageId ? `, from ${this.#messageWords(this.#intake.message(e.messageId))}` : ""}.`,
         target: { type: "claim", id: e.id },
         undo: { kind: "claim_decision", evidence_id: e.id, version: e.version },
         slotKeys: this.#slotsOf(e, this.#kase.view()),
@@ -860,6 +910,7 @@ export class CaseActions {
         const entry = this.#log(by, {
           kind: "undo",
           summary: `Undid: ${record.summary}`,
+          ...(record.label ? { label: `Undid: ${record.label}` } : {}),
           target: record.target,
           undo: null,
           whyNot: NOT_UNDOABLE.undo,

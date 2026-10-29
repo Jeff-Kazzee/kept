@@ -41,6 +41,8 @@ export type ActivityEvent =
         actor: ActivityActor;
         kind: string;
         summary: string;
+        // The words the person sees, when they differ (0016, M3, M4).
+        label?: string;
         target: ActivityTarget;
         // Null when the entry cannot be undone. `why_not` then says why.
         undo: UndoSpec | null;
@@ -91,6 +93,7 @@ export function activityEntry(r: ActivityRecord, zoned: (iso: string) => string)
     actor: r.actor,
     kind: r.kind,
     summary: r.summary,
+    ...(r.label ? { label: r.label } : {}),
     target: r.target,
     undoable: r.undo !== null && r.undoneAt === null,
     undone: r.undoneAt !== null,
