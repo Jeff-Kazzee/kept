@@ -40,8 +40,12 @@ The design and its reasons are in `docs/decisions/0012-google.md`.
   may contain a paste, the assistant may import from Gmail but makes no
   calendar change until your next message. The clash checks read the
   Google Calendar events the app last fetched, beside a loaded `.ics`
-  file: at start, after Connect, after `calendar_list`, and on
-  `POST /api/google/calendar/refresh`.
+  file: at start, after Connect, and on
+  `POST /api/google/calendar/refresh`. Before the assistant answers a clash
+  question, it reads Google again when that copy is more than a minute old
+  or does not cover the date, and says so when Google cannot be read
+  (`docs/decisions/0016-live-run-fixes.md`, H1). Connections shows when the
+  app last read the calendar.
 
 The app asks Google only for the permissions you turn on: Gmail, Calendar,
 or both. It also asks for your email address, to show which account is

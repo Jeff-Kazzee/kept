@@ -515,6 +515,34 @@ recording (sprint 16) waits for this sprint.
   Google console and the server (0014 J16 asks for name and email only).
 - [ ] Confirm or change Z1 to Z9 in 0015.
 
+## Sprint 13C: fixes from the first live Gmail and Calendar run
+
+Branch `sprint/13c-live-fixes`. The live run on 2026-10-29 found the items
+below. Decisions: `docs/decisions/0016-live-run-fixes.md`.
+
+- [x] H1 Clash checks read Google Calendar again when the copy is more
+  than a minute old or does not cover the date, once a turn per window,
+  and say the calendar could not be read instead of "no events".
+- [x] H2 "Read the calendar again" shows that it is reading, then when it
+  read and how many events, and a plain error. Connections always shows
+  the last read.
+- [x] H3 The zone says "From this device" only when this device's zone
+  matches, and a notice offers this device's zone with one button.
+- [x] H4 The calendar event is titled by the office and the state, holds
+  the office's place, and a requested slot is tentative at Google.
+- [x] H5 One readback for the reply card in the chat and in the panel.
+- [x] M1 The reply greets the office by name, never an address.
+- [x] M2 Replies are signed only with a name the person gave in the case.
+- [x] M3 Activity lines and reply sources name messages by sender and
+  time, without ids.
+- [x] M4 Activity says a fact was recorded, not accepted, and tells two
+  requests of one message apart.
+- [x] L1 A chat notice shows that its action was undone.
+- [x] L2 The "New messages" pill stays clear of the slot chips.
+- [x] L3 The prompt is unchanged (0016 says why).
+- [ ] The coordinator's live rerun with Gmail and Google Calendar.
+- [ ] Confirm or change the choices marked proposed in 0016.
+
 ## Sprint 14: paid plans with Stripe (deferred until after the hackathon)
 
 Deferred by Jeff on 2026-10-28 (J18 in
