@@ -290,3 +290,19 @@ describe("sprint 13D fix round 1, R8: the event and the greeting wait for the of
     expect(slotFields("ask_still_stands", after, { ...ctx, evidence: app.intake.evidence() }).fields.find((f) => f.name === "office_name")!.value).toBe("Lantern Hill Clinic");
   });
 });
+
+describe("sprint 13D fix round 1: what the app last read of its own events", () => {
+  it("a read after the person removed the event no longer lists its slot", async () => {
+    const { fake, app } = await connected();
+    await receive(app, "m-monday", MONDAY);
+    await call(app, "calendar_sync_slot", { slot_key: MONDAY_KEY });
+    const events = app.google.events!;
+    await events.refresh(["2026-11-16"], "2026-11-05");
+    expect(events.ownSeen().flatMap((w) => w.slots)).toEqual([MONDAY_KEY]);
+    live(fake)[0]!.status = "cancelled";
+    fake.now += 1000;
+    await events.refresh(["2026-11-16"], "2026-11-05");
+    const newest = events.ownSeen().sort((a, b) => Date.parse(b.readAt) - Date.parse(a.readAt))[0]!;
+    expect([newest.from <= "2026-11-16", "2026-11-16" <= newest.to, newest.slots]).toEqual([true, true, []]);
+  });
+});

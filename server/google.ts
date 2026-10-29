@@ -123,7 +123,7 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
     await options.events.refresh(dates, today);
     return options.events.status().events;
   };
-  const readStatus = () => (options.events && connection.status().calendar ? { calendarRead: options.events.status() } : {});
+  const readStatus = () => (options.events && connection.status().calendar ? { calendarRead: options.events.status(), calendarOwn: options.events.ownSeen() } : {});
 
   const fail = (err: unknown): GoogleRouteResponse => {
     if (err instanceof GoogleError) {

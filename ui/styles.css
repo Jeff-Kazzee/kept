@@ -845,6 +845,7 @@ figure.source { margin: 0; }
 .marker { display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; line-height: 20px; border-radius: var(--radius-pill); font-size: var(--text-xs); font-weight: 650; }
 .marker-clash { background: var(--danger-soft); color: var(--danger); }
 .marker-gcal { padding: 0 4px; color: var(--text-2); background: var(--surface-2); }
+.marker-gcal.is-removed { padding: 0 6px; color: var(--warn); background: var(--warn-soft, var(--surface-2)); }
 
 /* Schedule panel */
 

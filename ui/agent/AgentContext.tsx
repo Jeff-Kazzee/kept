@@ -3,7 +3,7 @@
 // case, and every undo re-reads them.
 import { createContext, useContext } from "react";
 import type { AgentBackend } from "../agentApi.ts";
-import { CALENDAR_KINDS, DEFAULT_SETTINGS, GOOGLE_OFF, type ActivityEntry, type ActivityLog, type GoogleStatus, type Settings } from "../contract.ts";
+import { CALENDAR_KINDS, DEFAULT_SETTINGS, GOOGLE_OFF, type ActivityEntry, type ActivityLog, type CalendarOwnSeen, type GoogleStatus, type Settings } from "../contract.ts";
 import type { SignedInSession } from "../hosted/session.ts";
 
 export type AgentState = {
@@ -105,6 +105,20 @@ const CALENDAR = new Set<string>(Object.values(CALENDAR_KINDS));
 
 // True when the assistant's latest Google Calendar action on a slot that is
 // still in effect added or updated its event.
+// Where the appointment's own event stands at Google (0017, fix round 1):
+// "on" while the app's last write added or updated it, "removed" when a
+// read of the calendar made after that write covers the date and no longer
+// finds the event, so the person removed it in Google Calendar. Null when
+// the app has no event for it.
+export function googleEventState(log: ActivityLog | null, seen: CalendarOwnSeen[] | undefined, slot: { key: string; date: string }): "on" | "removed" | null {
+  if (!onGoogleCalendar(log, slot.key)) return null;
+  const entries = log?.entries.filter((e) => CALENDAR.has(e.kind) && e.target?.type === "slot" && e.target.id === slot.key) ?? [];
+  const since = Math.max(...entries.flatMap((e) => [Date.parse(e.at), e.undoneAt ? Date.parse(e.undoneAt) : NaN]).filter(Number.isFinite));
+  const covering = (seen ?? []).filter((w) => w.from <= slot.date && slot.date <= w.to && Date.parse(w.readAt) > since);
+  const newest = covering.sort((a, b) => Date.parse(b.readAt) - Date.parse(a.readAt))[0];
+  return newest && !newest.slots.includes(slot.key) ? "removed" : "on";
+}
+
 export function onGoogleCalendar(log: ActivityLog | null, slotKey: string): boolean {
   const last = log?.entries.find((e) => CALENDAR.has(e.kind) && e.target?.type === "slot" && e.target.id === slotKey && !e.undone);
   return last !== undefined && last.kind !== CALENDAR_KINDS.removed;

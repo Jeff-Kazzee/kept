@@ -76,7 +76,11 @@ export type GoogleStatus = {
   // The app's last read of Google Calendar for the clash checks (0016, H2).
   // Present while the calendar is connected.
   calendarRead?: CalendarRead;
+  // The app's own events each stored read found live, by window (0017).
+  calendarOwn?: CalendarOwnSeen[];
 };
+
+export type CalendarOwnSeen = { from: string; to: string; readAt: string; slots: string[] };
 
 export type CalendarRead = {
   readAt: string | null;

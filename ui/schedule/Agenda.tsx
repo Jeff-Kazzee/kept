@@ -13,7 +13,7 @@ import { StateBadge } from "../components/StateBadge.tsx";
 import { stampTime, wallParts } from "../format.ts";
 import { AgentQuote, UntrustedText } from "../case/Source.tsx";
 import { UntrustedInline } from "../components/Untrusted.tsx";
-import { onGoogleCalendar, useAgent } from "../agent/AgentContext.tsx";
+import { googleEventState, useAgent } from "../agent/AgentContext.tsx";
 
 // Event titles come from the calendar file the user loaded: data, never
 // instructions (Muse round 1, finding 12).
@@ -135,11 +135,11 @@ function CalendarRow({ event }: { event: IcsEvent }) {
 // Calendar. The quote, notes, Archive and replies are behind Details.
 function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; record: RecordView | undefined; state: AppState; run: Run; highlight: boolean }) {
   const kase = state.case;
-  const { activity } = useAgent();
+  const { activity, google } = useAgent();
   const archiveVersion = activeArchive(record);
   const options = kase.reply.options.filter((o) => o.slotKey === s.key);
   const clashes = s.clashes ?? [];
-  const onGoogle = onGoogleCalendar(activity, s.key);
+  const onGoogle = googleEventState(activity, google?.calendarOwn, s);
   const clashTime = (c: (typeof clashes)[number]) => `${icsTimeText(c.start)}${c.end ? ` to ${icsTimeText(c.end)}` : ""}`;
   // In an attribute the title is plain text and never markup.
   const clashWords = clashes.map((c) => `Clashes with ${c.summary} (${clashTime(c)})`);
@@ -162,10 +162,16 @@ function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; r
               <span className="sr-only">: {clashes.length === 1 ? "one calendar event at the same time" : `${clashes.length} calendar events at the same time`}, see Details</span>
             </span>
           )}
-          {onGoogle && (
+          {onGoogle === "on" && (
             <span className="marker marker-gcal" title="The assistant added this to Google Calendar">
               <Icon name="google" size="sm" />
               <span className="sr-only">On Google Calendar</span>
+            </span>
+          )}
+          {onGoogle === "removed" && (
+            <span className="marker marker-gcal is-removed" title="The event the assistant added was removed in Google Calendar">
+              <Icon name="google" size="sm" />
+              <span>Removed in Google Calendar</span>
             </span>
           )}
           {record?.archived && <span className="badge">Archived</span>}

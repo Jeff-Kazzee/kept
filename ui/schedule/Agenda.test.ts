@@ -6,6 +6,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AppState } from "../api.ts";
 import { Agenda, EVENT_LABEL } from "./Agenda.tsx";
+import { AgentContext, DEFAULT_AGENT, googleEventState } from "../agent/AgentContext.tsx";
+import type { ActivityLog } from "../contract.ts";
 
 const title = "Team <b>meeting</b>";
 const state = {
@@ -54,5 +56,39 @@ describe("sprint 13C fix round 2, N4: no evidence id on the schedule", () => {
     const html = renderToStaticMarkup(createElement(Agenda, { state: stale, run: async () => {} }));
     expect(html).toContain("A reminder for this time may be out of date.</p>");
     expect(html).not.toMatch(/gmail-18f0a1-e3|m2-e4/);
+  });
+});
+
+describe("sprint 13D fix round 1: an event the person removed in Google Calendar", () => {
+  const slot = { key: "2026-11-13T09:15", date: "2026-11-13" };
+  const added = { id: "a3", at: "2026-11-05T10:00:00-07:00", actor: "agent", kind: "calendar_event_added", summary: "Added", target: { type: "slot", id: slot.key }, undoable: true, undone: false };
+  const log = { version: 3, entries: [added] } as unknown as ActivityLog;
+  const read = (readAt: string, slots: string[]) => [{ from: "2026-11-05", to: "2026-12-05", readAt, slots }];
+
+  it("reads as removed only when a read made after the write covers the date and no longer finds it", () => {
+    expect(googleEventState(null, undefined, slot)).toBeNull();
+    // No read since the write: the app's own write stands.
+    expect(googleEventState(log, undefined, slot)).toBe("on");
+    expect(googleEventState(log, read("2026-11-05T16:59:00.000Z", []), slot)).toBe("on");
+    // A later read still finds it.
+    expect(googleEventState(log, read("2026-11-05T17:05:00.000Z", [slot.key]), slot)).toBe("on");
+    // A later read covering the date does not: removed in Google Calendar.
+    expect(googleEventState(log, read("2026-11-05T17:05:00.000Z", []), slot)).toBe("removed");
+    // A read of other days says nothing about it.
+    expect(googleEventState(log, [{ from: "2026-12-06", to: "2027-01-05", readAt: "2026-11-05T17:05:00.000Z", slots: [] }], slot)).toBe("on");
+    // An undo after that read counts as a newer write.
+    const undone = { version: 4, entries: [{ ...added, undone: true, undoneAt: "2026-11-05T17:10:00.000Z" }] } as unknown as ActivityLog;
+    expect(googleEventState(undone, read("2026-11-05T17:05:00.000Z", []), slot)).toBeNull();
+  });
+
+  it("the agenda row says Removed in Google Calendar instead of On Google Calendar", () => {
+    const row = (google: unknown) =>
+      renderToStaticMarkup(createElement(AgentContext.Provider, { value: { ...DEFAULT_AGENT, activity: log, google } as never }, createElement(Agenda, { state, run: async () => {} })));
+    const on = row({ calendarOwn: read("2026-11-05T17:05:00.000Z", [slot.key]) });
+    expect(on).toContain("On Google Calendar");
+    expect(on).not.toContain("Removed in Google Calendar");
+    const removed = row({ calendarOwn: read("2026-11-05T17:05:00.000Z", []) });
+    expect(removed).toContain("<span>Removed in Google Calendar</span>");
+    expect(removed).not.toContain("On Google Calendar");
   });
 });

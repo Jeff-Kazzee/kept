@@ -159,6 +159,18 @@ export class GoogleCalendarEvents {
     if (this.#state || this.#last || this.#error) this.clear();
   }
 
+  // For each stored window, when it was read and the slots whose own event
+  // it found live, so the page can say an event was removed in Google
+  // Calendar (0017, fix round 1). Empty without a calendar connection.
+  ownSeen(): Array<{ from: string; to: string; readAt: string; slots: string[] }> {
+    return (this.#windows() ?? []).map((w) => ({
+      from: w.from,
+      to: w.to,
+      readAt: new Date(w.readAt).toISOString(),
+      slots: [...new Set(w.events.flatMap((e) => (e.slotKey === null ? [] : [e.slotKey])))],
+    }));
+  }
+
   // The last read and the last failure since it, for Connections.
   status(): CalendarReadStatus {
     const w = this.#windows() ? this.#last?.window : undefined;
