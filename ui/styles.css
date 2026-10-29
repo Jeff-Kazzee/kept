@@ -510,7 +510,8 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
 .msg-group { display: grid; gap: var(--s-4); }
 .msg-group:empty { display: none; }
 
-.welcome { position: relative; display: grid; justify-items: center; gap: var(--s-2); padding: 12vh 0 var(--s-2); text-align: center; }
+/* 0017, E6: the scene is wider than the column. It is clipped at the sides, so the thread never scrolls sideways. */
+.welcome { position: relative; display: grid; justify-items: center; gap: var(--s-2); padding: 12vh 0 var(--s-2); text-align: center; overflow-x: clip; overflow-y: visible; }
 .scene { position: absolute; z-index: -1; left: 50%; top: calc(12vh - 150px); width: min(960px, 140%); height: auto; transform: translateX(-50%); color: var(--scene); mask-image: linear-gradient(to bottom, black 55%, transparent); }
 .welcome-mark {
   display: grid; place-items: center; width: 48px; height: 48px; border-radius: var(--radius-md);
