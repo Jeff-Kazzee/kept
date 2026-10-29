@@ -600,6 +600,10 @@ items below. Decisions: `docs/decisions/0018-gmail-step.md`.
   account and case, one outcome per email for import and read, no sender
   name in the Gmail tools, one offer per email, and declined set only by
   the tool.
+- [x] Review fix round 2 (0018): Add it checks again before it imports,
+  no sender line in the paste import, hashed and used-once offers, offers
+  dropped only for another account, the whole search output tested, and
+  the server's sentence for an offer no longer there.
 - [ ] The coordinator's live rerun of the Gmail step.
 - [ ] Confirm or change the choices marked proposed in 0018.
 

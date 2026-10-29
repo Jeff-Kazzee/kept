@@ -248,6 +248,38 @@ The recordings did not change: the demo story runs without Google, so
 the Gmail tools' texts are not in its requests, and `pnpm demo:recordings`
 wrote the same files.
 
+## Fix round 2 (review of 2026-10-29)
+
+- F1. "Add it" checks again after Gmail answers. The route reads the Gmail
+  account at its start, and right before the import, with no wait between
+  the check and the import, it checks that the same account is still
+  connected and the offer can still be used. A disconnect or another
+  account in between refuses with `gmail_not_offered` and writes nothing.
+- F2. `import_message` (a paste) gives the same sender shape as the Gmail
+  tools: `office` and `sender_domain`, never the sender line or its
+  address. For a paste the page names the office by the name the paste
+  gave, so `office` is that name.
+- F3. The offers hold a hash of the Google account's id, never the id.
+  "Add it" uses its offer. Only an Undo of that import makes the email
+  addable again, which the card that offers it again needs. A second Add
+  while the email is in the case is refused.
+- F4. The Gmail offers are dropped only when the Google account itself
+  changes, read from the stored connection, so a reconnect after it
+  expired keeps them. A change of calendar keeps them too. The calendar
+  comparison stays as it was for the calendar intents. A disconnect drops
+  both.
+- F5. The H3 test reads the whole search output, body included. An
+  email's subject and body are message text, labeled `untrusted_text`,
+  and they can name the office, as when the email signs "Front Desk,
+  Lantern Hill Clinic". That is expected. Only the fields code writes are
+  held to the page's name.
+- F6. The page shows the server's sentence for `gmail_not_offered`, not
+  the general one for a changed item.
+
+The paste import's output is part of the demo's requests, so the
+placeholder recordings were rewritten with `pnpm demo:recordings`, in one
+commit.
+
 ## Recordings
 
 The tool definitions and the instructions are part of every chat
