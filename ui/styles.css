@@ -747,8 +747,8 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
 /* 0017, E3: a facts card already in the thread, pointed to in one line. */
 .facts-pointer { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1); color: var(--text-2); }
 .facts-pointer > span { min-width: 0; }
-.facts-anchor:focus { outline: none; }
-.facts-anchor:focus-visible > .card { box-shadow: 0 0 0 2px var(--accent); }
+.claims .card-title:focus { outline: none; }
+.claims .card-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm, 4px); }
 .notice .icon { color: var(--text-2); margin-top: 2px; }
 .warn { display: flex; align-items: flex-start; gap: var(--s-1); color: var(--warn); font-weight: 560; font-size: var(--text-sm); }
 .warn .icon { margin-top: 2px; }

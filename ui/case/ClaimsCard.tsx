@@ -26,7 +26,23 @@ export function claimSlotWords(c: EvidenceView["claim"]): string {
 
 // `fresh` is true for a card of the turn being streamed: a missing message
 // was just imported and the case view is still loading it.
-export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }: { messageId: string; evidenceIds: string[]; state: AppState; run: Run; fresh?: boolean }) {
+// `headingId` makes the card's heading a target that "Show the card" can
+// move focus to (0017, fix round 1, R6).
+export function ClaimsCard({
+  messageId,
+  evidenceIds,
+  state,
+  run,
+  fresh = false,
+  headingId,
+}: {
+  messageId: string;
+  evidenceIds: string[];
+  state: AppState;
+  run: Run;
+  fresh?: boolean;
+  headingId?: string;
+}) {
   const { activity } = useAgent();
   const uid = useId();
   const [openChoice, setOpen] = useState<boolean | null>(null);
@@ -65,7 +81,9 @@ export function ClaimsCard({ messageId, evidenceIds, state, run, fresh = false }
           <Icon name={gmail ? "mail" : "message"} size="sm" />
         </span>
         <div className="stack-xs">
-          <span className="card-title">Facts from {sender}</span>
+          <span className="card-title" id={headingId} tabIndex={headingId ? -1 : undefined}>
+            Facts from {sender}
+          </span>
           <span className="small muted">
             {gmail && <span className="source-tag">From Gmail</span>}
             {channelWord(m.channel)} · received <span className="tabular">{shortTime(m.received_at)}</span> · {view.sourceType === "reported_by_user" ? "reported by you" : "office message"}

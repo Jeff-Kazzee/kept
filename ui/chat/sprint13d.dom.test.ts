@@ -2,7 +2,7 @@
 // already in the chat is not shown again in full.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AppState } from "../api.ts";
 import { installTestDom, TestElement, type TestDocument } from "../test-dom.ts";
 import { ChatView, factsCards, followTop, type ChatViewProps } from "./ChatView.tsx";
@@ -201,9 +201,39 @@ describe("sprint 13D, E3: one full facts card per office message", () => {
     expect(text).toContain("1 waits for you there.");
     // Accept and Reject show once, on the first card.
     expect(view.container.querySelectorAll("button").filter((b) => b.textContent.trim() === "Accept")).toHaveLength(1);
-    const anchor = view.container.querySelector("section.claims")!.parentNode as TestElement;
-    expect(anchor.getAttribute("id")).toBe("facts-1");
+    // Fix round 1, R6: the card's heading carries the anchor.
+    const heading = view.container.querySelector("section.claims .card-title")!;
+    expect([heading.getAttribute("id"), heading.getAttribute("tabindex")]).toEqual(["facts-1", "-1"]);
     await view.unmount();
+  });
+
+  it("Show the card scrolls to the first card's heading and moves focus there (fix round 1, R6)", async () => {
+    const scrolled: string[] = [];
+    const spy = vi.spyOn(TestElement.prototype, "scrollIntoView").mockImplementation(function (this: TestElement) {
+      scrolled.push(this.getAttribute("id") ?? "");
+    });
+    const view = await mountChat(chatOf([answer("a1", "Added.", [claims]), question("u2", "Does Monday clash?"), answer("a2", "Yes.", [claims])]));
+    const show = view.container.querySelectorAll("button").find((b) => b.textContent.trim() === "Show the card")!;
+    const { act } = await import("react");
+    await act(async () => show.click());
+    const heading = view.container.querySelector("#facts-1")!;
+    expect(scrolled).toEqual(["facts-1"]);
+    expect(document.activeElement).toBe(heading);
+    expect(heading.textContent).toBe("Facts from Lantern Hill Clinic");
+    spy.mockRestore();
+    await view.unmount();
+  });
+
+  it("the same office message added twice through the import sheet keeps one card, and the pointer finds it (fix round 1, R5)", () => {
+    const plan = factsCards(
+      [
+        { messageId: MSG, after: 0 },
+        { messageId: MSG, after: 0 },
+      ],
+      { messages: [answer("a1", "x", [claims])], pending: null },
+    );
+    expect(plan.get(`import:${MSG}`)).toEqual({ anchor: "facts-1", repeat: false });
+    expect(plan.get("a1:0")).toEqual({ anchor: "facts-1", repeat: true });
   });
 
   it("the first card of each message keeps its place, the streamed turn included", () => {

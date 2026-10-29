@@ -220,7 +220,8 @@ export function ChatView(props: ChatViewProps) {
         importedIds={new Set(state.messages.map((m) => m.id))}
         onClose={() => setImporting(null)}
         onImported={(messageId) => {
-          setImports((all) => [...all, { messageId, after: chat.messages.length }]);
+          // Fix round 1, R5: one entry per message, so its card keeps one place.
+          setImports((all) => (all.some((x) => x.messageId === messageId) ? all : [...all, { messageId, after: chat.messages.length }]));
           if (importing && importing.text === draft) setDraft("");
           setImporting(null);
           pinned.current = true;
@@ -371,6 +372,9 @@ export function factsCards(imports: Array<{ messageId: string; after: number }>,
   const out = new Map<string, FactsPlace>();
   const first = new Map<string, string>();
   const add = (key: string, messageId: string) => {
+    // Fix round 1, R5: a later entry with the same key never takes the
+    // first card's place, so a pointer always points at a rendered card.
+    if (out.has(key)) return;
     const anchor = first.get(messageId);
     if (anchor) out.set(key, { anchor, repeat: true });
     else {
@@ -391,11 +395,9 @@ export function factsCards(imports: Array<{ messageId: string; after: number }>,
 
 function FactsCard({ messageId, evidenceIds, state, run, fresh = false, place }: { messageId: string; evidenceIds: string[]; state: AppState; run: Run; fresh?: boolean; place?: FactsPlace }) {
   if (place?.repeat) return <FactsPointer messageId={messageId} anchor={place.anchor} state={state} />;
-  return (
-    <div id={place?.anchor} tabIndex={place ? -1 : undefined} className="facts-anchor">
-      <ClaimsCard messageId={messageId} evidenceIds={evidenceIds} state={state} run={run} fresh={fresh} />
-    </div>
-  );
+  // Fix round 1, R6: the card's heading carries the anchor, so "Show the
+  // card" lands on words a screen reader reads.
+  return <ClaimsCard messageId={messageId} evidenceIds={evidenceIds} state={state} run={run} fresh={fresh} headingId={place?.anchor} />;
 }
 
 function FactsPointer({ messageId, anchor, state }: { messageId: string; anchor: string; state: AppState }) {
