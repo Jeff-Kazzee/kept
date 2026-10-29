@@ -28,13 +28,12 @@ const ROUTE_WORDS = new Set(
     "account judge-code chatgpt signout start meta-key chat google refresh connect disconnect session judge usage callback signin"
   ).split(" "),
 );
-const MESSAGE = String.raw`(?:gmail-[A-Za-z0-9]{1,40}|chat-[a-z0-9]{1,40}|pasted-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|m\d{1,3})(?:-r\d{1,3})?`;
-const EVIDENCE = String.raw`${MESSAGE}-[eu]\d{1,3}`;
+// Fix round 2, F5: a message id can hold words a person or an email chose,
+// and a fact id holds its message's id, so both are always "*". The ids
+// kept are made by the server from numbers and dates only.
 const SLOT = String.raw`\d{8}(?:-\d{4})?`;
 const ID_AFTER: Record<string, RegExp> = {
-  messages: new RegExp(`^${MESSAGE}$`),
-  evidence: new RegExp(`^${EVIDENCE}$`),
-  conflicts: new RegExp(`^(?:[a-z]+(?:-[a-z]+)*-${SLOT}(?:_${SLOT})*(?:-change)?|ambiguous-date-${EVIDENCE})$`),
+  conflicts: new RegExp(`^(?:both-held|change-proposed|unknown-order|possibly-stale|location-mismatch|incomplete-slot)-${SLOT}(?:_${SLOT})*(?:-change)?$`),
   questions: /^q\d{1,4}$/,
   drafts: /^d\d{1,4}$/,
   records: /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?$/,

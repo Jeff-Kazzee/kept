@@ -95,11 +95,12 @@ describe("sprint 13D, E4: the request log", () => {
   });
 
   it("keeps the app's route words and its own ids where a route takes one, and writes every other segment as * (fix round 1, R4)", () => {
-    expect(loggedPath("/api/evidence/gmail-18f0a1-e1/accept?x=1")).toBe("/api/evidence/gmail-18f0a1-e1/accept");
-    expect(loggedPath("/api/evidence/m2-r2-u1/reject")).toBe("/api/evidence/m2-r2-u1/reject");
+    // Fix round 2, F5: message and fact ids are always "*".
+    expect(loggedPath("/api/evidence/gmail-18f0a1-e1/accept?x=1")).toBe("/api/evidence/*/accept");
+    expect(loggedPath("/api/evidence/m2-r2-u1/reject")).toBe("/api/evidence/*/reject");
     expect(loggedPath("/api/records/2026-11-16T13%3A00/archive")).toBe("/api/records/2026-11-16T13:00/archive");
-    expect(loggedPath("/api/messages/chat-3f9a2c/extract")).toBe("/api/messages/chat-3f9a2c/extract");
-    expect(loggedPath("/api/messages/pasted-0b6f2c1e-8d3a-4f7b-9c2e-5a1d3e4f6a7b/manual")).toBe("/api/messages/pasted-0b6f2c1e-8d3a-4f7b-9c2e-5a1d3e4f6a7b/manual");
+    expect(loggedPath("/api/messages/chat-3f9a2c/extract")).toBe("/api/messages/*/extract");
+    expect(loggedPath("/api/messages/pasted-0b6f2c1e-8d3a-4f7b-9c2e-5a1d3e4f6a7b/manual")).toBe("/api/messages/*/manual");
     expect(loggedPath("/api/conflicts/both-held-20261112-1030_20261116-1300/explain")).toBe("/api/conflicts/both-held-20261112-1030_20261116-1300/explain");
     expect(loggedPath("/api/questions/q2/answer")).toBe("/api/questions/q2/answer");
     expect(loggedPath("/api/reply/drafts/d3/approve")).toBe("/api/reply/drafts/d3/approve");
@@ -119,6 +120,12 @@ describe("sprint 13D, E4: the request log", () => {
     expect(loggedPath(`/api/${secret}/state`)).toBe("/api/*/state");
     expect(loggedPath(`/api/records/${secret}/archive`)).toBe("/api/records/*/archive");
     expect(loggedPath(`/api/evidence/gmail-${secret}-e1/accept`)).toBe("/api/evidence/*/accept");
+    // Fix round 2, F5: a lowercase token where a chat- message id goes.
+    const token = "chat-k7q2xv9pt0kena1b2c3d4e5";
+    expect(loggedPath(`/api/messages/${token}/extract`)).toBe("/api/messages/*/extract");
+    expect(loggedPath(`/api/evidence/${token}-e1/accept`)).toBe("/api/evidence/*/accept");
+    // A word and digits shaped like a conflict id, but not one of its kinds.
+    expect(loggedPath("/api/conflicts/token-20261116/explain")).toBe("/api/conflicts/*/explain");
     expect(loggedPath("/api/messages/%E0%A4%A/extract")).toBe("/api/messages/*/extract");
   });
 
