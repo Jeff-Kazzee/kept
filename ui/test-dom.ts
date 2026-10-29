@@ -196,6 +196,12 @@ export class TestElement extends TestNode {
   #value: string | null = null;
   checked = false;
   defaultChecked = false;
+  selected = false;
+  defaultSelected = false;
+  // A select's options, which react-dom reads to set the chosen one.
+  get options(): TestElement[] {
+    return this.querySelectorAll("option");
+  }
   get value() {
     return this.#value ?? this.getAttribute("value") ?? "";
   }

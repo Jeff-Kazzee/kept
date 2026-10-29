@@ -743,6 +743,11 @@ details[open] > :not(summary) { animation: rise var(--med) var(--ease); }
 .stack-sm { display: grid; gap: var(--s-1); }
 .stack-xs { display: grid; gap: 2px; }
 .notice { display: flex; gap: var(--s-2); padding: var(--s-2); border-radius: var(--radius-md); background: var(--surface-2); font-size: var(--text-sm); }
+/* 0017, E3: a facts card already in the thread, pointed to in one line. */
+.facts-pointer { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1); color: var(--text-2); }
+.facts-pointer > span { min-width: 0; }
+.facts-anchor:focus { outline: none; }
+.facts-anchor:focus-visible > .card { box-shadow: 0 0 0 2px var(--accent); }
 .notice .icon { color: var(--text-2); margin-top: 2px; }
 .warn { display: flex; align-items: flex-start; gap: var(--s-1); color: var(--warn); font-weight: 560; font-size: var(--text-sm); }
 .warn .icon { margin-top: 2px; }

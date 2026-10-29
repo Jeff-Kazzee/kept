@@ -17,6 +17,7 @@ import { ModelPicker } from "../agent/ModelPicker.tsx";
 import { Receipts } from "../agent/Receipts.tsx";
 import { shortTime } from "../format.ts";
 import { ClaimsCard } from "../case/ClaimsCard.tsx";
+import { senderShown } from "../case/Source.tsx";
 import { ExplanationCard, QuestionCard } from "../case/ConflictCards.tsx";
 import { OwnReportCard } from "../case/OwnReportCard.tsx";
 import { ReplyCard } from "../case/ReplyCard.tsx";
@@ -68,15 +69,24 @@ export function ChatView(props: ChatViewProps) {
     }
   }, [lostTurn]);
 
-  // Follow the newest content while the user is at the bottom.
-  // Scrolled up, new content shows a "New messages" pill instead.
+  // Follow the newest content while the user has not scrolled away.
+  // Scrolled up, new content shows a "New messages" pill instead. Once a
+  // turn ends, the view stops where the newest answer starts, so a long
+  // card after it never pushes its words out of view (0017, E3).
   const content = `${chat.messages.length}:${chat.pending?.text.length ?? 0}:${chat.pending?.cards.length ?? 0}:${chat.pending?.tools.length ?? 0}:${chat.pending?.actions.length ?? 0}:${chat.pending?.status ?? ""}`;
   const [unseen, setUnseen] = useState(false);
+  // Where the app last scrolled to, so its own scroll is not read as the
+  // person scrolling away.
+  const placed = useRef<number | null>(null);
   useLayoutEffect(() => {
     const el = threadRef.current;
     if (!el) return;
-    if (pinned.current) el.scrollTop = el.scrollHeight;
-    else setUnseen(true);
+    if (!pinned.current) {
+      setUnseen(true);
+      return;
+    }
+    el.scrollTop = followTop(el, chat.pending?.status === "streaming");
+    placed.current = el.scrollTop;
   }, [content]);
   const toBottom = () => {
     const el = threadRef.current;
@@ -104,6 +114,9 @@ export function ChatView(props: ChatViewProps) {
     });
   };
 
+  // 0017, E3: one full facts card per office message in the thread.
+  const facts = factsCards(imports, chat);
+
   const demo = nextDemoMessage(fixtures, state);
   const demoStarted = state.messages.some((m) => DEMO_IDS.includes(m.id));
   const openConflict = state.case.question === null && state.case.conflicts.some((c) => c.status === "open" && c.askable && c.archivedSlotKeys.length === 0);
@@ -122,6 +135,8 @@ export function ChatView(props: ChatViewProps) {
         ref={threadRef}
         onScroll={(e) => {
           const el = e.currentTarget;
+          if (placed.current !== null && Math.abs(el.scrollTop - placed.current) < 2) return;
+          placed.current = null;
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           if (pinned.current) setUnseen(false);
         }}
@@ -141,7 +156,7 @@ export function ChatView(props: ChatViewProps) {
             />
           )}
           {imports.filter((x) => x.after === 0).map((x) => (
-            <ImportedItem key={x.messageId} messageId={x.messageId} state={state} run={run} />
+            <ImportedItem key={x.messageId} messageId={x.messageId} state={state} run={run} place={facts.get(`import:${x.messageId}`)} />
           ))}
           {chat.messages.map((m, i) => (
             <div key={m.id} className="msg-group">
@@ -153,15 +168,16 @@ export function ChatView(props: ChatViewProps) {
                 tools={chat.toolsByMessage[m.id]}
                 onShowSlot={onShowSlot}
                 onImport={offersImport(m, userTextBefore(chat, i)) ? () => openImport(m.declined ? declinedOriginal(chat, i) : userTextBefore(chat, i)) : undefined}
+                facts={facts}
               />
               {imports
                 .filter((x) => x.after === i + 1)
                 .map((x) => (
-                  <ImportedItem key={x.messageId} messageId={x.messageId} state={state} run={run} />
+                  <ImportedItem key={x.messageId} messageId={x.messageId} state={state} run={run} place={facts.get(`import:${x.messageId}`)} />
                 ))}
             </div>
           ))}
-          {chat.pending && <PendingItem turn={chat.pending} state={state} run={run} scripted={scripted} onShowSlot={onShowSlot} onImport={() => openImport(chat.pending?.userText ?? "")} />}
+          {chat.pending && <PendingItem turn={chat.pending} state={state} run={run} scripted={scripted} onShowSlot={onShowSlot} onImport={() => openImport(chat.pending?.userText ?? "")} facts={facts} />}
         </div>
       </div>
       <div className="composer-wrap">
@@ -326,7 +342,7 @@ function declinedOriginal(chat: ChatState, index: number): string {
   return before && before.role === "user" ? (chat.declinedText[before.id] ?? "") : "";
 }
 
-function ImportedItem({ messageId, state, run }: { messageId: string; state: AppState; run: Run }) {
+function ImportedItem({ messageId, state, run, place }: { messageId: string; state: AppState; run: Run; place?: FactsPlace }) {
   return (
     <article className="msg msg-assistant" aria-label="Office message you added">
       <div className="msg-meta">
@@ -335,9 +351,89 @@ function ImportedItem({ messageId, state, run }: { messageId: string; state: App
         </span>
         <span className="msg-who">You added an office message</span>
       </div>
-      <ClaimsCard messageId={messageId} evidenceIds={[]} state={state} run={run} />
+      <FactsCard messageId={messageId} evidenceIds={[]} state={state} run={run} place={place} />
     </article>
   );
+}
+
+// 0017, E3. A facts card renders the message's facts from the live case
+// view, so a second card for the same message in the thread is the same
+// card. The first keeps its place, and each later one is a short line that
+// points to it.
+export type FactsPlace = { anchor: string; repeat: boolean };
+
+const factsKey = (chatMessageId: string, index: number) => `${chatMessageId}:${index}`;
+
+// The facts cards of the thread, in the order it shows them: the imports
+// before the first message, then each message and the imports after it,
+// then the turn being streamed.
+export function factsCards(imports: Array<{ messageId: string; after: number }>, chat: Pick<ChatState, "messages" | "pending">): Map<string, FactsPlace> {
+  const out = new Map<string, FactsPlace>();
+  const first = new Map<string, string>();
+  const add = (key: string, messageId: string) => {
+    const anchor = first.get(messageId);
+    if (anchor) out.set(key, { anchor, repeat: true });
+    else {
+      const id = `facts-${first.size + 1}`;
+      first.set(messageId, id);
+      out.set(key, { anchor: id, repeat: false });
+    }
+  };
+  const importsAfter = (n: number) => imports.filter((x) => x.after === n).forEach((x) => add(`import:${x.messageId}`, x.messageId));
+  importsAfter(0);
+  chat.messages.forEach((m, i) => {
+    m.cards.forEach((c, j) => c.kind === "claims" && add(factsKey(m.id, j), c.messageId));
+    importsAfter(i + 1);
+  });
+  chat.pending?.cards.forEach((c, j) => c.kind === "claims" && add(factsKey(PENDING_MESSAGE, j), c.messageId));
+  return out;
+}
+
+function FactsCard({ messageId, evidenceIds, state, run, fresh = false, place }: { messageId: string; evidenceIds: string[]; state: AppState; run: Run; fresh?: boolean; place?: FactsPlace }) {
+  if (place?.repeat) return <FactsPointer messageId={messageId} anchor={place.anchor} state={state} />;
+  return (
+    <div id={place?.anchor} tabIndex={place ? -1 : undefined} className="facts-anchor">
+      <ClaimsCard messageId={messageId} evidenceIds={evidenceIds} state={state} run={run} fresh={fresh} />
+    </div>
+  );
+}
+
+function FactsPointer({ messageId, anchor, state }: { messageId: string; anchor: string; state: AppState }) {
+  const view = state.messages.find((m) => m.id === messageId);
+  const sender = view ? senderShown(view, state) : null;
+  const waiting = view ? [...view.evidenceIds, ...view.manualEvidenceIds].filter((id) => state.evidence.find((e) => e.id === id)?.status === "pending").length : 0;
+  const show = () => {
+    const el = document.getElementById(anchor);
+    if (!el) return;
+    const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
+    el.focus({ preventScroll: true });
+  };
+  return (
+    <p className="facts-pointer small">
+      <Icon name="message" size="sm" />
+      <span>
+        {sender ? `The facts from ${sender} are in the card above.` : "These facts are in the card above."}
+        {waiting > 0 && ` ${waiting === 1 ? "1 waits" : `${waiting} wait`} for you there.`}
+      </span>
+      <button type="button" className="link-btn" onClick={show}>
+        Show the card
+      </button>
+    </p>
+  );
+}
+
+// The scroll position that follows the thread. While a turn streams, the
+// end. Otherwise the end, but never past the start of the newest answer, so
+// its first words stay in view.
+export function followTop(el: HTMLElement, streaming: boolean): number {
+  const end = Math.max(0, el.scrollHeight - el.clientHeight);
+  if (streaming) return end;
+  const answers = el.querySelectorAll("article.msg-assistant");
+  const last = answers[answers.length - 1] as HTMLElement | undefined;
+  if (!last) return end;
+  const start = last.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 12;
+  return Math.max(0, Math.min(end, start));
 }
 
 // The message id a chip of the streamed turn carries until the stored
@@ -356,6 +452,7 @@ function Extras({
   state,
   run,
   onShowSlot,
+  facts,
 }: {
   messageId: string;
   fresh?: boolean;
@@ -365,6 +462,7 @@ function Extras({
   state: AppState;
   run: Run;
   onShowSlot: (k: string, from?: HTMLElement) => void;
+  facts?: Map<string, FactsPlace>;
 }): ReactNode {
   // A claims card shows its own receipt, so its facts are not repeated
   // as a second one.
@@ -394,7 +492,7 @@ function Extras({
         </div>
       )}
       {cards.map((c, i) => (
-        <CardView key={i} card={c} state={state} run={run} fresh={fresh} actions={actions} />
+        <CardView key={i} card={c} state={state} run={run} fresh={fresh} actions={actions} place={facts?.get(factsKey(messageId, i))} />
       ))}
     </>
   );
@@ -408,6 +506,7 @@ function MessageItem({
   tools,
   onShowSlot,
   onImport,
+  facts,
 }: {
   message: ChatMessage;
   state: AppState;
@@ -416,6 +515,7 @@ function MessageItem({
   tools?: ToolLine[];
   onShowSlot: (k: string, from?: HTMLElement) => void;
   onImport?: () => void;
+  facts?: Map<string, FactsPlace>;
 }) {
   const { activity } = useAgent();
   if (m.role === "user") return <UserBubble text={m.text} at={m.createdAt} />;
@@ -434,7 +534,7 @@ function MessageItem({
           {m.text && <p className="assistant-text">{m.text}</p>}
         </>
       )}
-      <Extras messageId={m.id} cards={m.cards} chips={m.chips} actions={entriesById(activity, m.actions ?? [])} state={state} run={run} onShowSlot={onShowSlot} />
+      <Extras messageId={m.id} cards={m.cards} chips={m.chips} actions={entriesById(activity, m.actions ?? [])} state={state} run={run} onShowSlot={onShowSlot} facts={facts} />
     </article>
   );
 }
@@ -446,6 +546,7 @@ function PendingItem({
   scripted,
   onShowSlot,
   onImport,
+  facts,
 }: {
   turn: PendingTurn;
   state: AppState;
@@ -453,6 +554,7 @@ function PendingItem({
   scripted: boolean;
   onShowSlot: (k: string, from?: HTMLElement) => void;
   onImport: () => void;
+  facts?: Map<string, FactsPlace>;
 }) {
   const err = turn.error;
   // ungrounded and model_unavailable: the streamed text is a fixed
@@ -498,7 +600,7 @@ function PendingItem({
             )}
           </>
         )}
-        <Extras messageId={PENDING_MESSAGE} fresh cards={turn.cards} chips={turn.chips} actions={turn.actions} state={state} run={run} onShowSlot={onShowSlot} />
+        <Extras messageId={PENDING_MESSAGE} fresh cards={turn.cards} chips={turn.chips} actions={turn.actions} state={state} run={run} onShowSlot={onShowSlot} facts={facts} />
         {err?.code === "stopped" && (
           <p className="notice" role="status">
             <Icon name="stop" />
@@ -684,10 +786,11 @@ export function turnErrorText(err: { code: string; message: string }): string {
 
 // `actions` are the turn's activity entries. A notice that states one of
 // them shows when it was undone (0016, L1).
-export function CardView({ card, state, run, fresh = false, actions = [] }: { card: Card; state: AppState; run: Run; fresh?: boolean; actions?: ActivityEntry[] }) {
+// `place` says where a facts card sits among the thread's (0017, E3).
+export function CardView({ card, state, run, fresh = false, actions = [], place }: { card: Card; state: AppState; run: Run; fresh?: boolean; actions?: ActivityEntry[]; place?: FactsPlace }) {
   switch (card.kind) {
     case "claims":
-      return <ClaimsCard messageId={card.messageId} evidenceIds={card.evidenceIds} state={state} run={run} fresh={fresh} />;
+      return <FactsCard messageId={card.messageId} evidenceIds={card.evidenceIds} state={state} run={run} fresh={fresh} place={place} />;
     case "question":
       return <QuestionCard conflictId={card.conflictId} state={state} run={run} />;
     case "explanation":
