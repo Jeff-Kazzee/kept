@@ -596,6 +596,10 @@ items below. Decisions: `docs/decisions/0018-gmail-step.md`.
 - [x] H8 Noted: Google Calendar shows no tentative marker. No change.
 - [x] The demo story's placeholder chat recordings rewritten with
   `pnpm demo:recordings`.
+- [x] Review fix round 1 (0018): Add it only for offered emails of this
+  account and case, one outcome per email for import and read, no sender
+  name in the Gmail tools, one offer per email, and declined set only by
+  the tool.
 - [ ] The coordinator's live rerun of the Gmail step.
 - [ ] Confirm or change the choices marked proposed in 0018.
 

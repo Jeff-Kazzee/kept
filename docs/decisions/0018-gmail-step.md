@@ -16,9 +16,12 @@ Code: `src/google/tools.ts`, `src/agent/agent.ts`, `src/agent/tools.ts`,
 `server/request-log.ts`, `ui/chat/ChatView.tsx`, `ui/chat/state.ts`,
 `ui/agent/Receipts.tsx`, `ui/agent/AgentContext.tsx`,
 `ui/schedule/CaseTabs.tsx`, `ui/api.ts`, `ui/format.ts`, `ui/styles.css`.
-Tests: `test/sprint13e-gmail.test.ts`, `ui/chat/sprint13e.dom.test.ts`, and
-changes to `test/google.test.ts`, `test/google-agent.test.ts`,
-`test/review-sprint12.test.ts` and `test/review-sprint12-round2.test.ts`.
+Fix round 1 adds `src/google/offers.ts`, `src/google/connection.ts`,
+`src/case/history.ts`, `server/google.ts`, `server/workspace.ts` and
+`ui/shell/shell.ts`. Tests: `test/sprint13e-gmail.test.ts`,
+`ui/chat/sprint13e.dom.test.ts`, and changes to `test/google.test.ts`,
+`test/google-agent.test.ts`, `test/review-sprint12.test.ts` and
+`test/review-sprint12-round2.test.ts`.
 
 ## H1. One ask imports every matching email
 
@@ -163,10 +166,10 @@ Found: the refusal to add back a removed event showed as "Worked through
 Changed:
 
 - A tool result can say it `declined`: the tool chose not to act by a
-  rule. The sync's refusal for a removed event sets it, and so does every
-  `waits_for_person` refusal of a paste turn (0009, D2'). (proposed: the
-  paste-turn refusal counts too.) The result stays not ok for the model and
-  the eval, with the same code.
+  rule. The sync's refusal for a removed event sets it, and so does the
+  paste rule's refusal of a write (0009, D2', fix round 1, R5). (proposed:
+  the paste-turn refusal counts too.) The result stays not ok for the model
+  and the eval, with the same code.
 - `tool.finished` carries `declined: true`. The step reads "Updating your
   online calendar. It chose not to act." with an info mark, and the
   summary "Worked through 2 steps, 1 chose not to act". A real failure
@@ -197,6 +200,53 @@ Noted, no change. The app writes `status: "tentative"` for a requested
 appointment, and the API stores it, but Google Calendar's web page shows
 no marker for it. The event's title says "(requested)" until the office
 confirms. Run 3 saw the same.
+
+## Fix round 1 (review of 2026-10-29)
+
+- R1. "Add it" imports only an email code offered. When a turn adds
+  `gmail_waiting` cards it records each offer on the case's
+  `gmail_offers` stream with the Gmail account it was found in (the
+  account's Google id, never an address) and the case generation.
+  `POST /api/gmail/<id>/add` refuses with 409 `gmail_not_offered` an id not
+  offered for the account connected now and the current generation, and
+  writes nothing. Delete case erases the stream with the case. A
+  disconnect, or a connect that names another account, drops every offer,
+  and the account check now counts the Gmail account too, for a connection
+  without the calendar. The turn reads the account only after it searched
+  Gmail. The stream is left out of the case history.
+- R2. An email's import and read are one outcome. `gmail_import` reports
+  each email as refused (nothing added), added and read, or added and not
+  read: a read that fails after the add leaves the email in the case,
+  unread, and its result says `status: "imported"`, `not_read` with the
+  reason's code, and a note that its card can read it again or take its
+  facts by hand. It is counted as `imported_not_read`, not as refused, and
+  is not marked refused for the offers. Any other error of one email is
+  that email's `server_error` result and the others still run. Errors that
+  end every turn still end it: Delete case, a busy store, the turn's token
+  limit and the hosted usage stop. "Add it" no longer hides a failed read:
+  the person is told "Added the email from Lantern Hill Clinic, Oct 28,
+  6:43 PM, but it was not read." with the reason and "Its card has Read
+  this message.", and a missing model still links to Connections.
+- R3. The Gmail tools no longer give the sender line. Each email has
+  `office` (the page's name, or null for "the office") and
+  `sender_domain`, the domain of the sender's address, so the model cannot
+  copy the account's display name before the page names the office. The
+  email's subject and body are still given as message text, labeled
+  untrusted. The H3 test now answers "the office" while `office` is null.
+- R4. One offer per email. A turn does not offer an email an earlier answer
+  still offers for the same account and case. The page shows only the
+  newest card for each email, so one email never has two "Add it"
+  buttons, and after Undo of its import only that card offers it again.
+- R5. Only the tool says it chose not to act: `declined` is set by the
+  paste rule's refusal (`pasteRefusal`) and the refusal to add back a
+  removed event. The agent no longer reads it from the `waits_for_person`
+  code, so `gmail_import`'s refusal to read an unread email in a paste
+  turn counts as a step that did not finish. This replaces the H6 bullet
+  that counted every `waits_for_person` refusal.
+
+The recordings did not change: the demo story runs without Google, so
+the Gmail tools' texts are not in its requests, and `pnpm demo:recordings`
+wrote the same files.
 
 ## Recordings
 
