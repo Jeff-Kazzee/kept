@@ -282,3 +282,13 @@ describe("sprint 13D, E6: the page shows each thing once and never the account's
     expect(html(accepted)).toContain("Facts from Lantern Hill Clinic");
   });
 });
+
+describe("sprint 13D fix round 2, F6: a pointer to a message no longer in the case", () => {
+  it("says the message is gone and offers no Show the card button", async () => {
+    const gone = { kind: "claims" as const, messageId: "gmail-gone", evidenceIds: [] };
+    const view = await mountChat(chatOf([answer("a1", "Added.", [gone]), question("u2", "Does Monday clash?"), answer("a2", "Yes.", [gone])]));
+    expect(view.container.textContent).toContain("This message is no longer in the case.");
+    expect(view.container.querySelectorAll("button").filter((b) => b.textContent.trim() === "Show the card")).toHaveLength(0);
+    await view.unmount();
+  });
+});

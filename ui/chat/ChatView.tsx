@@ -411,11 +411,21 @@ function FactsPointer({ messageId, anchor, state }: { messageId: string; anchor:
     el.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
     el.focus({ preventScroll: true });
   };
+  // Fix round 2, F6: a message no longer in the case has no card to show,
+  // so the line says so and offers no button.
+  if (!view) {
+    return (
+      <p className="facts-pointer small">
+        <Icon name="message" size="sm" />
+        <span>This message is no longer in the case.</span>
+      </p>
+    );
+  }
   return (
     <p className="facts-pointer small">
       <Icon name="message" size="sm" />
       <span>
-        {sender ? `The facts from ${sender} are in the card above.` : "These facts are in the card above."}
+        The facts from {sender} are in the card above.
         {waiting > 0 && ` ${waiting === 1 ? "1 waits" : `${waiting} wait`} for you there.`}
       </span>
       <button type="button" className="link-btn" onClick={show}>
