@@ -15,7 +15,6 @@ import { CaseAgent, replacedAnswerLine } from "../src/agent/agent.ts";
 import { defaultMessageId } from "../src/agent/tools.ts";
 import { CaseService } from "../src/case/service.ts";
 import { localDate } from "../src/domain/zone.ts";
-import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { GoogleCalendar } from "../src/google/calendar.ts";
 import { GoogleConnection } from "../src/google/connection.ts";
 import { GoogleCalendarEvents } from "../src/google/events.ts";
@@ -128,7 +127,7 @@ export function createWorkspace(o: WorkspaceOptions) {
   const googleEvents = new GoogleCalendarEvents(googleCalendar);
   const google: GoogleServices = { connection: googleConnection, gmail: new Gmail(googleConnection), calendar: googleCalendar, events: googleEvents };
   const intake = new IntakeService(store, client);
-  const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name, externalCalendar: () => googleEvents.snapshot(), externalVersion: () => googleEvents.version() });
+  const kase = new CaseService(store, intake, client, { externalCalendar: () => googleEvents.snapshot(), externalVersion: () => googleEvents.version() });
   const reply = new ReplyService(store, kase, client);
   const records = new RecordsService(store, intake, kase);
   const api = createApi(intake, kase, { settings: auth.source, ready }, reply, { store, records, google });

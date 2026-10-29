@@ -20,7 +20,7 @@ const ORIGIN_LABELS: Record<DraftView["origin"], string> = {
 // The reply card: the draft while it is open, then its simulated send.
 export function ReplyCard({ draftId, state, run }: { draftId: string; state: AppState; run: Run }) {
   const reply = state.case.reply;
-  if (reply.draft?.id === draftId) return <DraftCard draft={reply.draft} version={reply.version} run={run} />;
+  if (reply.draft?.id === draftId) return <DraftCard draft={reply.draft} version={reply.version} profileVersion={state.case.profile?.version ?? 0} run={run} />;
   const sent = reply.sent.find((s) => s.draftId === draftId);
   if (sent) return <SentCard sent={sent} />;
   return (
@@ -32,10 +32,10 @@ export function ReplyCard({ draftId, state, run }: { draftId: string; state: App
 
 // The reply section of the Schedule tab: the open draft, the templates the
 // user can pick by hand, and the replies already approved.
-export function ReplyPanel({ reply, run }: { reply: ReplyView; run: Run }) {
+export function ReplyPanel({ reply, run, profileVersion = 0 }: { reply: ReplyView; run: Run; profileVersion?: number }) {
   return (
     <div className="stack">
-      {reply.draft && <DraftCard draft={reply.draft} version={reply.version} run={run} />}
+      {reply.draft && <DraftCard draft={reply.draft} version={reply.version} profileVersion={profileVersion} run={run} />}
       {reply.suggestion && <SuggestionNotice suggestion={reply.suggestion} />}
       {(reply.options.length > 0 || reply.withheld.length > 0) && (
         <details className="stack-sm">
@@ -122,7 +122,7 @@ export function setSharedReadback(key: string, change: (prev: SharedReadback) =>
 export const readbackKey = (draft: DraftView, version: number) =>
   [draft.id, version, draft.text, JSON.stringify(draft.fields.map((f) => [f.name, f.value]))].join("|");
 
-export function DraftCard({ draft, version, run }: { draft: DraftView; version: number; run: Run }) {
+export function DraftCard({ draft, version, profileVersion = 0, run }: { draft: DraftView; version: number; profileVersion?: number; run: Run }) {
   const [text, setText] = useState(draft.text);
   const uid = useId();
   const key = readbackKey(draft, version);
@@ -177,9 +177,12 @@ export function DraftCard({ draft, version, run }: { draft: DraftView; version: 
                   <span>
                     <span className="muted small">{f.label}</span>
                     <br />
-                    <span className="readback-value">{f.display ?? <em>Not in any accepted evidence. Left out of the reply.</em>}</span>
+                    <span className="readback-value">
+                      {f.display ?? <em>{f.name === "user_name" ? "Not given yet. The reply ends without a name." : "Not in any accepted evidence. Left out of the reply."}</em>}
+                    </span>
                   </span>
                 </label>
+                {f.name === "user_name" && f.display === null && !draft.edited && <NameForm version={profileVersion} run={run} />}
                 {f.untrustedLabel && <p className="warn">{f.untrustedLabel}</p>}
                 {f.sources.length > 0 && (
                   <div className="stack-sm">
@@ -249,6 +252,25 @@ export function DraftCard({ draft, version, run }: { draft: DraftView; version: 
       ) : null}
       <p className="small muted">Sending is simulated. Nothing leaves this app.</p>
     </section>
+  );
+}
+
+// 0016, M2: the reply is signed only with a name the person gives in this
+// case. Giving it builds the open draft again with the name, to read back.
+function NameForm({ version, run }: { version: number; run: Run }) {
+  const [name, setName] = useState("");
+  const uid = useId();
+  const ok = name.trim() !== "" && !name.includes("@");
+  return (
+    <div className="name-form">
+      <label className="field" htmlFor={`${uid}-name`}>
+        <span className="small">Your name, to sign the reply</span>
+        <input id={`${uid}-name`} name="user-name" className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={100} autoComplete="name" />
+      </label>
+      <ActionButton run={run} size="sm" disabled={!ok} action={() => api.giveName(name, version)}>
+        Sign with this name
+      </ActionButton>
+    </div>
   );
 }
 

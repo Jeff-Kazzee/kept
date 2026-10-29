@@ -190,6 +190,7 @@ export const api = {
     request<CaseView>("POST", "/api/reply/drafts", { expectedVersion, template, slotKey }),
   editDraft: (id: string, text: string, expectedVersion: number) =>
     request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/edit`, { expectedVersion, text }),
+  giveName: (name: string, expectedVersion: number) => request<CaseView>("POST", "/api/profile/name", { expectedVersion, name }),
   discardDraft: (id: string, expectedVersion: number) =>
     request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/discard`, { expectedVersion }),
   deleteCase: (expectedVersion: number, confirmation: string) =>

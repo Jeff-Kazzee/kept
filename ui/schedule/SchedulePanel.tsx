@@ -160,7 +160,7 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
               </div>
             </>
           )}
-          {replyWaiting && <ReplyPanel reply={{ ...reply, sent: [] }} run={run} />}
+          {replyWaiting && <ReplyPanel reply={{ ...reply, sent: [] }} run={run} profileVersion={kase.profile?.version ?? 0} />}
         </section>
       )}
       <section className="stack" aria-labelledby="appointments">

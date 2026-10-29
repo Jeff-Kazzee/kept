@@ -55,6 +55,7 @@ const AnswerBody = z
   .object({ expectedVersion: Version, choiceId: z.string().min(1).max(200), replyVersion: Version.optional() })
   .strict();
 const StartDraftBody = z.object({ expectedVersion: Version, template: z.string().min(1).max(50), slotKey: z.string().min(1).max(50) }).strict();
+const NameBody = z.object({ expectedVersion: Version, name: z.string().max(200) }).strict();
 const EditDraftBody = z.object({ expectedVersion: Version, text: z.string().max(5000) }).strict();
 const SuggestBody = z.object({ expectedVersion: Version, intent: z.string().max(2000).nullable() }).strict();
 const DeleteCaseBody = z.object({ expectedVersion: Version, confirmation: z.string().max(20) }).strict();
@@ -202,6 +203,11 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     ["POST", /^\/api\/reply\/drafts\/([^/]+)\/edit$/, (m, body) => {
       const { expectedVersion, text } = EditDraftBody.parse(body);
       return actions.editDraft(YOU, decodeURIComponent(m[1]!), text, expectedVersion);
+    }],
+    // 0016, M2: the name that signs replies, given by the person.
+    ["POST", /^\/api\/profile\/name$/, (_m, body) => {
+      const { expectedVersion, name } = NameBody.parse(body);
+      return actions.giveName(YOU, name, expectedVersion);
     }],
     ["POST", /^\/api\/reply\/drafts\/([^/]+)\/discard$/, (m, body) =>
       actions.discardDraft(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),

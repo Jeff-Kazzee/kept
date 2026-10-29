@@ -143,6 +143,7 @@ const NOT_UNDOABLE = {
   explain: "An explanation changes nothing in your schedule, so there is nothing to undo.",
   suggest: "A template suggestion changes nothing in your schedule, so there is nothing to undo.",
   edit: "An edit to a draft cannot be undone. Edit the text again, or discard the draft.",
+  name: "Giving your name cannot be undone. Give another name to change it.",
   approve: "The reply was approved and its send simulated. A sent reply cannot be unsent.",
   undo: "An undo cannot be undone. Make the change again instead.",
   recordUndo: "This undo cannot be undone. Make the change again instead.",
@@ -743,6 +744,19 @@ export class CaseActions {
       target: { type: "draft", id: draftId },
       undo: null,
       whyNot: NOT_UNDOABLE.edit,
+    }));
+  }
+
+  // 0016, M2: the person gives the name that signs replies. The person
+  // only. The name is the person's own words, so the entry leaves it out.
+  giveName(by: By, name: string, expectedVersion: number): CaseView {
+    this.#personOnly(by, "give the name that signs your replies");
+    return this.#act(by, () => this.#reply.giveName(name, expectedVersion), () => ({
+      kind: "name_given",
+      summary: "Gave the name that signs your replies.",
+      target: null,
+      undo: null,
+      whyNot: NOT_UNDOABLE.name,
     }));
   }
 

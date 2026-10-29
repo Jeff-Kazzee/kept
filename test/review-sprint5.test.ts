@@ -412,7 +412,7 @@ describe("review round 2, B3: every public write of the case services runs as on
   // Reads, and the scope and transaction primitives the MCP server uses.
   const NOT_WRITES: Record<string, string[]> = {
     IntakeService: ["modelLabel", "message", "evidenceItem", "messages", "evidence", "reviewQueue", "acceptedEvidence", "verificationProblem"],
-    CaseService: ["view", "history", "caseVersion", "replyState", "generation", "inCase", "erasePending", "archivedKeys", "liveVersion", "timeZone", "zoned", "questions"],
+    CaseService: ["view", "history", "caseVersion", "replyState", "generation", "inCase", "erasePending", "archivedKeys", "liveVersion", "timeZone", "zoned", "questions", "userName", "profileVersion"],
     ReplyService: [],
     RecordsService: ["transaction", "caseGeneration", "inCase", "record", "appointments", "appointment", "openQuestions", "accessLog"],
     CaseActions: ["activity", "activityVersion"],
@@ -484,6 +484,7 @@ describe("review round 2, B3: every public write of the case services runs as on
     await step("ReplyService", "undoDiscard", () => app.reply.undoDiscard(draftId));
     await step("ReplyService", "discard", () => app.reply.discard(draftId, app.kase.view().reply.version));
     await step("ReplyService", "suggest", () => app.reply.suggest("I want Monday.", app.kase.view().reply.version));
+    await step("ReplyService", "giveName", () => app.reply.giveName("Sam Rivera", app.kase.profileVersion()));
     await step("ReplyService", "start", () => app.reply.start("accept_offer", "2026-11-16T13:00", app.kase.view().reply.version));
     view = app.kase.view();
     await step("ReplyService", "approve", () => app.reply.approve(view.reply.draft!.id, view.reply.draft!.fields.map((f) => f.name), view.reply.version));
@@ -525,6 +526,8 @@ describe("review round 2, B3: every public write of the case services runs as on
     view = app.kase.view();
     const mon2 = view.question!.choices.find((c) => c.label.includes("Monday"))!;
     await act("answerQuestion", () => a.answerQuestion(bot, view.question!.id, mon2.id, view.questionsVersion, view.reply.version));
+    view = app.kase.view();
+    await act("giveName", () => a.giveName(you, "Sam Rivera", app.kase.profileVersion()));
     view = app.kase.view();
     await act("editDraft", () => a.editDraft(you, view.reply.draft!.id, "Monday works for me.", view.reply.version));
     view = app.kase.view();

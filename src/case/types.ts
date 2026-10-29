@@ -77,4 +77,7 @@ export type CaseView = {
   reply: ReplyView;
   // What the office asked the user to bring or do, from accepted evidence.
   checklist: ChecklistItem[];
+  // The name that signs replies, given by the person in this case, and
+  // the version a new name states (0016, M2).
+  profile: { userName: string | null; version: number };
 };

@@ -14,7 +14,6 @@
 // stderr. stdout carries only MCP messages.
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { CaseService } from "../src/case/service.ts";
-import { loadCaseProfile } from "../src/fixtures/load.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { ChatGptAuth } from "../src/model/providers/chatgpt-auth.ts";
 import { createProviderClient } from "../src/model/providers/factory.ts";
@@ -62,7 +61,7 @@ const google: GoogleServices = { connection: googleConnection, gmail: new Gmail(
 // inherits it.
 delete process.env.GOOGLE_CLIENT_SECRET;
 const intake = new IntakeService(store, client);
-const kase = new CaseService(store, intake, client, { userName: loadCaseProfile().user_name, externalCalendar: () => googleEvents.snapshot(), externalVersion: () => googleEvents.version() });
+const kase = new CaseService(store, intake, client, { externalCalendar: () => googleEvents.snapshot(), externalVersion: () => googleEvents.version() });
 const reply = new ReplyService(store, kase, client);
 const records = new RecordsService(store, intake, kase);
 // J12: a tool that needs the model is refused while no provider is ready.

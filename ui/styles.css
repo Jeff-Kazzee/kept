@@ -1059,3 +1059,5 @@ figure.source { margin: 0; }
 .zone-notice { flex-wrap: wrap; text-align: left; }
 .zone-notice .btn { min-height: 0; }
 .notice.is-undone s { color: var(--text-2); text-decoration-thickness: 1px; }
+.name-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s-1); margin-top: var(--s-1); }
+.name-form .field { flex: 1 1 12rem; }

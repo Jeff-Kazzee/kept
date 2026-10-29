@@ -3,7 +3,7 @@
 // claims the template asserts as user-reported evidence and a simulated
 // send. Nothing leaves the app. Every write states the expected version of
 // the reply stream.
-import type { CaseService } from "../case/service.ts";
+import { MAX_NAME_CHARS, PROFILE_STREAM, type CaseService, type ProfileEvent } from "../case/service.ts";
 import type { CaseView } from "../case/types.ts";
 import type { Effort, EvidenceClaim } from "../domain/claim.ts";
 import { OutOfScopeError, hasClinicalContent } from "../domain/scope.ts";
@@ -22,7 +22,7 @@ import { claimConfirmation, draftClaims, draftValidity } from "./view.ts";
 
 export const MAX_REPLY_CHARS = 2000;
 
-const asEvent = (e: ReplyEvent | EvidenceEvent) => ({ type: e.type, data: e.data });
+const asEvent = (e: ReplyEvent | EvidenceEvent | ProfileEvent) => ({ type: e.type, data: e.data });
 
 // The template call defaults to effort low, like the other D2 calls.
 export type ReplyOptions = { now?: () => string; effort?: Effort; model?: string };
@@ -155,6 +155,43 @@ export class ReplyService {
       );
     }
     this.#appendFor(built?.ok ? built.content.slot.key : null, () => this.#store.append(REPLY_STREAM, expectedVersion, events.map(asEvent), this.#describe));
+    return this.#kase.view();
+  }
+
+  // 0016, M2: the person gives the name that signs replies, in this case.
+  // An open draft that has no name and was not edited is built again with
+  // it, in the same write, so the card shows the signed text to read back.
+  giveName(name: string, expectedVersion: number): CaseView {
+    return this.#store.inCase(() => this.#giveName(name, expectedVersion));
+  }
+
+  #giveName(raw: string, expectedVersion: number): CaseView {
+    const name = raw.replace(/\s+/g, " ").trim();
+    if (name === "" || name.length > MAX_NAME_CHARS) throw new InvalidRequestError(`Give a name of 1 to ${MAX_NAME_CHARS} characters.`);
+    if (/[@<>\u0000-\u001F\u007F]/.test(name)) throw new InvalidRequestError("Give your name, not an email address.");
+    if (hasClinicalContent(name)) throw new OutOfScopeError();
+    this.#store.transaction(() => {
+      const event: ProfileEvent = { type: "user_name_given", data: { name } };
+      this.#store.append(PROFILE_STREAM, expectedVersion, [asEvent(event)], () => ({ version: this.#kase.profileVersion() }));
+      const { context, log } = this.#kase.replyState();
+      const open = openDraft(log);
+      const unnamed = open && !open.edited && open.fields.some((f) => f.name === "user_name" && f.value === null);
+      if (!open || !unnamed) return;
+      const built = buildDraft(open.template, open.slotKey, context);
+      if (!built.ok) return;
+      const events = draftEvents(log, {
+        template: open.template,
+        slot_key: open.slotKey,
+        slot_label: built.content.slot.label,
+        origin: open.origin,
+        question_id: open.questionId,
+        suggestion_id: open.suggestionId,
+        fields: built.content.fields,
+        declines: built.content.declines,
+        text: built.content.text,
+      });
+      this.#store.append(REPLY_STREAM, log.version, events.map(asEvent), this.#describe);
+    });
     return this.#kase.view();
   }
 

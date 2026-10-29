@@ -49,6 +49,12 @@ export const MAX_CALENDAR_CHARS = 60_000;
 // Streams from before sprint 8 (grants, proposals) are erased too.
 export const KEPT_ON_DELETE = [SETTINGS_STREAM] as const;
 
+// 0016, M2: the name the person gave in this case to sign replies. It is a
+// case stream, so Delete case erases it.
+export const PROFILE_STREAM = "profile";
+export type ProfileEvent = { type: "user_name_given"; data: { name: string } };
+export const MAX_NAME_CHARS = 100;
+
 export { DELETE_CONFIRMATION };
 
 const asEvent = (e: CaseEvent | EvidenceEvent) => ({ type: e.type, data: e.data });
@@ -76,7 +82,8 @@ const summary = (a: AttemptData): AttemptSummary => ({
   latency_ms: a.latency_ms,
 });
 
-// `userName` comes from the case profile and signs replies.
+// `userName` signs replies in tests and evals. The app passes none, and
+// replies are signed with the name the person gave in the case (0016, M2).
 // `externalCalendar` gives calendar events from outside the case, such as
 // the person's Google Calendar (0012). They join the loaded .ics events for
 // the clash checks.
@@ -153,6 +160,18 @@ export class CaseService {
   // not make the user's confirmation stale.
   caseVersion(): number {
     return this.#store.latestSeqExcept([SETTINGS_STREAM, ACCESS_LOG_STREAM]);
+  }
+
+  // The name that signs replies: the one a test or an eval passes, else
+  // the last one the person gave in this case (0016, M2). Null when none.
+  userName(): string | null {
+    if (this.#userName !== null) return this.#userName;
+    const given = this.#store.readStream(PROFILE_STREAM).filter((e) => e.type === "user_name_given").at(-1);
+    return given ? (given.data as ProfileEvent["data"]).name : null;
+  }
+
+  profileVersion(): number {
+    return this.#store.streamVersion(PROFILE_STREAM);
   }
 
   // The case's time zone (0009, J5), read from the settings each time.
@@ -241,7 +260,7 @@ export class CaseService {
       slots: projection.slots,
       evidence,
       messages: this.#intake.messages(),
-      userName: this.#userName,
+      userName: this.userName(),
       officeAcceptedSeqs: this.#officeAcceptedSeqs(evidence),
       archived: [...archived].sort(),
       timeZone,
@@ -260,6 +279,7 @@ export class CaseService {
       reply: replyView(replies, replyContext),
       // An agent's report of an office request waits like its other reports.
       checklist: buildChecklist(evidence.filter((e) => !unconfirmedAgentReport(e))),
+      profile: { userName: replyContext.userName, version: this.profileVersion() },
     };
     return { view, evidence, conflicts: projection.conflicts, queue, open, current, replyContext, replies };
   }
