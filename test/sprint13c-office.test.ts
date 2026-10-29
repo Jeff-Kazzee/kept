@@ -138,3 +138,17 @@ describe("sprint 13C fix round 2, N3: one office, named from accepted facts", ()
     expect(officeOf(slot(["gmail-2-e1"]), [...ev, evidence("gmail-2-e1", "gmail-2", "2026-11-16", "13:00", null)], messages)).toMatchObject({ name: "Lantern Hill Clinic", location: PLACE });
   });
 });
+
+describe("sprint 13C fix round 2, N4: no evidence id in a reply field's source", () => {
+  it("a source with no quote reads in words, for an office fact and for an agent's report", () => {
+    const messages = [message("gmail-1", "lantern hill <front@lanternhill.example>")];
+    const noQuote = (id: string, source: string) =>
+      ({ id, version: 1, messageId: "gmail-1", status: "accepted", claim: { claim_type: "offer", slot: { date: "2026-11-16", time: "13:00", location: PLACE }, quote: null, source_type: source, agent_name: "Laptop assistant" } }) as unknown as EvidenceView;
+    const ev = [noQuote("gmail-1-e7", "office_message"), noQuote("p-9-e1", "reported_by_user_via_agent")];
+    const s = slot(["gmail-1-e7"], "requested", PLACE);
+    const { fields } = slotFields("ask_still_stands", s, { slots: [s], evidence: ev, messages, userName: null, timeZone: ZONE });
+    const texts = fields.flatMap((f) => f.sources.map((x) => x.text));
+    expect(texts).toContain("From the message that set this time");
+    for (const t of texts) expect(t).not.toMatch(/gmail-1-e7|p-9-e1|\bEvidence\b/);
+  });
+});

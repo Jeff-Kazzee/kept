@@ -190,7 +190,7 @@ function SlotRow({ slot: s, record, state, run, highlight }: { slot: SlotView; r
             {s.locationDisputed && <span className="warn">The sources disagree on the place</span>}
             <StateQuote id={s.stateEvidenceId} state={state} />
             <Unconfirmed ids={s.unconfirmedEvidenceIds ?? []} state={state} />
-            {s.staleEvidenceIds.length > 0 && <p className="warn">A reminder for this time may be out of date: {s.staleEvidenceIds.join(", ")}</p>}
+            {s.staleEvidenceIds.length > 0 && <p className="warn">A reminder for this time may be out of date.</p>}
             {clashes.length > 0 ? (
               clashes.map((c, i) => (
                 <p key={i} className="clash">

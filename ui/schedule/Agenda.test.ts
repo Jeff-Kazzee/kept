@@ -46,3 +46,13 @@ describe("agenda", () => {
     expect(html).toContain("<span>Clash</span>");
   });
 });
+
+describe("sprint 13C fix round 2, N4: no evidence id on the schedule", () => {
+  it("a stale reminder is named in words, without its evidence id", () => {
+    const slot = { ...(state.case.slots[0] as object), staleEvidenceIds: ["gmail-18f0a1-e3", "m2-e4"] };
+    const stale = { ...state, case: { ...state.case, slots: [slot] } } as unknown as AppState;
+    const html = renderToStaticMarkup(createElement(Agenda, { state: stale, run: async () => {} }));
+    expect(html).toContain("A reminder for this time may be out of date.</p>");
+    expect(html).not.toMatch(/gmail-18f0a1-e3|m2-e4/);
+  });
+});

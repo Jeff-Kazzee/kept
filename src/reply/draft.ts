@@ -74,15 +74,18 @@ function officeName(slot: SlotView, ctx: ReplyContext): { value: string; source:
   return { value: office.name, source: { kind: "evidence", evidenceId: office.evidenceId, text: `Sender of ${messageLabel(message, wall, office.name)}` } };
 }
 
+// Fix round 2, N4: a source without a quote, in words without its id.
+export const NO_QUOTE_SOURCE = "From the message that set this time";
+
 // An evidence item as a field source. The quote of an agent's confirmed
 // report is the agent's own words, so it carries the agent's name and the
 // untrusted label instead of being shown as a quote.
 function evidenceSource(e: EvidenceView): FieldSource {
   const c = e.claim;
   if (c.source_type === "reported_by_user_via_agent") {
-    return { kind: "evidence", evidenceId: e.id, text: c.quote ?? `Evidence ${e.id}`, agentName: c.agent_name ?? null, untrustedLabel: agentWordsLabel(c.agent_name) };
+    return { kind: "evidence", evidenceId: e.id, text: c.quote ?? NO_QUOTE_SOURCE, agentName: c.agent_name ?? null, untrustedLabel: agentWordsLabel(c.agent_name) };
   }
-  return { kind: "evidence", evidenceId: e.id, text: c.quote ? `Quote: “${c.quote}”` : `Evidence ${e.id}` };
+  return { kind: "evidence", evidenceId: e.id, text: c.quote ? `Quote: “${c.quote}”` : NO_QUOTE_SOURCE };
 }
 
 // A value that only agents' words support, such as a place an agent
