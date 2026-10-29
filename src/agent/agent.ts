@@ -91,6 +91,9 @@ export const AGENT_INSTRUCTIONS = [
   "Answer in at most three short sentences in plain words.",
 ].join(" ");
 
+// How long a running turn holds Delete case back (0017, fix round 2, F1).
+export const TURN_STALE_MS = 5 * 60_000;
+
 const ERROR_MESSAGES: Record<ChatErrorCode, string> = {
   out_of_scope: SCOPE_DECLINE,
   case_deleted: "The case was deleted while this was in progress. Nothing was saved.",
@@ -206,10 +209,14 @@ export class CaseAgent {
   readonly #onRejected: NonNullable<AgentOptions["onRejected"]>;
   readonly #admit: () => void;
   #busy = false;
+  // When the running turn started, by this agent's clock.
+  #busySince: number | null = null;
 
-  // Whether a turn is running now. Delete case waits for it (0017, R1).
+  // Whether a turn is running now. Delete case waits for it (0017, R1). A
+  // turn running longer than TURN_STALE_MS no longer counts, so a turn that
+  // never ends cannot block Delete case for good (fix round 2, F1).
   get busy(): boolean {
-    return this.#busy;
+    return this.#busySince !== null && Date.parse(this.#now()) - this.#busySince < TURN_STALE_MS;
   }
 
   constructor(store: EventStore, services: ToolServices, client: ToolModelClient, options: AgentOptions = {}) {
@@ -274,6 +281,7 @@ export class CaseAgent {
       return report;
     }
     this.#busy = true;
+    this.#busySince = Date.parse(this.#now());
     try {
       await this.#store.inCase(() => this.#turn(turnId, input, emit, report), input.generation);
     } catch (err) {
@@ -281,6 +289,7 @@ export class CaseAgent {
       fail(errorCode(err), err instanceof UsageRefusedError ? err.userText : undefined);
     } finally {
       this.#busy = false;
+      this.#busySince = null;
     }
     if (report.rejected.length > 0) this.#onRejected({ turnId, rejected: report.rejected });
     return report;
