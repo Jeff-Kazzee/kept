@@ -180,3 +180,18 @@ holds: under 150 KB of JavaScript gzipped on first load.
 - C4. The suggestion row above the composer still scrolls sideways (0011,
   U19). A chip cut at the edge fades out over 48 px, and space after the
   last chip lets it scroll clear of the fade.
+
+## Review round 2 (Muse Wonder and the coordinator)
+
+Round 2 found every round 1 item closed. The coordinator fixed what it
+found:
+
+- The top bar comes before the sidebar in the DOM, so Tab meets the fold
+  toggle first, then the sidebar, then the case. The grid places both, so
+  nothing moves on screen.
+- Choosing the view that is already open leaves focus where it is.
+- The test DOM's `click()` does nothing on a hidden element, as a browser
+  does.
+
+Left as a note: the fold toggle exists only at laptop width, so resizing
+below 1024 px while it has focus drops focus to the page.
