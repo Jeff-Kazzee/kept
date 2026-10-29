@@ -197,15 +197,22 @@ const STATUS: Partial<Record<SlotView["state"], EventFields["status"]>> = {
   confirmed: "confirmed",
 };
 
-const SUMMARY: Record<EventFields["status"], (s: SlotView) => string> = {
-  tentative: (s) => (s.state === "change_proposed" ? "Appointment (change proposed)" : "Appointment (requested, not confirmed)"),
-  confirmed: () => "Appointment",
+// 0016, H4: the title names the office and the state, as "Lantern Hill
+// Clinic (requested)". The state words are code's. Without an office name
+// the title keeps the earlier words.
+const SUMMARY: Record<EventFields["status"], (s: SlotView, office: string | null) => string> = {
+  tentative: (s, office) =>
+    s.state === "change_proposed" ? `${office ?? "Appointment"} (change proposed)` : office ? `${office} (requested)` : "Appointment (requested, not confirmed)",
+  confirmed: (_s, office) => office ?? "Appointment",
 };
 
+// The office as the case holds it (src/reply/office.ts).
+export type EventOffice = { name: string | null; location: string | null };
+
 // The event the slot should have, or null when it should have none. Every
-// word is written by code, except the place, which comes from the office's
-// message and is shown in the calendar as given.
-export function desiredEvent(slot: SlotView | null, timeZone: string): EventFields | null {
+// word is written by code, except the office's name and place, which come
+// from the office's messages and are shown in the calendar as given.
+export function desiredEvent(slot: SlotView | null, timeZone: string, office: EventOffice | null = null): EventFields | null {
   const status = slot ? STATUS[slot.state] : undefined;
   if (!slot || !status) return null;
   const timed = slot.time !== null;
@@ -216,12 +223,12 @@ export function desiredEvent(slot: SlotView | null, timeZone: string): EventFiel
     ? { dateTime: new Date(wallClockToUtc(slot.date, slot.time!, timeZone) + ASSUMED_SLOT_MINUTES * 60_000).toISOString(), timeZone }
     : { date: addDays(slot.date, 1) };
   return {
-    summary: SUMMARY[status](slot),
+    summary: SUMMARY[status](slot, office?.name ? clean(office.name, 100) : null),
     description:
       `Added by the appointment change assistant for ${slotLabel(slot.date, slot.time)}. ` +
       (status === "confirmed" ? "The office confirmed it." : "The office has not confirmed it yet.") +
       " The app updates this event when the appointment changes. Edits made here are not read back.",
-    location: slot.location === null ? "" : clean(slot.location, 300),
+    location: clean(office?.location ?? slot.location ?? "", 300),
     status,
     start,
     end,
@@ -426,10 +433,10 @@ export class GoogleCalendar {
   // slot any more. An event of the app's that was removed in Google
   // Calendar is put back only with `restoreRemoved`, which the agent sets
   // when the person asked for it.
-  async plan(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean } = {}): Promise<Planned> {
+  async plan(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean; office?: EventOffice | null } = {}): Promise<Planned> {
     const { calendarId, sub, key } = this.#conn.calendar();
     const restore = options.restoreRemoved === true;
-    const want = desiredEvent(slot, this.#timeZone());
+    const want = desiredEvent(slot, this.#timeZone(), options.office ?? null);
     const found = await this.#locate(calendarId, sub, slotKey);
     const have = found.live;
     const base = { account: key, calendarId, slotKey };
@@ -512,7 +519,7 @@ export class GoogleCalendar {
   }
 
   // Plans and writes in one step, for callers that record nothing.
-  async sync(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean } = {}): Promise<SyncOutcome> {
+  async sync(slotKey: string, slot: SlotView | null, options: { restoreRemoved?: boolean; office?: EventOffice | null } = {}): Promise<SyncOutcome> {
     const planned = await this.plan(slotKey, slot, options);
     return planned.write ? this.execute(planned.write) : planned.outcome!;
   }

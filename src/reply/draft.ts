@@ -6,7 +6,9 @@ import { agentWordsLabel, untrustedLabel } from "../domain/untrusted.ts";
 import type { EvidenceView, MessageView } from "../intake/events.ts";
 import { dateLabel, timeLabel } from "../slots/labels.ts";
 import type { SlotView } from "../slots/types.ts";
+import { localDateTime } from "../domain/zone.ts";
 import { FIELD_LABELS, TEMPLATES, TEMPLATE_IDS, renderReply, type FieldDisplays, type FieldName, type TemplateId } from "./templates.ts";
+import { messageLabel, officeOf } from "./office.ts";
 import type { FieldSource, FieldView, ReplyOption, WithheldOption } from "./types.ts";
 
 export type ReplyContext = {
@@ -21,6 +23,8 @@ export type ReplyContext = {
   // Slot keys of archived appointments. They leave the reply panel, and no
   // draft is built for one until the archive is undone.
   archived?: string[];
+  // The case's time zone, for the labels of messages in field sources.
+  timeZone?: string;
 };
 
 export type DraftProblem = "unknown_slot" | "slot_archived" | "template_not_valid_for_state" | "missing_field";
@@ -59,16 +63,15 @@ export function proposedAlternatives(slot: SlotView, slots: SlotView[]): SlotVie
   );
 }
 
+// 0016, M1: the office by the name the case holds for it, never an email
+// address. M3: its source names the message by sender and time, not id.
 function officeName(slot: SlotView, ctx: ReplyContext): { value: string; source: FieldSource } | null {
-  // The sender of the latest office message on the slot.
-  for (const id of [...slot.evidenceIds].reverse()) {
-    const ev = ctx.evidence.find((e) => e.id === id);
-    const message = ev?.messageId ? ctx.messages.find((m) => m.id === ev.messageId) : undefined;
-    if (!ev || !message || message.sourceType !== "office_message") continue;
-    const value = oneLine(message.message.from);
-    if (value) return { value, source: { kind: "evidence", evidenceId: id, text: `Sender of message ${message.id}` } };
-  }
-  return null;
+  const office = officeOf(slot, ctx.evidence, ctx.messages);
+  const message = office.messageId ? ctx.messages.find((m) => m.id === office.messageId) : undefined;
+  if (!office.name || !message) return null;
+  const zone = ctx.timeZone ?? "UTC";
+  const wall = (iso: string) => (Number.isFinite(Date.parse(iso)) ? localDateTime(Date.parse(iso), zone) : null);
+  return { value: office.name, source: { kind: "evidence", evidenceId: office.evidenceId, text: `Sender of ${messageLabel(message, wall)}` } };
 }
 
 // An evidence item as a field source. The quote of an agent's confirmed

@@ -543,7 +543,7 @@ describe("Calendar: one event per slot, only the app's own, every write undoable
     expect(r.output).toMatchObject({ action: "created", event_status: "confirmed", undoable: true });
     expect(r.cards).toEqual([{ kind: "notice", text: "Added Thursday 11/12 10:30 AM to Google Calendar as confirmed." }]);
     const [event] = primary(s);
-    expect(event).toMatchObject({ status: "confirmed", summary: "Appointment", location: "Lantern Hill Clinic, 400 Elm Street, Suite 2", extendedProperties: { private: { [APP_PROPERTY]: "1", [SLOT_PROPERTY]: "2026-11-12T10:30" } } });
+    expect(event).toMatchObject({ status: "confirmed", summary: "Front Desk, Lantern Hill Clinic", location: "Lantern Hill Clinic, 400 Elm Street, Suite 2", extendedProperties: { private: { [APP_PROPERTY]: "1", [SLOT_PROPERTY]: "2026-11-12T10:30" } } });
     expect((event!.start as any).dateTime).toBe("2026-11-12T17:30:00.000Z");
     const entry = c.entries.at(-1)!;
     expect(entry).toMatchObject({ kind: "calendar_event_added", summary: "Added Thursday 11/12 10:30 AM to Google Calendar as confirmed.", undo: { kind: "google_calendar", action: "created", eventId: event!.id, before: null } });
@@ -570,7 +570,7 @@ describe("Calendar: one event per slot, only the app's own, every write undoable
     expect(outcome).toMatchObject({ action: "updated", status: "tentative" });
     expect(primary(s)[0]).toMatchObject({ status: "tentative", summary: "Appointment (requested, not confirmed)" });
     await undoGoogleActivity(c.ctx, outcome.undo!);
-    expect(primary(s)[0]).toMatchObject({ status: "confirmed", summary: "Appointment" });
+    expect(primary(s)[0]).toMatchObject({ status: "confirmed", summary: "Front Desk, Lantern Hill Clinic" });
   });
 
   it("calendar_remove_slot deletes the app's event, and undo creates it again", async () => {
@@ -1356,7 +1356,7 @@ describe("review round 3", () => {
     store.failActivity = 1;
     await expect(c.ctx.actions.undoEntry({ actor: "you" }, entry.id, c.ctx.actions.activityVersion())).rejects.toBeInstanceOf(StoreBusyError);
     // Google has the earlier fields back, and the entry is not undone yet.
-    expect(live(s)[0]).toMatchObject({ status: "confirmed", summary: "Appointment" });
+    expect(live(s)[0]).toMatchObject({ status: "confirmed", summary: "Front Desk, Lantern Hill Clinic" });
     expect(c.entries.find((e) => e.id === entry.id)!.undoneAt).toBeNull();
     const sent = calendarWrites(s).length;
     const undone = await c.ctx.actions.undoEntry({ actor: "you" }, entry.id, c.ctx.actions.activityVersion());

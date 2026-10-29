@@ -244,6 +244,7 @@ export class CaseService {
       userName: this.#userName,
       officeAcceptedSeqs: this.#officeAcceptedSeqs(evidence),
       archived: [...archived].sort(),
+      timeZone,
     };
     const replies = projectReplies(this.#store.readStream(REPLY_STREAM));
     const view: CaseView = {

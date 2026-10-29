@@ -112,7 +112,7 @@ describe("sprint 11: the in-app agent with Gmail and Google Calendar", () => {
     expect(added.map((e) => [e.kind, e.actor, e.target?.id, e.undoable])).toEqual([["calendar_event_added", "agent", THU, true]]);
     const event = [...fake.calendars.get("primary")!.values()][0]!;
     // The case's time zone: 10:30 in America/Denver.
-    expect(event).toMatchObject({ status: "confirmed", summary: "Appointment", start: { dateTime: "2026-11-12T17:30:00.000Z", timeZone: "America/Denver" } });
+    expect(event).toMatchObject({ status: "confirmed", summary: "Front Desk, Lantern Hill Clinic", start: { dateTime: "2026-11-12T17:30:00.000Z", timeZone: "America/Denver" } });
 
     // The person undoes the calendar write in the app.
     const api = createApi(app.intake, app.kase, {}, app.reply, { store: app.store, records: app.records, google });

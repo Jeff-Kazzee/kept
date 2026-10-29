@@ -28,6 +28,7 @@ import { OutOfScopeError } from "../domain/scope.ts";
 import type { EvidenceView } from "../intake/events.ts";
 import { InvalidRequestError } from "../intake/service.ts";
 import { AppointmentId } from "../records/inputs.ts";
+import { officeOf } from "../reply/office.ts";
 import { slotLabel } from "../slots/labels.ts";
 import type { SlotView } from "../slots/types.ts";
 import { StaleEditError } from "../store/event-log.ts";
@@ -158,7 +159,9 @@ async function calendarWrite(ctx: ToolContext, name: "calendar_sync_slot" | "cal
     // Review round 3, finding 2: an earlier write whose entry was not
     // recorded gets it now, before anything else is written.
     await ctx.actions.reconcileGoogle(ctx.by);
-    const planned = await google.calendar.plan(slotKey, name === "calendar_sync_slot" ? slot : null, { restoreRemoved });
+    // 0016, H4: the event names the office and its place.
+    const office = slot ? officeOf(slot, ctx.intake.evidence(), ctx.intake.messages()) : null;
+    const planned = await google.calendar.plan(slotKey, name === "calendar_sync_slot" ? slot : null, { restoreRemoved, office });
     if (planned.write) {
       const write = planned.write;
       const expected = KIND_OF_ACTION[write.plan.action]!;

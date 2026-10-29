@@ -160,3 +160,22 @@ describe("sprint 13C, H2: Read the calendar again reports when it read", () => {
     expect(after.body).toMatchObject({ calendarRead: { events: 1, error: { code: "google_unavailable" } } });
   });
 });
+
+describe("sprint 13C, H4: the event at Google", () => {
+  it("is titled by the office and the state with the office's place, and a requested slot is tentative at Google", async () => {
+    const { fake, app } = await connected();
+    const { googleToolByName } = await import("../src/google/tools.ts");
+    const sync = googleToolByName("calendar_sync_slot")!;
+    const ctx = { ...mcpContext(app.store, app, CLOCK()), by: { actor: "agent" as const } };
+    const done = await sync.run(ctx, sync.input.parse({ slot_key: "2026-11-12T10:30", restore_removed: null }));
+    expect(done.ok).toBe(true);
+    const event = [...fake.calendars.get("primary")!.values()][0]!;
+    expect(event).toMatchObject({ summary: "Lantern Hill Clinic", status: "confirmed", location: "Lantern Hill Clinic, 400 Elm Street, Suite 2" });
+    // The same event while requested: Google records it as tentative.
+    const thu = { ...app.kase.view().slots[0]!, state: "requested" as const };
+    await app.google.calendar.sync(thu.key, thu, { office: { name: "Lantern Hill Clinic", location: thu.location } });
+    const sent = fake.calls.filter((c) => c.method === "PATCH").at(-1)!;
+    expect(JSON.parse(sent.body)).toMatchObject({ status: "tentative", summary: "Lantern Hill Clinic (requested)" });
+    expect(fake.calendars.get("primary")!.get(event.id)).toMatchObject({ status: "tentative", summary: "Lantern Hill Clinic (requested)" });
+  });
+});
