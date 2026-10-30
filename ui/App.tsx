@@ -49,7 +49,7 @@ const fakesBuilt = import.meta.env.DEV || import.meta.env.APP_FAKES === true;
 type ScriptedModule = typeof import("./chat/mockStream.ts");
 // Started with the page, beside the first reads.
 const scriptedLoad: Promise<ScriptedModule> | null = fakesBuilt && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("mockchat") === "1" ? import("./chat/mockStream.ts") : null;
-const scriptedChat = () => fakesBuilt && new URLSearchParams(window.location.search).get("mockchat") === "1";
+const scriptedChat = () => fakesBuilt && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("mockchat") === "1";
 
 // 0019, P18: what is not on the case screen loads on demand. Each import
 // is one function, so every caller (the sidebar, the account menu, a
@@ -104,8 +104,12 @@ function PageLoading() {
 // The page first asks which mode the server runs in (0014). Local mode is
 // the app as it was. The hosted site shows the sign-in screen until a
 // session is open, and the app after.
-export function Root() {
-  const [session, setSession] = useState<SessionInfo | null>(null);
+// 0019, P30: a page the server rendered passes what it rendered from, so
+// the first render here is the same, and React hydrates it.
+export type Initial = { session: SessionInfo; boot: BootData };
+
+export function Root({ initial }: { initial?: Initial } = {}) {
+  const [session, setSession] = useState<SessionInfo | null>(initial?.session ?? null);
   const [failed, setFailed] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const load = useCallback(async () => {
@@ -121,6 +125,7 @@ export function Root() {
     setSession((s) => (s && s.mode === "hosted" ? { mode: "hosted", signedIn: false, googleSignIn: s.googleSignIn } : s));
   }, []);
   useEffect(() => {
+    if (initial) return;
     // A failed Sign in with Google comes back as /?signInError=<code>.
     const params = new URLSearchParams(window.location.search);
     const code = params.get("signInError");
@@ -141,7 +146,7 @@ export function Root() {
     );
   }, []);
   if (failed) return <LoadError message={failed} onRetry={() => void load()} />;
-  return <RootView session={session} notice={notice} setNotice={setNotice} setSession={setSession} toSignIn={toSignIn} />;
+  return <RootView session={session} notice={notice} setNotice={setNotice} setSession={setSession} toSignIn={toSignIn} boot={initial?.boot} />;
 }
 
 // Who the page is open for: local, signed out, or one hosted account. Kept
@@ -155,7 +160,9 @@ function RootView({
   setNotice,
   setSession,
   toSignIn,
+  boot,
 }: {
+  boot?: BootData;
   session: SessionInfo | null;
   notice: string | null;
   setNotice: (t: string | null) => void;
@@ -187,14 +194,15 @@ function RootView({
       </>
     );
   }
-  return <App hosted={session.mode === "hosted" ? session : null} onSession={setSession} onSignedOut={toSignIn} />;
+  return <App hosted={session.mode === "hosted" ? session : null} onSession={setSession} onSignedOut={toSignIn} boot={boot} />;
 }
 
 export function App({
   hosted = null,
   onSession = () => {},
   onSignedOut = () => {},
-}: { hosted?: SignedInSession | null; onSession?: (s: SessionInfo) => void; onSignedOut?: (text: string | null) => void } = {}) {
+  boot,
+}: { hosted?: SignedInSession | null; onSession?: (s: SessionInfo) => void; onSignedOut?: (text: string | null) => void; boot?: BootData } = {}) {
   const scripted = useMemo(scriptedChat, []);
   // Read through refs, so a new balance does not start another read.
   const hostedRef = useRef(hosted);
@@ -213,11 +221,12 @@ export function App({
   }, [scripted]);
   const scriptedLog = useMemo(() => (fakesBuilt && mock ? mock.createScriptedLog(sessionStorage) : null), [mock]);
   const backend: AgentBackend = useMemo(() => (fakesBuilt && mock && scriptedLog ? mock.scriptedBackend(realBackend, scriptedLog) : realBackend), [mock, scriptedLog]);
-  const [state, setState] = useState<AppState | null>(null);
-  const [firstChat, setFirstChat] = useState<ChatLog | null | undefined>(undefined);
-  const [settings, setSettings] = useState<Settings | null>(null);
-  const [activity, setActivity] = useState<ActivityLog | null>(null);
-  const [google, setGoogle] = useState<GoogleStatus | null>(null);
+  // A server-rendered page starts from its boot data (0019, P30).
+  const [state, setState] = useState<AppState | null>(boot?.state ?? null);
+  const [firstChat, setFirstChat] = useState<ChatLog | null | undefined>((boot?.chat as ChatLog | null | undefined) ?? undefined);
+  const [settings, setSettings] = useState<Settings | null>(() => normalizeSettings((boot?.settings as Settings | null) ?? null));
+  const [activity, setActivity] = useState<ActivityLog | null>((boot?.activity as ActivityLog | null) ?? null);
+  const [google, setGoogle] = useState<GoogleStatus | null>((boot?.google as GoogleStatus | null) ?? null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
@@ -236,9 +245,24 @@ export function App({
   // reads as null: the default zone, and the case history in Activity. Any
   // other failure keeps the last good value (Muse round 1, finding 5).
   const reads = useRef(0);
-  const firstRender = useRef(true);
-  const last = useRef<{ settings: Settings | null; activity: ActivityLog | null; google: GoogleStatus | null }>({ settings: null, activity: null, google: null });
+  const firstRender = useRef(!boot);
+  const last = useRef<{ settings: Settings | null; activity: ActivityLog | null; google: GoogleStatus | null }>({ settings, activity, google });
   const [degraded, setDegraded] = useState(false);
+  // On first load with no zone set, the page sends this device's zone.
+  // It counts as done once sent, or when someone else set the settings
+  // first. A failed send is tried again at the next read (finding 8).
+  const sendZoneOnce = useCallback(
+    async (s: Settings | null, stale: () => boolean) => {
+      if (!s || s.timezoneSource !== "default" || sentZone.current) return;
+      const zone = deviceZone();
+      sentZone.current = true;
+      if (!zone) return;
+      const outcome = await sendDeviceZone(backend, s, zone);
+      if (outcome === "failed") sentZone.current = false;
+      else if (!stale()) void refreshRef.current();
+    },
+    [backend],
+  );
   const refresh = useCallback(async () => {
     const mine = ++reads.current;
     const stale = () => mine !== reads.current;
@@ -275,32 +299,22 @@ export function App({
       setDegraded(!sRead.ok || !aRead.ok || !gRead.ok);
       setState(next);
       setLoadError(null);
-      // On first load with no zone set, the page sends this device's zone.
-      // It counts as done once sent, or when someone else set the settings
-      // first. A failed send is tried again at the next read (finding 8).
-      if (s && s.timezoneSource === "default" && !sentZone.current) {
-        const zone = deviceZone();
-        if (!zone) {
-          sentZone.current = true;
-          return;
-        }
-        sentZone.current = true;
-        const outcome = await sendDeviceZone(backend, s, zone);
-        if (outcome === "failed") sentZone.current = false;
-        else if (!stale()) void refreshRef.current();
-      }
+      await sendZoneOnce(s, stale);
     } catch (e) {
       if (signedOut(e)) return onSignedOutRef.current("Your session ended. Sign in again.");
       if (!stale()) setLoadError(errorSentence(e));
     }
-  }, [backend, scripted]);
+  }, [backend, scripted, sendZoneOnce]);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
 
   useEffect(() => {
     // The scripted chat reads through its own backend, once it is in.
     if (scripted && !mock) return;
-    void refresh();
+    // A server-rendered page shows its boot data, and the live read catches
+    // anything newer. It only sends the device's zone when none is set.
+    if (boot && !scripted) void sendZoneOnce(settings, () => false);
+    else void refresh();
     const back = signInReturn(new URLSearchParams(window.location.search));
     if (back) {
       toast(back.kind, back.text);
@@ -460,6 +474,10 @@ function Shell({
   useEffect(() => {
     if (sheetOpen) setSheetUsed(true);
   }, [sheetOpen]);
+  // Set once the shell is on screen, so what the page opens with is not
+  // faded in (0019, P30).
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
   // The phone sheet's height (0019, P16). It opens full.
   const [snap, setSnap] = useState<Snap>("full");
   useEffect(() => {
@@ -474,15 +492,21 @@ function Shell({
   // The view the work area shows (0015). A page covers the case, which
   // stays mounted under it, so the chat, its scroll and the draft stay.
   const [view, setView] = useState<View>("case");
-  const [folded, setFolded] = useState(readFolded);
-  const device = useMemo(deviceZone, []);
+  // Read after the first render, so a server-rendered page hydrates as it
+  // was rendered (0019, P30).
+  const [folded, setFolded] = useState(false);
+  const [device, setDevice] = useState<string | null>(null);
+  useEffect(() => {
+    setFolded(readFolded());
+    setDevice(deviceZone());
+  }, []);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const sheetToggle = useRef<HTMLButtonElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const drawerClose = useRef<HTMLButtonElement>(null);
   const title = useRef<HTMLHeadingElement>(null);
-  const laptop = useMedia(LAPTOP);
-  const phone = !useMedia(TABLET_UP);
+  const laptop = useMedia(LAPTOP, true);
+  const phone = !useMedia(TABLET_UP, true);
   const online = useOnline();
   const layout: SideLayout = phone ? "drawer" : laptop && !folded ? "full" : "rail";
   const panelMounted = laptop || sheetOpen || sheetUsed;
@@ -679,7 +703,7 @@ function Shell({
 
   return (
     <AgentContext.Provider value={agent}>
-      <div className="app" data-snap={snap} data-panel={sheetOpen ? "open" : "closed"} data-rail={railed ? "folded" : "open"} data-side={layout} data-drawer={drawerOpen ? "open" : "closed"} data-view={view}>
+      <div className="app" data-ready={ready || undefined} data-snap={snap} data-panel={sheetOpen ? "open" : "closed"} data-rail={railed ? "folded" : "open"} data-side={layout} data-drawer={drawerOpen ? "open" : "closed"} data-view={view}>
         {/* The top bar comes first in the DOM so Tab meets the fold toggle
             before the sidebar (review r2). The grid places both. */}
         <header className="topbar" inert={inert.topbar}>
@@ -855,8 +879,9 @@ export function caseLine(state: Pick<AppState, "case" | "records">, waiting: num
 
 // True while the browser says it is online.
 function useOnline(): boolean {
-  const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
+  const [online, setOnline] = useState(true);
   useEffect(() => {
+    setOnline(navigator.onLine);
     const update = () => setOnline(navigator.onLine);
     window.addEventListener("online", update);
     window.addEventListener("offline", update);

@@ -70,3 +70,19 @@ describe("round 2, finding 2: the first render's data names its generation", () 
     expect(Date.now() - started).toBeLessThan(1000);
   });
 });
+
+describe("0019, P30: the server renders the case screen from the boot data", () => {
+  it("renders the shell, the welcome and the composer, with no inline script the CSP would refuse", async () => {
+    const ws = workspace();
+    const boot = await bootOf(ws);
+    const { renderCase } = await import("../ui/entry-server.tsx");
+    const html = await renderCase(boot as never);
+    expect(html).toContain('class="app"');
+    expect(html).toContain('id="chat-input"');
+    expect(html).toContain("What changed with your appointments?");
+    expect(html).toContain('data-opening="true"');
+    expect(html).not.toMatch(/<script/);
+    // The same boot renders the same HTML, so the page's hydration matches.
+    expect(await renderCase(boot as never)).toBe(html);
+  });
+});

@@ -139,19 +139,47 @@ export function ChatView(props: ChatViewProps) {
   // the first time the thread has content: it opens at its end before the
   // first paint, so the newest answer is the first thing drawn.
   const streamingNow = chat.pending?.status === "streaming";
+  // 0019, P30: until then a server-rendered thread opens at its end in the
+  // first paint, before any script: a reversed column (styles.css,
+  // data-opening), which a browser scrolls from its end. A server-rendered
+  // page keeps it until the person scrolls or the thread changes, and then
+  // leaves it with the view where it was (P31). Leaving it at hydration
+  // would lay the thread out anew and repaint it. The stop at an answer's
+  // start (0017, E3) is for a turn that just ended.
   const opened = useRef(false);
+  const keepOpening = useRef(false);
+  const followedOnce = useRef(false);
+  const [opening, setOpening] = useState(true);
+  const leaveOpening = () => {
+    const el = threadRef.current;
+    if (!el || !el.hasAttribute("data-opening")) return;
+    // In a reversed column the offset counts up from the end, as zero or less.
+    const fromEnd = Math.abs(el.scrollTop);
+    el.removeAttribute("data-opening");
+    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - fromEnd);
+    placed.current = el.scrollTop;
+    setOpening(false);
+  };
   useLayoutEffect(() => {
     const el = threadRef.current;
     if (opened.current || !el || chat.messages.length === 0) return;
     opened.current = true;
+    if (el.hasAttribute("data-opening") && el.closest("[data-server-rendered]") !== null) {
+      keepOpening.current = true;
+      return;
+    }
+    el.removeAttribute("data-opening");
     el.scrollTop = followTop(el, false);
     placed.current = el.scrollTop;
+    setOpening(false);
   }, [chat.messages.length]);
   // When the older messages join the first render's window, the view stays
   // where it was, in the same commit, so nothing in view moves.
   useLayoutEffect(() => {
     const el = threadRef.current;
-    if (windowed || firstWindow === undefined || !el || !opened.current || !pinned.current) return;
+    // A server-rendered page keeps where it opened: the browser anchors the
+    // view while the older messages go in above it.
+    if (windowed || firstWindow === undefined || !el || !opened.current || !pinned.current || keepOpening.current) return;
     el.scrollTop = followTop(el, false);
     placed.current = el.scrollTop;
   }, [windowed, firstWindow]);
@@ -162,6 +190,16 @@ export function ChatView(props: ChatViewProps) {
       setUnseen(true);
       return;
     }
+    // The follow on mount leaves a server-rendered page where it opened. A
+    // later change leaves the opening first.
+    if (keepOpening.current && el.hasAttribute("data-opening")) {
+      if (!followedOnce.current) {
+        followedOnce.current = true;
+        return;
+      }
+      keepOpening.current = false;
+      leaveOpening();
+    }
     const frame = requestAnimationFrame(() => {
       el.scrollTop = followTop(el, streamingNow);
       placed.current = el.scrollTop;
@@ -169,6 +207,7 @@ export function ChatView(props: ChatViewProps) {
     return () => cancelAnimationFrame(frame);
   }, [content]);
   const toBottom = () => {
+    leaveOpening();
     const el = threadRef.current;
     if (!el) return;
     pinned.current = true;
@@ -223,9 +262,14 @@ export function ChatView(props: ChatViewProps) {
       <div
         className="thread"
         data-settled={settled || undefined}
+        data-opening={opening || undefined}
         ref={threadRef}
         onScroll={(e) => {
           const el = e.currentTarget;
+          if (el.hasAttribute("data-opening")) {
+            keepOpening.current = false;
+            leaveOpening();
+          }
           if (placed.current !== null && Math.abs(el.scrollTop - placed.current) < 2) return;
           placed.current = null;
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;

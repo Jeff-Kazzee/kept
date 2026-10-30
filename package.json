@@ -10,7 +10,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ui/tsconfig.json && tsc --noEmit -p ui/tsconfig.node-tests.json",
     "dev": "node server/main.ts",
-    "build": "vite build && node scripts/precompress.ts",
+    "build": "vite build && SSR_BUILD=1 vite build --ssr entry-server.tsx --outDir ../dist/ssr && node scripts/precompress.ts",
     "start": "node server/main.ts --static",
     "mcp": "node mcp/main.ts",
     "eval:live": "node scripts/eval-live.ts",

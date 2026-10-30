@@ -347,6 +347,9 @@ details[open] > :not(summary) { animation: rise var(--dur-2) var(--ease); }
    with room to spare for wider system fonts. */
 .side-name { flex: 1; min-width: 0; font-size: var(--text-sm); font-weight: 650; letter-spacing: var(--tracking-tight); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-fold { margin-left: calc(-1 * var(--s-2)); }
+/* The server renders a laptop. Below laptop width the fold toggle never
+   shows, so it takes no space before the page hydrates (0019, P30). */
+@media (max-width: 1023px) { .side-fold { display: none; } }
 .side-nav { display: grid; align-content: start; gap: var(--s-px); flex: 1; min-height: 0; overflow-y: auto; padding: var(--s-2) var(--s-1); }
 .side-item {
   position: relative; display: flex; align-items: center; gap: var(--s-2); min-height: var(--touch); padding: 0 var(--s-1) 0 var(--s-1h);
@@ -1229,6 +1232,18 @@ figure.source { margin: 0; }
 
 /* Round 2, finding 1: a part whose chunk failed, in its own space. */
 .part-error { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); padding: var(--s-1h) var(--s-2); border-radius: var(--radius-md); background: var(--surface-2); }
+
+/* 0019, P30: a server-rendered thread opens at its end in the first
+   paint, before any script: while it opens, it is a reversed column, which
+   a browser scrolls from its end. The page then takes over and places the
+   view itself (ChatView, followTop). */
+.thread { display: flex; flex-direction: column; }
+.thread > .thread-inner { flex: none; width: 100%; }
+.thread[data-opening] { flex-direction: column-reverse; }
+/* What the page opens with is drawn as it is, not faded in: entrance
+   motion is for what arrives after (P14). */
+.thread[data-opening] * { animation: none; }
+.app:not([data-ready]) .panel, .app:not([data-ready]) .panel-body { animation: none; }
 
 .thread-loading { display: grid; gap: var(--s-1h); padding-top: var(--s-3); }
 

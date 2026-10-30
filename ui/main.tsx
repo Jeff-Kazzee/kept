@@ -1,6 +1,11 @@
 import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, hydrateRoot } from "react-dom/client";
+import { api, type BootData } from "./api.ts";
 import { Root } from "./App.tsx";
+import { DEFAULT_SETTINGS, type Settings } from "./contract.ts";
+import { setCaseZone } from "./format.ts";
+import { loadCaseCards } from "./case/lazyCards.tsx";
+import { loadPanel } from "./schedule/lazyPanel.tsx";
 import "./styles.css";
 import { applyTheme, readTheme } from "./theme.ts";
 
@@ -10,8 +15,34 @@ matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
   if (readTheme() === "system") applyTheme("system");
 });
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <Root />
-  </StrictMode>,
-);
+// 0019, P30: a page the server rendered carries its boot data as a JSON
+// block (data, not code). The page hydrates what the server rendered from
+// it. Otherwise it renders on its own, as before.
+const root = document.getElementById("root")!;
+const inline = document.getElementById("boot");
+let boot: BootData | null = null;
+try {
+  boot = inline?.textContent && root.firstElementChild ? (JSON.parse(inline.textContent) as BootData) : null;
+} catch {
+  boot = null;
+}
+if (boot) {
+  api.adoptBoot(boot);
+  setCaseZone((boot.settings as Settings | null)?.timezone ?? DEFAULT_SETTINGS.timezone);
+  // The parts the server rendered hydrate with their code in place, so an
+  // update before their chunk arrived never replaces what the server drew.
+  // The page is on screen meanwhile.
+  await Promise.all([loadCaseCards(), loadPanel()]).catch(() => {});
+  hydrateRoot(
+    root,
+    <StrictMode>
+      <Root initial={{ session: { mode: "local" }, boot }} />
+    </StrictMode>,
+  );
+} else {
+  createRoot(root).render(
+    <StrictMode>
+      <Root />
+    </StrictMode>,
+  );
+}

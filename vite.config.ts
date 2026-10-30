@@ -13,6 +13,9 @@ import { defineConfig } from "vite";
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
+// The modules that load on demand keep their own chunks (0019, P18).
+const LAZY = /\/(shell\/(PageView|Pages)|pages\/Settings|hosted\/(SignIn|Usage)|chat\/(ImportSheet|mockStream)|case\/(caseCards|ClaimsCard|ConflictCards|ReplyCard|OwnReportCard|Source)|schedule\/(SchedulePanel|Agenda|CaseTabs)|components\/(InfoTip|CopyButton|Untrusted|StateBadge)|domain\/(scope|ics))\.tsx?$/;
+
 export default defineConfig(({ mode }) => ({
   root: here("./ui"),
   publicDir: "public",
@@ -29,6 +32,14 @@ export default defineConfig(({ mode }) => ({
     // Browsers the app supports load module preloads natively.
     modulePreload: { polyfill: false },
     reportCompressedSize: false,
+    // 0019, round 2: the modules the first screen shares with the
+    // on-demand chunks go in one chunk, not ten small ones, which compress
+    // worse and cost a request each. The server build keeps its own split.
+    rollupOptions: {
+      output: {
+        manualChunks: (id: string) => (process.env.SSR_BUILD || /node_modules/.test(id) || !/\/(ui|src)\//.test(id) || LAZY.test(id) ? undefined : "core"),
+      },
+    },
     sourcemap: false,
   },
 }));

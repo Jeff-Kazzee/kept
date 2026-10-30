@@ -7,7 +7,7 @@
 // inline scripts, and requests only to this origin.
 import { createHash } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { brotliCompressSync, gzipSync } from "node:zlib";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
@@ -151,7 +151,25 @@ export function withPreloads(html: string, reads: readonly string[]): string {
   return html.replace("</head>", `  ${links}\n  </head>`);
 }
 
-export type StaticOptions = { preload?: readonly string[] };
+// 0019, P30: the server-rendered case screen. `render` gives the case's
+// HTML and the boot data it was rendered from, or null to serve the plain
+// page. Local mode only (server/main.ts).
+export type Rendered = { html: string; boot: unknown };
+export type StaticOptions = { preload?: readonly string[]; render?: (req: IncomingMessage) => Promise<Rendered | null> };
+
+// The boot data as a JSON block. Data, not code, so the CSP's script-src
+// 'self' holds. Every "<" is escaped, so no "</script>" or "<!--" in a
+// message can end the block, and the two line separators JSON allows but
+// some parsers do not are escaped too.
+export function bootBlock(boot: unknown): string {
+  const json = JSON.stringify(boot).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+  return `<script id="boot" type="application/json">${json}</script>`;
+}
+
+// index.html with the rendered case in #root and the boot block after it.
+export function withRendered(html: string, rendered: Rendered): string {
+  return html.replace('<div id="root"></div>', () => `<div id="root" data-server-rendered="">${rendered.html}</div>${bootBlock(rendered.boot)}`);
+}
 
 // A request handler for every path outside /api/. A path with no file
 // extension that is not a file gets index.html, so the app can own its
@@ -169,7 +187,26 @@ export function createStaticHandler(root: string, options: StaticOptions = {}) {
     });
   }
   const index = files.get("/index.html")!;
+  // The page without preloads, for the rendered case: its data is inline.
+  const template = loadBuild(root).get("/index.html")!.raw.toString("utf8");
+  // A page the server rendered holds this moment's case, so it is never
+  // stored. It is compressed as it is sent.
+  const sendRendered = (req: IncomingMessage, res: ServerResponse, rendered: Rendered) => {
+    const raw = Buffer.from(withRendered(template, rendered));
+    const accepted = (req.headers["accept-encoding"] ?? "").toString();
+    const br = /\bbr\b/.test(accepted);
+    const gz = !br && /\bgzip\b/.test(accepted);
+    const body = br ? brotliCompressSync(raw, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } }) : gz ? gzipSync(raw, { level: 6 }) : raw;
+    const headers: Record<string, string> = { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", Vary: "Accept-Encoding", "Content-Length": String(body.length) };
+    if (br) headers["Content-Encoding"] = "br";
+    if (gz) headers["Content-Encoding"] = "gzip";
+    res.writeHead(200, headers);
+    res.end(req.method === "HEAD" ? undefined : body);
+  };
   return function serveStatic(req: IncomingMessage, res: ServerResponse): void {
+    void serve(req, res);
+  };
+  async function serve(req: IncomingMessage, res: ServerResponse): Promise<void> {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.writeHead(405, { Allow: "GET, HEAD", "Content-Type": "text/plain; charset=utf-8" });
@@ -192,6 +229,16 @@ export function createStaticHandler(root: string, options: StaticOptions = {}) {
       res.end("Not found.");
       return;
     }
+    // The scripted chat of a check build (?mockchat=1) renders on its own.
+    if (entry === index && options.render && !new URL(req.url ?? "/", "http://app.invalid").searchParams.has("mockchat")) {
+      let rendered: Rendered | null = null;
+      try {
+        rendered = await options.render(req);
+      } catch (err) {
+        console.error(`The case screen could not be rendered on the server (${err instanceof Error ? err.name : "error"}). The page renders it itself.`);
+      }
+      if (rendered) return sendRendered(req, res, rendered);
+    }
     const headers: Record<string, string> = { "Content-Type": entry.type, "Cache-Control": entry.cache, ETag: entry.etag, Vary: "Accept-Encoding" };
     if (req.headers["if-none-match"] === entry.etag) {
       res.writeHead(304, headers);
@@ -204,5 +251,5 @@ export function createStaticHandler(root: string, options: StaticOptions = {}) {
     headers["Content-Length"] = String(body.length);
     res.writeHead(200, headers);
     res.end(req.method === "HEAD" ? undefined : body);
-  };
+  }
 }

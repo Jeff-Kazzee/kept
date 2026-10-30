@@ -32,7 +32,9 @@
 //                      mode for Sign in with Google
 //   APP_MODE, APP_MARKUP, APP_DAILY_COST_CAP_USD, APP_JUDGE_TOTAL_CAP_USD,
 //   APP_SERVER_KEY     hosted mode (src/hosted/config.ts, docs/hosted.md)
+import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { pathToFileURL } from "node:url";
 import { clientFromEnv } from "../src/google/connection.ts";
 import { ConfigError, readHostedConfig } from "../src/hosted/config.ts";
 import { appSecretsPath } from "../src/model/providers/secrets.ts";
@@ -45,7 +47,7 @@ import { apiPreamble, secureRequest } from "./http.ts";
 import { requestLogEnabled, requestLogger } from "./request-log.ts";
 import { API_SECURITY_HEADERS, FIRST_LOAD_READS, createStaticHandler } from "./static.ts";
 import { LIVE_PATH, parseSince, waitForChange } from "./live.ts";
-import { createWorkspace, liveOf, send, serveApi } from "./workspace.ts";
+import { bootOf, createWorkspace, liveOf, send, serveApi, type Boot, type Workspace } from "./workspace.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.APP_PORT ?? 5180);
@@ -76,8 +78,24 @@ let ui: (req: IncomingMessage, res: ServerResponse) => void;
 let closeUi = async () => {};
 if (serveBuild) {
   try {
-    // 0019, P17: local mode starts its first reads with the page.
-    ui = createStaticHandler(fromPackage("dist/ui"), { preload: config.mode === "local" ? FIRST_LOAD_READS : [] });
+    // 0019, P17: local mode starts its first reads with the page. P30: and
+    // renders the case screen on the server when the build has the
+    // renderer (dist/ssr). The hosted site does neither.
+    const local = config.mode === "local";
+    const ssrEntry = fromPackage("dist/ssr/entry-server.js");
+    const ssr = local && existsSync(ssrEntry) ? ((await import(pathToFileURL(ssrEntry).href)) as { renderCase: (boot: Boot) => Promise<string> }) : null;
+    ui = createStaticHandler(fromPackage("dist/ui"), {
+      preload: local ? FIRST_LOAD_READS : [],
+      ...(ssr
+        ? {
+            render: async (req) => {
+              if (!renderWorkspace || !hostAllowed(allowed, req.headers.host)) return null;
+              const boot = await bootOf(renderWorkspace);
+              return { html: await ssr.renderCase(boot), boot };
+            },
+          }
+        : {}),
+    });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(2);
@@ -93,6 +111,8 @@ if (serveBuild) {
   closeUi = () => vite.close();
 }
 
+// The local workspace the server renders the case screen from (P30).
+let renderWorkspace: Workspace | null = null;
 let closeApp: () => void;
 let started: () => void;
 
@@ -106,6 +126,7 @@ if (config.mode === "hosted") {
   };
 } else {
   const ws = createWorkspace({ dbPath: appDbPath(), secretsPath: appSecretsPath(), port: PORT, extraHosts, googleClient, serverMetaKey, logRejected: process.env.APP_LOG_REJECTED === "1" });
+  renderWorkspace = ws;
   closeApp = ws.close;
   server.on("request", async (req, res) => {
     // Refuse requests addressed to any other host name, so a page on another
