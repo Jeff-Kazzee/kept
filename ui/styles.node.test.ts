@@ -56,8 +56,10 @@ describe("0015: the shell", () => {
   });
 
   it("review C4: the suggestion row fades at its edge, with room for the last chip to scroll clear of the fade", () => {
-    const row = rule(".composer-inner > .chips");
-    expect(row).toMatch(/padding: 0 48px 2px 0/);
+    // 0019, P8: the row is the composer area's follow-up row.
+    const row = rule(".followup-chips");
+    expect(row).toMatch(/padding: 0 var\(--s-6\) var\(--s-px\) 0/);
     expect(row).toMatch(/mask-image: linear-gradient\(to right, black calc\(100% - 48px\), transparent\)/);
+    expect(row).toMatch(/scroll-snap-type: x mandatory/);
   });
 });
