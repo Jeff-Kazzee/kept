@@ -550,11 +550,14 @@ details[open] > :not(summary) { animation: rise var(--dur-2) var(--ease); }
   display: grid; gap: var(--s-4);
 }
 .msg-group { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-4); }
-/* 0019, P19: a finished turn out of view is not laid out or painted. Its
-   last size is kept, so the scroll height does not jump. The newest turns,
-   the ones the first view shows, always render, so nothing shifts when the
-   thread opens at its end. */
-.msg-group:nth-last-child(n + 6) { content-visibility: auto; contain-intrinsic-block-size: auto 280px; }
+/* 0019, P19: a finished turn out of view is not laid out or painted. Round
+   2, finding 5: only once every turn has been laid out (data-settled), so
+   each one keeps its measured size (the auto in contain-intrinsic), and
+   never a turn with a card the person must act on (a reply, a question, an
+   Add it offer, a clash), which stays in the focus order. The newest turns
+   always render. */
+.msg-group { contain-intrinsic-block-size: auto 280px; }
+.thread[data-settled] .msg-group:nth-last-child(n + 6):not(.has-action) { content-visibility: auto; }
 .msg-group:empty { display: none; }
 
 /* 0017, E6: the scene is wider than the column. It is clipped at the sides, so the thread never scrolls sideways. */
@@ -1209,7 +1212,8 @@ figure.source { margin: 0; }
 .waiting { gap: var(--s-1h); }
 .waiting-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-1); }
 .waiting-head h3 { font-size: var(--text-md); }
-.waiting-summary { color: var(--text-2); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+/* Round 2, finding 8: never clamped, so no code-written word is cut. */
+.waiting-summary { color: var(--text-2); }
 .waiting > .card, .waiting > .claim, .waiting > .stack > .card { padding: var(--s-1h) 0 0; background: transparent; box-shadow: none; border-top: 1px solid var(--hairline); border-radius: 0; }
 .panel .waiting > .claim { border: 0; border-top: 1px solid var(--hairline); border-radius: 0; padding: var(--s-1) 0 0; }
 

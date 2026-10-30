@@ -145,11 +145,12 @@ export function DraftCard({ draft, version, generation = 0, profileVersion = 0, 
         <div className="readback-head">
           <h3>Read back every field before you approve</h3>
           {/* 0019, P10: how far the read back is. */}
-          <span className={`readback-progress${allRead ? " is-done" : ""}`} aria-hidden="true">
-            <span className="tabular">
+          {/* Round 2, finding 8: screen readers hear the count as it moves. */}
+          <span className={`readback-progress${allRead ? " is-done" : ""}`}>
+            <span className="tabular" role="status" aria-live="polite">
               {ticked} of {draft.fields.length} checked
             </span>
-            <progress className="progress" value={ticked} max={Math.max(1, draft.fields.length)} />
+            <progress className="progress" value={ticked} max={Math.max(1, draft.fields.length)} aria-hidden="true" />
           </span>
         </div>
         <p className="small muted">

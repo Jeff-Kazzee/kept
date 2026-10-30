@@ -495,8 +495,12 @@ function Shell({
   const giveBackFocus = (fallback: HTMLElement | null) => {
     const ref = returnTo.current;
     returnTo.current = null;
-    // After React has rendered the chat again.
-    requestAnimationFrame(() => ((ref ? findChip(document, ref) : null) ?? fallback)?.focus());
+    // After React has rendered the chat again. Round 2, finding 6: through
+    // focusSoon, so it waits while the chip is not there yet or still inert.
+    focusSoon(() => {
+      const el = (ref ? findChip(document, ref) : null) ?? fallback;
+      return el && !el.closest("[inert]") ? el : null;
+    });
   };
   // What opened the sheet when it was not a fact chip, such as Open
   // Activity on the Agent access page. Focus goes back to it (Muse round 1,

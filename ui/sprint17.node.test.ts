@@ -353,3 +353,59 @@ describe("round 2, finding 1: a chunk that fails to load", () => {
     expect(calls).toBe(2);
   });
 });
+
+describe("round 2, findings 3, 5, 6 and 8", () => {
+  const three = [entry("b1", "Added the email."), entry("b2", "Set the time zone."), entry("b3", "Added it to Google Calendar.")];
+
+  it("finding 3: a new refusal opens the group again after the person closed it", async () => {
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const container = (document as unknown as { createElement(t: string): unknown; body: { appendChild(n: unknown): void } }).createElement("div");
+    (document as unknown as { body: { appendChild(n: unknown): void } }).body.appendChild(container);
+    const root = createRoot(container as Element);
+    const render = (blocked: Record<string, string>) => act(async () => root.render(createElement(AgentContext.Provider, { value: { ...DEFAULT_AGENT, blocked } }, createElement(Receipts, { entries: three, state }))));
+    await render({});
+    const summary = () => (container as unknown as { querySelector(s: string): { getAttribute(a: string): string | null; click(): void } }).querySelector(".receipt-summary");
+    await act(async () => summary().click());
+    expect(summary().getAttribute("aria-expanded")).toBe("true");
+    await act(async () => summary().click());
+    expect(summary().getAttribute("aria-expanded")).toBe("false");
+    await render({ b2: "A later action depends on this one." });
+    expect(summary().getAttribute("aria-expanded")).toBe("true");
+    await act(async () => summary().click());
+    await render({ b2: "A later action depends on this one.", b3: "Google Calendar is busy." });
+    expect(summary().getAttribute("aria-expanded")).toBe("true");
+    await act(async () => root.unmount());
+  });
+
+  it("finding 8: the summary counts actions, not rows", () => {
+    expect(groupSummary([{ text: "Accepted 3 facts", entries: [entry("c1", "a"), entry("c2", "b"), entry("c3", "c")] }, { text: "Two", entries: [entry("d", "d")] }])).toBe("4 actions · Accepted 3 facts, and 1 more");
+  });
+
+  it("finding 8: the read back count is live text, and the waiting summary is never clamped", () => {
+    expect(read("./case/ReplyCard.tsx")).toMatch(/<span className="tabular" role="status" aria-live="polite">\s*\{ticked\} of \{draft\.fields\.length\} checked/);
+    expect(ruleOf(".waiting-summary")).not.toMatch(/clamp|overflow: hidden/);
+  });
+
+  it("finding 5: a turn with a card the person must act on is never skipped, and turns skip only once settled", async () => {
+    const { needsPerson } = await import("./chat/ChatView.tsx");
+    const st = { evidence: [{ id: "e1", messageId: "m1", status: "pending" }] } as unknown as AppState;
+    expect(needsPerson({ cards: [{ kind: "reply", draftId: "d1" }] } as never, st)).toBe(true);
+    expect(needsPerson({ cards: [{ kind: "question", conflictId: "c1" }] } as never, st)).toBe(true);
+    expect(needsPerson({ cards: [{ kind: "gmail_waiting" }] } as never, st)).toBe(true);
+    expect(needsPerson({ cards: [{ kind: "claims", messageId: "m1", evidenceIds: [] }] } as never, st)).toBe(true);
+    expect(needsPerson({ cards: [{ kind: "claims", messageId: "m2", evidenceIds: [] }] } as never, st)).toBe(false);
+    expect(needsPerson({ cards: [{ kind: "notice", text: "x" }] } as never, st)).toBe(false);
+    expect(css).toMatch(/\n\.thread\[data-settled\] \.msg-group:nth-last-child\(n \+ 6\):not\(\.has-action\) \{ content-visibility: auto; \}/);
+    expect(css).toMatch(/\n\.msg-group \{ contain-intrinsic-block-size: auto 280px; \}/);
+    expect(css).not.toMatch(/\n\.msg-group:nth-last-child[^{]*\{ content-visibility/);
+  });
+
+  it("finding 6: focus going back from the sheet waits through focusSoon for a chip that is there and not inert", () => {
+    const app = read("./App.tsx");
+    const give = app.slice(app.indexOf("const giveBackFocus"), app.indexOf("const opener ="));
+    expect(give).toMatch(/focusSoon\(\(\) => \{/);
+    expect(give).toMatch(/!el\.closest\("\[inert\]"\)/);
+    expect(give).not.toMatch(/requestAnimationFrame/);
+  });
+});

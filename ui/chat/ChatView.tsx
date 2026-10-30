@@ -82,6 +82,14 @@ export function ChatView(props: ChatViewProps) {
     if (windowed) startTransition(() => setWindowed(false));
   }, [windowed]);
   const from = windowed && firstWindow !== undefined ? Math.max(0, chat.messages.length - firstWindow) : 0;
+  // Round 2, finding 5: turns out of view are skipped only once every turn
+  // has been laid out, a frame after the whole thread rendered.
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (windowed || settled) return;
+    const frame = requestAnimationFrame(() => setSettled(true));
+    return () => cancelAnimationFrame(frame);
+  }, [windowed, settled]);
   const draft = useRef<DraftStore | null>(null);
   draft.current ??= createDraft();
   const drafts = draft.current;
@@ -214,6 +222,7 @@ export function ChatView(props: ChatViewProps) {
     <section className="chat" aria-label="Chat">
       <div
         className="thread"
+        data-settled={settled || undefined}
         ref={threadRef}
         onScroll={(e) => {
           const el = e.currentTarget;
@@ -248,7 +257,7 @@ export function ChatView(props: ChatViewProps) {
             <ImportedItem key={x.messageId} messageId={x.messageId} state={state} run={run} place={facts.get(`import:${x.messageId}`)} />
           ))}
           {chat.messages.map((m, i) => i < from ? null : (
-            <div key={m.id} className={`msg-group${m.role === "user" ? " is-user" : ""}`}>
+            <div key={m.id} className={`msg-group${m.role === "user" ? " is-user" : ""}${needsPerson(m, state) ? " has-action" : ""}`}>
               <MessageItem
                 message={m}
                 state={state}
@@ -624,6 +633,16 @@ export function followTop(el: HTMLElement, streaming: boolean): number {
 }
 
 const NO_CHIPS: FactChip[] = [];
+
+// Round 2, finding 5: a turn with a card the person must act on: a reply,
+// a question or its explanation, an Add it offer, a question about their
+// own report, or facts that wait for them. Its turn is never skipped.
+const ACTION_CARDS = new Set<Card["kind"]>(["reply", "question", "explanation", "gmail_waiting", "own_report"]);
+export function needsPerson(m: Pick<ChatMessage, "cards">, state: Pick<AppState, "evidence">): boolean {
+  return m.cards.some(
+    (c) => ACTION_CARDS.has(c.kind) || (c.kind === "claims" && state.evidence.some((e) => e.messageId === c.messageId && e.status === "pending")),
+  );
+}
 
 // 0019, P6: the chips each message shows. A chip shows when the thread has
 // not shown its time yet, or showed it in another state. A later answer
