@@ -30,6 +30,7 @@ export function AccountMenu({
   compact,
   onOpen,
   onSignOut,
+  onAddPasskey,
 }: {
   mode: Mode;
   who: Person;
@@ -38,6 +39,8 @@ export function AccountMenu({
   compact: boolean;
   onOpen: (view: View) => void;
   onSignOut: () => void;
+  // 0020, B9: an email account can add a passkey here.
+  onAddPasskey?: (() => void) | undefined;
 }) {
   const menu = useMenu();
   const id = useId();
@@ -69,7 +72,7 @@ export function AccountMenu({
             <p className="menu-label">Signed in</p>
             <p className="menu-note">
               <strong>{who.name}</strong>
-              {session.account.kind === "google" && session.account.email && session.account.name && (
+              {session.account.kind !== "judge" && session.account.email && session.account.name && (
                 <>
                   <br />
                   <span className="small muted">{session.account.email}</span>
@@ -80,6 +83,15 @@ export function AccountMenu({
               Balance <strong>{session.balance}</strong>
             </p>
           </>
+        )}
+        {onAddPasskey && (
+          <button type="button" className="menu-item" onClick={() => menu.choose(onAddPasskey)}>
+            <Icon name="key" />
+            <span>
+              Add a passkey
+              <small>Sign in with your device instead of a password</small>
+            </span>
+          </button>
         )}
         {itemsFor(mode, "account").map((item) => {
           if (item.id === "theme") {

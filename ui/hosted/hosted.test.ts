@@ -17,7 +17,7 @@ import { errorSentence } from "../format.ts";
 import { ApiError } from "../api.ts";
 import { ConnectionsPage, SettingsPage, UsagePage } from "../pages/Settings.tsx";
 import { SignIn, judgePath } from "./SignIn.tsx";
-import { accountLabel, hostedSignInError, type SignedInSession } from "./session.ts";
+import { accountLabel, authErrorText, hostedSignInError, type SignedInSession } from "./session.ts";
 
 const run = async () => {};
 const html = (node: ReactNode, agent: Partial<AgentState> = {}) =>
@@ -26,11 +26,11 @@ const html = (node: ReactNode, agent: Partial<AgentState> = {}) =>
 const session: SignedInSession = {
   mode: "hosted",
   signedIn: true,
-  account: { kind: "google", email: "dana@example.com", name: "Dana Demo" },
+  account: { kind: "user", email: "dana@example.com", name: "Dana Demo" },
   balanceMicros: 4_870_000,
   balance: "$4.87",
   expiresAt: 0,
-  googleSignIn: true,
+  passwordMin: 10,
 };
 
 const hostedSettings: Settings = {
@@ -47,19 +47,35 @@ const hostedSettings: Settings = {
 };
 
 describe("the hosted site", () => {
-  it("the sign-in screen offers Google and a judge code, and /judge opens the code form", () => {
-    const page = html(createElement(SignIn, { googleSignIn: true, notice: null, onSignedIn: () => {} }));
-    expect(page).toContain("Sign in with Google");
+  it("0020, B9: the sign-in screen offers an email and password, a passkey and a judge code, and /judge opens the code form", () => {
+    const page = html(createElement(SignIn, { passwordMin: 10, notice: null, onSignedIn: () => {} }));
+    expect(page).not.toContain("Google");
+    expect(page).toContain('type="email"');
+    expect(page).toContain('autoComplete="current-password"');
+    expect(page).toContain("Use a passkey");
     expect(page).toContain("I have a judge code");
+    expect(page).toContain("Make an account");
     expect(page).not.toContain('name="judge-code"');
+    expect(page).toContain("Your password is stored only as a hash.");
+    // The privacy line names Better Auth only when its dashboard is on.
+    expect(page).not.toContain("Better Auth");
+    expect(html(createElement(SignIn, { passwordMin: 10, dashboard: true, notice: null, onSignedIn: () => {} }))).toContain("also go to Better Auth");
     expect(judgePath("/judge")).toBe(true);
     expect(judgePath("/judge/")).toBe(true);
     expect(judgePath("/judges")).toBe(false);
-    const noGoogle = html(createElement(SignIn, { googleSignIn: false, notice: "Google sign-in was canceled. Nothing changed. You can try again.", onSignedIn: () => {} }));
-    expect(noGoogle).not.toContain("Sign in with Google</button>");
-    expect(noGoogle).toContain('role="alert"');
-    expect(hostedSignInError("access_denied")).toBe("Google sign-in was canceled. Nothing changed. You can try again.");
+    const notice = html(createElement(SignIn, { passwordMin: 10, notice: "Your session ended. Sign in again.", onSignedIn: () => {} }));
+    expect(notice).toContain('role="alert"');
+    expect(hostedSignInError("chatgpt_not_available_here")).toBe("Sign in with ChatGPT is not available on the hosted site yet.");
     expect(hostedSignInError("anything")).toMatch(/did not finish/);
+  });
+
+  it("0020: Better Auth's refusals read as the page's own sentences, never the server's text", () => {
+    expect(authErrorText(401, { code: "INVALID_EMAIL_OR_PASSWORD", message: "Invalid email or password" })).toBe("That email and password do not match an account. Check them and try again.");
+    expect(authErrorText(422, { code: "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" })).toMatch(/already exists/);
+    expect(authErrorText(400, { code: "PASSWORD_TOO_SHORT" })).toBe("Use a password of at least 10 characters.");
+    expect(authErrorText(429, { message: "Too many requests. Please try again later." })).toBe("Too many tries from here. Wait a minute and try again.");
+    expect(authErrorText(429, { error: "rate_limited", message: "Too many tries from this address. Wait a few minutes and try again." })).toMatch(/^Too many tries from this address/);
+    expect(authErrorText(500, { code: "SOMETHING", message: "internal detail" })).not.toContain("internal detail");
   });
 
   it("the account label names a judge account for what it is", () => {

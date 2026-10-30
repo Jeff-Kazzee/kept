@@ -36,7 +36,7 @@ import { Sidebar, type SideLayout } from "./shell/Sidebar.tsx";
 import { Toasts, type Toast } from "./shell/Toasts.tsx";
 import { VIEW_TITLES, openersFor, person, shellModes, readFolded, saveFolded, setupLink, viewIn, type ToastLink, type View } from "./shell/shell.ts";
 import { SignIn } from "./hosted/SignIn.tsx";
-import { hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
+import { AuthError, accountAuth, hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
 
 
 // The scripted chat is a development tool. It makes real case writes, so
@@ -65,10 +65,11 @@ export function Root() {
   }, []);
   const toSignIn = useCallback((text: string | null) => {
     setNotice(text);
-    setSession((s) => (s && s.mode === "hosted" ? { mode: "hosted", signedIn: false, googleSignIn: s.googleSignIn } : s));
+    setSession((s) => (s && s.mode === "hosted" ? { mode: "hosted", signedIn: false, passwordMin: s.passwordMin, ...(s.dashboard !== undefined ? { dashboard: s.dashboard } : {}) } : s));
   }, []);
   useEffect(() => {
-    // A failed Sign in with Google comes back as /?signInError=<code>.
+    // A sign-in this site cannot finish, such as ChatGPT's, comes back as
+    // /?signInError=<code>.
     const params = new URLSearchParams(window.location.search);
     const code = params.get("signInError");
     void hostedApi.session().then(
@@ -76,10 +77,6 @@ export function Root() {
         if (s.mode === "hosted" && code !== null) {
           setNotice(hostedSignInError(code));
           params.delete("signInError");
-          window.history.replaceState(null, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
-        }
-        if (s.mode === "hosted" && params.get("signedIn") === "google") {
-          params.delete("signedIn");
           window.history.replaceState(null, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
         }
         setSession(s);
@@ -123,23 +120,25 @@ function RootView({
   if (session.mode === "hosted" && !session.signedIn) {
     return (
       <SignIn
-        googleSignIn={session.googleSignIn}
+        passwordMin={session.passwordMin}
+        dashboard={session.dashboard ?? false}
         notice={notice}
-        onSignedIn={(s) => {
-          setNotice(null);
+        onSignedIn={(s, problem) => {
+          setNotice(problem ?? null);
           setSession(s);
         }}
       />
     );
   }
-  return <App hosted={session.mode === "hosted" ? session : null} onSession={setSession} onSignedOut={toSignIn} />;
+  return <App hosted={session.mode === "hosted" ? session : null} welcome={notice} onSession={setSession} onSignedOut={toSignIn} />;
 }
 
 export function App({
   hosted = null,
+  welcome = null,
   onSession = () => {},
   onSignedOut = () => {},
-}: { hosted?: SignedInSession | null; onSession?: (s: SessionInfo) => void; onSignedOut?: (text: string | null) => void } = {}) {
+}: { hosted?: SignedInSession | null; welcome?: string | null; onSession?: (s: SessionInfo) => void; onSignedOut?: (text: string | null) => void } = {}) {
   const scripted = useMemo(scriptedChat, []);
   // Read through refs, so a new balance does not start another read.
   const hostedRef = useRef(hosted);
@@ -163,6 +162,13 @@ export function App({
     setToasts((t) => [...t.slice(-2), { id, kind, text, ...(link ? { link } : {}) }]);
     if (kind === "info") setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 5000);
   }, []);
+  // A sentence from the sign-in screen, such as a judge code that was not
+  // added at sign-up, shown once when the app opens.
+  const welcomed = useRef(false);
+  useEffect(() => {
+    if (welcome && !welcomed.current) toast("error", welcome);
+    welcomed.current = true;
+  }, [welcome, toast]);
 
   // Reads the case, the settings, the activity and Google together. Reads
   // can overlap (a card mid-turn, the turn's end, the poll), so only the
@@ -533,6 +539,15 @@ function Shell({
     ...openersFor(openView),
     signedOut: () => onSignedOut(null),
   };
+  // 0020, B9: a passkey from the account menu.
+  const addPasskey = async () => {
+    try {
+      await accountAuth.addPasskey();
+      toast("info", "Added a passkey. Next time, choose Use a passkey to sign in.");
+    } catch (e) {
+      toast("error", e instanceof AuthError ? e.message : errorSentence(e));
+    }
+  };
   const signOut = async () => {
     try {
       await hostedApi.signOut();
@@ -610,6 +625,7 @@ function Shell({
           onClose={closeDrawer}
           onOpen={openView}
           onSignOut={() => void signOut()}
+          onAddPasskey={hosted?.account.kind === "user" ? () => void addPasskey() : undefined}
         />
         <button type="button" className="drawer-scrim" aria-label="Close the menu" tabIndex={-1} onClick={closeDrawer} />
         <div className="banners">

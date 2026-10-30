@@ -26,6 +26,7 @@ export function Sidebar({
   onClose,
   onOpen,
   onSignOut,
+  onAddPasskey,
 }: {
   mode: Mode;
   layout: SideLayout;
@@ -40,6 +41,8 @@ export function Sidebar({
   onClose: () => void;
   onOpen: (view: View) => void;
   onSignOut: () => void;
+  // Shown for an email account only (0020, B9).
+  onAddPasskey?: (() => void) | undefined;
 }) {
   const compact = layout === "rail";
   const modal = layout === "drawer" && drawerOpen;
@@ -78,7 +81,7 @@ export function Sidebar({
         ))}
       </nav>
       <div className="side-foot">
-        <AccountMenu mode={mode} who={who} session={session} compact={compact} onOpen={onOpen} onSignOut={onSignOut} />
+        <AccountMenu mode={mode} who={who} session={session} compact={compact} onOpen={onOpen} onSignOut={onSignOut} onAddPasskey={onAddPasskey} />
       </div>
     </div>
   );

@@ -5,7 +5,7 @@ import { GOOGLE_OFF } from "../contract.ts";
 import type { SignedInSession } from "../hosted/session.ts";
 import { SIDEBAR, VIEW_TITLES, initials, itemsFor, person, viewIn } from "./shell.ts";
 
-const hosted = (account: SignedInSession["account"]): SignedInSession => ({ mode: "hosted", signedIn: true, account, balanceMicros: 4_870_000, balance: "$4.87", expiresAt: 0, googleSignIn: true });
+const hosted = (account: SignedInSession["account"]): SignedInSession => ({ mode: "hosted", signedIn: true, account, balanceMicros: 4_870_000, balance: "$4.87", expiresAt: 0, passwordMin: 10 });
 
 describe("the sidebar registry", () => {
   it("local mode lists Case, Connections and Agent access, and its account menu has no Usage and no Sign out", () => {
@@ -61,9 +61,9 @@ describe("the account button", () => {
     expect(person(null, { ...GOOGLE_OFF, configured: true, connected: false, email: "dana.reyes@example.com" }).initials).toBeNull();
   });
 
-  it("a hosted Google account shows its name, initials and balance", () => {
-    expect(person(hosted({ kind: "google", name: "Dana Demo", email: "dana@example.com" }), null)).toEqual({ initials: "DD", name: "Dana Demo", line: "Balance $4.87" });
-    expect(person(hosted({ kind: "google", name: null, email: "dana@example.com" }), null).name).toBe("dana@example.com");
+  it("a hosted email account shows its name, initials and balance", () => {
+    expect(person(hosted({ kind: "user", name: "Dana Demo", email: "dana@example.com" }), null)).toEqual({ initials: "DD", name: "Dana Demo", line: "Balance $4.87" });
+    expect(person(hosted({ kind: "user", name: null, email: "dana@example.com" }), null).name).toBe("dana@example.com");
   });
 
   it("a judge account shows Judge access and never a code", () => {

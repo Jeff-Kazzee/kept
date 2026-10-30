@@ -16,17 +16,17 @@ beforeAll(() => {
 const session: SignedInSession = {
   mode: "hosted",
   signedIn: true,
-  account: { kind: "google", email: "dana@example.com", name: "Dana Demo" },
+  account: { kind: "user", email: "dana@example.com", name: "Dana Demo" },
   balanceMicros: 4_870_000,
   balance: "$4.87",
   expiresAt: 0,
-  googleSignIn: true,
+  passwordMin: 10,
 };
 
-async function menu(mode: "local" | "hosted", s: SignedInSession | null) {
+async function menu(mode: "local" | "hosted", s: SignedInSession | null, onAddPasskey?: () => void) {
   const opened: View[] = [];
   let signedOut = 0;
-  const ui = await mount(createElement(AccountMenu, { mode, who: person(s, null), session: s, compact: false, onOpen: (v: View) => opened.push(v), onSignOut: () => signedOut++ }));
+  const ui = await mount(createElement(AccountMenu, { mode, who: person(s, null), session: s, compact: false, onOpen: (v: View) => opened.push(v), onSignOut: () => signedOut++, onAddPasskey }));
   const account = ui.find("[data-account-button]");
   const list = ui.find(".account-menu");
   const open = async () => {
@@ -39,6 +39,19 @@ async function menu(mode: "local" | "hosted", s: SignedInSession | null) {
 }
 
 describe("the account menu, opened", () => {
+  it("0020, B9: an email account can add a passkey from the menu", async () => {
+    let added = 0;
+    const m = await menu("hosted", session, () => added++);
+    await m.open();
+    expect(m.items()[0]).toBe("Add a passkeySign in with your device instead of a password");
+    await m.ui.click(m.ui.button("Add a passkey"));
+    expect(added).toBe(1);
+    expect(m.list.shown).toBe(false);
+    const judge = await menu("hosted", { ...session, account: { kind: "judge", email: null, name: null } });
+    await judge.open();
+    expect(judge.items().some((t) => t?.startsWith("Add a passkey"))).toBe(false);
+  });
+
   it("hosted: starts closed, opens, names the account and balance, and Settings, Usage and Sign out each do their part", async () => {
     const m = await menu("hosted", session);
     expect(m.account.getAttribute("aria-label")).toBe("Account: Dana Demo, Balance $4.87");
