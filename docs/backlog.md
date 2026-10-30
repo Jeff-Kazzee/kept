@@ -673,10 +673,15 @@ Branch `sprint/17-polish`. Decisions: `docs/decisions/0019-polish.md`.
 - [x] P19 Content visibility, memoized turns, layout read once per frame.
 - [x] P20 The poll backs off when quiet and stops while hidden.
 - [x] The scripted chat plays a demo-length transcript (P21).
-- [ ] LCP under 1.2 s on a 4x slowed phone with a stored chat (now
-  1.98 s, from 2.34 s). Follow-up.
+- [x] LCP under 1.2 s on a 4x slowed phone with a stored chat: 848 ms
+  in round 2, with the server render (P30).
+- [x] Round 2: the eight Muse Wonder findings closed (0019, round 2), one
+  held live read, GET /api/boot, the server-rendered case screen.
+- [ ] Round 2 targets not met: INP under 50 ms (112 ms) and first-load JS
+  under 80 KB counting the hydrated chunks (113.1 KB). Follow-up.
+- [ ] The design direction Jeff picks from the explorer, next round.
 - [ ] Jeff reviews the before and after screenshots.
-- [ ] Confirm or change the choices marked proposed in 0019 (P21 to P28).
+- [ ] Confirm or change the choices marked proposed in 0019 (P21 to P33).
 
 ## Sprint 10: model providers and sign-in
 

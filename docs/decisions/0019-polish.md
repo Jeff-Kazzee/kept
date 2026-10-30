@@ -45,8 +45,11 @@ Visual system
   (`--elev-1` to `--elev-3`) per theme, one radius scale, one accent with
   `--accent-hover` and `--accent-pressed`, and the state colors of 0011
   U22 plus `--st-clash-*`, each text pair 4.5:1 or more in both themes.
-  Every color, space and radius outside the token block is a token, and
-  a test fails on a raw color or a raw spacing value there.
+  Outside the token block, every color is a token, and every padding,
+  margin, gap and radius above a 2 px hairline is a token. A test fails
+  on either. Component dimensions (icon sizes, the 72 px agenda time
+  column, the 18 px count badge) are plain lengths and are not checked
+  (round 2, finding 7: the wording now says what the test checks).
 - P3. Three kinds of card. Quiet is the default: a subtle fill, no border.
   Plain sits on the page. Emphasized has an accent edge, for what needs
   the person: the reply to approve, the own-report question and what
@@ -139,7 +142,8 @@ Performance
   the composer only (its text is in a small store), a finished turn is
   memoized, and the thread reads layout once per frame in
   `requestAnimationFrame`.
-- P20. The live poll asks every 2 seconds while a turn or an undo runs
+- P20. Replaced in round 2 (finding 4) by one held read, below. Round 1
+  text: the live poll asked every 2 seconds while a turn or an undo ran
   and right after a change, then waits half again as long each quiet
   check, up to 15 seconds. A hidden tab asks nothing and asks once when it
   shows again.
@@ -282,3 +286,160 @@ Each step was run by script and passed:
 
 Screenshots (synthetic data, not committed): `/tmp/sprint17-shots/`,
 `before-*` and `after-*` with the same names.
+
+## Round 2 (2026-10-30)
+
+Jeff saw round 1 side by side and asked for more: better performance
+still and a higher bar. A design explorer works on fonts and colors
+separately, so this round changes no font, color, token value or look.
+The token structure stays as it is, so a chosen direction drops in by
+replacing token values and the font files.
+
+### The Muse Wonder review of round 1, closed
+
+1. High, a failed chunk. `onDemand` parts now render as an error
+   boundary, a Suspense and the part, the same on every render. A chunk
+   that fails shows "This part of the page did not load. Check the
+   connection, then try again." and Try again in the part's own space,
+   and the shell stays. Try again starts a fresh load. A render reads the
+   load as it stands, so a chunk that keeps failing is not fetched again
+   on every render. The pages, sign-in and the import sheet use the same
+   parts, and no bare `lazy()` is left. Tests: a rejecting import shows
+   the failure, Try again loads it (`ui/sprint17.node.test.ts`).
+2. High, a stale first read. `GET /api/boot` reads the case, the
+   settings, the activity, Google and the stored chat together, of one
+   live version (read again when the version moved during the reads). The
+   page's first render shows it, and its first held live read
+   (`?since=<that version>`) answers at once when the case moved, a
+   Delete case included, so the page reads again. Local mode preloads only
+   `/api/session` and `/api/boot`. `/api/chat` and the activity are no
+   longer preloaded on their own. Tests: `test/live.test.ts` (a Delete
+   case after the boot read answers the first held read at once) and
+   `ui/useLiveRefresh.test.ts` (a page shown at an older generation
+   refreshes at once).
+3. Medium, a refusal folded away. Each new refused Undo opens its group
+   again, even after the person closed it, and brings the reason into
+   view. Test: close, refuse, open, close, refuse again.
+4. Medium, slow outside changes. The poll is replaced by one held read:
+   `GET /api/case/version?since=<generation>.<seq>.<calendar>`, which the
+   server holds until the live version differs or 25 s pass, reading it
+   every 250 ms (the MCP server writes the same file from its own
+   process). The page asks again at once, backs off 1, 2, 4 up to 15 s
+   after a failure, polls every 2 s a server that does not hold, drops the
+   held read while the tab is hidden, and asks again on showing, `focus`
+   and `pageshow`. In hosted mode each check opens the account's
+   workspace briefly and asks again whether the session still holds, so a
+   held read keeps no workspace open and never blocks Delete account. The
+   request log leaves the route out, as before. Idle, the page makes one
+   quiet request per 25 s. Measured: an archive written by another client
+   showed in the open page 264 ms later.
+5. Medium, skipped turns. A turn is skipped only after every turn was laid
+   out once, so its measured size is kept (`contain-intrinsic-block-size:
+   auto 280px` on every turn, `content-visibility: auto` only once the
+   thread is `data-settled`), and never a turn with a reply, a question, an
+   explanation, an Add it offer, an own-report question or facts that wait
+   (`has-action`), so those stay in the focus order.
+6. Medium, focus back from the sheet. It goes through `focusSoon`, which
+   waits while the chip is not there yet or still inert.
+7. Low, tests. The P2 wording now says what the stylesheet test checks
+   (above). The browser check confirms the page's fetch reuses each
+   preload: on the production build without the server render, one
+   request each for `/api/session` and `/api/boot`, and none for
+   `/api/state` or `/api/chat`. The hook's own wiring is tested in a page:
+   one held read, dropped when the tab hides, asked again on showing,
+   focus and pageshow, one read in flight at a time.
+8. Low. The read back count is live text (`role="status"`), the folded
+   summary counts actions (entries), and the waiting summary is never
+   clamped.
+
+### Writer decisions (proposed)
+
+- P29. The on-demand parts read their chunk with `use()` on a tracked
+  promise, so a loaded chunk renders at once and a server render and the
+  page's hydration see one structure.
+- P30. The server renders the case screen. In local mode with a
+  production build, `pnpm build` also builds `dist/ssr/entry-server.js`,
+  and the static server renders the case screen to HTML from the boot
+  data for the current case, with the data after it as
+  `<script id="boot" type="application/json">`. It is data, not code, so
+  the CSP's `script-src 'self'` holds. Every `<` and both JSON line
+  separators are escaped, so no message can close the block. The page is
+  sent `no-store` and compressed as sent. The on-demand parts load before
+  the render, so nothing waits during it and React writes no inline
+  script. The page hydrates once the parts it shows are in, without a
+  top-level await, because those chunks import the page's own chunk. The
+  hosted site and the scripted chat render on their own (no account's
+  HTML is ever rendered or kept for another), and a render that fails
+  falls back to the plain page. Media queries read a laptop while
+  hydrating, and the device then answers. The fold, the device zone and
+  the online state are read after the first render, and the fold toggle
+  is hidden by CSS below laptop width. Both renders draw the newest six
+  messages, and the older ones follow in a transition.
+- P31. A server-rendered thread opens at its end as a reversed column (a
+  browser scrolls one from its end, with no script), with short content
+  at the top. The page keeps it until the person scrolls or the thread
+  changes, and then leaves it with the view where it was: leaving it at
+  hydration would lay the thread out anew and repaint it. What the page
+  opens with is not faded in. So a server-rendered page opens at the end
+  of its thread. The stop at an answer's start (0017, E3) still applies
+  when a turn ends and on a page the browser renders itself.
+- P32. The modules the first screen shares with the on-demand chunks go
+  in one chunk (`manualChunks` in `vite.config.ts`), not ten small ones.
+- P33. The account button's name is its visible words and then "account
+  menu" (screen reader text), with the person's words for screen readers
+  only when it is folded to the rail.
+
+### Measured, round 2
+
+The same method as round 1: 390 x 844 mobile, Fast 4G, 4x CPU, cache
+off, dark, the median of 5 loads, the production build. The 8-turn chat
+is the recorded demo story in the database. "Before" is the round 1 end
+(`3f90701`).
+
+| Measure | Round 1 end | Round 2 | Target |
+| --- | --- | --- | --- |
+| Production, 8-turn chat: LCP | 1,980 ms | 848 ms | under 1,000 ms |
+| Production, 8-turn chat: CLS | 0 | 0 | 0 |
+| Production, 8-turn chat: typing INP | 96 ms | 112 ms | under 50 ms |
+| Production, 8-turn chat: open a facts card INP | 72 ms | 80 ms | under 50 ms |
+| Production, empty case: LCP | 1,308 ms | 704 ms | under 800 ms |
+| Production, empty case: typing INP | 80 ms | 120 ms | under 50 ms |
+| Check build, 30 turns: typing INP | 112 ms | 112 ms | under 50 ms |
+| Check build, 30 turns: open a facts card INP | 112 ms | 104 ms | under 50 ms |
+| Check build, 30 turns: CLS | 0 | 0 | 0 |
+| Requests before LCP, 8-turn chat | 17 | 5 | |
+| Entry script, gzipped | 97.8 KB | 97.9 KB | |
+| Every chunk the first case screen hydrates with, gzipped | 112.5 KB | 113.1 KB | under 80 KB |
+| Long tasks after the first paint while idle (after load) | not measured | none in 15 s | none |
+
+Lighthouse 13.4.1 on the server-rendered production page with the stored
+chat: accessibility, best practices and SEO 100, mobile and desktop, and
+the desktop's agentic browsing audits all pass.
+
+Not met, with the reason:
+
+- INP under 50 ms. Each keystroke runs about 20 ms of script on the 4x
+  slowed CPU (the controlled composer renders), and then waits for a
+  frame. Typing goes through React state, so a key re-renders the
+  composer. Getting under 50 ms would need an uncontrolled composer (its
+  value read from the field, rendered only when it turns empty or
+  non-empty) and a smaller page to lay out. Follow-up.
+- First-load JS under 80 KB. React DOM alone is about 60 KB of the entry.
+  The case screen hydrates with the entry (97.9 KB) and the cards, panel,
+  their shared and copy button chunks it shows (15.3 KB), 113.1 KB in all. Under 80 KB would need the screen to
+  stay static HTML until used, part by part, or a much smaller app.
+  Server rendering moved the script off the paint's critical path: the
+  page shows the case at 704 to 848 ms whatever the script's size.
+- The load itself still has long tasks after the first paint: hydration
+  (about 360 ms) and the older turns' transition (about 170 ms), on the
+  4x slowed CPU. None while idle after.
+
+### Browser check, round 2
+
+The round 1 check passed again, all 26 steps (check build, port 5200).
+On the production build with the server render: hydration logged
+nothing to the console at 1440 and 390 px, the composer took text, the
+phone got its phone layout after hydration, and no part was rendered
+anew by the page (no client-made ids). With scripts off the page showed
+the end of the thread. The preload reuse check and the outside-change
+check are under findings 7 and 4.
