@@ -61,7 +61,11 @@
   size-adjust: 108.32%;
 }
 
-:root {
+/* The token block is declared on the sidebar too. The sidebar is night in
+   both themes (color-scheme: dark), and a browser resolves light-dark()
+   inside a token where the token is declared, so the sidebar gets every
+   token in its dark value, the account menu inside it included. */
+:root, .sidebar {
   color-scheme: dark;
 
   --font: "Instrument Sans", "Instrument Sans Fallback", ui-sans-serif, sans-serif;
