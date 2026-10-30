@@ -486,7 +486,9 @@ function Shell({
   };
   const closeRef = useRef(closeSchedule);
   closeRef.current = closeSchedule;
-  const focusPanel = () => focusSoon(() => document.getElementById("panel-title"));
+  // The panel's chunk may still be loading on a phone (0019, P18), so focus
+  // waits for it.
+  const focusPanel = () => void loadPanel().then(() => focusSoon(() => document.getElementById("panel-title")), () => {});
   const openPanel = (t?: PanelTab) => {
     const from = document.activeElement;
     // A page's button goes away with the page, so focus then goes back to
@@ -579,11 +581,11 @@ function Shell({
     if (laptop) setRailed(false);
     else setSheetOpen(true);
     setHighlight(slotKey);
-    focusSoon(() => {
+    void loadPanel().then(() => focusSoon(() => {
       const el = document.getElementById(slotElementId(slotKey));
       el?.scrollIntoView({ block: "center" });
       return el;
-    });
+    }), () => {});
   };
 
   const loadCalendar = async (file: File) => {
@@ -863,6 +865,8 @@ function SheetHandle({ onClose, snap, onSnap }: { onClose: () => void; snap: Sna
       onPointerDown={(e) => {
         start.current = e.clientY;
         dragged.current = false;
+        // A mouse drag keeps reaching the handle past its edge, as a touch does.
+        e.currentTarget.setPointerCapture?.(e.pointerId);
       }}
       onPointerUp={(e) => {
         const next = start.current === null ? null : snapAfterDrag(snap, e.clientY - start.current);

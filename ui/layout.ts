@@ -30,7 +30,9 @@ export function focusSoon(target: () => HTMLElement | null, frames = 30): void {
     requestAnimationFrame(() => {
       const el = target();
       el?.focus({ preventScroll: true });
-      if (el && document.activeElement !== el && left > 0) attempt(left - 1);
+      // 0019: also while the target is not there yet, as a sheet that
+      // mounts on its first open (P19).
+      if ((!el || document.activeElement !== el) && left > 0) attempt(left - 1);
     });
   attempt(frames);
 }

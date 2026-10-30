@@ -50,7 +50,7 @@ export function AccountMenu({
         data-account-button=""
         aria-expanded={menu.open}
         aria-controls={id}
-        aria-label={`Account: ${who.name}, ${who.line}`}
+        aria-label={`${who.name}, ${who.line}, account menu`}
         title={compact ? `${who.name} · ${who.line}` : undefined}
         onClick={() => menu.setOpen((o) => !o)}
       >

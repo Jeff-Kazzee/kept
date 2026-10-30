@@ -59,15 +59,23 @@ describe("focusSoon", () => {
     expect(doc.activeElement).toBe(el);
   });
 
-  it("gives up after its frames, and does nothing without an element", () => {
+  it("gives up after its frames, and waits its frames for an element that is not there yet", () => {
     const run = frames();
     globalThis.document = { activeElement: null } as unknown as Document;
     let tries = 0;
     focusSoon(() => ({ focus: () => void tries++ }) as unknown as HTMLElement, 4);
     run();
     expect(tries).toBe(5);
-    focusSoon(() => null);
-    expect(run()).toBe(1);
+    // 0019: a sheet that mounts on its first open has its heading a frame
+    // or two later.
+    focusSoon(() => null, 4);
+    expect(run()).toBe(5);
+    const doc = globalThis.document as unknown as { activeElement: unknown };
+    let frame = 0;
+    const el = { focus: () => (doc.activeElement = el) } as unknown as HTMLElement;
+    focusSoon(() => (++frame >= 3 ? el : null), 4);
+    expect(run()).toBe(3);
+    expect(doc.activeElement).toBe(el);
   });
 });
 
