@@ -18,6 +18,7 @@ import type { ActivityEntry } from "./contract.ts";
 import { setCaseZone } from "./format.ts";
 import { SIDEBAR, VIEW_TITLES, openersFor, type View } from "./shell/shell.ts";
 import { installTestDom, mount } from "./test-dom.ts";
+import { PART_FAILED, onDemand } from "./components/onDemand.tsx";
 
 beforeAll(() => {
   installTestDom();
@@ -185,8 +186,11 @@ describe("0019, P18: every view loads on demand and opens from each caller", () 
 
   it("the shell opens every page through the one lazy import, and warms it when idle", () => {
     const app = read("./App.tsx");
-    expect(app).toMatch(/export const loadPages = \(\) => import\("\.\/shell\/PageView\.tsx"\);/);
-    expect(app).toMatch(/const PageView = lazy\(loadPages\);/);
+    expect(app).toMatch(/const pages = onDemand\(\(\) => import\("\.\/shell\/PageView\.tsx"\)\);/);
+    expect(app).toMatch(/export const loadPages = pages\.ensure;/);
+    expect(app).toMatch(/const PageView = pages\.part\(/);
+    // Round 2, finding 1: no bare lazy() is left, so every part has its boundary.
+    for (const file of ["./App.tsx", "./chat/ChatView.tsx", "./case/lazyCards.tsx", "./schedule/lazyPanel.tsx"]) expect(read(file), file).not.toMatch(/\blazy\(/);
     expect(app).toMatch(/<PageView\s+view=\{view\}/);
     expect(app).toMatch(/Promise\.all\(\[loadPages\(\), loadCaseCards\(\), loadPanel\(\)\]\)/);
     // No page module is imported statically by the first-load code.
@@ -308,5 +312,44 @@ describe("0019, P14: motion", () => {
     expect(block).toMatch(/transition-duration: 0\.01ms !important/);
     expect(block).toMatch(/scroll-behavior: auto !important/);
     expect(block).toMatch(/\.skeleton-line::after, \.skeleton-block::after[^}]*animation: none !important/);
+  });
+});
+
+describe("round 2, finding 1: a chunk that fails to load", () => {
+  it("shows the failure and Try again in the part's own space, and Try again loads it anew", async () => {
+    let calls = 0;
+    const Hello = ({ who }: { who: string }) => createElement("p", { className: "hello" }, `Hello ${who}`);
+    const chunk = onDemand(async () => {
+      calls++;
+      if (calls === 1) throw new Error("Failed to fetch dynamically imported module");
+      return { Hello };
+    });
+    const Part = chunk.part((m) => m.Hello, "Hello", createElement("span", { className: "waiting" }, "…"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = await mount(createElement("div", { className: "shell" }, createElement("h1", null, "The shell"), createElement(Part, { who: "Dana" })));
+    const { act } = await import("react");
+    await act(async () => new Promise((r) => setTimeout(r, 10)));
+    // The shell stays, and the part's space says what happened.
+    expect(view.container.textContent).toContain("The shell");
+    expect(view.find(".part-error").textContent).toContain(PART_FAILED);
+    await view.click(view.button("Try again"));
+    await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(view.find(".hello").textContent).toBe("Hello Dana");
+    expect(calls).toBe(2);
+    expect(chunk.isLoaded()).toBe(true);
+    errors.mockRestore();
+    await view.unmount();
+  });
+
+  it("a later ensure after a failure loads again instead of keeping the failure", async () => {
+    let calls = 0;
+    const chunk = onDemand(async () => {
+      calls++;
+      if (calls === 1) throw new Error("offline");
+      return { ok: true };
+    });
+    await expect(chunk.ensure()).rejects.toThrow("offline");
+    await expect(chunk.ensure()).resolves.toEqual({ ok: true });
+    expect(calls).toBe(2);
   });
 });

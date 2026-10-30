@@ -5,12 +5,13 @@
 // lines while a turn runs and folds into one line when it ends. What the
 // agent did shows as receipts with Undo. Every card renders from the live
 // case view.
-import { Suspense, lazy, memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Mark, RidgeScene } from "../components/Art.tsx";
 import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
 import { usageStopText } from "../../src/model/usage-text.ts";
 import { api, type AppState, type FixtureScenario } from "../api.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
+import { onDemand } from "../components/onDemand.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { entriesById, useAgent } from "../agent/AgentContext.tsx";
 import { ModelPicker, modelLabel, providerNeedsSetup } from "../agent/ModelPicker.tsx";
@@ -26,8 +27,9 @@ import { turnLost, type ChatState, type PendingTurn, type ToolLine } from "./sta
 import type { Card, ChatMessage, FactChip } from "./types.ts";
 
 // 0019, P18: the import sheet loads when it first opens.
-export const loadImportSheet = () => import("./ImportSheet.tsx");
-const ImportSheet = lazy(() => loadImportSheet().then((m) => ({ default: m.ImportSheet })));
+const sheet = onDemand(() => import("./ImportSheet.tsx"));
+export const loadImportSheet = sheet.ensure;
+const ImportSheet = sheet.part((m) => m.ImportSheet, "ImportSheet", null);
 
 // 0019, P19: the composer's text lives in a small store, so typing renders
 // the composer only, never the transcript.
@@ -316,7 +318,7 @@ export function ChatView(props: ChatViewProps) {
         </div>
       </div>
       {importing && (
-        <Suspense fallback={null}>
+        <>
           <ImportSheet
         request={importing}
         run={run}
@@ -331,7 +333,7 @@ export function ChatView(props: ChatViewProps) {
           pinned.current = true;
         }}
           />
-        </Suspense>
+        </>
       )}
       <div className="sr-only" aria-live="polite">
         {chat.pending?.status === "streaming" ? (chat.pending.tools.findLast((t) => t.ok === null)?.label ?? "The assistant is checking its answer.") : chat.pending?.error ? chat.pending.error.message : ""}

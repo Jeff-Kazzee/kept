@@ -8,8 +8,9 @@
 // case, the settings and the activity together, and gives the settings and
 // activity to every part through AgentContext.
 import { caseNeedsCards, loadCaseCards } from "./case/lazyCards.tsx";
+import { onDemand } from "./components/onDemand.tsx";
 import { scopeReadback } from "./case/readback.ts";
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { realBackend, type AgentBackend } from "./agentApi.ts";
 import { AgentContext, type AgentState } from "./agent/AgentContext.tsx";
 import { keep, sendDeviceZone, settle } from "./agent/reads.ts";
@@ -54,8 +55,9 @@ const scriptedChat = () => fakesBuilt && new URLSearchParams(window.location.sea
 // is one function, so every caller (the sidebar, the account menu, a
 // toast, the model pill, Open Usage) opens the same chunk, and the idle
 // prefetch below warms it.
-export const loadPages = () => import("./shell/PageView.tsx");
-const PageView = lazy(loadPages);
+const pages = onDemand(() => import("./shell/PageView.tsx"));
+export const loadPages = pages.ensure;
+const PageView = pages.part((m) => m.default, "PageView", <PageLoading />);
 // The case's cards start loading with the page, beside the first reads,
 // and so does the panel on a laptop (0019, P18).
 // On a phone or a tablet the panel is a closed sheet, so its chunk waits
@@ -67,7 +69,8 @@ void loadCaseCards().catch(() => {});
 // preload has it already. Not for the scripted chat, which keeps its own.
 // A failure leaves it to the chat hook.
 const readFirstChat = (scripted: boolean): Promise<ChatLog | null | undefined> => (scripted ? Promise.resolve(undefined) : realTransport.load().catch(() => undefined));
-const SignIn = lazy(() => import("./hosted/SignIn.tsx").then((m) => ({ default: m.SignIn })));
+const signIn = onDemand(() => import("./hosted/SignIn.tsx"));
+const SignIn = signIn.part((m) => m.SignIn, "SignIn", <main className="loading" aria-busy="true" />);
 
 // While a page's chunk loads: the page's frame, quiet, so nothing jumps.
 function PageLoading() {
@@ -153,7 +156,7 @@ function RootView({
   }
   if (session.mode === "hosted" && !session.signedIn) {
     return (
-      <Suspense fallback={<main className="loading" aria-busy="true" />}>
+      <>
         <SignIn
           googleSignIn={session.googleSignIn}
           notice={notice}
@@ -162,7 +165,7 @@ function RootView({
             setSession(s);
           }}
         />
-      </Suspense>
+      </>
     );
   }
   return <App hosted={session.mode === "hosted" ? session : null} onSession={setSession} onSignedOut={toSignIn} />;
@@ -796,7 +799,7 @@ function Shell({
           </div>
           {pageOpen && view !== "case" && (
             <section className="page" aria-labelledby="view-title" inert={inert.page}>
-              <Suspense fallback={<PageLoading />}>
+              <>
                 <PageView
                   view={view}
                   state={state}
@@ -806,7 +809,7 @@ function Shell({
                   caseDeleted={caseDeletedShown(deletedFrom, state)}
                   onCaseDeleted={() => setDeletedFrom(state.generation)}
                 />
-              </Suspense>
+              </>
             </section>
           )}
         </main>
