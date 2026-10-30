@@ -669,7 +669,7 @@ Branch `sprint/17-polish`. Decisions: `docs/decisions/0019-polish.md`.
 - [x] P16 The phone sheet's handle and snap points, 44 px targets,
   nothing sideways.
 - [x] P17 First reads preloaded in local mode, fixtures on demand.
-- [x] P18 Code split, first load 97.7 KB gzipped, budget 100 KB.
+- [x] P18 Code split, first load 97.8 KB gzipped, budget 100 KB.
 - [x] P19 Content visibility, memoized turns, layout read once per frame.
 - [x] P20 The poll backs off when quiet and stops while hidden.
 - [x] The scripted chat plays a demo-length transcript (P21).

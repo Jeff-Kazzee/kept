@@ -133,7 +133,7 @@ Performance
 - P18. Code split. The sidebar's pages (Connections, Agent access,
   Settings, Usage), the sign-in screen, the import sheet, the schedule
   panel and the case's cards load on demand. First-load JavaScript is
-  97.7 KB gzipped (was 111.7 KB), and the build fails above 100 KB.
+  97.8 KB gzipped (was 111.7 KB), and the build fails above 100 KB.
 - P19. Long transcripts. Finished turns out of view use
   `content-visibility: auto` with a remembered block size. Typing renders
   the composer only (its text is in a small store), a finished turn is
@@ -165,7 +165,7 @@ Performance
   them. The panel starts with the page on a laptop, and on a phone or
   tablet when the sheet first opens or the browser is idle. The pages'
   chunk loads when the browser is idle after the first load. Honest
-  accounting: the 97.7 KB counts the scripts index.html loads. The cards
+  accounting: the 97.8 KB counts the scripts index.html loads. The cards
   (7.0 KB), the panel (4.4 KB) and their shared chunk (3.5 KB) load right
   after, in parallel with the first reads, when the screen needs them.
 - P24. The first render of the case shows the stored chat. The shell
@@ -213,7 +213,7 @@ welcome first.
 
 | Measure | Before | After |
 | --- | --- | --- |
-| First-load JavaScript, gzipped | 111.7 KB, 1 file | 97.7 KB, 2 files |
+| First-load JavaScript, gzipped | 111.7 KB, 1 file | 97.8 KB, 2 files |
 | CSS, gzipped | 10.3 KB | 11.9 KB |
 | Production, empty case: LCP | 1,412 ms | 1,308 ms |
 | Production, empty case: CLS | 0 | 0 |
@@ -232,7 +232,7 @@ start with the page, in parallel, instead of one after another after the
 script.
 
 Chunks after, gzipped, in KB of 1,024 bytes: entry 89.0 and its shared
-`format` chunk 8.6 (the 97.7 above, as `scripts/precompress.ts` counts
+`format` chunk 8.6 (97.7 at the measured commit, 97.8 at the final one after P28, as `scripts/precompress.ts` counts
 it), case cards 7.0, pages 6.9, panel 4.4, their shared chunk 3.5, import
 sheet 1.6, sign-in 1.3, copy button 0.4. Inter: 47.1.
 
