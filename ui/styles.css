@@ -1250,7 +1250,8 @@ figure.source { margin: 0; }
     animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; animation-delay: 0ms !important;
     transition-duration: 0.01ms !important; scroll-behavior: auto !important;
   }
-  .skeleton-line, .skeleton-block { animation: none !important; }
+  .skeleton-line::after, .skeleton-block::after, .spinner, .tool-lines.is-live .tool-line.is-running > span:last-child { animation: none !important; }
+  .start-card:hover, .start-card:active { transform: none; }
 }
 .zone-notice { flex-wrap: wrap; text-align: left; }
 .zone-notice .btn { min-height: 0; }

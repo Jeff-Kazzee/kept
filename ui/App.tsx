@@ -20,7 +20,7 @@ import { LoadError } from "./components/LoadError.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { DEFAULT_SETTINGS, deviceZone, type ActivityLog, type GoogleStatus, type Settings } from "./contract.ts";
 import { ChatView } from "./chat/ChatView.tsx";
-import { DEMO_IDS } from "./chat/demo.ts";
+import { DEMO_IDS, createFixturesLoader } from "./chat/demo.ts";
 import type { ScriptedLog } from "./chat/mockStream.ts";
 import { realTransport } from "./chat/transport.ts";
 import type { ChatTransport } from "./chat/types.ts";
@@ -504,21 +504,9 @@ function Shell({
   // 0019, P17: the fixtures load only when the person opens the demo or the
   // import sheet, or once the demo is in the case (for "Next demo
   // message"), never on a plain first load.
-  const fixturesLoad = useRef<Promise<FixtureScenario["messages"]> | null>(null);
-  const ensureFixtures = useCallback(() => {
-    fixturesLoad.current ??= api.fixtures().then(
-      (s) => {
-        const list = s.flatMap((x) => x.messages).filter((m, i, all) => all.findIndex((y) => y.id === m.id) === i);
-        setFixtures(list);
-        return list;
-      },
-      () => {
-        fixturesLoad.current = null;
-        return [];
-      },
-    );
-    return fixturesLoad.current;
-  }, []);
+  const fixturesLoader = useRef<(() => Promise<FixtureScenario["messages"]>) | null>(null);
+  fixturesLoader.current ??= createFixturesLoader(() => api.fixtures(), setFixtures);
+  const ensureFixtures = fixturesLoader.current;
   const demoStarted = state.messages.some((m) => DEMO_IDS.includes(m.id));
   useEffect(() => {
     if (demoStarted) void ensureFixtures();
