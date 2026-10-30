@@ -1,0 +1,28 @@
+# The hosted instance as a systemd user unit (0020, B10). Not installed.
+# To go live, the coordinator copies it to ~/.config/systemd/user/, sets
+# EnvironmentFile to the env file that holds the secrets, then runs
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now appointments-hosted.service
+# See docs/hosted.md, "Going live".
+[Unit]
+Description=Appointment assistant, hosted mode on 127.0.0.1:5300
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jeff/workspace/meta-hackathon-appointments
+# The secrets file. Mode 600, never in git. Set this path before installing.
+EnvironmentFile=/path/to/the/hosted-instance.env
+ExecStart=/home/jeff/workspace/meta-hackathon-appointments/scripts/hosted/start.sh
+Restart=on-failure
+RestartSec=5
+# A missing setting stops the start with code 2: no restart loop.
+RestartPreventExitStatus=2
+UMask=0077
+MemoryMax=1G
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target
