@@ -1,124 +1,136 @@
-// Asks whether anything changed (the app, the MCP server, another tab or
-// the chat) and reloads when it did. One request at a time. 0019, P20: it
-// asks every 2 seconds while a turn or an undo runs and right after a
-// change, then backs off by half again each quiet check, up to 15 seconds.
-// While the tab is hidden it does not ask at all, and it asks once as soon
-// as the tab shows again.
+// The page learns that anything changed (the app, the MCP server, another
+// tab or the chat) and reloads. Round 2, finding 4: one held read at a
+// time, GET /api/case/version?since=<the version shown>. The server answers
+// the moment the case changes, or after 25 seconds with the same version,
+// and the page asks again at once. Idle, that is one quiet request per 25
+// seconds. A failed read is tried again after 1, 2, 4 ... up to 15
+// seconds. A server that answers at once without holding is asked every 2
+// seconds, as before. While the tab is hidden nothing is asked and a held
+// read is dropped. Showing the tab, `focus` and `pageshow` ask again at
+// once.
 import { useEffect, useRef } from "react";
-import { api, versionChanged, type LiveVersion } from "./api.ts";
+import { versionChanged, type LiveVersion } from "./api.ts";
 
 export const POLL_MS = 2000;
-export const IDLE_MAX_MS = 15000;
+export const BACKOFF_MAX_MS = 15000;
+// An answer faster than this with no change means the server did not hold.
+export const HELD_MIN_MS = 1000;
 
-// The wait before the next check. Busy or just changed: the base. Quiet:
-// half again the last wait, at most IDLE_MAX_MS.
-export function nextDelay(last: number, { changed, busy }: { changed: boolean; busy: boolean }): number {
-  if (changed || busy) return POLL_MS;
-  return Math.min(IDLE_MAX_MS, Math.round(last * 1.5));
-}
+export const sinceParam = (v: LiveVersion) => `${v.generation}.${v.seq}${v.calendar !== undefined ? `.${v.calendar}` : ""}`;
+
+export const backoff = (failures: number) => Math.min(BACKOFF_MAX_MS, 1000 * 2 ** Math.max(0, failures - 1));
 
 export type LiveDeps = {
-  read: () => Promise<LiveVersion>;
-  setTimer: (fn: () => void, ms: number) => unknown;
-  clearTimer: (t: unknown) => void;
+  read: (since: LiveVersion, signal: AbortSignal) => Promise<LiveVersion>;
   hidden: () => boolean;
+  now: () => number;
+  // Resolves after `ms`, or early when `signal` aborts.
+  sleep: (ms: number, signal: AbortSignal) => Promise<void>;
 };
 
 const browser: LiveDeps = {
-  read: () => api.liveVersion(),
-  setTimer: (fn, ms) => setTimeout(fn, ms),
-  clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
-  hidden: () => typeof document !== "undefined" && document.visibilityState !== "visible",
+  read: async (since, signal) => {
+    const res = await fetch(`/api/case/version?since=${sinceParam(since)}`, { signal });
+    if (!res.ok) throw new Error(`live ${res.status}`);
+    return (await res.json()) as LiveVersion;
+  },
+  hidden: () => typeof document !== "undefined" && document.visibilityState === "hidden",
+  now: () => Date.now(),
+  sleep: (ms, signal) =>
+    new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, ms);
+      signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+    }),
 };
 
-// The poller without React, so its timing is tested on its own. `current`
-// and `busy` are read at each check. `wake` asks now and starts again from
-// the base wait, as when the tab shows or a turn starts.
-export function createPoller(o: { current: () => LiveVersion | null; busy: () => boolean; refresh: () => Promise<void> }, deps: LiveDeps = browser) {
-  let timer: unknown = null;
-  let delay = POLL_MS;
-  let checking = false;
+// The channel without React, so its behavior is tested on its own.
+export function createLiveChannel(o: { current: () => LiveVersion | null; refresh: () => Promise<void> }, deps: LiveDeps = browser) {
   let stopped = false;
-  const schedule = (ms: number) => {
-    if (timer !== null) deps.clearTimer(timer);
-    timer = null;
-    if (stopped || deps.hidden()) return;
-    timer = deps.setTimer(() => void check(), ms);
-  };
-  const check = async () => {
-    timer = null;
-    if (stopped || deps.hidden()) return;
-    if (checking) return schedule(delay);
-    const seen = o.current();
-    if (seen === null) return schedule(delay);
-    checking = true;
-    let changed = false;
+  let running = false;
+  // Aborts the held read or the wait, whichever is under way.
+  let step: AbortController | null = null;
+  let failures = 0;
+  // The version a refresh was started for, until the page shows it, so
+  // the next read does not ask about a change already being shown.
+  let shown: LiveVersion | null = null;
+  const reads = { count: 0 };
+  const loop = async () => {
+    if (running) return;
+    running = true;
     try {
-      const now = await deps.read();
-      const latest = o.current();
-      changed = latest !== null && versionChanged(now, latest);
-      if (changed) await o.refresh();
-    } catch {
-      // Tried again at the next check.
+      while (!stopped && !deps.hidden()) {
+        const page = o.current();
+        if (shown !== null && page !== null && !versionChanged(page, shown)) shown = null;
+        const since = shown ?? page;
+        step = new AbortController();
+        const signal = step.signal;
+        if (since === null) {
+          await deps.sleep(POLL_MS, signal);
+          continue;
+        }
+        const started = deps.now();
+        try {
+          reads.count++;
+          const now = await deps.read(since, signal);
+          failures = 0;
+          const latest = o.current();
+          if (latest !== null && versionChanged(now, shown ?? latest)) {
+            shown = now;
+            await o.refresh();
+          }
+          else if (deps.now() - started < HELD_MIN_MS) await deps.sleep(POLL_MS, signal);
+        } catch {
+          if (signal.aborted) continue;
+          failures++;
+          await deps.sleep(backoff(failures), signal);
+        }
+      }
     } finally {
-      checking = false;
+      running = false;
+      step = null;
     }
-    delay = nextDelay(delay, { changed, busy: o.busy() });
-    schedule(delay);
   };
   return {
-    start: () => schedule(delay),
+    start: () => void loop(),
+    // Ask now: a wait ends at once, and a stopped loop starts again.
     wake: () => {
-      delay = POLL_MS;
-      void check();
+      if (stopped || deps.hidden()) return;
+      if (running) {
+        failures = 0;
+        step?.abort();
+      } else void loop();
     },
-    // Busy again: the next check comes at the base wait.
-    hurry: () => {
-      if (delay === POLL_MS) return;
-      delay = POLL_MS;
-      schedule(delay);
-    },
-    // Hidden: no timer waits. `wake` starts again.
-    pause: () => {
-      if (timer !== null) deps.clearTimer(timer);
-      timer = null;
-    },
+    // Hidden: the held read is dropped and the loop ends until `wake`.
+    pause: () => step?.abort(),
     stop: () => {
       stopped = true;
-      if (timer !== null) deps.clearTimer(timer);
-      timer = null;
+      step?.abort();
     },
-    get delay() {
-      return delay;
-    },
-    get scheduled() {
-      return timer !== null;
+    reads,
+    get running() {
+      return running;
     },
   };
 }
 
-export function useLiveRefresh(current: LiveVersion | null, refresh: () => Promise<void>, busy = false): void {
+export function useLiveRefresh(current: LiveVersion | null, refresh: () => Promise<void>, deps?: LiveDeps): void {
   const latest = useRef(current);
   latest.current = current;
-  const isBusy = useRef(busy);
-  isBusy.current = busy;
-  const poller = useRef<ReturnType<typeof createPoller> | null>(null);
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
   useEffect(() => {
-    const p = createPoller({ current: () => latest.current, busy: () => isBusy.current, refresh });
-    poller.current = p;
-    p.start();
-    const onVisible = () => {
-      if (document.visibilityState === "visible") p.wake();
-      else p.pause();
-    };
+    const channel = createLiveChannel({ current: () => latest.current, refresh: () => refreshRef.current() }, deps);
+    channel.start();
+    const onVisible = () => (document.visibilityState === "hidden" ? channel.pause() : channel.wake());
+    const onWake = () => channel.wake();
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onWake);
+    window.addEventListener("pageshow", onWake);
     return () => {
-      p.stop();
-      poller.current = null;
+      channel.stop();
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onWake);
+      window.removeEventListener("pageshow", onWake);
     };
-  }, [refresh]);
-  useEffect(() => {
-    if (busy) poller.current?.hurry();
-  }, [busy]);
+  }, [deps]);
 }

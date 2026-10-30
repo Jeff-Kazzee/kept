@@ -11,11 +11,11 @@ import { caseNeedsCards, loadCaseCards } from "./case/lazyCards.tsx";
 import { onDemand } from "./components/onDemand.tsx";
 import { scopeReadback } from "./case/readback.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { realBackend, type AgentBackend } from "./agentApi.ts";
+import { normalizeSettings, realBackend, type AgentBackend } from "./agentApi.ts";
 import { AgentContext, type AgentState } from "./agent/AgentContext.tsx";
 import { keep, sendDeviceZone, settle } from "./agent/reads.ts";
 import { runUndo, serialUndo } from "./agent/undo.ts";
-import { api, type AppState, type FixtureScenario } from "./api.ts";
+import { api, type AppState, type BootData, type FixtureScenario } from "./api.ts";
 import type { Run } from "./components/ActionButton.tsx";
 import { LoadError } from "./components/LoadError.tsx";
 import { Icon } from "./components/Icon.tsx";
@@ -64,11 +64,30 @@ const PageView = pages.part((m) => m.default, "PageView", <PageLoading />);
 // for the sheet or the idle prefetch.
 if (typeof matchMedia === "function" && matchMedia(LAPTOP).matches) void loadPanel().catch(() => {});
 void loadCaseCards().catch(() => {});
-// 0019, P17: the stored chat is read with the case's first reads, so the
-// first render of the case already shows it. In local mode the page's
-// preload has it already. Not for the scripted chat, which keeps its own.
-// A failure leaves it to the chat hook.
-const readFirstChat = (scripted: boolean): Promise<ChatLog | null | undefined> => (scripted ? Promise.resolve(undefined) : realTransport.load().catch(() => undefined));
+// Round 2, finding 2: the first render's data, read together and of one
+// generation: from the page itself when the server rendered it, else from
+// GET /api/boot, which local mode preloads. Null for the scripted chat,
+// which keeps its own, and for a server without the route.
+let bootRead: Promise<BootData | null> | null = null;
+export function readBoot(scripted: boolean): Promise<BootData | null> {
+  if (scripted) return Promise.resolve(null);
+  bootRead ??= (async () => {
+    const inline = typeof document === "undefined" ? null : document.getElementById("boot");
+    if (inline?.textContent) {
+      try {
+        return api.adoptBoot(JSON.parse(inline.textContent) as BootData);
+      } catch {
+        // Read it from the route instead.
+      }
+    }
+    try {
+      return await api.boot();
+    } catch {
+      return null;
+    }
+  })();
+  return bootRead;
+}
 const signIn = onDemand(() => import("./hosted/SignIn.tsx"));
 const SignIn = signIn.part((m) => m.SignIn, "SignIn", <main className="loading" aria-busy="true" />);
 
@@ -224,20 +243,23 @@ export function App({
     const mine = ++reads.current;
     const stale = () => mine !== reads.current;
     try {
-      const chatRead = firstRender.current ? readFirstChat(scripted) : null;
-      const [next, sRead, aRead, gRead] = await Promise.all([api.state(), settle(() => backend.settings()), settle(() => backend.activity()), settle(() => backend.google())]);
+      const boot = firstRender.current ? await readBoot(scripted) : null;
+      firstRender.current = false;
+      const [next, sRead, aRead, gRead] = boot
+        ? [
+            boot.state,
+            { ok: true as const, value: normalizeSettings(boot.settings as Settings | null) },
+            { ok: true as const, value: boot.activity as ActivityLog | null },
+            { ok: true as const, value: boot.google as GoogleStatus | null },
+          ]
+        : await Promise.all([api.state(), settle(() => backend.settings()), settle(() => backend.activity()), settle(() => backend.google())]);
       if (stale()) return;
       // 0019, P18: the first render of a case that shows these cards waits
       // for their chunk, which started with the page, so no placeholder is
       // swapped for a card in view.
       if (caseNeedsCards(next)) await loadCaseCards().catch(() => {});
       // The first render of the case shows the stored chat with it.
-      if (chatRead) {
-        firstRender.current = false;
-        const log = await chatRead;
-        if (stale()) return;
-        setFirstChat(log);
-      }
+      if (boot) setFirstChat((boot.chat as ChatLog | null) ?? undefined);
       if (stale()) return;
       // The balance moves with every turn on the hosted site.
       if (hostedRef.current) void hostedApi.session().then((x) => onSessionRef.current(x), () => {});
@@ -426,10 +448,9 @@ function Shell({
     [scripted, mock, backend, scriptedLog],
   );
   const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh(), scripted ? undefined : initialChat);
-  // A change by an agent, the chat or another tab shows without a reload.
-  // It asks often while a turn or an undo runs, and backs off when quiet
-  // (0019, P20).
-  useLiveRefresh(state.live, refresh, streaming || undoing);
+  // A change by an agent, the chat or another tab shows without a reload,
+  // the moment the server sees it (round 2, finding 4).
+  useLiveRefresh(state.live, refresh);
   const mode = hosted ? "hosted" : "local";
   const [sheetOpen, setSheetOpen] = useState(false);
   // 0019, P19: on a phone or a tablet the schedule is a closed sheet at

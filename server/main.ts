@@ -44,7 +44,8 @@ import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./h
 import { apiPreamble, secureRequest } from "./http.ts";
 import { requestLogEnabled, requestLogger } from "./request-log.ts";
 import { API_SECURITY_HEADERS, FIRST_LOAD_READS, createStaticHandler } from "./static.ts";
-import { createWorkspace, send, serveApi } from "./workspace.ts";
+import { LIVE_PATH, parseSince, waitForChange } from "./live.ts";
+import { createWorkspace, liveOf, send, serveApi } from "./workspace.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.APP_PORT ?? 5180);
@@ -131,6 +132,13 @@ if (config.mode === "hosted") {
     if (url.pathname === "/api/session") {
       if (req.method !== "GET") return send(res, 405, { error: "method_not_allowed" });
       return send(res, 200, { mode: "local" });
+    }
+    // Round 2, finding 4: the held live read.
+    const since = req.method === "GET" && url.pathname === LIVE_PATH ? parseSince(url.search) : null;
+    if (since) {
+      const live = await waitForChange(() => liveOf(ws), since, { closed: () => res.destroyed || res.writableEnded });
+      if (live) send(res, 200, live);
+      return;
     }
     await serveApi(ws, { method: req.method ?? "GET", path: url.pathname, body: input.body, generation: input.generation, host: req.headers.host, secure: secureRequest(req) }, res);
   });

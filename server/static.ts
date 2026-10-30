@@ -140,7 +140,9 @@ export function pickEncoding(acceptEncoding: string | undefined, entry: Pick<Ent
 // script loads instead of after it. GET routes need no header (guard.ts),
 // so the page's own fetch takes the preloaded answer. The hosted site has
 // none: its reads need a session first.
-export const FIRST_LOAD_READS = ["/api/session", "/api/state", "/api/settings", "/api/activity", "/api/google", "/api/chat"] as const;
+// Round 2, finding 2: only the session and the first render's data, read
+// together and naming its generation (GET /api/boot).
+export const FIRST_LOAD_READS = ["/api/session", "/api/boot"] as const;
 
 // index.html with a preload link for each read, before </head>.
 export function withPreloads(html: string, reads: readonly string[]): string {

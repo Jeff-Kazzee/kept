@@ -38,6 +38,7 @@ import { CHAT_PATH, createChat, sseFrame } from "./chat.ts";
 import { dropGmailOffers } from "../src/google/offers.ts";
 import { createGoogleRoutes } from "./google.ts";
 import { API_SECURITY_HEADERS } from "./static.ts";
+import { LIVE_PATH, type Live } from "./live.ts";
 
 // Hosted mode's provider part: the metered client on the server key, and
 // the sentence ChatGPT answers on the hosted site (J14).
@@ -218,7 +219,52 @@ export type WorkspaceRequest = {
 };
 
 // An /api request for one workspace, after the server's checks.
+// The case's live version, as GET /api/case/version answers it.
+export async function liveOf(ws: Workspace): Promise<Live> {
+  return (await ws.api({ method: "GET", path: LIVE_PATH, body: undefined, generation: undefined })).body as Live;
+}
+
+// Round 2, finding 2: what the page needs for its first render, read
+// together: the case (with its generation), the settings, the activity,
+// Google and the stored chat. The reads are taken again when the live
+// version moved while they ran, so every part is of the generation `live`
+// names. The page's later reads go through the usual routes.
+export const BOOT_PATH = "/api/boot";
+export type Boot = { live: Live; state: unknown; settings: unknown; activity: unknown; google: unknown; chat: unknown };
+
+export async function bootOf(ws: Workspace): Promise<Boot> {
+  const get = async (path: string) => {
+    const settings = await ws.auth.handle({ method: "GET", path, body: undefined });
+    if (settings) return settings.status === 200 ? settings.body : null;
+    if (ws.googleRoutes.handles(path)) {
+      const g = await ws.googleRoutes.api({ method: "GET", path, body: undefined, generation: undefined, host: undefined, secure: false });
+      return g.status === 200 ? g.body : null;
+    }
+    const r = await ws.api({ method: "GET", path, body: undefined, generation: undefined });
+    return r.status === 200 ? r.body : null;
+  };
+  const chat = async () => {
+    let body: unknown = null;
+    await ws.chat.serve(
+      { method: "GET", body: undefined, generation: undefined },
+      { json: (status, payload) => void (body = status === 200 ? payload : null), event: () => {}, end: () => {} },
+    );
+    return body;
+  };
+  for (let attempt = 0; ; attempt++) {
+    const live = await liveOf(ws);
+    const [state, settings, activity, google, log] = await Promise.all([get("/api/state"), get("/api/settings"), get("/api/activity"), get("/api/google"), chat()]);
+    const after = await liveOf(ws);
+    const same = after.generation === live.generation && after.seq === live.seq;
+    if (same || attempt >= 4) return { live: after, state, settings, activity, google, chat: log };
+  }
+}
+
 export async function serveApi(ws: Workspace, req: WorkspaceRequest, res: ServerResponse): Promise<void> {
+  if (req.path === BOOT_PATH) {
+    if (req.method !== "GET") return send(res, 405, { error: "method_not_allowed" });
+    return send(res, 200, await bootOf(ws));
+  }
   // App settings and sign-in. They need no case generation.
   const settingsResult = await ws.auth.handle({ method: req.method, path: req.path, body: req.body });
   if (settingsResult) return send(res, settingsResult.status, settingsResult.body);

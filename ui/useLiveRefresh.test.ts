@@ -1,114 +1,193 @@
-// 0019, P20: the poll backs off when nothing changes, asks at the base wait
-// while busy or right after a change, and asks nothing while the tab is
-// hidden.
-import { describe, expect, it } from "vitest";
+// Round 2, finding 4: the page learns of a change through one held read.
+// It refreshes the moment the server answers with a change, asks again at
+// once, backs off after a failure, polls every 2 s a server that does not
+// hold, drops the held read while hidden, and asks again on showing, focus
+// and pageshow. Finding 7: the hook's own wiring is tested in a DOM too.
+import { createElement } from "react";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { LiveVersion } from "./api.ts";
-import { IDLE_MAX_MS, POLL_MS, createPoller, nextDelay } from "./useLiveRefresh.ts";
+import { installTestDom, mount } from "./test-dom.ts";
+import { BACKOFF_MAX_MS, POLL_MS, backoff, createLiveChannel, sinceParam, useLiveRefresh, type LiveDeps } from "./useLiveRefresh.ts";
 
+beforeAll(() => {
+  installTestDom();
+});
+
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+// A server whose held reads the test answers by hand.
 function harness(start: LiveVersion = { generation: 1, seq: 1 }) {
-  let server = start;
-  let seen: LiveVersion | null = start;
+  let shown: LiveVersion | null = start;
   let hidden = false;
-  let busy = false;
-  const timers: Array<{ fn: () => void; ms: number; live: boolean }> = [];
-  const reads: number[] = [];
-  const refreshes: LiveVersion[] = [];
-  const poller = createPoller(
-    {
-      current: () => seen,
-      busy: () => busy,
-      refresh: async () => {
-        refreshes.push(server);
-        seen = server;
-      },
-    },
-    {
-      read: async () => {
-        reads.push(Date.now());
-        return server;
-      },
-      setTimer: (fn, ms) => {
-        const t = { fn, ms, live: true };
-        timers.push(t);
-        return t;
-      },
-      clearTimer: (t) => {
-        (t as { live: boolean }).live = false;
-      },
-      hidden: () => hidden,
-    },
-  );
-  // Runs the next live timer and waits for its check.
-  const tick = async () => {
-    const t = timers.find((x) => x.live);
-    if (!t) return null;
-    t.live = false;
-    t.fn();
-    await new Promise((r) => setTimeout(r, 0));
-    return t.ms;
+  let clock = 0;
+  const held: Array<{ since: LiveVersion; signal: AbortSignal; answer: (v: LiveVersion) => void; fail: (e: Error) => void }> = [];
+  const sleeps: Array<{ ms: number; signal: AbortSignal; done: () => void }> = [];
+  const refreshes: number[] = [];
+  const deps: LiveDeps = {
+    read: (since, signal) =>
+      new Promise((resolve, reject) => {
+        held.push({ since, signal, answer: resolve, fail: reject });
+        signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }),
+    hidden: () => hidden,
+    now: () => clock,
+    sleep: (ms, signal) =>
+      new Promise<void>((done) => {
+        sleeps.push({ ms, signal, done });
+        signal.addEventListener("abort", () => done());
+      }),
   };
-  const waits = () => timers.filter((x) => x.live).map((x) => x.ms);
+  let server = start;
+  const channel = createLiveChannel(
+    {
+      current: () => shown,
+      refresh: async () => {
+        refreshes.push(server.seq);
+        shown = server;
+      },
+    },
+    deps,
+  );
   return {
-    poller,
-    tick,
-    waits,
-    reads,
+    channel,
+    held,
+    sleeps,
     refreshes,
-    change: () => (server = { ...server, seq: server.seq + 1 }),
+    set: (v: LiveVersion) => (server = v),
+    advance: (ms: number) => (clock += ms),
     hide: (h: boolean) => (hidden = h),
-    busy: (b: boolean) => (busy = b),
+    last: () => held.at(-1)!,
   };
 }
 
-describe("0019, P20: polling back-off", () => {
-  it("backs off by half again while quiet, up to 15 seconds", () => {
-    expect(nextDelay(POLL_MS, { changed: false, busy: false })).toBe(3000);
-    expect(nextDelay(10000, { changed: false, busy: false })).toBe(IDLE_MAX_MS);
-    expect(nextDelay(IDLE_MAX_MS, { changed: false, busy: false })).toBe(IDLE_MAX_MS);
-    expect(nextDelay(IDLE_MAX_MS, { changed: true, busy: false })).toBe(POLL_MS);
-    expect(nextDelay(IDLE_MAX_MS, { changed: false, busy: true })).toBe(POLL_MS);
+describe("round 2, finding 4: the live channel", () => {
+  it("names the version it shows in the read", () => {
+    expect(sinceParam({ generation: 3, seq: 41 })).toBe("3.41");
+    expect(sinceParam({ generation: 3, seq: 41, calendar: 2 })).toBe("3.41.2");
   });
 
-  it("waits longer after each quiet check, and goes back to 2 seconds after a change", async () => {
+  it("refreshes the moment the held read answers a change, then holds a read for the new version", async () => {
     const h = harness();
-    h.poller.start();
-    const seen: Array<number | null> = [];
-    for (let i = 0; i < 7; i++) seen.push(await h.tick());
-    expect(seen).toEqual([2000, 3000, 4500, 6750, 10125, 15000, 15000]);
-    h.change();
-    await h.tick();
-    expect(h.refreshes).toHaveLength(1);
-    expect(h.waits()).toEqual([POLL_MS]);
+    h.channel.start();
+    await tick();
+    expect(h.held).toHaveLength(1);
+    expect(h.last().since).toEqual({ generation: 1, seq: 1 });
+    h.advance(3000);
+    h.set({ generation: 1, seq: 2 });
+    h.last().answer({ generation: 1, seq: 2 });
+    await tick();
+    await tick();
+    expect(h.refreshes).toEqual([2]);
+    expect(h.held).toHaveLength(2);
+    expect(h.last().since).toEqual({ generation: 1, seq: 2 });
+    expect(h.sleeps).toHaveLength(0);
   });
 
-  it("stays at 2 seconds while a turn or an undo runs, and hurries back when one starts", async () => {
-    const h = harness();
-    h.poller.start();
-    for (let i = 0; i < 4; i++) await h.tick();
-    expect(h.waits()[0]).toBeGreaterThan(POLL_MS);
-    h.busy(true);
-    h.poller.hurry();
-    expect(h.waits()).toEqual([POLL_MS]);
-    for (let i = 0; i < 3; i++) expect(await h.tick()).toBe(POLL_MS);
+  it("a page shown at an older generation (a Delete case before its first read) refreshes at once", async () => {
+    const h = harness({ generation: 4, seq: 9 });
+    h.set({ generation: 5, seq: 0 });
+    h.channel.start();
+    await tick();
+    h.last().answer({ generation: 5, seq: 0 });
+    await tick();
+    await tick();
+    expect(h.refreshes).toEqual([0]);
   });
 
-  it("asks nothing while the tab is hidden, and asks at once when it shows", async () => {
+  it("after a held answer with no change it asks again at once, and a server that does not hold is asked every 2 s", async () => {
     const h = harness();
-    h.poller.start();
-    await h.tick();
-    const before = h.reads.length;
+    h.channel.start();
+    await tick();
+    h.advance(25000);
+    h.last().answer({ generation: 1, seq: 1 });
+    await tick();
+    expect(h.held).toHaveLength(2);
+    expect(h.sleeps).toHaveLength(0);
+    h.last().answer({ generation: 1, seq: 1 });
+    await tick();
+    expect(h.sleeps.map((s) => s.ms)).toEqual([POLL_MS]);
+  });
+
+  it("backs off 1, 2, 4 ... 15 s after failures, and focus asks again at once", async () => {
+    expect([1, 2, 3, 4, 5, 6].map(backoff)).toEqual([1000, 2000, 4000, 8000, BACKOFF_MAX_MS, BACKOFF_MAX_MS]);
+    const h = harness();
+    h.channel.start();
+    await tick();
+    h.last().fail(new Error("offline"));
+    await tick();
+    expect(h.sleeps.at(-1)!.ms).toBe(1000);
+    h.sleeps.at(-1)!.done();
+    await tick();
+    h.last().fail(new Error("offline"));
+    await tick();
+    expect(h.sleeps.at(-1)!.ms).toBe(2000);
+    h.channel.wake();
+    await tick();
+    expect(h.held).toHaveLength(3);
+  });
+
+  it("hidden, the held read is dropped and nothing is asked, and showing asks at once", async () => {
+    const h = harness();
+    h.channel.start();
+    await tick();
+    const first = h.last();
     h.hide(true);
-    h.poller.pause();
-    expect(h.waits()).toEqual([]);
-    // A timer that fired just as the tab hid does not read.
-    expect(await h.tick()).toBeNull();
-    expect(h.reads.length).toBe(before);
+    h.channel.pause();
+    await tick();
+    expect(first.signal.aborted).toBe(true);
+    expect(h.held).toHaveLength(1);
+    expect(h.channel.running).toBe(false);
+    h.channel.wake();
+    await tick();
+    expect(h.held).toHaveLength(1);
     h.hide(false);
-    h.change();
-    h.poller.wake();
-    await new Promise((r) => setTimeout(r, 0));
-    expect(h.reads.length).toBe(before + 1);
-    expect(h.refreshes).toHaveLength(1);
-    expect(h.waits()).toEqual([POLL_MS]);
+    h.channel.wake();
+    await tick();
+    expect(h.held).toHaveLength(2);
+  });
+});
+
+describe("round 2, finding 7: the hook's wiring in a page", () => {
+  it("starts one held read, drops it when the tab hides, and asks again on showing, focus and pageshow", async () => {
+    const h = harness();
+    const deps: LiveDeps = {
+      read: (since, signal) =>
+        new Promise((resolve, reject) => {
+          h.held.push({ since, signal, answer: resolve, fail: reject });
+          signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        }),
+      hidden: () => (document as unknown as { visibilityState: string }).visibilityState === "hidden",
+      now: () => 0,
+      sleep: (_ms, signal) => new Promise<void>((done) => signal.addEventListener("abort", () => done())),
+    };
+    const doc = document as unknown as { visibilityState: string; dispatchEvent(e: unknown): void };
+    doc.visibilityState = "visible";
+    function Probe() {
+      useLiveRefresh({ generation: 1, seq: 1 }, async () => {}, deps);
+      return null;
+    }
+    const view = await mount(createElement(Probe));
+    await tick();
+    expect(h.held).toHaveLength(1);
+    const { TestEvent } = await import("./test-dom.ts");
+    doc.visibilityState = "hidden";
+    doc.dispatchEvent(new TestEvent("visibilitychange"));
+    await tick();
+    expect(h.held[0]!.signal.aborted).toBe(true);
+    expect(h.held).toHaveLength(1);
+    doc.visibilityState = "visible";
+    doc.dispatchEvent(new TestEvent("visibilitychange"));
+    await tick();
+    expect(h.held).toHaveLength(2);
+    // Focus while a read is held asks again at once, with one read in flight.
+    (window as unknown as { dispatchEvent(e: unknown): void }).dispatchEvent(new TestEvent("focus"));
+    await tick();
+    expect(h.held).toHaveLength(3);
+    expect(h.held.filter((r) => !r.signal.aborted)).toHaveLength(1);
+    (window as unknown as { dispatchEvent(e: unknown): void }).dispatchEvent(new TestEvent("pageshow"));
+    await tick();
+    expect(h.held.filter((r) => !r.signal.aborted)).toHaveLength(1);
+    await view.unmount();
+    expect(h.held.every((r) => r.signal.aborted)).toBe(true);
   });
 });

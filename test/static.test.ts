@@ -168,7 +168,7 @@ describe("0019, P17: the first reads start with the page", () => {
     const dir = build();
     precompress(dir);
     const get = await serve(dir, FIRST_LOAD_READS);
-    expect(FIRST_LOAD_READS).toEqual(["/api/session", "/api/state", "/api/settings", "/api/activity", "/api/google", "/api/chat"]);
+    expect(FIRST_LOAD_READS).toEqual(["/api/session", "/api/boot"]);
     const plain = (await get("/")).body.toString("utf8");
     for (const read of FIRST_LOAD_READS) expect(plain).toContain(`<link rel="preload" href="${read}" as="fetch" crossorigin>`);
     // Before </head>, so the browser starts them before the script runs.

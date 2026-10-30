@@ -40,7 +40,8 @@ import { GOOGLE_CALLBACK_PATH, googleRedirectUris } from "./google.ts";
 import { appHosts, hostAllowed } from "./hosts.ts";
 import { apiPreamble, trustedSecure } from "./http.ts";
 import { API_SECURITY_HEADERS } from "./static.ts";
-import { CHATGPT_HOSTED_TEXT, createWorkspace, send, serveApi, type Workspace } from "./workspace.ts";
+import { LIVE_PATH, parseSince, waitForChange, type Live } from "./live.ts";
+import { CHATGPT_HOSTED_TEXT, createWorkspace, liveOf, send, serveApi, type Workspace } from "./workspace.ts";
 import { WorkspaceBusyError, Workspaces, WorkspacesFullError } from "./workspaces.ts";
 
 export type HostedOptions = {
@@ -488,6 +489,21 @@ export function createHostedApp(o: HostedOptions) {
       const { session } = sessionOf(req);
       if (!session) return send(res, 401, { error: "signed_out", message: SIGNED_OUT_TEXT });
       const accountId = session.account.id;
+      // Round 2, finding 4: the held live read. Each check opens this
+      // account's workspace briefly and asks again whether the session
+      // still holds, so a held request keeps nothing open.
+      const since = req.method === "GET" && url.pathname === LIVE_PATH ? parseSince(url.search) : null;
+      if (since) {
+        let live: Live | null = null;
+        try {
+          live = await waitForChange(() => workspaces.use(accountId, (ws) => liveOf(ws)), since, { closed: () => res.destroyed || res.writableEnded || sessionOf(req).session?.account.id !== accountId });
+        } catch {
+          live = null;
+        }
+        if (live && !res.destroyed) send(res, 200, live);
+        else if (!res.destroyed && !res.writableEnded) send(res, 401, { error: "signed_out", message: SIGNED_OUT_TEXT });
+        return;
+      }
       await workspaces.use(accountId, async (ws) => {
         if (await hostedOnly(ws, req, res, url.pathname, input)) return;
         await withUsageScope({ route: routeOf(url.pathname), turn: null }, () =>
