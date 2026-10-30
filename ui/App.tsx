@@ -20,7 +20,7 @@ import { Icon } from "./components/Icon.tsx";
 import { DEFAULT_SETTINGS, deviceZone, type ActivityLog, type GoogleStatus, type Settings } from "./contract.ts";
 import { ChatView } from "./chat/ChatView.tsx";
 import { DEMO_IDS } from "./chat/demo.ts";
-import { createMockTransport } from "./chat/mockStream.ts";
+import { createMockTransport, createScriptedLog, scriptedBackend, type ScriptedLog } from "./chat/mockStream.ts";
 import { realTransport } from "./chat/transport.ts";
 import type { ChatTransport } from "./chat/types.ts";
 import { useChat } from "./chat/useChat.ts";
@@ -148,7 +148,10 @@ export function App({
   onSessionRef.current = onSession;
   const onSignedOutRef = useRef(onSignedOut);
   onSignedOutRef.current = onSignedOut;
-  const backend: AgentBackend = realBackend;
+  // The scripted chat's own entries (0019, P21), in development and check
+  // builds only.
+  const scriptedLog = useMemo(() => (fakesBuilt && scripted ? createScriptedLog(sessionStorage) : null), [scripted]);
+  const backend: AgentBackend = useMemo(() => (fakesBuilt && scriptedLog ? scriptedBackend(realBackend, scriptedLog) : realBackend), [scriptedLog]);
   const [state, setState] = useState<AppState | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [activity, setActivity] = useState<ActivityLog | null>(null);
@@ -300,6 +303,7 @@ export function App({
       toasts={toasts}
       setToasts={setToasts}
       scripted={scripted}
+      scriptedLog={scriptedLog}
       backend={backend}
       settings={settings}
       activity={activity}
@@ -322,6 +326,7 @@ function Shell({
   toasts,
   setToasts,
   scripted,
+  scriptedLog,
   backend,
   settings,
   activity,
@@ -342,6 +347,7 @@ function Shell({
   toasts: Toast[];
   setToasts: (f: (t: Toast[]) => Toast[]) => void;
   scripted: boolean;
+  scriptedLog: ScriptedLog | null;
   backend: AgentBackend;
   settings: Settings | null;
   activity: ActivityLog | null;
@@ -352,8 +358,8 @@ function Shell({
   degraded: boolean;
 }) {
   const transport: ChatTransport = useMemo(
-    () => (fakesBuilt && scripted ? createMockTransport({ api, storage: sessionStorage, activity: () => backend.activity(), google: () => backend.google() }) : realTransport),
-    [scripted, backend],
+    () => (fakesBuilt && scripted ? createMockTransport({ api, storage: sessionStorage, activity: () => backend.activity(), google: () => backend.google(), scriptedLog }) : realTransport),
+    [scripted, backend, scriptedLog],
   );
   const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh());
   const mode = hosted ? "hosted" : "local";
