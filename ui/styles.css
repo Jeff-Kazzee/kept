@@ -1240,6 +1240,8 @@ figure.source { margin: 0; }
 .thread { display: flex; flex-direction: column; }
 .thread > .thread-inner { flex: none; width: 100%; }
 .thread[data-opening] { flex-direction: column-reverse; }
+/* Short content sits at the top, as it does after the opening. */
+.thread[data-opening] > .thread-inner { margin-bottom: auto; }
 /* What the page opens with is drawn as it is, not faded in: entrance
    motion is for what arrives after (P14). */
 .thread[data-opening] * { animation: none; }

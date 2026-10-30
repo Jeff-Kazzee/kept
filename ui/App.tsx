@@ -398,6 +398,7 @@ export function App({
       setToasts={setToasts}
       scripted={scripted}
       initialChat={firstChat}
+      fromServer={boot !== undefined}
       mock={mock}
       scriptedLog={scriptedLog}
       backend={backend}
@@ -423,6 +424,7 @@ function Shell({
   setToasts,
   scripted,
   initialChat,
+  fromServer,
   mock,
   scriptedLog,
   backend,
@@ -446,6 +448,8 @@ function Shell({
   setToasts: (f: (t: Toast[]) => Toast[]) => void;
   scripted: boolean;
   initialChat: ChatLog | null | undefined;
+  // The page hydrates what the server rendered (0019, P30).
+  fromServer: boolean;
   mock: ScriptedModule | null;
   scriptedLog: ScriptedLog | null;
   backend: AgentBackend;
@@ -803,6 +807,7 @@ function Shell({
               fixtures={fixtures}
               loadFixtures={ensureFixtures}
               firstWindow={6}
+              opensFromServer={fromServer && !scripted}
               modelLabel={modelLabel}
             />
           </div>

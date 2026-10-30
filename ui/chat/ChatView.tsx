@@ -69,6 +69,8 @@ export type ChatViewProps = {
   // older ones render right after the first paint, in a transition, above
   // what is in view. Unset: all at once.
   firstWindow?: number;
+  // A page the server rendered opens as a reversed column (P30).
+  opensFromServer?: boolean;
   // Loads the fixtures when the import sheet opens (0019, P17).
   loadFixtures?: () => Promise<unknown>;
   // What the composer says when no provider is set, such as "No model set".
@@ -76,7 +78,7 @@ export type ChatViewProps = {
 };
 
 export function ChatView(props: ChatViewProps) {
-  const { state, run, chat, streaming, scripted, send, onStop, onShowSlot, onLoadCalendar, onLoadDemo, fixtures, loadFixtures, modelLabel = null, firstWindow } = props;
+  const { state, run, chat, streaming, scripted, send, onStop, onShowSlot, onLoadCalendar, onLoadDemo, fixtures, loadFixtures, modelLabel = null, firstWindow, opensFromServer = false } = props;
   const [windowed, setWindowed] = useState(firstWindow !== undefined);
   useEffect(() => {
     if (windowed) startTransition(() => setWindowed(false));
@@ -149,7 +151,7 @@ export function ChatView(props: ChatViewProps) {
   const opened = useRef(false);
   const keepOpening = useRef(false);
   const followedOnce = useRef(false);
-  const [opening, setOpening] = useState(true);
+  const [opening, setOpening] = useState(opensFromServer);
   const leaveOpening = () => {
     const el = threadRef.current;
     if (!el || !el.hasAttribute("data-opening")) return;

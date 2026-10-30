@@ -37,7 +37,7 @@ export default defineConfig(({ mode }) => ({
     // worse and cost a request each. The server build keeps its own split.
     rollupOptions: {
       output: {
-        manualChunks: (id: string) => (process.env.SSR_BUILD || /node_modules/.test(id) || !/\/(ui|src)\//.test(id) || LAZY.test(id) ? undefined : "core"),
+        manualChunks: (id: string) => (process.env.SSR_BUILD || /node_modules/.test(id) || !/\/(ui|src)\//.test(id) || LAZY.test(id) || /\/ui\/main\.tsx$/.test(id) ? undefined : "core"),
       },
     },
     sourcemap: false,

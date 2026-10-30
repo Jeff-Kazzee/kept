@@ -27,18 +27,23 @@ try {
   boot = null;
 }
 if (boot) {
-  api.adoptBoot(boot);
-  setCaseZone((boot.settings as Settings | null)?.timezone ?? DEFAULT_SETTINGS.timezone);
+  const initial = boot;
+  api.adoptBoot(initial);
+  setCaseZone((initial.settings as Settings | null)?.timezone ?? DEFAULT_SETTINGS.timezone);
   // The parts the server rendered hydrate with their code in place, so an
   // update before their chunk arrived never replaces what the server drew.
-  // The page is on screen meanwhile.
-  await Promise.all([loadCaseCards(), loadPanel()]).catch(() => {});
-  hydrateRoot(
-    root,
-    <StrictMode>
-      <Root initial={{ session: { mode: "local" }, boot }} />
-    </StrictMode>,
-  );
+  // The page is on screen meanwhile. Not a top-level await: those chunks
+  // import this module's chunk, which must finish first.
+  void Promise.all([loadCaseCards(), loadPanel()])
+    .catch(() => {})
+    .then(() =>
+      hydrateRoot(
+        root,
+        <StrictMode>
+          <Root initial={{ session: { mode: "local" }, boot: initial }} />
+        </StrictMode>,
+      ),
+    );
 } else {
   createRoot(root).render(
     <StrictMode>
