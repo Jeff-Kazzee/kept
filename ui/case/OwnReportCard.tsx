@@ -25,8 +25,7 @@ export const excerpt = (text: string, max = 90) => {
   return one.length <= max ? one : `${one.slice(0, max - 1).trimEnd()}…`;
 };
 
-// The messages whose question waits for the person.
-export const openOwnReports = (state: Pick<AppState, "messages">) => state.messages.filter((m) => m.ownReport === "offered");
+export { openOwnReports } from "./ownReports.ts";
 
 export function OwnReportCard({ messageId, state, run }: { messageId: string; state: AppState; run: Run }) {
   const { activity } = useAgent();

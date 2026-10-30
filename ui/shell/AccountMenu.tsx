@@ -7,7 +7,7 @@ import { useId } from "react";
 import { Icon } from "../components/Icon.tsx";
 import { useMenu } from "../components/Menu.tsx";
 import type { SignedInSession } from "../hosted/session.ts";
-import { ThemeSetting } from "../pages/Settings.tsx";
+import { ThemeSetting } from "../pages/shared.tsx";
 import { itemsFor, type Mode, type Person, type View } from "./shell.ts";
 
 const NOTES: Partial<Record<string, string>> = {
