@@ -44,7 +44,7 @@ const browser: LiveDeps = {
 };
 
 // The channel without React, so its behavior is tested on its own.
-export function createLiveChannel(o: { current: () => LiveVersion | null; refresh: () => Promise<void> }, deps: LiveDeps = browser) {
+export function createLiveChannel(o: { current: () => LiveVersion | null; refresh: () => Promise<boolean | void> }, deps: LiveDeps = browser) {
   let stopped = false;
   let running = false;
   // Aborts the held read or the wait, whichever is under way.
@@ -75,8 +75,16 @@ export function createLiveChannel(o: { current: () => LiveVersion | null; refres
           failures = 0;
           const latest = o.current();
           if (latest !== null && versionChanged(now, shown ?? latest)) {
+            // Muse round 2, finding 3: the cursor moves only once the page
+            // read the change. A failed read keeps the old one and backs
+            // off, so the change is asked about again.
+            const ok = await o.refresh();
+            if (ok === false) {
+              failures++;
+              await deps.sleep(backoff(failures), signal);
+              continue;
+            }
             shown = now;
-            await o.refresh();
           }
           else if (deps.now() - started < HELD_MIN_MS) await deps.sleep(POLL_MS, signal);
         } catch {
@@ -113,7 +121,7 @@ export function createLiveChannel(o: { current: () => LiveVersion | null; refres
   };
 }
 
-export function useLiveRefresh(current: LiveVersion | null, refresh: () => Promise<void>, deps?: LiveDeps): void {
+export function useLiveRefresh(current: LiveVersion | null, refresh: () => Promise<boolean | void>, deps?: LiveDeps): void {
   const latest = useRef(current);
   latest.current = current;
   const refreshRef = useRef(refresh);

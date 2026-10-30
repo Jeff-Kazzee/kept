@@ -238,6 +238,20 @@ describe("0019, P30: the server-rendered case screen", () => {
     // Its data is inline, so it preloads none.
     expect(page).not.toContain('rel="preload" href="/api/boot"');
     expect((await get("/?mockchat=1")).body.toString("utf8")).not.toContain("<p>rendered</p>");
+    // Muse round 2, finding 6: only the case's own address is rendered.
+    let renders = 0;
+    const counting = await serve(dir, [], async () => (renders++, { html: "<p>rendered</p>", boot: {} }));
+    for (const stray of ["/x", "/settings", "/wp-login"]) expect((await counting(stray)).body.toString("utf8")).not.toContain("<p>rendered</p>");
+    expect(renders).toBe(0);
+    expect((await counting("/")).body.toString("utf8")).toContain("<p>rendered</p>");
+    expect(renders).toBe(1);
+    // Finding 8: a refused encoding is never sent.
+    const plainBody = await counting("/", { "Accept-Encoding": "br;q=0, gzip;q=0" });
+    expect(plainBody.headers["content-encoding"]).toBeUndefined();
+    expect(plainBody.body.toString("utf8")).toContain("<p>rendered</p>");
+    const gz = await counting("/", { "Accept-Encoding": "br;q=0, gzip" });
+    expect(gz.headers["content-encoding"]).toBe("gzip");
+    expect(gunzipSync(gz.body).toString("utf8")).toContain("<p>rendered</p>");
     const errors: unknown[] = [];
     const log = console.error;
     console.error = (...a: unknown[]) => void errors.push(a);

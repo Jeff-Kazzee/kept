@@ -91,6 +91,9 @@ if (serveBuild) {
             render: async (req) => {
               if (!renderWorkspace || !hostAllowed(allowed, req.headers.host)) return null;
               const boot = await bootOf(renderWorkspace);
+              // A case that kept moving during the read is not rendered: the
+              // page reads it on its own.
+              if (!boot) return null;
               return { html: await ssr.renderCase(boot), boot };
             },
           }

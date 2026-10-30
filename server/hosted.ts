@@ -496,7 +496,10 @@ export function createHostedApp(o: HostedOptions) {
       if (since) {
         let live: Live | null = null;
         try {
-          live = await waitForChange(() => workspaces.use(accountId, (ws) => liveOf(ws)), since, { closed: () => res.destroyed || res.writableEnded || sessionOf(req).session?.account.id !== accountId });
+          // Round 2, finding 9: each check looks at the open workspace
+          // without counting as use, so a held tab does not keep it from
+          // the idle sweep. A closed workspace has not changed.
+          live = await waitForChange(async () => (await workspaces.peek(accountId, (ws) => liveOf(ws))) ?? since, since, { closed: () => res.destroyed || res.writableEnded || sessionOf(req).session?.account.id !== accountId });
         } catch {
           live = null;
         }

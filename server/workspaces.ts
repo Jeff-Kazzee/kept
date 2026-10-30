@@ -92,6 +92,23 @@ export class Workspaces {
     }
   }
 
+  // Round 2, finding 9: a look at a workspace that is already open, for
+  // the held live read. It does not open one, does not count as use (the
+  // idle sweep still closes a workspace only a held read looks at) and
+  // holds it only while `fn` runs. Null when the workspace is not open: a
+  // closed workspace has no write of its own in flight, and any write
+  // opens it first.
+  async peek<T>(accountId: string, fn: (ws: Workspace) => Promise<T> | T): Promise<T | null> {
+    const e = this.#open.get(accountId);
+    if (!e || e.deleting) return null;
+    e.inFlight++;
+    try {
+      return await fn(e.ws);
+    } finally {
+      e.inFlight--;
+    }
+  }
+
   // A workspace that may close: no request running, no Google connect
   // waiting, and not used in the last `withinMs`.
   #closable(e: Entry, withinMs: number): boolean {

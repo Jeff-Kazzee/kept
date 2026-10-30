@@ -466,3 +466,104 @@ describe("round 2, findings 3, 5, 6 and 8", () => {
     expect(give).not.toMatch(/requestAnimationFrame/);
   });
 });
+
+describe("Muse round 2, finding 4: turns with chips or an Undo are never skipped", () => {
+  it("marks a turn with slot chips or an undoable action as one that needs the person, and a plain turn not", () => {
+    const thu = "2026-11-12T10:30";
+    const live = { ...state, case: { ...state.case, slots: [{ key: thu, label: "Thursday 11/12 10:30 AM", stateLabel: "Confirmed · office message" }] } } as unknown as AppState;
+    const undoable = entry("x1", "Set the time zone.");
+    const messages: ChatMessage[] = [
+      { ...answer("plain", []), text: "Hello." },
+      answer("chips", [chip(thu, "Confirmed · office message")]),
+      { ...answer("undo", []), actions: ["x1"] },
+    ];
+    const view = createElement(ChatView, {
+      state: live,
+      run: async () => {},
+      chat: { status: "ready", chatVersion: 3, messages, pending: null, declinedText: {}, toolsByMessage: {} },
+      streaming: false,
+      scripted: false,
+      send: async () => {},
+      onShowSlot: () => {},
+      onLoadCalendar: async () => {},
+      onLoadDemo: async () => null,
+      fixtures: [],
+    });
+    const html = renderToStaticMarkup(createElement(AgentContext.Provider, { value: { ...DEFAULT_AGENT, activity: { activityVersion: 1, entries: [undoable] } } }, view));
+    const groups = html.match(/<div class="msg-group[^"]*">/g)!;
+    expect(groups).toEqual(['<div class="msg-group">', '<div class="msg-group has-action">', '<div class="msg-group has-action">']);
+  });
+
+  it("skips turns only two frames after the whole thread rendered", () => {
+    const src = read("./chat/ChatView.tsx");
+    expect(src).toMatch(/const first = requestAnimationFrame\(\(\) => \{\s*second = requestAnimationFrame\(\(\) => setSettled\(true\)\);/);
+  });
+});
+
+describe("Muse round 2, finding 5: the same refusal again opens the group again", () => {
+  it("keys the reopening on when each refusal came, not on its words", async () => {
+    const three = [entry("r1", "Added the email."), entry("r2", "Set the time zone."), entry("r3", "Added it to Google Calendar.")];
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const doc = document as unknown as { createElement(t: string): unknown; body: { appendChild(n: unknown): void } };
+    const container = doc.createElement("div");
+    doc.body.appendChild(container);
+    const root = createRoot(container as Element);
+    const reason = "A later action depends on this one.";
+    const render = (tick: number) =>
+      act(async () => root.render(createElement(AgentContext.Provider, { value: { ...DEFAULT_AGENT, blocked: { r2: reason }, blockedAt: { r2: tick } } }, createElement(Receipts, { entries: three, state }))));
+    const summary = () => (container as unknown as { querySelector(s: string): { getAttribute(a: string): string | null; click(): void } }).querySelector(".receipt-summary");
+    await render(1);
+    expect(summary().getAttribute("aria-expanded")).toBe("true");
+    await act(async () => summary().click());
+    expect(summary().getAttribute("aria-expanded")).toBe("false");
+    // The same entry refused again with the same words.
+    await render(2);
+    expect(summary().getAttribute("aria-expanded")).toBe("true");
+    // A render with no new refusal leaves the person's choice.
+    await act(async () => summary().click());
+    await render(2);
+    expect(summary().getAttribute("aria-expanded")).toBe("false");
+    await act(async () => root.unmount());
+  });
+});
+
+describe("Muse round 2, finding 7: what a part's boundary says, and siblings", () => {
+  it("a part that loaded but throws says it could not be shown, not that the connection failed", async () => {
+    const Broken = (): never => {
+      throw new Error("bad data");
+    };
+    const chunk = onDemand(async () => ({ Broken }));
+    await chunk.ensure();
+    const Part = chunk.part((m) => m.Broken, "Broken", null);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = await mount(createElement(Part, {}));
+    const { PART_BROKEN } = await import("./components/onDemand.tsx");
+    expect(view.find(".part-error").textContent).toContain(PART_BROKEN);
+    expect(view.find(".part-error").textContent).not.toContain("connection");
+    errors.mockRestore();
+    await view.unmount();
+  });
+
+  it("a successful Try again in one part brings back its siblings from the same chunk", async () => {
+    let calls = 0;
+    const Hello = ({ who }: { who: string }) => createElement("p", { className: "hello" }, `Hello ${who}`);
+    const chunk = onDemand(async () => {
+      calls++;
+      if (calls === 1) throw new Error("offline");
+      return { Hello };
+    });
+    const Part = chunk.part((m) => m.Hello, "Hello", null);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = await mount(createElement("div", null, createElement(Part, { who: "one" }), createElement(Part, { who: "two" })));
+    const { act } = await import("react");
+    await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(view.container.querySelectorAll(".part-error")).toHaveLength(2);
+    await view.click(view.container.querySelectorAll("button")[0]!);
+    await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(view.container.querySelectorAll(".part-error")).toHaveLength(0);
+    expect(view.container.querySelectorAll(".hello").map((e) => e.textContent)).toEqual(["Hello one", "Hello two"]);
+    errors.mockRestore();
+    await view.unmount();
+  });
+});

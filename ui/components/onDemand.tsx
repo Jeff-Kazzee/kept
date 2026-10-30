@@ -15,9 +15,15 @@ import { Component, Suspense, use, type ComponentType, type ReactNode } from "re
 type Tracked<M> = Promise<M> & { status?: "pending" | "fulfilled" | "rejected"; value?: M; reason?: unknown };
 
 export const PART_FAILED = "This part of the page did not load.";
+// Muse round 2, finding 7: a part that loaded but could not draw says so,
+// not that the connection failed.
+export const PART_BROKEN = "This part of the page could not be shown.";
 
 export function onDemand<M>(load: () => Promise<M>) {
   let pending: Tracked<M> | null = null;
+  // Boundaries that wait for this chunk: told when a load succeeds, so a
+  // Try again in one part also brings back its siblings.
+  const loaded = new Set<() => void>();
   const ensure = (): Tracked<M> => {
     if (!pending || pending.status === "rejected") {
       const p = load() as Tracked<M>;
@@ -26,6 +32,7 @@ export function onDemand<M>(load: () => Promise<M>) {
         (m) => {
           p.status = "fulfilled";
           p.value = m;
+          for (const f of loaded) f();
         },
         (e: unknown) => {
           p.status = "rejected";
@@ -46,7 +53,14 @@ export function onDemand<M>(load: () => Promise<M>) {
     }
     function Part(props: P) {
       return (
-        <PartBoundary onRetry={() => void ensure().then(undefined, () => {})}>
+        <PartBoundary
+          onRetry={() => void ensure().then(undefined, () => {})}
+          isLoadFailure={(e) => pending?.status === "rejected" && pending.reason === e}
+          onLoaded={(f) => {
+            loaded.add(f);
+            return () => void loaded.delete(f);
+          }}
+        >
           <Suspense fallback={fallback}>
             <Ready {...props} />
           </Suspense>
@@ -64,24 +78,51 @@ export function onDemand<M>(load: () => Promise<M>) {
   };
 }
 
-// The part's own space when its chunk failed: a sentence and Try again.
-// Try again renders the part anew, which loads the chunk again.
-export class PartBoundary extends Component<{ children: ReactNode; onRetry?: () => void }, { failed: boolean }> {
-  override state = { failed: false };
-  static getDerivedStateFromError() {
-    return { failed: true };
+// The part's own space when it failed. A failed load says to check the
+// connection, and Try again loads the chunk again. A part that loaded but
+// threw while drawing says it could not be shown, and Try again draws it
+// again. A load that succeeds anywhere clears every load failure of its
+// chunk, so siblings come back together.
+type BoundaryProps = {
+  children: ReactNode;
+  onRetry?: () => void;
+  isLoadFailure?: (error: unknown) => boolean;
+  onLoaded?: (f: () => void) => () => void;
+};
+
+type Failure = { value: unknown; load?: boolean };
+
+export class PartBoundary extends Component<BoundaryProps, { error: Failure | null }> {
+  override state: { error: Failure | null } = { error: null };
+  #off: (() => void) | null = null;
+  static getDerivedStateFromError(value: unknown) {
+    return { error: { value } };
+  }
+  // Whether it was the load that failed, judged when it happened.
+  override componentDidCatch(value: unknown) {
+    this.setState({ error: { value, load: this.props.isLoadFailure ? this.props.isLoadFailure(value) : true } });
+  }
+  override componentDidMount() {
+    this.#off =
+      this.props.onLoaded?.(() => {
+        if (this.state.error?.load) this.setState({ error: null });
+      }) ?? null;
+  }
+  override componentWillUnmount() {
+    this.#off?.();
   }
   override render() {
-    if (!this.state.failed) return this.props.children;
+    if (!this.state.error) return this.props.children;
+    const load = this.state.error.load ?? (this.props.isLoadFailure ? this.props.isLoadFailure(this.state.error.value) : true);
     return (
       <div className="part-error" role="alert">
-        <p className="small">{PART_FAILED} Check the connection, then try again.</p>
+        <p className="small">{load ? `${PART_FAILED} Check the connection, then try again.` : PART_BROKEN}</p>
         <button
           type="button"
           className="btn btn-sm"
           onClick={() => {
-            this.props.onRetry?.();
-            this.setState({ failed: false });
+            if (load) this.props.onRetry?.();
+            this.setState({ error: null });
           }}
         >
           Try again

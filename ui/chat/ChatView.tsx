@@ -13,7 +13,7 @@ import { api, type AppState, type FixtureScenario } from "../api.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { onDemand } from "../components/onDemand.tsx";
 import { Icon } from "../components/Icon.tsx";
-import { entriesById, useAgent } from "../agent/AgentContext.tsx";
+import { canUndo, entriesById, useAgent } from "../agent/AgentContext.tsx";
 import { ModelPicker, modelLabel, providerNeedsSetup } from "../agent/ModelPicker.tsx";
 import { Receipts } from "../agent/Receipts.tsx";
 import { DEFAULT_EXTRACTION_EFFORT, PartlyDoneError, clockTime, emailTime, reasonOnly, shortTime } from "../format.ts";
@@ -87,11 +87,20 @@ export function ChatView(props: ChatViewProps) {
   // Round 2, finding 5: turns out of view are skipped only once every turn
   // has been laid out, a frame after the whole thread rendered.
   const [settled, setSettled] = useState(false);
+  // Muse round 2, finding 4: two frames, so the turns were laid out and
+  // painted once, and each keeps its real size, not the estimate.
   useEffect(() => {
     if (windowed || settled) return;
-    const frame = requestAnimationFrame(() => setSettled(true));
-    return () => cancelAnimationFrame(frame);
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setSettled(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
   }, [windowed, settled]);
+  const { activity } = useAgent();
   const draft = useRef<DraftStore | null>(null);
   draft.current ??= createDraft();
   const drafts = draft.current;
@@ -303,7 +312,7 @@ export function ChatView(props: ChatViewProps) {
             <ImportedItem key={x.messageId} messageId={x.messageId} state={state} run={run} place={facts.get(`import:${x.messageId}`)} />
           ))}
           {chat.messages.map((m, i) => i < from ? null : (
-            <div key={m.id} className={`msg-group${m.role === "user" ? " is-user" : ""}${needsPerson(m, state) ? " has-action" : ""}`}>
+            <div key={m.id} className={`msg-group${m.role === "user" ? " is-user" : ""}${needsPerson(m, state) || (shownChips.get(m.id) ?? NO_CHIPS).length > 0 || entriesById(activity, m.actions ?? []).some(canUndo) ? " has-action" : ""}`}>
               <MessageItem
                 message={m}
                 state={state}
@@ -680,6 +689,8 @@ export function followTop(el: HTMLElement, streaming: boolean): number {
 const NO_CHIPS: FactChip[] = [];
 
 // Round 2, finding 5: a turn with a card the person must act on: a reply,
+// Muse round 2, finding 4: so is a turn with slot chips or an action that
+// can be undone (ChatView adds those).
 // a question or its explanation, an Add it offer, a question about their
 // own report, or facts that wait for them. Its turn is never skipped.
 const ACTION_CARDS = new Set<Card["kind"]>(["reply", "question", "explanation", "gmail_waiting", "own_report"]);

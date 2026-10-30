@@ -16,7 +16,7 @@ beforeAll(() => {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // A server whose held reads the test answers by hand.
-function harness(start: LiveVersion = { generation: 1, seq: 1 }) {
+function harness(start: LiveVersion = { generation: 1, seq: 1 }, failRefresh: () => boolean = () => false) {
   let shown: LiveVersion | null = start;
   let hidden = false;
   let clock = 0;
@@ -43,7 +43,9 @@ function harness(start: LiveVersion = { generation: 1, seq: 1 }) {
       current: () => shown,
       refresh: async () => {
         refreshes.push(server.seq);
+        if (failRefresh()) return false;
         shown = server;
+        return true;
       },
     },
     deps,
@@ -191,3 +193,31 @@ describe("round 2, finding 7: the hook's wiring in a page", () => {
     expect(h.held.every((r) => r.signal.aborted)).toBe(true);
   });
 });
+
+describe("Muse round 2, finding 3: the cursor moves only after the page read the change", () => {
+  it("a failed refresh keeps the old version, backs off, and asks about the change again", async () => {
+    let failing = true;
+    const h = harness({ generation: 1, seq: 1 }, () => failing);
+    h.channel.start();
+    await tick();
+    h.set({ generation: 1, seq: 2 });
+    h.advance(3000);
+    h.last().answer({ generation: 1, seq: 2 });
+    await tick();
+    await tick();
+    expect(h.refreshes).toEqual([2]);
+    // It backs off rather than holding a read for the new version.
+    expect(h.sleeps.at(-1)!.ms).toBe(1000);
+    failing = false;
+    h.sleeps.at(-1)!.done();
+    await tick();
+    // The next read still names the version the page shows.
+    expect(h.last().since).toEqual({ generation: 1, seq: 1 });
+    h.last().answer({ generation: 1, seq: 2 });
+    await tick();
+    await tick();
+    expect(h.refreshes).toEqual([2, 2]);
+    expect(h.last().since).toEqual({ generation: 1, seq: 2 });
+  });
+});
+

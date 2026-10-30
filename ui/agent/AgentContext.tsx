@@ -22,6 +22,9 @@ export type AgentState = {
   undoBusy: boolean;
   // The reason Undo was refused, by entry id, until the next undo.
   blocked: Readonly<Record<string, string>>;
+  // Muse round 2, finding 5: when each refusal came, as a count that only
+  // grows, so a repeat of the same refusal is still news.
+  blockedAt: Readonly<Record<string, number>>;
   reload: () => Promise<void>;
   // Opens Connections (0015), for the composer's model indicator and the
   // setup notice.
@@ -66,6 +69,7 @@ export const DEFAULT_AGENT: AgentState = {
   undo: noop,
   undoBusy: false,
   blocked: {},
+  blockedAt: {},
   reload: noop,
   openConnections: () => {},
   report: () => {},

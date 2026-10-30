@@ -68,16 +68,18 @@ export function groupSummary(groups: Array<Pick<ReceiptGroup, "text" | "entries"
 }
 
 export function Receipts({ entries, state, skipMessages }: { entries: ActivityEntry[]; state: AppState; skipMessages?: ReadonlySet<string> }) {
-  const { activity, google, blocked } = useAgent();
+  const { activity, google, blocked, blockedAt } = useAgent();
   const uid = useId();
   const groups = groupReceipts(entries, state).filter((g) => g.messageId === null || !skipMessages?.has(g.messageId));
   // A refused Undo opens the group, so its reason is in view. Round 2,
   // finding 3: each new refusal opens it again, even after the person
   // closed it, and brings the reason into view.
+  // Muse round 2, finding 5: keyed on when each refusal came, so the same
+  // refusal again, with the same words, opens the group again too.
   const refusals = groups
     .flatMap((g) => g.entries)
     .filter((e) => blocked[e.id])
-    .map((e) => `${e.id}:${blocked[e.id]}`)
+    .map((e) => `${e.id}:${blockedAt[e.id] ?? 0}`)
     .join("|");
   const [openChoice, setOpen] = useState<boolean | null>(null);
   const [seen, setSeen] = useState(refusals);

@@ -232,7 +232,7 @@ export async function liveOf(ws: Workspace): Promise<Live> {
 export const BOOT_PATH = "/api/boot";
 export type Boot = { live: Live; state: unknown; settings: unknown; activity: unknown; google: unknown; chat: unknown };
 
-export async function bootOf(ws: Workspace): Promise<Boot> {
+export async function bootOf(ws: Workspace): Promise<Boot | null> {
   const get = async (path: string) => {
     const settings = await ws.auth.handle({ method: "GET", path, body: undefined });
     if (settings) return settings.status === 200 ? settings.body : null;
@@ -251,19 +251,27 @@ export async function bootOf(ws: Workspace): Promise<Boot> {
     );
     return body;
   };
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 0; attempt < BOOT_ATTEMPTS; attempt++) {
     const live = await liveOf(ws);
     const [state, settings, activity, google, log] = await Promise.all([get("/api/state"), get("/api/settings"), get("/api/activity"), get("/api/google"), chat()]);
     const after = await liveOf(ws);
-    const same = after.generation === live.generation && after.seq === live.seq;
-    if (same || attempt >= 4) return { live: after, state, settings, activity, google, chat: log };
+    // Round 2, finding 2: the calendar counter too, since the clash checks
+    // in `state` read the calendar.
+    if (sameLive(after, live)) return { live: after, state, settings, activity, google, chat: log };
   }
+  // The case kept moving: no boot, rather than one of mixed versions. The
+  // page then reads each route on its own.
+  return null;
 }
+
+export const BOOT_ATTEMPTS = 5;
+export const sameLive = (a: Live, b: Live) => a.generation === b.generation && a.seq === b.seq && (a.calendar ?? 0) === (b.calendar ?? 0);
 
 export async function serveApi(ws: Workspace, req: WorkspaceRequest, res: ServerResponse): Promise<void> {
   if (req.path === BOOT_PATH) {
     if (req.method !== "GET") return send(res, 405, { error: "method_not_allowed" });
-    return send(res, 200, await bootOf(ws));
+    const boot = await bootOf(ws);
+    return boot ? send(res, 200, boot) : send(res, 503, { error: "boot_unavailable", message: "The case changed during the read. Read it again." });
   }
   // App settings and sign-in. They need no case generation.
   const settingsResult = await ws.auth.handle({ method: req.method, path: req.path, body: req.body });

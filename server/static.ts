@@ -7,7 +7,11 @@
 // inline scripts, and requests only to this origin.
 import { createHash } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
+import { promisify } from "node:util";
+import { brotliCompress, brotliCompressSync, constants as zlibConstants, gzip as gzipCb, gzipSync } from "node:zlib";
+
+const brotli = promisify(brotliCompress);
+const gzip = promisify(gzipCb);
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
@@ -191,15 +195,14 @@ export function createStaticHandler(root: string, options: StaticOptions = {}) {
   const template = loadBuild(root).get("/index.html")!.raw.toString("utf8");
   // A page the server rendered holds this moment's case, so it is never
   // stored. It is compressed as it is sent.
-  const sendRendered = (req: IncomingMessage, res: ServerResponse, rendered: Rendered) => {
+  // Muse round 2, findings 6 and 8: compressed off the event loop, in the
+  // encoding the browser accepts (q-values included).
+  const sendRendered = async (req: IncomingMessage, res: ServerResponse, rendered: Rendered) => {
     const raw = Buffer.from(withRendered(template, rendered));
-    const accepted = (req.headers["accept-encoding"] ?? "").toString();
-    const br = /\bbr\b/.test(accepted);
-    const gz = !br && /\bgzip\b/.test(accepted);
-    const body = br ? brotliCompressSync(raw, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } }) : gz ? gzipSync(raw, { level: 6 }) : raw;
+    const encoding = pickEncoding(req.headers["accept-encoding"], { br: raw, gzip: raw });
+    const body = encoding === "br" ? await brotli(raw, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } }) : encoding === "gzip" ? await gzip(raw, { level: 6 }) : raw;
     const headers: Record<string, string> = { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", Vary: "Accept-Encoding", "Content-Length": String(body.length) };
-    if (br) headers["Content-Encoding"] = "br";
-    if (gz) headers["Content-Encoding"] = "gzip";
+    if (encoding) headers["Content-Encoding"] = encoding;
     res.writeHead(200, headers);
     res.end(req.method === "HEAD" ? undefined : body);
   };
@@ -230,14 +233,16 @@ export function createStaticHandler(root: string, options: StaticOptions = {}) {
       return;
     }
     // The scripted chat of a check build (?mockchat=1) renders on its own.
-    if (entry === index && options.render && !new URL(req.url ?? "/", "http://app.invalid").searchParams.has("mockchat")) {
+    // Muse round 2, finding 6: only the case's own address is rendered, so
+    // a stray path never costs a render.
+    if (pathname === "/" && options.render && !new URL(req.url ?? "/", "http://app.invalid").searchParams.has("mockchat")) {
       let rendered: Rendered | null = null;
       try {
         rendered = await options.render(req);
       } catch (err) {
         console.error(`The case screen could not be rendered on the server (${err instanceof Error ? err.name : "error"}). The page renders it itself.`);
       }
-      if (rendered) return sendRendered(req, res, rendered);
+      if (rendered) return await sendRendered(req, res, rendered);
     }
     const headers: Record<string, string> = { "Content-Type": entry.type, "Cache-Control": entry.cache, ETag: entry.etag, Vary: "Accept-Encoding" };
     if (req.headers["if-none-match"] === entry.etag) {

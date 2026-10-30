@@ -10,6 +10,7 @@
 import { caseNeedsCards, loadCaseCards } from "./case/lazyCards.tsx";
 import { onDemand } from "./components/onDemand.tsx";
 import { scopeReadback } from "./case/readback.ts";
+import { readBoot, scopeBoot } from "./boot.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeSettings, realBackend, type AgentBackend } from "./agentApi.ts";
 import { AgentContext, type AgentState } from "./agent/AgentContext.tsx";
@@ -64,30 +65,6 @@ const PageView = pages.part((m) => m.default, "PageView", <PageLoading />);
 // for the sheet or the idle prefetch.
 if (typeof matchMedia === "function" && matchMedia(LAPTOP).matches) void loadPanel().catch(() => {});
 void loadCaseCards().catch(() => {});
-// Round 2, finding 2: the first render's data, read together and of one
-// generation: from the page itself when the server rendered it, else from
-// GET /api/boot, which local mode preloads. Null for the scripted chat,
-// which keeps its own, and for a server without the route.
-let bootRead: Promise<BootData | null> | null = null;
-export function readBoot(scripted: boolean): Promise<BootData | null> {
-  if (scripted) return Promise.resolve(null);
-  bootRead ??= (async () => {
-    const inline = typeof document === "undefined" ? null : document.getElementById("boot");
-    if (inline?.textContent) {
-      try {
-        return api.adoptBoot(JSON.parse(inline.textContent) as BootData);
-      } catch {
-        // Read it from the route instead.
-      }
-    }
-    try {
-      return await api.boot();
-    } catch {
-      return null;
-    }
-  })();
-  return bootRead;
-}
 const signIn = onDemand(() => import("./hosted/SignIn.tsx"));
 const SignIn = signIn.part((m) => m.SignIn, "SignIn", <main className="loading" aria-busy="true" />);
 
@@ -169,8 +146,10 @@ function RootView({
   setSession: (s: SessionInfo) => void;
   toSignIn: (text: string | null) => void;
 }) {
-  // Fix round 2, N6: reply ticks belong to this session and account.
+  // Fix round 2, N6: reply ticks belong to this session and account. So
+  // does the first read (Muse round 2, finding 1).
   scopeReadback(sessionOwner(session));
+  scopeBoot(sessionOwner(session));
   if (!session) {
     return (
       <main className="loading" aria-busy="true">
@@ -267,7 +246,7 @@ export function App({
     const mine = ++reads.current;
     const stale = () => mine !== reads.current;
     try {
-      const boot = firstRender.current ? await readBoot(scripted) : null;
+      const boot = firstRender.current ? await readBoot(scripted, sessionOwner(hostedRef.current ?? { mode: "local" })) : null;
       firstRender.current = false;
       const [next, sRead, aRead, gRead] = boot
         ? [
@@ -300,9 +279,14 @@ export function App({
       setState(next);
       setLoadError(null);
       await sendZoneOnce(s, stale);
+      return true;
     } catch (e) {
-      if (signedOut(e)) return onSignedOutRef.current("Your session ended. Sign in again.");
+      if (signedOut(e)) {
+        onSignedOutRef.current("Your session ended. Sign in again.");
+        return false;
+      }
       if (!stale()) setLoadError(errorSentence(e));
+      return false;
     }
   }, [backend, scripted, sendZoneOnce]);
   const refreshRef = useRef(refresh);
@@ -343,6 +327,8 @@ export function App({
   // read of the activity (Muse round 1, findings 3 and 4). A refusal shows
   // its reason beside the entry.
   const [blocked, setBlocked] = useState<Record<string, string>>({});
+  const [blockedAt, setBlockedAt] = useState<Record<string, number>>({});
+  const refusalTick = useRef(0);
   const [undoing, setUndoing] = useState(false);
   const serial = useRef(serialUndo());
   const undo = useCallback(
@@ -352,7 +338,11 @@ export function App({
         setBlocked((b) => Object.fromEntries(Object.entries(b).filter(([k]) => !ids.includes(k))));
         try {
           const out = await runUndo(backend, ids);
-          if (out.blocked) setBlocked((b) => ({ ...b, [out.blocked!.id]: errorSentence(out.blocked!.error) }));
+          if (out.blocked) {
+            const id = out.blocked.id;
+            setBlocked((b) => ({ ...b, [id]: errorSentence(out.blocked!.error) }));
+            setBlockedAt((t) => ({ ...t, [id]: ++refusalTick.current }));
+          }
           if (out.error) toast("error", errorSentence(out.error));
           await refresh();
         } finally {
@@ -407,6 +397,7 @@ export function App({
       google={google}
       undo={undo}
       blocked={blocked}
+      blockedAt={blockedAt}
       undoing={undoing}
       degraded={degraded}
       hosted={hosted}
@@ -433,6 +424,7 @@ function Shell({
   google,
   undo,
   blocked,
+  blockedAt,
   undoing,
   degraded,
   hosted,
@@ -442,7 +434,7 @@ function Shell({
   onSignedOut: (text: string | null) => void;
   state: AppState;
   run: Run;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<boolean | void>;
   toast: (kind: Toast["kind"], text: string, link?: ToastLink) => void;
   toasts: Toast[];
   setToasts: (f: (t: Toast[]) => Toast[]) => void;
@@ -458,6 +450,7 @@ function Shell({
   google: GoogleStatus | null;
   undo: AgentState["undo"];
   blocked: AgentState["blocked"];
+  blockedAt: AgentState["blockedAt"];
   undoing: boolean;
   degraded: boolean;
 }) {
@@ -685,11 +678,12 @@ function Shell({
     google,
     undo,
     blocked,
+    blockedAt,
     // Undo waits while a turn streams or another undo runs (finding 4).
     undoBusy: streaming || undoing,
     report: (e) => toast("error", errorSentence(e), setupLink(e)),
     notify: (text) => toast("info", text),
-    reload: refresh,
+    reload: async () => void (await refresh()),
     hosted,
     // S8: the model pill, the setup notice and Open Usage.
     ...openersFor(openView),
