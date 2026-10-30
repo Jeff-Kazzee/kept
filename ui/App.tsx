@@ -23,7 +23,7 @@ import { ChatView } from "./chat/ChatView.tsx";
 import { DEMO_IDS, createFixturesLoader } from "./chat/demo.ts";
 import type { ScriptedLog } from "./chat/mockStream.ts";
 import { realTransport } from "./chat/transport.ts";
-import type { ChatTransport } from "./chat/types.ts";
+import type { ChatLog, ChatTransport } from "./chat/types.ts";
 import { useChat } from "./chat/useChat.ts";
 import { errorSentence, setCaseZone, signInReturn } from "./format.ts";
 import { TABS, railLabel, slotElementId, waitingCount, type PanelTab } from "./schedule/tabs.ts";
@@ -56,10 +56,17 @@ const scriptedChat = () => fakesBuilt && new URLSearchParams(window.location.sea
 // prefetch below warms it.
 export const loadPages = () => import("./shell/PageView.tsx");
 const PageView = lazy(loadPages);
-// The panel and the case's cards start loading with the page, beside the
-// first reads (0019, P18).
-void loadPanel().catch(() => {});
+// The case's cards start loading with the page, beside the first reads,
+// and so does the panel on a laptop (0019, P18).
+// On a phone or a tablet the panel is a closed sheet, so its chunk waits
+// for the sheet or the idle prefetch.
+if (typeof matchMedia === "function" && matchMedia(LAPTOP).matches) void loadPanel().catch(() => {});
 void loadCaseCards().catch(() => {});
+// 0019, P17: the stored chat is read with the case's first reads, so the
+// first render of the case already shows it. In local mode the page's
+// preload has it already. Not for the scripted chat, which keeps its own.
+// A failure leaves it to the chat hook.
+const readFirstChat = (scripted: boolean): Promise<ChatLog | null | undefined> => (scripted ? Promise.resolve(undefined) : realTransport.load().catch(() => undefined));
 const SignIn = lazy(() => import("./hosted/SignIn.tsx").then((m) => ({ default: m.SignIn })));
 
 // While a page's chunk loads: the page's frame, quiet, so nothing jumps.
@@ -185,6 +192,7 @@ export function App({
   const scriptedLog = useMemo(() => (fakesBuilt && mock ? mock.createScriptedLog(sessionStorage) : null), [mock]);
   const backend: AgentBackend = useMemo(() => (fakesBuilt && mock && scriptedLog ? mock.scriptedBackend(realBackend, scriptedLog) : realBackend), [mock, scriptedLog]);
   const [state, setState] = useState<AppState | null>(null);
+  const [firstChat, setFirstChat] = useState<ChatLog | null | undefined>(undefined);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [activity, setActivity] = useState<ActivityLog | null>(null);
   const [google, setGoogle] = useState<GoogleStatus | null>(null);
@@ -206,18 +214,27 @@ export function App({
   // reads as null: the default zone, and the case history in Activity. Any
   // other failure keeps the last good value (Muse round 1, finding 5).
   const reads = useRef(0);
+  const firstRender = useRef(true);
   const last = useRef<{ settings: Settings | null; activity: ActivityLog | null; google: GoogleStatus | null }>({ settings: null, activity: null, google: null });
   const [degraded, setDegraded] = useState(false);
   const refresh = useCallback(async () => {
     const mine = ++reads.current;
     const stale = () => mine !== reads.current;
     try {
+      const chatRead = firstRender.current ? readFirstChat(scripted) : null;
       const [next, sRead, aRead, gRead] = await Promise.all([api.state(), settle(() => backend.settings()), settle(() => backend.activity()), settle(() => backend.google())]);
       if (stale()) return;
       // 0019, P18: the first render of a case that shows these cards waits
       // for their chunk, which started with the page, so no placeholder is
       // swapped for a card in view.
       if (caseNeedsCards(next)) await loadCaseCards().catch(() => {});
+      // The first render of the case shows the stored chat with it.
+      if (chatRead) {
+        firstRender.current = false;
+        const log = await chatRead;
+        if (stale()) return;
+        setFirstChat(log);
+      }
       if (stale()) return;
       // The balance moves with every turn on the hosted site.
       if (hostedRef.current) void hostedApi.session().then((x) => onSessionRef.current(x), () => {});
@@ -251,7 +268,7 @@ export function App({
       if (signedOut(e)) return onSignedOutRef.current("Your session ended. Sign in again.");
       if (!stale()) setLoadError(errorSentence(e));
     }
-  }, [backend]);
+  }, [backend, scripted]);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
 
@@ -341,6 +358,7 @@ export function App({
       toasts={toasts}
       setToasts={setToasts}
       scripted={scripted}
+      initialChat={firstChat}
       mock={mock}
       scriptedLog={scriptedLog}
       backend={backend}
@@ -365,6 +383,7 @@ function Shell({
   toasts,
   setToasts,
   scripted,
+  initialChat,
   mock,
   scriptedLog,
   backend,
@@ -387,6 +406,7 @@ function Shell({
   toasts: Toast[];
   setToasts: (f: (t: Toast[]) => Toast[]) => void;
   scripted: boolean;
+  initialChat: ChatLog | null | undefined;
   mock: ScriptedModule | null;
   scriptedLog: ScriptedLog | null;
   backend: AgentBackend;
@@ -402,13 +422,20 @@ function Shell({
     () => (fakesBuilt && scripted && mock ? mock.createMockTransport({ api, storage: sessionStorage, activity: () => backend.activity(), google: () => backend.google(), scriptedLog }) : realTransport),
     [scripted, mock, backend, scriptedLog],
   );
-  const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh());
+  const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh(), scripted ? undefined : initialChat);
   // A change by an agent, the chat or another tab shows without a reload.
   // It asks often while a turn or an undo runs, and backs off when quiet
   // (0019, P20).
   useLiveRefresh(state.live, refresh, streaming || undoing);
   const mode = hosted ? "hosted" : "local";
   const [sheetOpen, setSheetOpen] = useState(false);
+  // 0019, P19: on a phone or a tablet the schedule is a closed sheet at
+  // first, so its contents render the first time it opens, not with the
+  // first paint. It stays mounted after, so its scroll and folds stay.
+  const [sheetUsed, setSheetUsed] = useState(false);
+  useEffect(() => {
+    if (sheetOpen) setSheetUsed(true);
+  }, [sheetOpen]);
   // The phone sheet's height (0019, P16). It opens full.
   const [snap, setSnap] = useState<Snap>("full");
   useEffect(() => {
@@ -434,6 +461,7 @@ function Shell({
   const phone = !useMedia(TABLET_UP);
   const online = useOnline();
   const layout: SideLayout = phone ? "drawer" : laptop && !folded ? "full" : "rail";
+  const panelMounted = laptop || sheetOpen || sheetUsed;
   // What is modal and what is inert (shellModes, 0015).
   const { pageOpen, sheetModal, drawerModal, inert } = shellModes({ laptop, phone, sheetOpen, drawerOpen, railed, view });
   // The fact chip that opened the schedule. Focus goes back to it when the
@@ -523,7 +551,7 @@ function Shell({
   // pages' chunk loads, so opening one later does not wait.
   useEffect(() => {
     const idle = (cb: () => void) => (typeof requestIdleCallback === "function" ? requestIdleCallback(cb, { timeout: 4000 }) : setTimeout(cb, 2500));
-    const t = window.setTimeout(() => idle(() => void Promise.all([loadPages(), loadCaseCards()]).catch(() => {})), 1500);
+    const t = window.setTimeout(() => idle(() => void Promise.all([loadPages(), loadCaseCards(), loadPanel()]).catch(() => {})), 1500);
     return () => window.clearTimeout(t);
   }, []);
 
@@ -720,6 +748,7 @@ function Shell({
               onLoadDemo={loadDemo}
               fixtures={fixtures}
               loadFixtures={ensureFixtures}
+              firstWindow={6}
               modelLabel={modelLabel}
             />
           </div>
@@ -751,6 +780,7 @@ function Shell({
             inert={inert.panel}
           >
             {!laptop && <SheetHandle onClose={closeSchedule} snap={snap} onSnap={setSnap} />}
+            {panelMounted && (
             <SchedulePanel
               state={state}
               run={run}
@@ -760,6 +790,7 @@ function Shell({
               onClose={laptop ? undefined : closeSchedule}
               onCollapse={laptop ? () => setRailed(true) : undefined}
             />
+            )}
           </div>
           {pageOpen && view !== "case" && (
             <section className="page" aria-labelledby="view-title" inert={inert.page}>

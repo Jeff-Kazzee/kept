@@ -554,7 +554,7 @@ details[open] > :not(summary) { animation: rise var(--dur-2) var(--ease); }
    last size is kept, so the scroll height does not jump. The newest turns,
    the ones the first view shows, always render, so nothing shifts when the
    thread opens at its end. */
-.msg-group:nth-last-child(n + 11) { content-visibility: auto; contain-intrinsic-block-size: auto 280px; }
+.msg-group:nth-last-child(n + 6) { content-visibility: auto; contain-intrinsic-block-size: auto 280px; }
 .msg-group:empty { display: none; }
 
 /* 0017, E6: the scene is wider than the column. It is clipped at the sides, so the thread never scrolls sideways. */
@@ -1222,6 +1222,8 @@ figure.source { margin: 0; }
 
 /* P14: the tabs. The open one is clear on every width. */
 .tabs button[aria-selected="true"] { color: var(--accent-text); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); font-weight: 620; }
+
+.thread-loading { display: grid; gap: var(--s-1h); padding-top: var(--s-3); }
 
 /* The top bar's quiet line: how many appointments and what waits. */
 .view-sub { display: none; font-size: var(--text-sm); color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }

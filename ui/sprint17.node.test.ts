@@ -188,7 +188,7 @@ describe("0019, P18: every view loads on demand and opens from each caller", () 
     expect(app).toMatch(/export const loadPages = \(\) => import\("\.\/shell\/PageView\.tsx"\);/);
     expect(app).toMatch(/const PageView = lazy\(loadPages\);/);
     expect(app).toMatch(/<PageView\s+view=\{view\}/);
-    expect(app).toMatch(/Promise\.all\(\[loadPages\(\), loadCaseCards\(\)\]\)/);
+    expect(app).toMatch(/Promise\.all\(\[loadPages\(\), loadCaseCards\(\), loadPanel\(\)\]\)/);
     // No page module is imported statically by the first-load code.
     for (const file of ["./App.tsx", "./shell/AccountMenu.tsx", "./shell/Sidebar.tsx", "./chat/ChatView.tsx", "./agent/ModelPicker.tsx"]) {
       expect(read(file), file).not.toMatch(/from "\.\.?\/(pages\/Settings|shell\/Pages|hosted\/SignIn|chat\/ImportSheet|schedule\/SchedulePanel|case\/(ReplyCard|ConflictCards|OwnReportCard|ClaimsCard))\.tsx"/);

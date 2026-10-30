@@ -5,7 +5,7 @@
 // lines while a turn runs and folds into one line when it ends. What the
 // agent did shows as receipts with Undo. Every card renders from the live
 // case view.
-import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Suspense, lazy, memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Mark, RidgeScene } from "../components/Art.tsx";
 import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
 import { usageStopText } from "../../src/model/usage-text.ts";
@@ -63,6 +63,10 @@ export type ChatViewProps = {
   onLoadCalendar: (file: File) => Promise<void>;
   onLoadDemo: () => Promise<FixtureScenario["messages"][number] | null>;
   fixtures: FixtureScenario["messages"];
+  // 0019, P19: how many of the newest messages the first render draws. The
+  // older ones render right after the first paint, in a transition, above
+  // what is in view. Unset: all at once.
+  firstWindow?: number;
   // Loads the fixtures when the import sheet opens (0019, P17).
   loadFixtures?: () => Promise<unknown>;
   // What the composer says when no provider is set, such as "No model set".
@@ -70,7 +74,12 @@ export type ChatViewProps = {
 };
 
 export function ChatView(props: ChatViewProps) {
-  const { state, run, chat, streaming, scripted, send, onStop, onShowSlot, onLoadCalendar, onLoadDemo, fixtures, loadFixtures, modelLabel = null } = props;
+  const { state, run, chat, streaming, scripted, send, onStop, onShowSlot, onLoadCalendar, onLoadDemo, fixtures, loadFixtures, modelLabel = null, firstWindow } = props;
+  const [windowed, setWindowed] = useState(firstWindow !== undefined);
+  useEffect(() => {
+    if (windowed) startTransition(() => setWindowed(false));
+  }, [windowed]);
+  const from = windowed && firstWindow !== undefined ? Math.max(0, chat.messages.length - firstWindow) : 0;
   const draft = useRef<DraftStore | null>(null);
   draft.current ??= createDraft();
   const drafts = draft.current;
@@ -116,8 +125,26 @@ export function ChatView(props: ChatViewProps) {
   // person scrolling away.
   const placed = useRef<number | null>(null);
   // 0019, P19: layout is read once, in the next frame, after React has
-  // written the DOM, never in the middle of a commit.
+  // written the DOM, never in the middle of a commit. The one exception is
+  // the first time the thread has content: it opens at its end before the
+  // first paint, so the newest answer is the first thing drawn.
   const streamingNow = chat.pending?.status === "streaming";
+  const opened = useRef(false);
+  useLayoutEffect(() => {
+    const el = threadRef.current;
+    if (opened.current || !el || chat.messages.length === 0) return;
+    opened.current = true;
+    el.scrollTop = followTop(el, false);
+    placed.current = el.scrollTop;
+  }, [chat.messages.length]);
+  // When the older messages join the first render's window, the view stays
+  // where it was, in the same commit, so nothing in view moves.
+  useLayoutEffect(() => {
+    const el = threadRef.current;
+    if (windowed || firstWindow === undefined || !el || !opened.current || !pinned.current) return;
+    el.scrollTop = followTop(el, false);
+    placed.current = el.scrollTop;
+  }, [windowed, firstWindow]);
   useEffect(() => {
     const el = threadRef.current;
     if (!el) return;
@@ -171,7 +198,10 @@ export function ChatView(props: ChatViewProps) {
   const demoStarted = state.messages.some((m) => DEMO_IDS.includes(m.id));
   const openConflict = state.case.question === null && state.case.conflicts.some((c) => c.status === "open" && c.askable && c.archivedSlotKeys.length === 0);
   const nothingWaits = state.evidence.every((e) => e.status !== "pending") && state.case.question === null && state.case.reply.draft === null;
-  const empty = chat.messages.length === 0 && chat.pending === null;
+  // While the stored chat loads, the thread shows a quiet placeholder, not
+  // the welcome, so a case with a chat never flashes it (0019, P15).
+  const loading = chat.status === "loading";
+  const empty = !loading && chat.messages.length === 0 && chat.pending === null;
   const suggestions: Array<{ label: string; act: () => void }> = [];
   if (demoStarted && demo && nothingWaits) suggestions.push({ label: `Next demo message: ${demo.from}`, act: () => fill(demo.text) });
   if (openConflict) suggestions.push({ label: "What should I do about the change?", act: () => void submit("What should I do about the change?") });
@@ -194,6 +224,13 @@ export function ChatView(props: ChatViewProps) {
         <div className="thread-inner">
           {/* Card headings in the thread are h3, so the thread has its h2. */}
           {!empty && <h2 className="sr-only">Conversation</h2>}
+          {loading && (
+            <div className="thread-loading" aria-busy="true">
+              <span className="skeleton-line w-60" />
+              <span className="skeleton-line w-80" />
+              <span className="skeleton-line w-40" />
+            </div>
+          )}
           {empty && (
             <Welcome
               unavailable={unavailable}
@@ -208,7 +245,7 @@ export function ChatView(props: ChatViewProps) {
           {imports.filter((x) => x.after === 0).map((x) => (
             <ImportedItem key={x.messageId} messageId={x.messageId} state={state} run={run} place={facts.get(`import:${x.messageId}`)} />
           ))}
-          {chat.messages.map((m, i) => (
+          {chat.messages.map((m, i) => i < from ? null : (
             <div key={m.id} className={`msg-group${m.role === "user" ? " is-user" : ""}`}>
               <MessageItem
                 message={m}
@@ -238,14 +275,17 @@ export function ChatView(props: ChatViewProps) {
           {/* 0019, P8: one row of the composer's own area, on its solid
               ground, never over the transcript. It keeps its height while
               empty, so the composer does not move when chips come and go.
-              The New messages pill takes the row while it shows. */}
-          {!empty && (
+              The New messages pill takes the row while it shows. It is
+              there on an empty case too, so the first message does not
+              move the composer. */}
+          {(
             <div className="followups">
               {unseen ? (
                 <button type="button" className="new-pill" onClick={toBottom}>
                   <Icon name="arrowDown" size="sm" /> New messages
                 </button>
               ) : (
+                !empty &&
                 suggestions.length > 0 &&
                 !streaming && (
                   <div className="chips followup-chips" role="group" aria-label="Suggestions">
