@@ -6,7 +6,7 @@
 // agent did shows as receipts with Undo. Every card renders from the live
 // case view.
 import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Mark, RidgeScene } from "../components/Art.tsx";
+import { Mark } from "../components/Art.tsx";
 import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
 import { usageStopText } from "../../src/model/usage-text.ts";
 import { api, type AppState, type FixtureScenario } from "../api.ts";
@@ -412,7 +412,6 @@ export const GMAIL_ASK = "Check my Gmail for appointment changes";
 function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean; onPaste: () => void; onAsk: (q: string) => void; onDemo: () => void }) {
   return (
     <div className="welcome">
-      <RidgeScene />
       <span className="welcome-mark" aria-hidden="true">
         <Mark size={28} />
       </span>

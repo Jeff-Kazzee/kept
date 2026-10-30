@@ -158,9 +158,13 @@ describe("0019, P8: the follow-up chips never sit over the transcript", () => {
     expect(busy).toContain('<div class="followups"></div>');
   });
 
-  it("the composer's area has a solid ground, its fade takes no clicks, and nothing in it is positioned over the thread", () => {
-    expect(ruleOf(".composer-wrap")).toMatch(/background: var\(--bg\)/);
-    expect(ruleOf(".composer-wrap::before")).toMatch(/pointer-events: none/);
+  it("the composer's area sits below the thread in the column, and nothing in it is positioned over the thread", () => {
+    // 0019, P34: Steel lets the sky show through the composer's area. It
+    // is a row of the chat's column after the thread, so it never covers
+    // the transcript, and it has no fade over it.
+    expect(ruleOf(".composer-wrap")).toMatch(/position: relative/);
+    expect(css).not.toMatch(/\n\.composer-wrap::before \{/);
+    expect(ruleOf(".chat")).toMatch(/flex-direction: column/);
     expect(ruleOf(".followups")).toMatch(/min-height: var\(--touch\)/);
     for (const sel of [".followups", ".followup-chips", ".new-pill"]) expect(ruleOf(sel)).not.toMatch(/position: (absolute|fixed)/);
   });
@@ -273,24 +277,77 @@ describe("0019, P2: every color, space and radius comes from a token", () => {
     expect(raw).toEqual([]);
   });
 
-  it("the type is Inter, self-hosted under 50 KB with its license, preloaded, with a metric-matched fallback", () => {
-    expect(css).toMatch(/font-family: "Inter";\s*src: url\("\.\/fonts\/inter-latin\.woff2"\) format\("woff2"\);/);
-    expect(css).toMatch(/font-display: swap;/);
-    expect(css).toMatch(/font-family: "Inter Fallback";[^}]*size-adjust: [\d.]+%;/);
-    expect(css).toMatch(/--font: "Inter", "Inter Fallback"/);
-    const font = readFileSync(new URL("./fonts/inter-latin.woff2", import.meta.url));
-    expect(font.length).toBeLessThan(50 * 1024);
-    expect(font.subarray(0, 4).toString("latin1")).toBe("wOF2");
-    expect(read("./fonts/OFL.txt")).toContain("SIL Open Font License");
-    expect(read("./index.html")).toMatch(/<link rel="preload" href="\.\/fonts\/inter-latin\.woff2" as="font" type="font\/woff2" crossorigin \/>/);
+  it("0019, P34: Steel's three faces are self-hosted with their OFL licenses and metric-matched fallbacks, only the body face is preloaded, and Inter is gone", () => {
+    const faces = [
+      ["Instrument Sans", "instrument-sans", "Instrument Sans Fallback"],
+      ["Bricolage Grotesque", "bricolage-grotesque", "Bricolage Fallback"],
+      ["Martian Mono", "martian-mono", "Martian Fallback"],
+    ] as const;
+    let total = 0;
+    for (const [family, file, fallback] of faces) {
+      expect(css).toMatch(new RegExp(`font-family: "${family}";\\s*src: url\\("\\./fonts/${file}\\.woff2"\\) format\\("woff2"\\);[^}]*font-display: swap;`));
+      expect(css).toMatch(new RegExp(`font-family: "${fallback}";[^}]*ascent-override: [\\d.]+%;[^}]*size-adjust: [\\d.]+%;`));
+      const font = readFileSync(new URL(`./fonts/${file}.woff2`, import.meta.url));
+      expect(font.subarray(0, 4).toString("latin1")).toBe("wOF2");
+      total += font.length;
+      expect(read(`./fonts/OFL-${file}.txt`)).toContain("SIL Open Font License");
+    }
+    expect(total).toBeLessThan(70 * 1024);
+    expect(css).toMatch(/--font: "Instrument Sans", "Instrument Sans Fallback"/);
+    expect(css).toMatch(/--font-display: "Bricolage Grotesque", "Bricolage Fallback"/);
+    expect(css).toMatch(/--font-time: "Martian Mono", "Martian Fallback"/);
+    const html = read("./index.html");
+    expect(html.match(/rel="preload"[^>]*as="font"/g)).toHaveLength(1);
+    expect(html).toMatch(/<link rel="preload" href="\.\/fonts\/instrument-sans\.woff2" as="font" type="font\/woff2" crossorigin \/>/);
+    expect(css).not.toMatch(/Inter|inter-latin/);
+  });
+
+  it("0019, P34: light-dark() holds two colors, never a shadow list or a gradient", () => {
+    const COLOR = /^(#[0-9a-f]{3,8}|rgb\([\d. ]+(\/ [\d.]+)?\)|transparent|currentColor|var\(--[\w-]+\))$/i;
+    const args: string[] = [];
+    let i = css.indexOf("light-dark(");
+    while (i >= 0) {
+      let depth = 0;
+      let j = i + "light-dark(".length;
+      const start = j;
+      for (; j < css.length; j++) {
+        if (css[j] === "(") depth++;
+        else if (css[j] === ")") {
+          if (depth === 0) break;
+          depth--;
+        }
+      }
+      const inner = css.slice(start, j);
+      // Named in a comment, as "light-dark()".
+      if (inner.trim() === "") {
+        i = css.indexOf("light-dark(", j);
+        continue;
+      }
+      // Split on the comma at depth 0.
+      let d = 0;
+      let cut = -1;
+      for (let k = 0; k < inner.length; k++) {
+        if (inner[k] === "(") d++;
+        else if (inner[k] === ")") d--;
+        else if (inner[k] === "," && d === 0) {
+          expect(cut, `light-dark(${inner}) has more than two parts`).toBe(-1);
+          cut = k;
+        }
+      }
+      args.push(inner.slice(0, cut).trim(), inner.slice(cut + 1).trim());
+      i = css.indexOf("light-dark(", j);
+    }
+    expect(args.length).toBeGreaterThan(100);
+    expect(args.filter((a) => !COLOR.test(a))).toEqual([]);
   });
 });
 
 describe("0019, P14: motion", () => {
   it("three durations and one easing are tokens", () => {
     expect(css).toMatch(/--dur-1: 120ms;/);
-    expect(css).toMatch(/--dur-2: 180ms;/);
-    expect(css).toMatch(/--dur-3: 260ms;/);
+    // 0019, P34: Steel's durations.
+    expect(css).toMatch(/--dur-2: 200ms;/);
+    expect(css).toMatch(/--dur-3: 300ms;/);
     expect(css.match(/--ease: cubic-bezier\(/g)).toHaveLength(1);
   });
 

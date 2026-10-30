@@ -34,7 +34,9 @@ describe("0015: the shell", () => {
     expect(css).toMatch(/--side-w: 248px;/);
     expect(css).toMatch(/--rail-w: 64px;/);
     expect(css).toMatch(/--sidebar: light-dark\(#[0-9a-f]{6}, #[0-9a-f]{6}\);/);
-    expect(rule(".sidebar")).toMatch(/background: var\(--sidebar\)/);
+    // 0019, P34: Steel's sidebar is night glass in both themes.
+    expect(css).toMatch(/--sidebar-glass: rgb\(/);
+    expect(rule(".sidebar")).toMatch(/background: var\(--sidebar-glass\)/);
     expect(css).toMatch(/\.app\[data-side="full"\] \{ grid-template-columns: var\(--side-w\) minmax\(0, 1fr\); \}/);
   });
 

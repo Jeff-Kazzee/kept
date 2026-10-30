@@ -12,7 +12,7 @@ const KEY = "appointments-theme";
 // shows the choice (0015, Z7).
 export const THEME_EVENT = "appointments-theme";
 
-export const THEME_COLORS = { dark: "#0f1714", light: "#f3f2ec" } as const;
+export const THEME_COLORS = { dark: "#0b0c0d", light: "#f3f5f7" } as const;
 
 export function readTheme(): ThemeChoice {
   try {
