@@ -50,7 +50,8 @@ describe("waiting for you", () => {
     const html = renderToStaticMarkup(createElement(ScheduleTab, { state, run: async () => {}, highlight: null }));
     expect(html).toContain('aria-label="Explanation"');
     expect(html).toContain(" Explain with the model</button>");
-    expect(html).toContain(">Ask me the question about this</button>");
+    // 0019, P12: words a person would say.
+    expect(html).toContain(">Ask about this change</button>");
   });
 });
 

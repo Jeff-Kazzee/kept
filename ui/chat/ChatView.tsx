@@ -5,7 +5,7 @@
 // lines while a turn runs and folds into one line when it ends. What the
 // agent did shows as receipts with Undo. Every card renders from the live
 // case view.
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Mark, RidgeScene } from "../components/Art.tsx";
 import { MALFORMED_TEXT, MODEL_UNAVAILABLE_TEXT, PARTIAL_TEXT, PASTE_TURN_NOTICE, TOKEN_LIMIT_TEXT, TOOL_LIMIT_TEXT, UNGROUNDED_TEXT } from "../../src/agent/types.ts";
 import { usageStopText } from "../../src/model/usage-text.ts";
@@ -13,20 +13,42 @@ import { api, type AppState, type FixtureScenario } from "../api.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { entriesById, useAgent } from "../agent/AgentContext.tsx";
-import { ModelPicker } from "../agent/ModelPicker.tsx";
+import { ModelPicker, modelLabel, providerNeedsSetup } from "../agent/ModelPicker.tsx";
 import { Receipts } from "../agent/Receipts.tsx";
-import { DEFAULT_EXTRACTION_EFFORT, PartlyDoneError, emailTime, reasonOnly, shortTime } from "../format.ts";
-import { ClaimsCard } from "../case/ClaimsCard.tsx";
+import { DEFAULT_EXTRACTION_EFFORT, PartlyDoneError, clockTime, emailTime, reasonOnly, shortTime } from "../format.ts";
 import { senderShown } from "../case/Source.tsx";
-import { ExplanationCard, QuestionCard } from "../case/ConflictCards.tsx";
-import { OwnReportCard } from "../case/OwnReportCard.tsx";
-import { ReplyCard } from "../case/ReplyCard.tsx";
+import { ClaimsCard, ExplanationCard, OwnReportCard, QuestionCard, ReplyCard } from "../case/lazyCards.tsx";
 import type { ActivityEntry } from "../contract.ts";
 import { Composer } from "./Composer.tsx";
 import { DEMO_IDS, nextDemoMessage } from "./demo.ts";
-import { ImportSheet, type ImportRequest } from "./ImportSheet.tsx";
+import type { ImportRequest } from "./ImportSheet.tsx";
 import { turnLost, type ChatState, type PendingTurn, type ToolLine } from "./state.ts";
 import type { Card, ChatMessage, FactChip } from "./types.ts";
+
+// 0019, P18: the import sheet loads when it first opens.
+export const loadImportSheet = () => import("./ImportSheet.tsx");
+const ImportSheet = lazy(() => loadImportSheet().then((m) => ({ default: m.ImportSheet })));
+
+// 0019, P19: the composer's text lives in a small store, so typing renders
+// the composer only, never the transcript.
+export type DraftStore = { get(): string; set(next: string | ((d: string) => string)): void; subscribe(f: () => void): () => void };
+export function createDraft(initial = ""): DraftStore {
+  let value = initial;
+  const subs = new Set<() => void>();
+  return {
+    get: () => value,
+    set(next) {
+      const v = typeof next === "function" ? next(value) : next;
+      if (v === value) return;
+      value = v;
+      for (const f of subs) f();
+    },
+    subscribe(f) {
+      subs.add(f);
+      return () => void subs.delete(f);
+    },
+  };
+}
 
 export type ChatViewProps = {
   state: AppState;
@@ -41,13 +63,17 @@ export type ChatViewProps = {
   onLoadCalendar: (file: File) => Promise<void>;
   onLoadDemo: () => Promise<FixtureScenario["messages"][number] | null>;
   fixtures: FixtureScenario["messages"];
+  // Loads the fixtures when the import sheet opens (0019, P17).
+  loadFixtures?: () => Promise<unknown>;
   // What the composer says when no provider is set, such as "No model set".
   modelLabel?: string | null;
 };
 
 export function ChatView(props: ChatViewProps) {
-  const { state, run, chat, streaming, scripted, send, onStop, onShowSlot, onLoadCalendar, onLoadDemo, fixtures, modelLabel = null } = props;
-  const [draft, setDraft] = useState("");
+  const { state, run, chat, streaming, scripted, send, onStop, onShowSlot, onLoadCalendar, onLoadDemo, fixtures, loadFixtures, modelLabel = null } = props;
+  const draft = useRef<DraftStore | null>(null);
+  draft.current ??= createDraft();
+  const drafts = draft.current;
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -57,7 +83,18 @@ export function ChatView(props: ChatViewProps) {
   // card after the chat message that was last when it was added.
   const [imports, setImports] = useState<Array<{ messageId: string; after: number }>>([]);
   const [importing, setImporting] = useState<ImportRequest | null>(null);
-  const openImport = (text: string) => setImporting({ text });
+  // The sheet reads the fixtures when it opens, to know a demo message, so
+  // they load first (0019, P17).
+  const loadFixturesRef = useRef(loadFixtures);
+  loadFixturesRef.current = loadFixtures;
+  const openImport = useCallback((text: string) => {
+    void Promise.all([loadFixturesRef.current?.(), loadImportSheet()]).finally(() => setImporting({ text }));
+  }, []);
+  // The shell's callback changes with each render of the shell. Turns get
+  // one that does not, so a memoized turn is not rendered again for it.
+  const showSlotRef = useRef(onShowSlot);
+  showSlotRef.current = onShowSlot;
+  const showSlot = useCallback((k: string, from?: HTMLElement) => showSlotRef.current(k, from), []);
 
   // A turn the server did not store gives its text back to the composer.
   const lostTurn = turnLost(chat.pending) ? chat.pending : null;
@@ -65,7 +102,7 @@ export function ChatView(props: ChatViewProps) {
   useEffect(() => {
     if (lostTurn && restored.current !== lostTurn) {
       restored.current = lostTurn;
-      setDraft((d) => (d.trim() === "" ? lostTurn.userText : d));
+      drafts.set((d) => (d.trim() === "" ? lostTurn.userText : d));
     }
   }, [lostTurn]);
 
@@ -78,15 +115,21 @@ export function ChatView(props: ChatViewProps) {
   // Where the app last scrolled to, so its own scroll is not read as the
   // person scrolling away.
   const placed = useRef<number | null>(null);
-  useLayoutEffect(() => {
+  // 0019, P19: layout is read once, in the next frame, after React has
+  // written the DOM, never in the middle of a commit.
+  const streamingNow = chat.pending?.status === "streaming";
+  useEffect(() => {
     const el = threadRef.current;
     if (!el) return;
     if (!pinned.current) {
       setUnseen(true);
       return;
     }
-    el.scrollTop = followTop(el, chat.pending?.status === "streaming");
-    placed.current = el.scrollTop;
+    const frame = requestAnimationFrame(() => {
+      el.scrollTop = followTop(el, streamingNow);
+      placed.current = el.scrollTop;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [content]);
   const toBottom = () => {
     const el = threadRef.current;
@@ -99,13 +142,13 @@ export function ChatView(props: ChatViewProps) {
 
   const submit = async (text: string) => {
     if (text.trim() === "" || streaming || unavailable) return;
-    setDraft("");
+    drafts.set("");
     pinned.current = true;
     await send(text);
   };
 
   const fill = (text: string) => {
-    setDraft(text);
+    drafts.set(text);
     requestAnimationFrame(() => {
       const el = inputRef.current;
       if (!el) return;
@@ -115,8 +158,14 @@ export function ChatView(props: ChatViewProps) {
   };
 
   // 0017, E3: one full facts card per office message in the thread.
-  const offers = newestOffers(chat);
-  const facts = factsCards(imports, chat, new Set(state.messages.map((m) => m.id)), offers);
+  // 0019, P6: each answer shows only the chips for times that are new or
+  // changed since the thread last showed them. Chips still come from code.
+  const shownChips = useMemo(() => freshChips(chat.messages), [chat.messages]);
+  const pendingChips = useMemo(() => (chat.pending ? freshChips([...chat.messages, { id: PENDING_MESSAGE, chips: chat.pending.chips }]).get(PENDING_MESSAGE) ?? NO_CHIPS : NO_CHIPS), [chat.messages, chat.pending]);
+  // Kept while their inputs hold, so memoized turns see the same values.
+  const offers = useMemo(() => newestOffers(chat), [chat.messages, chat.pending]);
+  const inCase = state.messages.map((m) => m.id).join("|");
+  const facts = useMemo(() => factsCards(imports, chat, new Set(inCase.split("|")), offers), [imports, chat.messages, chat.pending, inCase, offers]);
 
   const demo = nextDemoMessage(fixtures, state);
   const demoStarted = state.messages.some((m) => DEMO_IDS.includes(m.id));
@@ -160,15 +209,17 @@ export function ChatView(props: ChatViewProps) {
             <ImportedItem key={x.messageId} messageId={x.messageId} state={state} run={run} place={facts.get(`import:${x.messageId}`)} />
           ))}
           {chat.messages.map((m, i) => (
-            <div key={m.id} className="msg-group">
+            <div key={m.id} className={`msg-group${m.role === "user" ? " is-user" : ""}`}>
               <MessageItem
                 message={m}
                 state={state}
                 run={run}
                 scripted={scripted}
                 tools={chat.toolsByMessage[m.id]}
-                onShowSlot={onShowSlot}
-                onImport={offersImport(m, userTextBefore(chat, i)) ? () => openImport(m.declined ? declinedOriginal(chat, i) : userTextBefore(chat, i)) : undefined}
+                onShowSlot={showSlot}
+                importText={offersImport(m, userTextBefore(chat, i)) ? (m.declined ? declinedOriginal(chat, i) : userTextBefore(chat, i)) : null}
+                chips={shownChips.get(m.id) ?? NO_CHIPS}
+                openImport={openImport}
                 facts={facts}
                 offers={offers}
               />
@@ -179,35 +230,44 @@ export function ChatView(props: ChatViewProps) {
                 ))}
             </div>
           ))}
-          {chat.pending && <PendingItem turn={chat.pending} state={state} run={run} scripted={scripted} onShowSlot={onShowSlot} onImport={() => openImport(chat.pending?.userText ?? "")} facts={facts} offers={offers} />}
+          {chat.pending && <PendingItem chips={pendingChips} turn={chat.pending} state={state} run={run} scripted={scripted} onShowSlot={showSlot} onImport={() => openImport(chat.pending?.userText ?? "")} facts={facts} offers={offers} />}
         </div>
       </div>
       <div className="composer-wrap">
         <div className="composer-inner">
-          {unseen && (
-            <button type="button" className="new-pill" onClick={toBottom}>
-              <Icon name="arrowDown" size="sm" /> New messages
-            </button>
-          )}
-          {!empty && suggestions.length > 0 && !streaming && (
-            <div className="chips" aria-label="Suggestions">
-              {suggestions.slice(0, 3).map((s) => (
-                <button key={s.label} type="button" className="chip" onClick={s.act}>
-                  {s.label}
+          {/* 0019, P8: one row of the composer's own area, on its solid
+              ground, never over the transcript. It keeps its height while
+              empty, so the composer does not move when chips come and go.
+              The New messages pill takes the row while it shows. */}
+          {!empty && (
+            <div className="followups">
+              {unseen ? (
+                <button type="button" className="new-pill" onClick={toBottom}>
+                  <Icon name="arrowDown" size="sm" /> New messages
                 </button>
-              ))}
+              ) : (
+                suggestions.length > 0 &&
+                !streaming && (
+                  <div className="chips followup-chips" role="group" aria-label="Suggestions">
+                    {suggestions.slice(0, 3).map((s) => (
+                      <button key={s.label} type="button" className="chip chip-followup" onClick={s.act}>
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                )
+              )}
             </div>
           )}
-          <Composer
-            value={draft}
-            onChange={setDraft}
-            onSend={() => void submit(draft)}
+          <DraftComposer
+            drafts={drafts}
+            onSend={(text) => void submit(text)}
             disabled={unavailable}
             busy={streaming}
             inputRef={inputRef}
             onLoadCalendar={onLoadCalendar}
             onAddOfficeMessage={() => {
-              openImport(draft);
+              openImport(drafts.get());
             }}
             model={<ModelPicker fallback={modelLabel ?? "No model set"} scripted={scripted} />}
             onStop={onStop}
@@ -215,7 +275,9 @@ export function ChatView(props: ChatViewProps) {
           <p className="composer-hint">Enter sends. Shift+Enter adds a line. The assistant acts on your case, and every action has Undo.</p>
         </div>
       </div>
-      <ImportSheet
+      {importing && (
+        <Suspense fallback={null}>
+          <ImportSheet
         request={importing}
         run={run}
         fixtures={fixtures}
@@ -224,11 +286,13 @@ export function ChatView(props: ChatViewProps) {
         onImported={(messageId) => {
           // Fix round 1, R5: one entry per message, so its card keeps one place.
           setImports((all) => (all.some((x) => x.messageId === messageId) ? all : [...all, { messageId, after: chat.messages.length }]));
-          if (importing && importing.text === draft) setDraft("");
+          if (importing && importing.text === drafts.get()) drafts.set("");
           setImporting(null);
           pinned.current = true;
         }}
-      />
+          />
+        </Suspense>
+      )}
       <div className="sr-only" aria-live="polite">
         {chat.pending?.status === "streaming" ? (chat.pending.tools.findLast((t) => t.ok === null)?.label ?? "The assistant is checking its answer.") : chat.pending?.error ? chat.pending.error.message : ""}
       </div>
@@ -236,17 +300,27 @@ export function ChatView(props: ChatViewProps) {
   );
 }
 
+// The composer, subscribed to the draft store, so a key press renders it
+// alone (0019, P19).
+function DraftComposer({ drafts, onSend, ...rest }: { drafts: DraftStore; onSend: (text: string) => void } & Omit<Parameters<typeof Composer>[0], "value" | "onChange" | "onSend">) {
+  const value = useSyncExternalStore(drafts.subscribe, drafts.get, drafts.get);
+  return <Composer value={value} onChange={drafts.set} onSend={() => onSend(drafts.get())} {...rest} />;
+}
+
 export const STARTERS = ["What is confirmed?", "What should I bring?"];
+
+// 0019, P9: the three ways in on an empty case.
+export const GMAIL_ASK = "Check my Gmail for appointment changes";
 
 function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean; onPaste: () => void; onAsk: (q: string) => void; onDemo: () => void }) {
   return (
     <div className="welcome">
       <RidgeScene />
       <span className="welcome-mark" aria-hidden="true">
-        <Mark size={24} />
+        <Mark size={28} />
       </span>
-      <h2>What changed with your appointments?</h2>
-      <p>Paste a message from the office. The assistant keeps your schedule up to date and shows each thing it did, with Undo.</p>
+      <h2 className="display">What changed with your appointments?</h2>
+      <p className="welcome-lede">Paste a message from the office, or let the assistant check your email. It keeps your schedule up to date and shows each thing it did, with Undo.</p>
       {unavailable ? (
         <p className="notice">
           <Icon name="info" />
@@ -258,41 +332,70 @@ function Welcome({ unavailable, onPaste, onAsk, onDemo }: { unavailable: boolean
         </p>
       ) : (
         <>
-          <div className="chips chips-center" aria-label="Ways to start">
-            <button type="button" className="chip" onClick={onPaste}>
-              <Icon name="message" size="sm" /> Paste a message from the office
-            </button>
-            {STARTERS.map((q) => (
-              <button key={q} type="button" className="chip" onClick={() => onAsk(q)}>
-                <Icon name={q.includes("bring") ? "checklist" : "check"} size="sm" /> {q}
-              </button>
-            ))}
-          </div>
-          <div className="demo-offer">
-            <div className="stack-xs">
-              <strong>New here?</strong>
-              <span className="small muted">
-                Try the demo: four made-up messages from Lantern Hill Clinic and a made-up calendar. The assistant is live: it reads them with the model you set up in
-                Connections.
+          <div className="starts" role="group" aria-label="Ways to start">
+            <button type="button" className="start-card" onClick={() => onAsk(GMAIL_ASK)}>
+              <span className="start-icon" aria-hidden="true">
+                <Icon name="mail" />
               </span>
-            </div>
-            <button type="button" className="btn btn-primary" onClick={onDemo}>
-              <Icon name="sparkle" size="sm" /> Try the demo
+              <span className="start-text">
+                <strong>{GMAIL_ASK}</strong>
+                <small>The assistant searches Gmail for messages about appointments.</small>
+              </span>
+            </button>
+            <button type="button" className="start-card" onClick={onPaste}>
+              <span className="start-icon" aria-hidden="true">
+                <Icon name="message" />
+              </span>
+              <span className="start-text">
+                <strong>Paste a message from the office</strong>
+                <small>A text or an email. It keeps its lines.</small>
+              </span>
+            </button>
+            <button type="button" className="start-card" onClick={onDemo}>
+              <span className="start-icon" aria-hidden="true">
+                <Icon name="sparkle" />
+              </span>
+              <span className="start-text">
+                <strong>Try the demo</strong>
+                <small>Four made-up messages from Lantern Hill Clinic and a made-up calendar. The assistant is live: it reads them with the model you set up in Connections.</small>
+              </span>
             </button>
           </div>
+          <ConnectionStatus />
         </>
       )}
     </div>
   );
 }
 
-function AssistantHead({ scripted, at }: { scripted: boolean; at?: string }) {
+// 0019, P9: where the connections stand, in one quiet line, with the way to
+// change them.
+export function ConnectionStatus() {
+  const { settings, settingsAvailable, google, openConnections } = useAgent();
+  const model = settingsAvailable ? modelLabel(settings) : null;
+  const ready = settingsAvailable && model !== null && !providerNeedsSetup(settings);
+  const gmail = google?.connected && google.gmail;
   return (
-    <div className="msg-meta">
-      <span className="avatar" aria-hidden="true">
-        <Icon name="sparkle" size="sm" />
-      </span>
-      <span className="msg-who">Assistant</span>
+    <p className="connection-status small">
+      <span className={`status-dot${gmail ? " is-on" : ""}`} aria-hidden="true" />
+      <span>{gmail ? `Gmail connected${google?.email ? ` as ${google.email}` : ""}` : "Google not connected"}</span>
+      <span className={`status-dot${ready ? " is-on" : ""}`} aria-hidden="true" />
+      <span>{ready ? model : "No model set up"}</span>
+      <button type="button" className="link-btn" onClick={openConnections}>
+        Connections
+      </button>
+    </p>
+  );
+}
+
+// 0019, P5: the turn's quiet line, once, under its words and actions: the
+// steps it took (folded), what wrote the words, and the time. The time
+// shows as a clock time, with the full date on hover and, for a keyboard,
+// while focus is anywhere in the turn. Screen readers hear the full time.
+function TurnMeta({ scripted, at, tools }: { scripted: boolean; at?: string; tools?: ToolLine[] }) {
+  return (
+    <div className="turn-meta">
+      {tools && tools.length > 0 && <ToolSummary tools={tools} />}
       {/* Only the scripted chat says scripted. Its full words stay for
           screen readers and on hover. */}
       {scripted ? (
@@ -302,7 +405,12 @@ function AssistantHead({ scripted, at }: { scripted: boolean; at?: string }) {
       ) : (
         <span className="model-tag">Model output</span>
       )}
-      {at && <time dateTime={at}>{shortTime(at)}</time>}
+      {at && (
+        <time className="turn-time" dateTime={at} title={shortTime(at)} data-full={shortTime(at)}>
+          <span aria-hidden="true">{clockTime(at)}</span>
+          <span className="sr-only">{shortTime(at)}</span>
+        </time>
+      )}
     </div>
   );
 }
@@ -473,6 +581,24 @@ export function followTop(el: HTMLElement, streaming: boolean): number {
   return Math.max(0, Math.min(end, start));
 }
 
+const NO_CHIPS: FactChip[] = [];
+
+// 0019, P6: the chips each message shows. A chip shows when the thread has
+// not shown its time yet, or showed it in another state. A later answer
+// that names the same times in the same states shows none. The state is
+// the one the chip carried when the answer was written, so the rule does
+// not depend on the live case.
+export function freshChips(messages: ReadonlyArray<Pick<ChatMessage, "id" | "chips">>): Map<string, FactChip[]> {
+  const seen = new Map<string, string>();
+  const out = new Map<string, FactChip[]>();
+  for (const m of messages) {
+    const shown = m.chips.filter((c) => seen.get(c.slotKey) !== c.stateLabel);
+    for (const c of m.chips) seen.set(c.slotKey, c.stateLabel);
+    out.set(m.id, shown.length === m.chips.length ? m.chips : shown);
+  }
+  return out;
+}
+
 // The message id a chip of the streamed turn carries until the stored
 // message replaces it.
 export const PENDING_MESSAGE = "pending";
@@ -632,16 +758,21 @@ function WaitingEmails({ emails, state, run, fresh }: { emails: WaitingEmail[]; 
   );
 }
 
-function MessageItem({
+// 0019, P19: a finished turn renders again only when its own inputs change:
+// the case, the activity, its message or the thread's facts cards. Typing
+// in the composer or a new turn below it leaves it as it is.
+const MessageItem = memo(function MessageItem({
   message: m,
   state,
   run,
   scripted,
   tools,
   onShowSlot,
-  onImport,
+  importText,
+  openImport,
   facts,
   offers,
+  chips,
 }: {
   message: ChatMessage;
   state: AppState;
@@ -649,11 +780,15 @@ function MessageItem({
   scripted: boolean;
   tools?: ToolLine[];
   onShowSlot: (k: string, from?: HTMLElement) => void;
-  onImport?: () => void;
+  importText: string | null;
+  openImport: (text: string) => void;
   facts?: Map<string, FactsPlace>;
   offers?: ReadonlySet<string>;
+  // 0019, P6: the chips this answer shows, new or changed times only.
+  chips: FactChip[];
 }) {
   const { activity } = useAgent();
+  const onImport = importText !== null ? () => openImport(importText) : undefined;
   if (m.role === "user") return <UserBubble text={m.text} at={m.createdAt} />;
   return (
     <article className="msg msg-assistant" aria-label="Assistant">
@@ -664,17 +799,13 @@ function MessageItem({
       ) : isCodeSentence(m.text) ? (
         <CodeNotice text={m.text} at={m.createdAt} onImport={onImport} />
       ) : (
-        <>
-          <AssistantHead scripted={scripted} at={m.createdAt} />
-          {tools && <ToolSummary tools={tools} />}
-          {m.text && <p className="assistant-text">{m.text}</p>}
-        </>
+        m.text && <p className="assistant-text">{m.text}</p>
       )}
       <Extras
         messageId={m.id}
         shownText={!m.declined && isCodeSentence(m.text) ? m.text.trim() : null}
         cards={m.cards}
-        chips={m.chips}
+        chips={chips}
         actions={entriesById(activity, m.actions ?? [])}
         state={state}
         run={run}
@@ -682,9 +813,10 @@ function MessageItem({
         facts={facts}
         offers={offers}
       />
+      {!m.declined && !usageStopText(m.text, PARTIAL_TEXT) && !isCodeSentence(m.text) && <TurnMeta scripted={scripted} at={m.createdAt} tools={tools} />}
     </article>
   );
-}
+});
 
 function PendingItem({
   turn,
@@ -695,6 +827,7 @@ function PendingItem({
   onImport,
   facts,
   offers,
+  chips,
 }: {
   turn: PendingTurn;
   state: AppState;
@@ -704,6 +837,7 @@ function PendingItem({
   onImport: () => void;
   facts?: Map<string, FactsPlace>;
   offers?: ReadonlySet<string>;
+  chips: FactChip[];
 }) {
   const err = turn.error;
   // ungrounded and model_unavailable: the streamed text is a fixed
@@ -732,8 +866,7 @@ function PendingItem({
           </>
         ) : (
           <>
-            {codeText === null && <AssistantHead scripted={scripted} />}
-            {turn.status === "streaming" ? <ToolLines tools={turn.tools} /> : <ToolSummary tools={turn.tools} />}
+            {turn.status === "streaming" && <ToolLines tools={turn.tools} live />}
             {codeText !== null ? (
               <CodeNotice text={codeText} onImport={offerImport ? onImport : undefined} />
             ) : turn.text ? (
@@ -754,7 +887,7 @@ function PendingItem({
           fresh
           shownText={codeText}
           cards={turn.cards}
-          chips={turn.chips}
+          chips={chips}
           actions={turn.actions}
           state={state}
           run={run}
@@ -762,6 +895,10 @@ function PendingItem({
           facts={facts}
           offers={offers}
         />
+        {codeText !== null && turn.status !== "streaming" && <ToolSummary tools={turn.tools} />}
+        {codeText === null && turn.status !== "streaming" && err?.code !== "out_of_scope" && err?.code !== "provider_not_ready" && err?.code !== "credits_exhausted" && err?.code !== "usage_paused" && (
+          <TurnMeta scripted={scripted} tools={turn.tools} />
+        )}
         {err?.code === "stopped" && (
           <p className="notice" role="status">
             <Icon name="stop" />
@@ -825,12 +962,14 @@ export function UsageNotice({ text, credits }: { text: string; credits: boolean 
   );
 }
 
-function ToolLines({ tools }: { tools: ToolLine[] }) {
+// 0019, P7: while a turn runs, its steps are a calm live list, with a soft
+// shimmer on the step that is running.
+function ToolLines({ tools, live = false }: { tools: ToolLine[]; live?: boolean }) {
   if (tools.length === 0) return null;
   return (
-    <ul className="tool-lines">
+    <ul className={`tool-lines${live ? " is-live" : ""}`}>
       {tools.map((t) => (
-        <li key={t.callId} className={`tool-line${t.ok === false && !t.declined ? " is-failed" : ""}`}>
+        <li key={t.callId} className={`tool-line${t.ok === false && !t.declined ? " is-failed" : ""}${t.ok === null ? " is-running" : ""}`}>
           {t.ok === null ? <span className="spinner" aria-hidden="true" /> : t.ok ? <Icon name="check" size="sm" /> : <Icon name={t.declined ? "info" : "alert"} size="sm" />}
           <span>
             {t.label}

@@ -2,7 +2,10 @@
 // Lantern Hill Clinic · Undo". Facts the agent decided about one message
 // form one receipt. Every other action is its own receipt with the
 // sentence code wrote for it. Undo reverses every entry of the receipt.
-import { useState } from "react";
+// 0019, P5: a turn's receipts sit as rows of one quiet group under its
+// words. With three or more, a one-line summary folds them, and each row
+// keeps its own Undo when opened.
+import { useId, useState } from "react";
 import type { AppState } from "../api.ts";
 import { Icon } from "../components/Icon.tsx";
 import type { ActivityEntry } from "../contract.ts";
@@ -50,18 +53,46 @@ export function groupReceipts(entries: ActivityEntry[], state: Pick<AppState, "e
   return groups;
 }
 
+// The folded group's one line: "3 actions · Accepted 2 facts from Lantern
+// Hill Clinic, and 2 more". Written by code from the receipts' own words.
+export const FOLD_AT = 3;
+export function groupSummary(groups: Array<Pick<ReceiptGroup, "text" | "entries">>): string {
+  const undone = groups.filter((g) => g.entries.length > 0 && g.entries.every((e) => e.undone)).length;
+  const first = groups[0]?.text ?? "";
+  const more = groups.length - 1;
+  const tail = undone > 0 ? ` · ${undone} undone` : "";
+  return `${groups.length} actions · ${first}${more > 0 ? `, and ${more} more` : ""}${tail}`;
+}
+
 export function Receipts({ entries, state, skipMessages }: { entries: ActivityEntry[]; state: AppState; skipMessages?: ReadonlySet<string> }) {
-  const { activity, google } = useAgent();
+  const { activity, google, blocked } = useAgent();
+  const uid = useId();
   const groups = groupReceipts(entries, state).filter((g) => g.messageId === null || !skipMessages?.has(g.messageId));
+  // A refused Undo opens the group, so its reason is in view.
+  const refused = groups.some((g) => g.entries.some((e) => blocked[e.id]));
+  const [openChoice, setOpen] = useState<boolean | null>(null);
   if (groups.length === 0) return null;
+  const folds = groups.length >= FOLD_AT;
+  const open = !folds || (openChoice ?? refused);
   return (
-    <ul className="receipts" aria-label="What the assistant did">
-      {groups.map((g) => (
-        <li key={g.key}>
-          <Receipt text={g.text} entries={g.entries} gone={g.entries.length === 1 && removedInGoogle(activity, google?.calendarOwn, g.entries[0]!)} />
-        </li>
-      ))}
-    </ul>
+    <div className={`receipt-group${folds ? " is-folding" : ""}`}>
+      {folds && (
+        <button type="button" className="receipt-summary" aria-expanded={open} aria-controls={`${uid}-rows`} onClick={() => setOpen(!open)}>
+          <span className="receipt-mark" aria-hidden="true">
+            <Icon name="check" size="sm" />
+          </span>
+          <span className="receipt-text">{groupSummary(groups)}</span>
+          <Icon name="chevronDown" size="sm" />
+        </button>
+      )}
+      <ul id={`${uid}-rows`} className="receipts" aria-label="What the assistant did" hidden={!open}>
+        {groups.map((g) => (
+          <li key={g.key}>
+            <Receipt text={g.text} entries={g.entries} gone={g.entries.length === 1 && removedInGoogle(activity, google?.calendarOwn, g.entries[0]!)} />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

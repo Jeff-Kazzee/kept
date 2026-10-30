@@ -7,8 +7,9 @@
 // page opens in the work area in place of the case. The shell reads the
 // case, the settings and the activity together, and gives the settings and
 // activity to every part through AgentContext.
-import { scopeReadback } from "./case/ReplyCard.tsx";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { caseNeedsCards, loadCaseCards } from "./case/lazyCards.tsx";
+import { scopeReadback } from "./case/readback.ts";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { realBackend, type AgentBackend } from "./agentApi.ts";
 import { AgentContext, type AgentState } from "./agent/AgentContext.tsx";
 import { keep, sendDeviceZone, settle } from "./agent/reads.ts";
@@ -20,22 +21,20 @@ import { Icon } from "./components/Icon.tsx";
 import { DEFAULT_SETTINGS, deviceZone, type ActivityLog, type GoogleStatus, type Settings } from "./contract.ts";
 import { ChatView } from "./chat/ChatView.tsx";
 import { DEMO_IDS } from "./chat/demo.ts";
-import { createMockTransport, createScriptedLog, scriptedBackend, type ScriptedLog } from "./chat/mockStream.ts";
+import type { ScriptedLog } from "./chat/mockStream.ts";
 import { realTransport } from "./chat/transport.ts";
 import type { ChatTransport } from "./chat/types.ts";
 import { useChat } from "./chat/useChat.ts";
 import { errorSentence, setCaseZone, signInReturn } from "./format.ts";
-import { SchedulePanel, TABS, railLabel, waitingCount, type PanelTab } from "./schedule/SchedulePanel.tsx";
-import { slotElementId } from "./schedule/Agenda.tsx";
+import { TABS, railLabel, slotElementId, waitingCount, type PanelTab } from "./schedule/tabs.ts";
+import { SchedulePanel, loadPanel } from "./schedule/lazyPanel.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
 import { LAPTOP, TABLET_UP, chipRef, findChip, focusSoon, useMedia, type ChipRef } from "./layout.ts";
-import { ConnectionsPage, SettingsPage, UsagePage, ZoneNotice, caseDeletedShown } from "./pages/Settings.tsx";
+import { ZoneNotice, caseDeletedShown } from "./pages/shared.tsx";
 import { Avatar } from "./shell/AccountMenu.tsx";
-import { AgentAccessPage, PageFrame } from "./shell/Pages.tsx";
 import { Sidebar, type SideLayout } from "./shell/Sidebar.tsx";
 import { Toasts, type Toast } from "./shell/Toasts.tsx";
 import { VIEW_TITLES, openersFor, person, shellModes, readFolded, saveFolded, setupLink, viewIn, type ToastLink, type View } from "./shell/shell.ts";
-import { SignIn } from "./hosted/SignIn.tsx";
 import { hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
 
 
@@ -46,7 +45,32 @@ import { hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedI
 // bundle. A production page ignores ?mockchat=1. Every route is the
 // server's, in every build (0011, U51).
 const fakesBuilt = import.meta.env.DEV || import.meta.env.APP_FAKES === true;
+type ScriptedModule = typeof import("./chat/mockStream.ts");
+// Started with the page, beside the first reads.
+const scriptedLoad: Promise<ScriptedModule> | null = fakesBuilt && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("mockchat") === "1" ? import("./chat/mockStream.ts") : null;
 const scriptedChat = () => fakesBuilt && new URLSearchParams(window.location.search).get("mockchat") === "1";
+
+// 0019, P18: what is not on the case screen loads on demand. Each import
+// is one function, so every caller (the sidebar, the account menu, a
+// toast, the model pill, Open Usage) opens the same chunk, and the idle
+// prefetch below warms it.
+export const loadPages = () => import("./shell/PageView.tsx");
+const PageView = lazy(loadPages);
+// The panel and the case's cards start loading with the page, beside the
+// first reads (0019, P18).
+void loadPanel().catch(() => {});
+void loadCaseCards().catch(() => {});
+const SignIn = lazy(() => import("./hosted/SignIn.tsx").then((m) => ({ default: m.SignIn })));
+
+// While a page's chunk loads: the page's frame, quiet, so nothing jumps.
+function PageLoading() {
+  return (
+    <div className="page-inner" aria-busy="true">
+      <span className="skeleton-line w-40" />
+      <span className="skeleton-block" />
+    </div>
+  );
+}
 
 // The page first asks which mode the server runs in (0014). Local mode is
 // the app as it was. The hosted site shows the sign-in screen until a
@@ -122,14 +146,16 @@ function RootView({
   }
   if (session.mode === "hosted" && !session.signedIn) {
     return (
-      <SignIn
-        googleSignIn={session.googleSignIn}
-        notice={notice}
-        onSignedIn={(s) => {
-          setNotice(null);
-          setSession(s);
-        }}
-      />
+      <Suspense fallback={<main className="loading" aria-busy="true" />}>
+        <SignIn
+          googleSignIn={session.googleSignIn}
+          notice={notice}
+          onSignedIn={(s) => {
+            setNotice(null);
+            setSession(s);
+          }}
+        />
+      </Suspense>
     );
   }
   return <App hosted={session.mode === "hosted" ? session : null} onSession={setSession} onSignedOut={toSignIn} />;
@@ -150,8 +176,14 @@ export function App({
   onSignedOutRef.current = onSignedOut;
   // The scripted chat's own entries (0019, P21), in development and check
   // builds only.
-  const scriptedLog = useMemo(() => (fakesBuilt && scripted ? createScriptedLog(sessionStorage) : null), [scripted]);
-  const backend: AgentBackend = useMemo(() => (fakesBuilt && scriptedLog ? scriptedBackend(realBackend, scriptedLog) : realBackend), [scriptedLog]);
+  // The module loads only in those builds, and only with ?mockchat=1, so
+  // no part of it reaches the production bundle (0019, P18).
+  const [mock, setMock] = useState<ScriptedModule | null>(null);
+  useEffect(() => {
+    if (fakesBuilt && scripted) void (scriptedLoad ?? import("./chat/mockStream.ts")).then((m) => setMock(m));
+  }, [scripted]);
+  const scriptedLog = useMemo(() => (fakesBuilt && mock ? mock.createScriptedLog(sessionStorage) : null), [mock]);
+  const backend: AgentBackend = useMemo(() => (fakesBuilt && mock && scriptedLog ? mock.scriptedBackend(realBackend, scriptedLog) : realBackend), [mock, scriptedLog]);
   const [state, setState] = useState<AppState | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [activity, setActivity] = useState<ActivityLog | null>(null);
@@ -181,6 +213,11 @@ export function App({
     const stale = () => mine !== reads.current;
     try {
       const [next, sRead, aRead, gRead] = await Promise.all([api.state(), settle(() => backend.settings()), settle(() => backend.activity()), settle(() => backend.google())]);
+      if (stale()) return;
+      // 0019, P18: the first render of a case that shows these cards waits
+      // for their chunk, which started with the page, so no placeholder is
+      // swapped for a card in view.
+      if (caseNeedsCards(next)) await loadCaseCards().catch(() => {});
       if (stale()) return;
       // The balance moves with every turn on the hosted site.
       if (hostedRef.current) void hostedApi.session().then((x) => onSessionRef.current(x), () => {});
@@ -219,16 +256,16 @@ export function App({
   refreshRef.current = refresh;
 
   useEffect(() => {
+    // The scripted chat reads through its own backend, once it is in.
+    if (scripted && !mock) return;
     void refresh();
     const back = signInReturn(new URLSearchParams(window.location.search));
     if (back) {
       toast(back.kind, back.text);
       window.history.replaceState(null, "", `${window.location.pathname}${back.rest ? `?${back.rest}` : ""}`);
     }
-  }, [refresh, toast]);
+  }, [refresh, toast, scripted, mock]);
 
-  // A change by an agent, the chat or another tab shows without a reload.
-  useLiveRefresh(state?.live ?? null, refresh);
 
   // Runs an action, says what went wrong in a plain sentence, and reloads
   // the case. A 409 means the record changed since it was shown, so the
@@ -270,7 +307,7 @@ export function App({
     [backend, refresh, toast],
   );
 
-  if (!state) {
+  if (!state || (scripted && !mock)) {
     // Loading: a skeleton of the chat and the schedule. A failed load: the
     // reason in a sentence and Try again.
     return loadError ? (
@@ -285,6 +322,7 @@ export function App({
           <span className="skeleton-line w-80" />
           <span className="skeleton-line w-60" />
           <span className="skeleton-block" />
+          <span className="skeleton-composer" />
         </div>
         <div className="skeleton-panel" aria-hidden="true">
           <span className="skeleton-line w-40" />
@@ -303,6 +341,7 @@ export function App({
       toasts={toasts}
       setToasts={setToasts}
       scripted={scripted}
+      mock={mock}
       scriptedLog={scriptedLog}
       backend={backend}
       settings={settings}
@@ -326,6 +365,7 @@ function Shell({
   toasts,
   setToasts,
   scripted,
+  mock,
   scriptedLog,
   backend,
   settings,
@@ -347,6 +387,7 @@ function Shell({
   toasts: Toast[];
   setToasts: (f: (t: Toast[]) => Toast[]) => void;
   scripted: boolean;
+  mock: ScriptedModule | null;
   scriptedLog: ScriptedLog | null;
   backend: AgentBackend;
   settings: Settings | null;
@@ -358,12 +399,21 @@ function Shell({
   degraded: boolean;
 }) {
   const transport: ChatTransport = useMemo(
-    () => (fakesBuilt && scripted ? createMockTransport({ api, storage: sessionStorage, activity: () => backend.activity(), google: () => backend.google(), scriptedLog }) : realTransport),
-    [scripted, backend, scriptedLog],
+    () => (fakesBuilt && scripted && mock ? mock.createMockTransport({ api, storage: sessionStorage, activity: () => backend.activity(), google: () => backend.google(), scriptedLog }) : realTransport),
+    [scripted, mock, backend, scriptedLog],
   );
   const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh());
+  // A change by an agent, the chat or another tab shows without a reload.
+  // It asks often while a turn or an undo runs, and backs off when quiet
+  // (0019, P20).
+  useLiveRefresh(state.live, refresh, streaming || undoing);
   const mode = hosted ? "hosted" : "local";
   const [sheetOpen, setSheetOpen] = useState(false);
+  // The phone sheet's height (0019, P16). It opens full.
+  const [snap, setSnap] = useState<Snap>("full");
+  useEffect(() => {
+    if (sheetOpen) setSnap("full");
+  }, [sheetOpen]);
   // The generation a Delete case left (0017, fix round 1, R7).
   const [deletedFrom, setDeletedFrom] = useState<number | null>(null);
   const [railed, setRailed] = useState(false);
@@ -451,11 +501,42 @@ function Shell({
   const closeDrawerRef = useRef(closeDrawer);
   closeDrawerRef.current = closeDrawer;
 
-  useEffect(() => {
-    void api.fixtures().then(
-      (s) => setFixtures(s.flatMap((x) => x.messages).filter((m, i, all) => all.findIndex((y) => y.id === m.id) === i)),
-      () => setFixtures([]),
+  // 0019, P17: the fixtures load only when the person opens the demo or the
+  // import sheet, or once the demo is in the case (for "Next demo
+  // message"), never on a plain first load.
+  const fixturesLoad = useRef<Promise<FixtureScenario["messages"]> | null>(null);
+  const ensureFixtures = useCallback(() => {
+    fixturesLoad.current ??= api.fixtures().then(
+      (s) => {
+        const list = s.flatMap((x) => x.messages).filter((m, i, all) => all.findIndex((y) => y.id === m.id) === i);
+        setFixtures(list);
+        return list;
+      },
+      () => {
+        fixturesLoad.current = null;
+        return [];
+      },
     );
+    return fixturesLoad.current;
+  }, []);
+  const demoStarted = state.messages.some((m) => DEMO_IDS.includes(m.id));
+  useEffect(() => {
+    if (demoStarted) void ensureFixtures();
+  }, [demoStarted, ensureFixtures]);
+
+  // 0019, P18: the cards a conflict, a reply or a question need load as
+  // soon as the case has one, beside the first reads.
+  const needsCards = caseNeedsCards(state);
+  useEffect(() => {
+    if (needsCards) void loadCaseCards().catch(() => {});
+  }, [needsCards]);
+
+  // 0019, P18: once the case is on screen and the browser is idle, the
+  // pages' chunk loads, so opening one later does not wait.
+  useEffect(() => {
+    const idle = (cb: () => void) => (typeof requestIdleCallback === "function" ? requestIdleCallback(cb, { timeout: 4000 }) : setTimeout(cb, 2500));
+    const t = window.setTimeout(() => idle(() => void Promise.all([loadPages(), loadCaseCards()]).catch(() => {})), 1500);
+    return () => window.clearTimeout(t);
   }, []);
 
   // Escape closes the sheet or the drawer. An open dialog, such as the
@@ -511,8 +592,9 @@ function Shell({
         toast("info", "Loaded the demo calendar. Press Enter to send the first demo message.");
       });
     }
+    const list = await ensureFixtures();
     const imported = new Set(state.messages.map((m) => m.id));
-    return fixtures.find((m) => DEMO_IDS.includes(m.id) && !imported.has(m.id)) ?? null;
+    return list.find((m) => DEMO_IDS.includes(m.id) && !imported.has(m.id)) ?? null;
   };
 
   const waiting = waitingCount(state);
@@ -551,7 +633,7 @@ function Shell({
 
   return (
     <AgentContext.Provider value={agent}>
-      <div className="app" data-panel={sheetOpen ? "open" : "closed"} data-rail={railed ? "folded" : "open"} data-side={layout} data-drawer={drawerOpen ? "open" : "closed"} data-view={view}>
+      <div className="app" data-snap={snap} data-panel={sheetOpen ? "open" : "closed"} data-rail={railed ? "folded" : "open"} data-side={layout} data-drawer={drawerOpen ? "open" : "closed"} data-view={view}>
         {/* The top bar comes first in the DOM so Tab meets the fold toggle
             before the sidebar (review r2). The grid places both. */}
         <header className="topbar" inert={inert.topbar}>
@@ -585,6 +667,8 @@ function Shell({
           <h1 ref={title} id="view-title" className="view-title" tabIndex={-1}>
             {VIEW_TITLES[view]}
           </h1>
+          {/* 0019: on a laptop the top bar says how the case stands. */}
+          {view === "case" && <span className="view-sub">{caseLine(state, waiting)}</span>}
           {!pageOpen && (
             <button
               ref={sheetToggle}
@@ -647,6 +731,7 @@ function Shell({
               onLoadCalendar={loadCalendar}
               onLoadDemo={loadDemo}
               fixtures={fixtures}
+              loadFixtures={ensureFixtures}
               modelLabel={modelLabel}
             />
           </div>
@@ -677,7 +762,7 @@ function Shell({
             aria-modal={sheetModal || undefined}
             inert={inert.panel}
           >
-            {!laptop && <SheetHandle onClose={closeSchedule} />}
+            {!laptop && <SheetHandle onClose={closeSchedule} snap={snap} onSnap={setSnap} />}
             <SchedulePanel
               state={state}
               run={run}
@@ -688,22 +773,19 @@ function Shell({
               onCollapse={laptop ? () => setRailed(true) : undefined}
             />
           </div>
-          {pageOpen && (
+          {pageOpen && view !== "case" && (
             <section className="page" aria-labelledby="view-title" inert={inert.page}>
-              <PageFrame onBack={back}>
-                {view === "connections" && <ConnectionsPage modelClient={state.modelClient} run={run} />}
-                {view === "access" && <AgentAccessPage onActivity={() => openPanel("activity")} />}
-                {view === "settings" && (
-                  <SettingsPage
-                    version={state.caseVersion}
-                    erasePending={state.erasePending}
-                    run={run}
-                    caseDeleted={caseDeletedShown(deletedFrom, state)}
-                    onCaseDeleted={() => setDeletedFrom(state.generation)}
-                  />
-                )}
-                {view === "usage" && <UsagePage run={run} />}
-              </PageFrame>
+              <Suspense fallback={<PageLoading />}>
+                <PageView
+                  view={view}
+                  state={state}
+                  run={run}
+                  onBack={back}
+                  onActivity={() => openPanel("activity")}
+                  caseDeleted={caseDeletedShown(deletedFrom, state)}
+                  onCaseDeleted={() => setDeletedFrom(state.generation)}
+                />
+              </Suspense>
             </section>
           )}
         </main>
@@ -711,6 +793,15 @@ function Shell({
       </div>
     </AgentContext.Provider>
   );
+}
+
+// "4 appointments · 1 waiting for you", written by code from the case.
+export function caseLine(state: Pick<AppState, "case" | "records">, waiting: number): string {
+  const archived = new Set(state.records.filter((r) => r.archived).map((r) => r.id));
+  const n = state.case.slots.filter((s) => !archived.has(s.key)).length;
+  const parts = [n === 0 ? "No appointments yet" : `${n} appointment${n === 1 ? "" : "s"}`];
+  if (waiting > 0) parts.push(`${waiting} waiting for you`);
+  return parts.join(" · ");
 }
 
 // True while the browser says it is online.
@@ -728,21 +819,39 @@ function useOnline(): boolean {
   return online;
 }
 
-// The bottom sheet's handle: a tap or a downward drag closes the sheet.
-function SheetHandle({ onClose }: { onClose: () => void }) {
+// The bottom sheet's handle. A tap closes the sheet. 0019, P16: it snaps
+// to two heights. A drag down from full goes to half, a drag down from half
+// closes it, and a drag up from half goes back to full.
+export type Snap = "full" | "half";
+export function snapAfterDrag(snap: Snap, dy: number): Snap | "close" | null {
+  if (Math.abs(dy) <= 48) return null;
+  if (dy < 0) return "full";
+  return snap === "full" ? "half" : "close";
+}
+
+function SheetHandle({ onClose, snap, onSnap }: { onClose: () => void; snap: Snap; onSnap: (s: Snap) => void }) {
   const start = useRef<number | null>(null);
+  const dragged = useRef(false);
   return (
     <button
       type="button"
       className="sheet-handle"
       aria-label="Close the schedule"
-      onClick={onClose}
+      onClick={() => {
+        if (dragged.current) dragged.current = false;
+        else onClose();
+      }}
       onPointerDown={(e) => {
         start.current = e.clientY;
+        dragged.current = false;
       }}
       onPointerUp={(e) => {
-        if (start.current !== null && e.clientY - start.current > 48) onClose();
+        const next = start.current === null ? null : snapAfterDrag(snap, e.clientY - start.current);
         start.current = null;
+        if (next === null) return;
+        dragged.current = true;
+        if (next === "close") onClose();
+        else onSnap(next);
       }}
     >
       <span aria-hidden="true" />

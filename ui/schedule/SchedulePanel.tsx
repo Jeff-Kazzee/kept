@@ -6,47 +6,16 @@ import type { AppState } from "../api.ts";
 import type { Run } from "../components/ActionButton.tsx";
 import { Icon, type IconName } from "../components/Icon.tsx";
 import { EvidenceCard } from "../case/ClaimsCard.tsx";
-import { ExplanationCard, QuestionCard } from "../case/ConflictCards.tsx";
 import { api } from "../api.ts";
 import { ActionButton } from "../components/ActionButton.tsx";
-import { OwnReportCard, openOwnReports } from "../case/OwnReportCard.tsx";
-import { ReplyPanel } from "../case/ReplyCard.tsx";
+import { ActivityTab, ChecklistPanel, ExplanationCard, OwnReportCard, QuestionCard, ReplyPanel } from "../case/lazyCards.tsx";
+import { type PanelTab, TABS, unaskedConflict, waitingCount } from "./tabs.ts";
+import { openOwnReports } from "../case/ownReports.ts";
 import { zoneWithShortName } from "../format.ts";
 import { Agenda } from "./Agenda.tsx";
 import { InfoTip } from "../components/InfoTip.tsx";
-import { ActivityTab, ChecklistPanel } from "./CaseTabs.tsx";
 
-export type PanelTab = "schedule" | "checklist" | "activity";
-
-export const TABS: Array<{ id: PanelTab; label: string; icon: IconName }> = [
-  { id: "schedule", label: "Schedule", icon: "calendar" },
-  { id: "checklist", label: "Checklist", icon: "checklist" },
-  { id: "activity", label: "Activity", icon: "activity" },
-];
-
-// The name of a tab's button on the laptop's folded rail. The Schedule
-// button says how many things wait, as its badge shows (review R4).
-export const railLabel = (t: { id: PanelTab; label: string }, waiting: number) => `Open ${t.label}${t.id === "schedule" && waiting > 0 ? `, ${waiting} waiting for you` : ""}`;
-
-// A conflict that waits to be asked about, when no question is open. The
-// chat usually asks it. Without the chat, or when the chat cannot answer,
-// the Schedule tab offers it (0008, B19).
-export function unaskedConflict(state: AppState) {
-  if (state.case.question) return undefined;
-  return state.case.conflicts.find((c) => c.status === "open" && c.askable && c.archivedSlotKeys.length === 0);
-}
-
-// How many things wait for the user: an own-report question, facts no one
-// has decided, the open question or a conflict waiting for one, and the
-// open reply draft.
-export function waitingCount(state: AppState): number {
-  return (
-    openOwnReports(state).length +
-    state.evidence.filter((e) => e.status === "pending").length +
-    (state.case.question || unaskedConflict(state) ? 1 : 0) +
-    (state.case.reply.draft ? 1 : 0)
-  );
-}
+export { TABS, railLabel, unaskedConflict, waitingCount, type PanelTab } from "./tabs.ts";
 
 export function SchedulePanel({
   state,
@@ -138,8 +107,14 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
   return (
     <div className="stack">
       {needsYou && (
-        <section className="stack" aria-labelledby="needs-you">
-          <h3 id="needs-you">Waiting for you</h3>
+        <section className="card card-emphasis waiting" aria-labelledby="needs-you">
+          <div className="waiting-head">
+            <h3 id="needs-you">Waiting for you</h3>
+            <span className="count" aria-hidden="true">
+              {waitingCount(state)}
+            </span>
+          </div>
+          <p className="waiting-summary small">{waitingSummary(state)}</p>
           {owns.map((m) => (
             <OwnReportCard key={m.id} messageId={m.id} state={state} run={run} />
           ))}
@@ -155,7 +130,7 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
               <ExplanationCard conflictId={conflict.id} state={state} run={run} compact />
               <div className="btn-row">
                 <ActionButton run={run} variant="primary" action={() => api.nextQuestion(kase.questionsVersion)}>
-                  Ask me the question about this
+                  Ask about this change
                 </ActionButton>
               </div>
             </>
@@ -184,6 +159,24 @@ export function ScheduleTab({ state, run, highlight }: { state: AppState; run: R
       )}
     </div>
   );
+}
+
+// 0019, P12: what waits, in two short lines written by code.
+export function waitingSummary(state: AppState): string {
+  const kase = state.case;
+  const parts: string[] = [];
+  const owns = openOwnReports(state).length;
+  const facts = state.evidence.filter((e) => e.status === "pending").length;
+  if (owns > 0) parts.push(owns === 1 ? "A question about a message you added" : `${owns} questions about messages you added`);
+  if (facts > 0) parts.push(facts === 1 ? "1 fact to accept or reject" : `${facts} facts to accept or reject`);
+  const conflict = kase.question ? kase.conflicts.find((c) => c.id === kase.question!.conflictId) : unaskedConflict(state);
+  if (conflict) {
+    const slots = kase.slots.filter((s) => conflict.slotKeys?.includes(s.key)).map((s) => s.label);
+    parts.push(kase.question ? `A question about ${slots.length > 0 ? slots.join(" and ") : "a change"}` : `A change to look at${slots.length > 0 ? `: ${slots.join(" and ")}` : ""}`);
+  }
+  if (kase.reply.draft) parts.push(`A reply to read back: ${kase.reply.draft.slotLabel}`);
+  else if (kase.reply.suggestion) parts.push("A reply to pick");
+  return parts.length > 0 ? `${parts.join(". ")}.` : "";
 }
 
 // The fine print behind the Appointments info button, and in Settings,
