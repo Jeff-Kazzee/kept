@@ -14,14 +14,17 @@
 //                            No default (J19).
 //   APP_SERVER_KEY           off stops every call on the server key
 //   APP_TRUSTED_PROXY        cloudflare trusts CF-Connecting-IP from a
-//                            loopback socket. none, the default, trusts no
-//                            forwarding header (finding 4).
+//                            loopback socket. tailscale trusts
+//                            X-Forwarded-For from a loopback socket, as
+//                            Tailscale serve and Funnel set it (0020, B11).
+//                            none, the default, trusts no forwarding header
+//                            (finding 4).
 //
 // J19: while either cap is unset the server key is off, and `missing`
 // names what to set. Money is kept in micro-dollars (millionths of a
 // dollar), as integers.
 export type AppMode = "local" | "hosted";
-export type TrustedProxy = "none" | "cloudflare";
+export type TrustedProxy = "none" | "cloudflare" | "tailscale";
 
 export type HostedConfig = {
   mode: AppMode;
@@ -83,7 +86,7 @@ export function readHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedCo
   const keyRaw = (env.APP_SERVER_KEY ?? "").trim().toLowerCase();
   if (keyRaw !== "" && keyRaw !== "on" && keyRaw !== "off") throw new ConfigError(`APP_SERVER_KEY must be on or off. It is "${env.APP_SERVER_KEY}".`);
   const proxyRaw = (env.APP_TRUSTED_PROXY ?? "").trim().toLowerCase();
-  if (proxyRaw !== "" && proxyRaw !== "none" && proxyRaw !== "cloudflare") throw new ConfigError(`APP_TRUSTED_PROXY must be cloudflare or none. It is "${env.APP_TRUSTED_PROXY}".`);
+  if (proxyRaw !== "" && proxyRaw !== "none" && proxyRaw !== "cloudflare" && proxyRaw !== "tailscale") throw new ConfigError(`APP_TRUSTED_PROXY must be tailscale, cloudflare or none. It is "${env.APP_TRUSTED_PROXY}".`);
   const dailyCapMicros = usd(env, "APP_DAILY_COST_CAP_USD");
   const judgeTotalCapMicros = usd(env, "APP_JUDGE_TOTAL_CAP_USD");
   const missing = [...(dailyCapMicros === null ? ["APP_DAILY_COST_CAP_USD"] : []), ...(judgeTotalCapMicros === null ? ["APP_JUDGE_TOTAL_CAP_USD"] : [])];
@@ -93,7 +96,7 @@ export function readHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedCo
     dailyCapMicros,
     judgeTotalCapMicros,
     serverKeyOn: keyRaw !== "off" && missing.length === 0,
-    trustedProxy: proxyRaw === "cloudflare" ? "cloudflare" : "none",
+    trustedProxy: proxyRaw === "cloudflare" || proxyRaw === "tailscale" ? proxyRaw : "none",
     missing,
   };
 }

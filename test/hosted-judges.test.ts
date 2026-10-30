@@ -111,7 +111,7 @@ describe("redeeming judge codes on the site", () => {
     h = await startHosted();
     const { code } = h.judgeCode("Judge Bo", 7);
     const g = h.browser();
-    await h.googleSignIn(g);
+    await h.signUp(g);
     const r = await g.call("POST", "/api/account/judge-code", { code });
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ balanceMicros: 7_000_000, canAddCode: true });
@@ -124,7 +124,7 @@ describe("redeeming judge codes on the site", () => {
     expect((await g.call("POST", "/api/account/judge-code", { code: second.code })).body.error).toBe("judge_has_code");
     // Another Google account cannot take the first code.
     const g2 = h.browser();
-    await h.googleSignIn(g2, { sub: "sub-2", email: "two@example.com" });
+    await h.signUp(g2, { email: "two@example.com" });
     expect((await g2.call("POST", "/api/account/judge-code", { code })).body.error).toBe("judge_used");
     // A judge account cannot attach a code.
     const j = h.browser();

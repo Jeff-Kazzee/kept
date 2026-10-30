@@ -23,7 +23,8 @@
 // reachable only from them is not read.
 //
 // What it finds, on one line, in each of those:
-// - an assignment of MODEL_API_KEY with a value: `MODEL_API_KEY=value`,
+// - an assignment of MODEL_API_KEY, BETTER_AUTH_SECRET or
+//   BETTER_AUTH_API_KEY (0020) with a value: `MODEL_API_KEY=value`,
 //   with optional spaces, `export` and quotes, as in an env file or a shell
 //   line. The value is at least 12 characters and ends at a space, a quote
 //   or a backslash, so an escaped newline in a JSON log ends it. A value
@@ -51,12 +52,14 @@
 //   "judge_" and 43 base64url characters, on its own.
 // - a SQLite file, under any name, that is hosted mode's accounts database
 //   or a copy of it: one with a judge_codes or sessions table. It holds
-//   only hashes of codes and sessions, but also email addresses.
+//   only hashes of codes and sessions, but also email addresses. The same
+//   for Better Auth's sign-in database (0020): one with a passkey or
+//   verification table, which holds password hashes and session tokens.
 // - a file or folder name that is the app's settings file
 //   (app-secrets.sqlite and its -wal, -shm and -journal files, or the
 //   older app-secrets.json and its temporary file), hosted mode's
 //   accounts database (accounts.sqlite and its -wal, -shm and -journal
-//   files), or a
+//   files) and sign-in database (auth.sqlite and the same), or a
 //   local env file (.env.local, .env.<name>.local), in the working tree or
 //   in any tree in history.
 // The key's own shape is not known to this scan, so it does not look for a
@@ -95,7 +98,7 @@ type Range = [number, number];
 
 // The value of a MODEL_API_KEY assignment, and a bearer token. Read on the
 // line's bytes as latin1, so string offsets are byte offsets.
-const ASSIGNMENT = /(?<![A-Za-z0-9_])MODEL_API_KEY[ \t]*=[ \t]*["']?([^\s"'`$<>\\]{12,})/g;
+const ASSIGNMENT = /(?<![A-Za-z0-9_])(?:MODEL_API_KEY|BETTER_AUTH_SECRET|BETTER_AUTH_API_KEY)[ \t]*=[ \t]*["']?([^\s"'`$<>\\]{12,})/g;
 // A redaction a log tool already made is not a key.
 const PLACEHOLDER = /^redacted/i;
 const BEARER = /(?<![A-Za-z0-9_])Bearer[ \t]+([A-Za-z0-9._~+/=|-]{24,})/g;
@@ -174,7 +177,7 @@ export function jsonSecretFields(text: string): string[] {
 }
 
 // The app's settings file and local env files must never be tracked.
-const SECRET_FILE_NAME = /^(?:app-secrets\.sqlite(?:-wal|-shm|-journal)?|accounts\.sqlite(?:-wal|-shm|-journal)?|app-secrets\.json|\.app-secrets\.json\..*\.tmp|\.env\.local|\.env\.[^/]+\.local)$/;
+const SECRET_FILE_NAME = /^(?:app-secrets\.sqlite(?:-wal|-shm|-journal)?|accounts\.sqlite(?:-wal|-shm|-journal)?|auth\.sqlite(?:-wal|-shm|-journal)?|app-secrets\.json|\.app-secrets\.json\..*\.tmp|\.env\.local|\.env\.[^/]+\.local)$/;
 
 export const ACCOUNTS_DB = "accounts database";
 
@@ -192,8 +195,9 @@ export function sqliteSecretFields(bytes: Buffer): string[] {
     writeFileSync(file, bytes, { mode: 0o600 });
     const db = new DatabaseSync(file, { readOnly: true });
     try {
-      // Hosted mode's accounts database (0014), under any name.
-      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name IN ('judge_codes', 'sessions')").get()) return [ACCOUNTS_DB];
+      // Hosted mode's accounts database (0014) or sign-in database (0020),
+      // under any name.
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name IN ('judge_codes', 'sessions', 'passkey', 'verification')").get()) return [ACCOUNTS_DB];
       const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings'").get();
       if (!table) return [];
       const out: string[] = [];

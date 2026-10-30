@@ -50,7 +50,7 @@ const revoked = (s: AccountsStore, a: string) => 0 - s.ledger(a).filter((r) => r
 describe("finding 1: a revoke never takes other credit", () => {
   it("Muse's case: $5 judge credit, $2 other credit, a $6 hold open, then a $1 charge, leaves $2", () => {
     const s = tempStore();
-    const g = s.googleAccount({ sub: "g", email: "g@example.com", name: null }).id;
+    const g = s.userAccount({ userId: "user-g-000000", email: "g@example.com", name: null }).id;
     s.grant(g, 2_000_000, "purchase:test");
     const { id, code } = s.createJudgeCode({ label: "J", capMicros: 5_000_000, expiresAt: Date.now() + 86_400_000, totalCapMicros: 100_000_000 });
     s.redeemJudgeCode(code, g);
@@ -66,7 +66,7 @@ describe("finding 1: a revoke never takes other credit", () => {
 
   it("two holds open at the revoke, one released and one charged, still leave other credit whole", () => {
     const s = tempStore();
-    const g = s.googleAccount({ sub: "g2", email: "g2@example.com", name: null }).id;
+    const g = s.userAccount({ userId: "user-g2-000000", email: "g2@example.com", name: null }).id;
     s.grant(g, 2_000_000, "purchase:test");
     const { id, code } = s.createJudgeCode({ label: "J", capMicros: 5_000_000, expiresAt: Date.now() + 86_400_000, totalCapMicros: 100_000_000 });
     s.redeemJudgeCode(code, g);
@@ -85,7 +85,7 @@ describe("finding 1: a revoke never takes other credit", () => {
     for (let seed = 1; seed <= 40; seed++) {
       const r = rng(seed);
       const s = tempStore();
-      const g = s.googleAccount({ sub: `p${seed}`, email: `p${seed}@example.com`, name: null }).id;
+      const g = s.userAccount({ userId: `user-p${seed}-000000`, email: `p${seed}@example.com`, name: null }).id;
       const { id, code } = s.createJudgeCode({ label: "J", capMicros: 1 + Math.floor(r() * 5_000_000), expiresAt: Date.now() + 86_400_000, totalCapMicros: 1e12 });
       s.redeemJudgeCode(code, g);
       let other = 0;
@@ -177,13 +177,14 @@ describe("finding 2: the workspace cache has a hard ceiling", () => {
     const browsers: Browser[] = [];
     for (let i = 0; i < 5; i++) {
       const b = h.browser();
-      await h.googleSignIn(b, { sub: `full-${i}`, email: `full${i}@example.com` });
+      await h.signUp(b, { email: `full${i}@example.com` });
       browsers.push(b);
     }
-    const idOf = (b: Browser) => h!.app.store.session(b.cookies.get(`appt_session_${h!.port}`)!)!.account.id;
+    const idOf = (b: Browser) => h!.accountOf(b);
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const held = browsers.slice(0, 4).map((b) => h!.app.workspaces.use(idOf(b), () => gate));
+    const ids = await Promise.all(browsers.map((b) => idOf(b)));
+    const held = ids.slice(0, 4).map((id) => h!.app.workspaces.use(id, () => gate));
     const res = await browsers[4]!.call("GET", "/api/state");
     release();
     await Promise.all(held);
@@ -211,15 +212,6 @@ describe("finding 3: the cookie form does not follow a claimed scheme", () => {
     await b.call("POST", "/api/session/judge", { code: h.judgeCode().code });
     expect((await b.call("GET", "/api/session", undefined, { "X-Forwarded-Proto": "https" })).body.signedIn).toBe(true);
     expect((await b.call("GET", "/api/state", undefined, { "X-Forwarded-Proto": "https" })).status).toBe(200);
-  });
-
-  it("a loopback Google sign-in finishes when its callback wrongly claims HTTPS", async () => {
-    h = await startHosted();
-    const b = h.browser();
-    const start = await b.call("POST", "/api/session/google", {});
-    const back = h.google!.fake.consent(start.body.authorizeUrl);
-    const cb = await b.call("GET", `${back.pathname}${back.search}`, undefined, { "X-Forwarded-Proto": "https" });
-    expect(cb.headers.location).toBe("/?signedIn=google");
   });
 
   it("the __Host- form wins when both forms are sent", async () => {

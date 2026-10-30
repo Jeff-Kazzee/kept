@@ -20,10 +20,9 @@ async function twoAccounts() {
   h = await startHosted();
   const a = h.browser();
   const b = h.browser();
-  await h.googleSignIn(a, { sub: "sub-a", email: "a@example.com" });
-  await h.googleSignIn(b, { sub: "sub-b", email: "b@example.com" });
-  const idOf = (x: Browser) => h!.app.store.session(x.cookies.get(`appt_session_${h!.port}`)!)!.account.id;
-  return { a, b, idA: idOf(a), idB: idOf(b) };
+  await h.signUp(a, { email: "a@example.com" });
+  await h.signUp(b, { email: "b@example.com" });
+  return { a, b, idA: await h.accountOf(a), idB: await h.accountOf(b) };
 }
 
 describe("isolation across accounts", () => {
@@ -153,9 +152,8 @@ describe("isolation across accounts", () => {
     expect(h!.app.store.ledger(idA).map((r) => r.kind)).toEqual(["grant"]);
     // B is untouched, and signing in again as A makes a new, empty account.
     expect((await b.call("GET", "/api/session")).body.signedIn).toBe(true);
-    await h!.googleSignIn(a, { sub: "sub-a", email: "a@example.com" });
-    const again = h!.app.store.session(a.cookies.get(`appt_session_${h!.port}`)!)!.account;
-    expect(again.id).not.toBe(idA);
+    await h!.signUp(a, { email: "a@example.com" });
+    expect(await h!.accountOf(a)).not.toBe(idA);
     expect((await a.call("GET", "/api/state")).body.messages).toEqual([]);
   });
 
@@ -163,8 +161,8 @@ describe("isolation across accounts", () => {
     let now = Date.parse("2026-11-01T12:00:00Z");
     h = await startHosted({ now: () => now });
     const a = h.browser();
-    await h.googleSignIn(a);
-    const id = h.app.store.session(a.cookies.get(`appt_session_${h.port}`)!)!.account.id;
+    await h.signUp(a);
+    const id = (await h.accountOf(a));
     const s = (await a.call("GET", "/api/state")).body;
     await a.call("POST", "/api/messages", fixtureMessage("m2"), gen(s));
     expect(h.app.workspaces.isOpen(id)).toBe(true);

@@ -6,9 +6,10 @@
 // mode (J12): with no provider ready, the chat and every model step answer
 // a fixed sentence that links to Settings, and nothing is replayed.
 //
-// APP_MODE=hosted runs the hosted site instead (0014, server/hosted.ts):
-// accounts that sign in with Google or a judge code, one workspace each,
-// and the server's key reached only through usage credits.
+// APP_MODE=hosted runs the hosted site instead (0014, 0020,
+// server/hosted.ts): accounts that sign in with an email and password, a
+// passkey or a judge code, one workspace each, and the server's key
+// reached only through usage credits.
 //
 // Environment:
 //   APP_PORT           port, default 5180
@@ -28,13 +29,18 @@
 //                      proxy such as Tailscale serve (see hosts.ts)
 //   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
 //                      the Google OAuth client, for the built-in Gmail and
-//                      Calendar connection (docs/google.md), and in hosted
-//                      mode for Sign in with Google
+//                      Calendar connection (docs/google.md)
 //   APP_MODE, APP_MARKUP, APP_DAILY_COST_CAP_USD, APP_JUDGE_TOTAL_CAP_USD,
-//   APP_SERVER_KEY     hosted mode (src/hosted/config.ts, docs/hosted.md)
+//   APP_SERVER_KEY, APP_TRUSTED_PROXY
+//                      hosted mode (src/hosted/config.ts, docs/hosted.md)
+//   BETTER_AUTH_SECRET, BETTER_AUTH_URL, BETTER_AUTH_API_KEY
+//                      hosted mode's accounts (src/hosted/auth.ts). The
+//                      public origin's host is added to the allowed hosts.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { clientFromEnv } from "../src/google/connection.ts";
+import { AuthFileError, readAuthConfig, type AuthConfig } from "../src/hosted/auth.ts";
 import { ConfigError, readHostedConfig } from "../src/hosted/config.ts";
+import { AccountsFileError } from "../src/hosted/store.ts";
 import { appSecretsPath } from "../src/model/providers/secrets.ts";
 import { appDbPath, fromPackage } from "../src/paths.ts";
 import { CALLBACK_PATH } from "./auth.ts";
@@ -52,9 +58,16 @@ const serveBuild = process.argv.includes("--static");
 
 let extraHosts: string[];
 let config: ReturnType<typeof readHostedConfig>;
+let authConfig: AuthConfig | null = null;
 try {
   extraHosts = parseAllowedHosts(process.env.APP_ALLOWED_HOSTS);
   config = readHostedConfig();
+  if (config.mode === "hosted") {
+    authConfig = readAuthConfig();
+    // The public origin's host, with its port when it has one (0020, B11).
+    const publicHost = authConfig.host;
+    if (!["localhost", "127.0.0.1"].includes(authConfig.rpId) && !extraHosts.includes(publicHost)) extraHosts.push(publicHost);
+  }
 } catch (err) {
   if (!(err instanceof AllowedHostsError) && !(err instanceof ConfigError)) throw err;
   console.error(err.message);
@@ -95,7 +108,14 @@ let closeApp: () => void;
 let started: () => void;
 
 if (config.mode === "hosted") {
-  const hosted = createHostedApp({ config, port: PORT, extraHosts, googleClient, serverMetaKey, ui, logRejected: process.env.APP_LOG_REJECTED === "1" });
+  let hosted: Awaited<ReturnType<typeof createHostedApp>>;
+  try {
+    hosted = await createHostedApp({ config, auth: authConfig!, port: PORT, extraHosts, googleClient, serverMetaKey, ui, logRejected: process.env.APP_LOG_REJECTED === "1" });
+  } catch (err) {
+    if (!(err instanceof AuthFileError) && !(err instanceof AccountsFileError)) throw err;
+    console.error(err.message);
+    process.exit(2);
+  }
   server.on("request", hosted.handle);
   closeApp = hosted.close;
   started = () => {

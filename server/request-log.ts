@@ -25,7 +25,10 @@ const ROUTE_WORDS = new Set(
   (
     "api auth activity undo calendar case delete version conflicts explain evidence accept reject fixtures messages extract manual own-report " +
     "profile name questions answer next records archive unarchive reply drafts approve discard edit suggest settings timezone model provider state " +
-    "account judge-code chatgpt signout start meta-key chat google refresh connect disconnect session judge usage callback signin gmail add"
+    "account judge-code chatgpt signout start meta-key chat google refresh connect disconnect session judge usage callback signin gmail add " +
+    // 0020: Better Auth's routes. A token in a path is never one of these.
+    "sign-in sign-up sign-out email get-session passkey generate-register-options verify-registration generate-authenticate-options " +
+    "verify-authentication list-user-passkeys delete-passkey reset-password dash ok error"
   ).split(" "),
 );
 // Fix round 2, F5: a message id can hold words a person or an email chose,

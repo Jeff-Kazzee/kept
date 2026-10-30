@@ -33,7 +33,7 @@ function newStore(file = tempFile(), now?: () => number) {
   return s;
 }
 
-const account = (s: AccountsStore, sub = `sub-${Math.random()}`) => s.googleAccount({ sub, email: `${sub}@example.com`, name: null }).id;
+const account = (s: AccountsStore, sub = `sub-${Math.random().toString(36).slice(2)}`) => s.userAccount({ userId: `user-${sub}`, email: `${sub}@example.com`, name: null }).id;
 
 // A small seeded generator, so a failing run can be repeated.
 function rng(seed: number) {

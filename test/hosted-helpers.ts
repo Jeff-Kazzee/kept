@@ -1,30 +1,34 @@
-// Offline helpers for hosted mode tests (0014): the hosted app in this
-// process on a temporary data folder, a browser with its own cookie jar,
-// Google's fake endpoints with signed ID tokens, and a fake Meta Responses
-// endpoint with usage. Nothing reaches the network.
+// Offline helpers for hosted mode tests (0014, 0020): the hosted app in
+// this process on a temporary data folder, a browser with its own cookie
+// jar, email sign-up through Better Auth, Google's fake endpoints for the
+// Gmail and Calendar connection, and a fake Meta Responses endpoint with
+// usage. Nothing reaches the network.
 import { createServer, request, type Server } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import type { FetchLike } from "../src/google/http.ts";
+import { readAuthConfig } from "../src/hosted/auth.ts";
 import { readHostedConfig, type HostedConfig } from "../src/hosted/config.ts";
-import { GOOGLE_JWKS_URL } from "../src/hosted/signin.ts";
 import { createHostedApp } from "../server/hosted.ts";
 import { FAKE_CLIENT, FakeGoogle } from "./google-fake.ts";
 import { META_URL, completed, jwt, message, signingKey } from "./provider-fakes.ts";
 
 export type Res = { status: number; body: any; text: string; headers: Record<string, string | string[] | undefined> };
 
-// FakeGoogle, with its ID tokens signed by a key served at Google's JWKS
-// address, as the account sign-in checks the signature.
+// A Better Auth secret for tests only: 40 bytes, made up.
+export const TEST_AUTH_SECRET = "hosted-tests-only-not-a-real-secret-0123";
+export const TEST_PASSWORD = "correct horse battery";
+
+// FakeGoogle, with its ID tokens signed, for the Gmail and Calendar
+// connection of a test account.
 export function signedGoogle() {
   const fake = new FakeGoogle();
   const key = signingKey("google-test-key");
   let resign = true;
   const fetch: FetchLike = async (input, init) => {
     const url = String(input);
-    if (url === GOOGLE_JWKS_URL) return Response.json({ keys: [key.jwk] }, { headers: { "cache-control": "max-age=3600" } });
     const res = await fake.fetch(input, init ?? {});
     if (resign && url === "https://oauth2.googleapis.com/token" && res.status === 200) {
       const body = (await res.json()) as Record<string, unknown>;
@@ -71,13 +75,24 @@ export type Browser = {
   call(method: string, p: string, body?: unknown, extra?: Record<string, string>): Promise<Res>;
   // A top-level navigation, as from Google's page: no app header.
   visit(p: string): Promise<Res>;
+  // A call to Better Auth, as its client makes it: JSON, the public
+  // origin, no app header.
+  auth(method: string, p: string, body?: unknown, extra?: Record<string, string>): Promise<Res>;
   cookieHeader(): string;
 };
 
 export type Hosted = Awaited<ReturnType<typeof startHosted>>;
 
 export async function startHosted(
-  options: { env?: Record<string, string>; config?: Partial<HostedConfig>; serverKey?: string | null; google?: boolean; now?: () => number; maxWorkspaces?: number } = {},
+  options: {
+    env?: Record<string, string>;
+    authEnv?: Record<string, string>;
+    config?: Partial<HostedConfig>;
+    serverKey?: string | null;
+    google?: boolean;
+    now?: () => number;
+    maxWorkspaces?: number;
+  } = {},
 ) {
   const dir = mkdtempSync(path.join(tmpdir(), "hosted-"));
   const port = 20000 + Math.floor(Math.random() * 20000);
@@ -90,8 +105,12 @@ export async function startHosted(
     ...readHostedConfig({ APP_MODE: "hosted", APP_DAILY_COST_CAP_USD: "20", APP_JUDGE_TOTAL_CAP_USD: "100", APP_TRUSTED_PROXY: "cloudflare", ...options.env }),
     ...options.config,
   };
-  const app = createHostedApp({
+  // The public origin is the loopback name, so a passkey has a host name.
+  const authConfig = readAuthConfig({ BETTER_AUTH_SECRET: TEST_AUTH_SECRET, BETTER_AUTH_URL: `http://localhost:${port}`, ...options.authEnv });
+  const publicHost = new URL(authConfig.origin).host;
+  const app = await createHostedApp({
     config,
+    auth: authConfig,
     port,
     extraHosts: [],
     googleClient: google ? FAKE_CLIENT : null,
@@ -101,6 +120,7 @@ export async function startHosted(
       res.end("<!doctype html><title>ui</title>");
     },
     accountsFile: path.join(dir, "hosted", "accounts.sqlite"),
+    authFile: path.join(dir, "hosted", "auth.sqlite"),
     workspacesDir: path.join(dir, "accounts"),
     ...(google ? { googleFetch: google.fetch } : {}),
     ...(options.now ? { now: options.now } : {}),
@@ -112,7 +132,9 @@ export async function startHosted(
 
   const raw = (method: string, p: string, headers: Record<string, string>, body?: unknown): Promise<Res> =>
     new Promise((resolve, reject) => {
-      const req = request({ host: "127.0.0.1", port, path: p, method, headers: { Host: `127.0.0.1:${port}`, ...headers } }, (res) => {
+      const payload = body === undefined ? undefined : JSON.stringify(body);
+      const length: Record<string, string> = payload === undefined ? {} : { "Content-Length": String(Buffer.byteLength(payload)) };
+      const req = request({ host: "127.0.0.1", port, path: p, method, headers: { Host: `127.0.0.1:${port}`, ...length, ...headers } }, (res) => {
         let text = "";
         res.on("data", (d: Buffer) => (text += d.toString()));
         res.on("end", () => {
@@ -126,10 +148,14 @@ export async function startHosted(
         });
       });
       req.on("error", reject);
-      req.end(body === undefined ? undefined : JSON.stringify(body));
+      req.end(payload);
     });
 
+  // Each browser comes from its own address, as the trusted proxy says,
+  // so Better Auth's per-address limits count each person apart.
+  let browsers = 0;
   const browser = (): Browser => {
+    const address = `198.51.100.${(++browsers % 250) + 1}`;
     const cookies = new Map<string, string>();
     const keep = (res: Res) => {
       const set = res.headers["set-cookie"];
@@ -161,20 +187,40 @@ export async function startHosted(
           ),
         ),
       visit: async (p) => keep(await raw("GET", p, cookies.size ? { Cookie: cookieHeader() } : {})),
+      auth: async (method, p, body, extra = {}) =>
+        keep(
+          await raw(
+            method,
+            p,
+            {
+              Host: publicHost,
+              "CF-Connecting-IP": address,
+              ...(method === "GET" ? {} : { "Content-Type": "application/json", Origin: authConfig.origin }),
+              ...(cookies.size ? { Cookie: cookieHeader() } : {}),
+              ...extra,
+            },
+            body,
+          ),
+        ),
     };
   };
 
-  // Sign in with Google through the fake consent page.
-  const googleSignIn = async (b: Browser, account?: { sub: string; email: string; name?: string }) => {
-    if (!google) throw new Error("no Google");
-    if (account) {
-      google.fake.account = { sub: account.sub, email: account.email };
-      google.fake.idToken = account.name ? { name: account.name } : {};
-    }
-    const start = await b.call("POST", "/api/session/google", {});
-    if (start.status !== 200) return start;
-    const back = google.fake.consent(start.body.authorizeUrl);
-    return b.visit(`${back.pathname}${back.search}`);
+  // Sign up with an email and password, as the sign-in page does.
+  let signups = 0;
+  const signUp = async (b: Browser, account: { email?: string; name?: string; password?: string } = {}) => {
+    const email = account.email ?? `person${++signups}-${port}@example.com`;
+    return b.auth("POST", "/api/auth/sign-up/email", { email, password: account.password ?? TEST_PASSWORD, name: account.name ?? "" });
+  };
+  const signIn = (b: Browser, email: string, password = TEST_PASSWORD) => b.auth("POST", "/api/auth/sign-in/email", { email, password });
+  // The app account of a browser's Better Auth session.
+  const accountOf = async (b: Browser): Promise<string> => {
+    // The app makes the account the first time it sees the session.
+    await b.call("GET", "/api/session");
+    const r = await b.auth("GET", "/api/auth/get-session");
+    const id = r.body?.user?.id;
+    const account = typeof id === "string" ? app.store.accountOfUser(id) : null;
+    if (!account) throw new Error("no signed-in account");
+    return account.id;
   };
 
   // A judge code made through the store, as the admin command does.
@@ -188,8 +234,11 @@ export async function startHosted(
     google,
     logs,
     config,
+    authConfig,
     browser,
-    googleSignIn,
+    signUp,
+    signIn,
+    accountOf,
     judgeCode,
     raw,
     close: async () => {

@@ -52,7 +52,7 @@ describe("finding 1: a charge never exceeds its hold", () => {
 
   it("bills output_tokens only, and charges a reasoning count above output as the whole hold", async () => {
     const { s } = tempStore();
-    const a = s.googleAccount({ sub: "s", email: "e@example.com", name: null }).id;
+    const a = s.userAccount({ userId: "user-s-000000", email: "e@example.com", name: null }).id;
     s.grant(a, 100_000_000, "g");
     const r = rng(11);
     let next: TokenUsage = { input: 0, cachedInput: 0, output: 0, reasoning: 0 };
@@ -89,7 +89,7 @@ describe("finding 1: a charge never exceeds its hold", () => {
   it("the live rows' shape, output with reasoning inside it, is billed by output_tokens", () => {
     // Live check, 2026-10-28: output 67 with reasoning 13, and 62 with 40.
     const { s } = tempStore();
-    const a = s.googleAccount({ sub: "t", email: "t@example.com", name: null }).id;
+    const a = s.userAccount({ userId: "user-t-000000", email: "t@example.com", name: null }).id;
     s.grant(a, 10_000_000, "g");
     return (async () => {
       const inner: LiveClient = {
@@ -140,7 +140,7 @@ describe("finding 2: a revoked code's credit is fully gone once its holds settle
 
   it("other credit on the same account stays usable after a revoke", () => {
     const { s } = tempStore();
-    const g = s.googleAccount({ sub: "g", email: "g@example.com", name: null }).id;
+    const g = s.userAccount({ userId: "user-g-000000", email: "g@example.com", name: null }).id;
     s.grant(g, 2_000_000, "purchase:test");
     const { id, code } = s.createJudgeCode({ label: "J", capMicros: 5_000_000, expiresAt: Date.now() + 86_400_000, totalCapMicros: 100_000_000 });
     s.redeemJudgeCode(code, g);
@@ -157,8 +157,8 @@ describe("finding 3: Delete account finds out the account is busy before it disc
     const meta = fakeMeta();
     h = await startHosted();
     const b = h.browser();
-    await h.googleSignIn(b);
-    const id = h.app.store.session(sessionOf(b))!.account.id;
+    await h.signUp(b);
+    const id = await h.accountOf(b);
     h.app.store.grant(id, 5_000_000, "g");
     const s = (await b.call("GET", "/api/state")).body;
     const g = (await b.call("GET", "/api/google")).body;
@@ -222,8 +222,8 @@ describe("finding 5: the cache never drops a workspace with a Google flow, or on
     h = await startHosted({ maxWorkspaces: 1 });
     const a = h.browser();
     const b = h.browser();
-    await h.googleSignIn(a, { sub: "sub-a", email: "a@example.com" });
-    await h.googleSignIn(b, { sub: "sub-b", email: "b@example.com" });
+    await h.signUp(a, { email: "a@example.com" });
+    await h.signUp(b, { email: "b@example.com" });
     const sa = (await a.call("GET", "/api/state")).body;
     const g = (await a.call("GET", "/api/google")).body;
     const start = await a.call("POST", "/api/google/connect", { expectedVersion: g.version }, gen(sa));
@@ -239,15 +239,15 @@ describe("finding 5: the cache never drops a workspace with a Google flow, or on
     const a = h.browser();
     const b = h.browser();
     const c = h.browser();
-    for (const [x, sub] of [[a, "a"], [b, "b"], [c, "c"]] as const) await h.googleSignIn(x, { sub, email: `${sub}@example.com` });
-    const idOf = (x: Browser) => h!.app.store.session(sessionOf(x))!.account.id;
+    for (const [x, sub] of [[a, "a"], [b, "b"], [c, "c"]] as const) await h.signUp(x, { email: `${sub}@example.com` });
+    const [idA, idC] = [await h.accountOf(a), await h.accountOf(c)];
     await a.call("GET", "/api/state");
     await b.call("GET", "/api/state");
-    expect(h.app.workspaces.isOpen(idOf(a))).toBe(true);
+    expect(h.app.workspaces.isOpen(idA)).toBe(true);
     now += 11 * 60_000;
     await c.call("GET", "/api/state");
-    expect(h.app.workspaces.isOpen(idOf(a))).toBe(false);
-    expect(h.app.workspaces.isOpen(idOf(c))).toBe(true);
+    expect(h.app.workspaces.isOpen(idA)).toBe(false);
+    expect(h.app.workspaces.isOpen(idC)).toBe(true);
   });
 });
 

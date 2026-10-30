@@ -32,16 +32,25 @@ export class AddressLimiter {
 }
 
 // The address a request came from (review round 1, finding 4). A
-// forwarding header counts only behind the configured proxy: with
-// APP_TRUSTED_PROXY=cloudflare, CF-Connecting-IP, and only when the socket
-// is loopback, since cloudflared runs on this server. Otherwise, and for
-// every other header, the socket's own address.
+// forwarding header counts only behind the configured proxy, and only when
+// the socket is loopback, since the proxy runs on this server:
+//   cloudflare  CF-Connecting-IP
+//   tailscale   X-Forwarded-For. Tailscale serve and Funnel proxy with Go's
+//               ReverseProxy, which drops a client's own X-Forwarded-*
+//               headers, then set X-Forwarded-For to the one address the
+//               connection came from (ipn/ipnlocal/serve.go,
+//               addProxyForwardedHeaders). So one plain address is
+//               trusted, and a list or anything else is not.
+// Otherwise, and for every other header, the socket's own address.
 const LOOPBACK = /^(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3})$/;
 
-export function clientAddress(headers: Record<string, string | string[] | undefined>, socketAddress: string | undefined, trusted: "none" | "cloudflare"): string {
+const PLAIN_ADDRESS = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:]{2,39})$/;
+
+export function clientAddress(headers: Record<string, string | string[] | undefined>, socketAddress: string | undefined, trusted: "none" | "cloudflare" | "tailscale"): string {
   const socket = socketAddress ?? "unknown";
-  if (trusted !== "cloudflare" || !LOOPBACK.test(socket)) return socket;
-  const raw = headers["cf-connecting-ip"];
-  const cf = (Array.isArray(raw) ? raw[0] : raw)?.trim();
-  return cf && cf.length <= 64 ? cf : socket;
+  if (trusted === "none" || !LOOPBACK.test(socket)) return socket;
+  const raw = headers[trusted === "cloudflare" ? "cf-connecting-ip" : "x-forwarded-for"];
+  const value = (Array.isArray(raw) ? (raw.length === 1 ? raw[0] : undefined) : raw)?.trim();
+  if (trusted === "tailscale") return value && PLAIN_ADDRESS.test(value) ? value : socket;
+  return value && value.length <= 64 ? value : socket;
 }

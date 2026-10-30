@@ -22,8 +22,8 @@ const gen = (state: { generation: number }) => ({ "X-Case-Generation": String(st
 async function signedIn(options: Parameters<typeof startHosted>[0] = {}, grantUsd = 5) {
   h = await startHosted(options);
   const b = h.browser();
-  await h.googleSignIn(b);
-  const id = h.app.store.session(b.cookies.get(`appt_session_${h.port}`)!)!.account.id;
+  await h.signUp(b);
+  const id = (await h.accountOf(b));
   if (grantUsd > 0) h.app.store.grant(id, grantUsd * 1_000_000, "judge:j000000000000");
   return { b, id };
 }

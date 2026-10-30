@@ -12,12 +12,31 @@
 //       unspent credit is removed.
 //   pnpm admin judges grant --id <id> --usd <n>
 //       Raises a code's cap. A redeemed code's account gets the credit.
+//   pnpm admin users list
+//       Every email account: its email, when it was made, how many
+//       passkeys it has. Never a password or a session.
+//   pnpm admin users reset-password --email <email>
+//       The site sends no email (0020), so a person who forgot their
+//       password asks the coordinator. This sets a new random password,
+//       prints it once, and ends every session of that account. Its
+//       passkeys stay.
+//   pnpm admin backup --to <folder>
+//       Copies the accounts and sign-in databases with SQLite's VACUUM
+//       INTO, safe while the app runs, into a new folder of mode 700, each
+//       file mode 600.
 //
 // APP_JUDGE_TOTAL_CAP_USD caps every code together: a new code or a grant
 // that would pass it is refused. It has no default (J19): while it is
 // unset, create and grant refuse. APP_DB names the data
 // folder as for the app.
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
+import { hashPassword } from "better-auth/crypto";
+import { AuthFileError, authPath } from "../src/hosted/auth.ts";
+import { checkPrivateFile } from "../src/hosted/db-file.ts";
 import { ConfigError, formatUsd, parseUsd, readHostedConfig } from "../src/hosted/config.ts";
 import { AccountsStore, JUDGE_CODE_ID, JudgeCodeError, accountsPath } from "../src/hosted/store.ts";
 
@@ -25,7 +44,10 @@ const USAGE = `Usage:
   pnpm admin judges create --label <name> --cap-usd <n> --expires <YYYY-MM-DD>
   pnpm admin judges list
   pnpm admin judges revoke --id <id>
-  pnpm admin judges grant --id <id> --usd <n>`;
+  pnpm admin judges grant --id <id> --usd <n>
+  pnpm admin users list
+  pnpm admin users reset-password --email <email>
+  pnpm admin backup --to <folder>`;
 
 export type AdminResult = { code: number; out: string[]; err: string[] };
 
@@ -83,7 +105,7 @@ export function runAdmin(argv: string[], env: NodeJS.ProcessEnv = process.env, n
         const { committedMicros } = store.judgeTotals();
         if (codes.length === 0) out.push("No judge codes yet.");
         for (const c of codes) {
-          out.push([c.id, JSON.stringify(c.label), `cap ${formatUsd(c.capMicros)}`, `spent ${formatUsd(c.spentMicros)}`, c.status, `through ${day(c.expiresAt)}`, c.accountKind === "google" ? "on a Google account" : ""].filter(Boolean).join("  "));
+          out.push([c.id, JSON.stringify(c.label), `cap ${formatUsd(c.capMicros)}`, `spent ${formatUsd(c.spentMicros)}`, c.status, `through ${day(c.expiresAt)}`, c.accountKind === "user" ? "on an email account" : c.accountKind === "google" ? "on a Google account" : ""].filter(Boolean).join("  "));
         }
         out.push(totalCap === null ? `Committed ${formatUsd(committedMicros)}. APP_JUDGE_TOTAL_CAP_USD is not set.` : `Committed ${formatUsd(committedMicros)} of the ${formatUsd(totalCap)} total cap.`);
         return { code: 0, out, err };
@@ -113,8 +135,107 @@ export function runAdmin(argv: string[], env: NodeJS.ProcessEnv = process.env, n
   }
 }
 
+// The sign-in database, opened with the app's checks. Never made here.
+function openAuth(env: NodeJS.ProcessEnv): DatabaseSync {
+  const file = authPath(env);
+  checkPrivateFile(file, "The sign-in database", false, (m) => new AuthFileError(m));
+  const db = new DatabaseSync(file, { timeout: 5_000 });
+  db.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
+  return db;
+}
+
+type Row = Record<string, unknown>;
+
+// The users and backup commands, and every other command through
+// runAdmin. Async, as Better Auth's password hash is.
+export async function runAdminAsync(argv: string[], env: NodeJS.ProcessEnv = process.env, now: () => number = Date.now): Promise<AdminResult> {
+  const [group, command, ...rest] = argv;
+  if (group !== "users" && group !== "backup") return runAdmin(argv, env, now);
+  const out: string[] = [];
+  const fail = (line: string, code = 2): AdminResult => ({ code, out, err: [line] });
+  let parsed;
+  try {
+    parsed = parseArgs({ args: group === "backup" ? (command ? [command, ...rest] : []) : rest, options: { email: { type: "string" }, to: { type: "string" } }, strict: true });
+  } catch (e) {
+    return fail(`${e instanceof Error ? e.message : String(e)}\n${USAGE}`);
+  }
+  const v = parsed.values;
+  try {
+    if (group === "backup") {
+      if (!v.to) return fail(`backup needs --to <folder>.\n${USAGE}`);
+      const folder = path.resolve(v.to);
+      if (existsSync(folder)) return fail(`${folder} already exists. Name a new folder, so no backup is written over.`);
+      mkdirSync(folder, { recursive: true, mode: 0o700 });
+      chmodSync(folder, 0o700);
+      for (const [file, name] of [
+        [accountsPath(env), "accounts.sqlite"],
+        [authPath(env), "auth.sqlite"],
+      ] as const) {
+        if (!existsSync(file)) {
+          out.push(`No ${name} yet at ${file}. Skipped.`);
+          continue;
+        }
+        checkPrivateFile(file, `The ${name} database`, false, (m) => new Error(m));
+        const target = path.join(folder, name);
+        const db = new DatabaseSync(file, { readOnly: true, timeout: 5_000 });
+        try {
+          db.prepare("VACUUM INTO ?").run(target);
+        } finally {
+          db.close();
+        }
+        chmodSync(target, 0o600);
+        out.push(`Backed up ${name} to ${target}.`);
+      }
+      return { code: 0, out, err: [] };
+    }
+    if (command === "list") {
+      const db = openAuth(env);
+      try {
+        const rows = db.prepare(`SELECT u.email, u.createdAt, (SELECT COUNT(*) FROM passkey p WHERE p.userId = u.id) AS passkeys FROM user u ORDER BY u.createdAt`).all() as Row[];
+        if (rows.length === 0) out.push("No email accounts yet.");
+        for (const r of rows) out.push([String(r.email), `made ${String(r.createdAt).slice(0, 10)}`, `${Number(r.passkeys)} passkey(s)`].join("  "));
+      } finally {
+        db.close();
+      }
+      return { code: 0, out, err: [] };
+    }
+    if (command === "reset-password") {
+      const email = v.email?.trim().toLowerCase();
+      if (!email) return fail(`reset-password needs --email.\n${USAGE}`);
+      const password = randomBytes(15).toString("base64url");
+      const hash = await hashPassword(password);
+      const db = openAuth(env);
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const user = db.prepare("SELECT id FROM user WHERE lower(email) = ?").get(email) as Row | undefined;
+          if (!user) throw new Error("No email account has that address. Nothing was changed.");
+          const at = new Date(now()).toISOString();
+          const changed = db.prepare("UPDATE account SET password = ?, updatedAt = ? WHERE userId = ? AND providerId = 'credential'").run(hash, at, String(user.id)).changes;
+          if (Number(changed) !== 1) throw new Error("That account has no password to reset. Nothing was changed.");
+          db.prepare("DELETE FROM session WHERE userId = ?").run(String(user.id));
+          db.exec("COMMIT");
+        } catch (e) {
+          db.exec("ROLLBACK");
+          throw e;
+        }
+      } finally {
+        db.close();
+      }
+      out.push(`Set a new password for ${email} and signed that account out everywhere. Its passkeys still work.`);
+      out.push("The new password, shown this once. Give it to the person, who can sign in with it now:");
+      out.push(password);
+      return { code: 0, out, err: [] };
+    }
+    return fail(USAGE);
+  } catch (e) {
+    if (e instanceof Error) return fail(e.message, 1);
+    throw e;
+  }
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const r = runAdmin(process.argv.slice(2));
+  const r = await runAdminAsync(process.argv.slice(2));
   for (const line of r.out) console.log(line);
   for (const line of r.err) console.error(line);
   process.exit(r.code);

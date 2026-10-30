@@ -1,6 +1,9 @@
 // The hosted mode's central database (0014, design items 3 to 5):
-// accounts, sessions, the usage credits ledger and the judge codes, in
-// data/hosted/accounts.sqlite. Each account's case, settings and Google
+// accounts, judge sessions, the usage credits ledger and the judge codes,
+// in data/hosted/accounts.sqlite. Sign-up, passwords, passkeys and the
+// sessions of those accounts are Better Auth's, in its own file beside
+// this one (auth.ts, 0020). An account here points at its Better Auth user
+// by that user's id, and nothing else of Better Auth's is kept here. Each account's case, settings and Google
 // connection live apart, in its own workspace folder (workspaces.ts).
 //
 // The file follows the secrets store's patterns (0010): mode 600, owned by
@@ -25,11 +28,11 @@
 // and a charge never takes more than its own hold or the balance, so the
 // balance never goes below zero.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { TokenUsage } from "../model/request.ts";
 import { appDbPath } from "../paths.ts";
+import { checkPrivateFile } from "./db-file.ts";
 
 export const ACCOUNTS_FILE_NAME = "accounts.sqlite";
 
@@ -55,7 +58,11 @@ export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
 // charged in full after this long. The model call times out after 60 s.
 export const STALE_HOLD_MS = 10 * 60_000;
 
-export type AccountKind = "google" | "judge";
+// "user": an account with an email and a password, and maybe passkeys,
+// from Better Auth (0020). "judge": a judge code that is its own sign-in.
+// "google": an account from Sign in with Google, before 0020. It cannot
+// sign in any more, and is kept for the ledger.
+export type AccountKind = "user" | "judge" | "google";
 export type Account = { id: string; kind: AccountKind; email: string | null; name: string | null; createdAt: number; deleted: boolean };
 
 export type LedgerKind = "grant" | "hold" | "charge" | "release" | "refund" | "adjust";
@@ -88,8 +95,8 @@ export type JudgeCodeRow = {
   status: JudgeCodeStatus;
   expiresAt: number;
   createdAt: number;
-  // "judge" for a code that is its own sign-in, "google" when attached to
-  // a Google account, null while unused.
+  // "judge" for a code that is its own sign-in, "user" (or "google",
+  // before 0020) when attached to an account, null while unused.
   accountKind: AccountKind | null;
 };
 
@@ -120,8 +127,9 @@ export const BUSY_TIMEOUT_MS = 5_000;
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS accounts (
   id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('google', 'judge')),
+  kind TEXT NOT NULL CHECK (kind IN ('google', 'judge', 'user')),
   google_sub TEXT UNIQUE,
+  auth_user TEXT UNIQUE,
   email TEXT,
   name TEXT,
   created_at INTEGER NOT NULL,
@@ -173,6 +181,44 @@ CREATE TABLE IF NOT EXISTS judge_codes (
   revoke_hold_max INTEGER NOT NULL DEFAULT 0
 ) STRICT;`;
 
+// A Better Auth user id: its own ids are 32 letters and digits.
+export const AUTH_USER_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+// A database made before 0020 allows only 'google' and 'judge' accounts,
+// and has no auth_user column. SQLite cannot change a CHECK, so the
+// accounts table is made again, in one transaction, with every row kept
+// (SQLite's own steps for a table change, with foreign keys off).
+function migrateAccounts(db: DatabaseSync): void {
+  const sql = String((db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'").get() as Row | undefined)?.sql ?? "");
+  if (sql.includes("'user'")) return;
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(`CREATE TABLE accounts_0020 (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('google', 'judge', 'user')),
+  google_sub TEXT UNIQUE,
+  auth_user TEXT UNIQUE,
+  email TEXT,
+  name TEXT,
+  created_at INTEGER NOT NULL,
+  deleted_at INTEGER
+) STRICT;
+INSERT INTO accounts_0020 (id, kind, google_sub, email, name, created_at, deleted_at) SELECT id, kind, google_sub, email, name, created_at, deleted_at FROM accounts;
+DROP TABLE accounts;
+ALTER TABLE accounts_0020 RENAME TO accounts;`);
+      if ((db.prepare("PRAGMA foreign_key_check").all() as Row[]).length > 0) throw new Error("foreign keys");
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
 const isBusy = (err: unknown) => {
   const code = (err as { errcode?: unknown } | null)?.errcode;
   return typeof code === "number" && (code & 0xff) === 5;
@@ -206,7 +252,6 @@ export class AccountsStore {
 
   #open(): DatabaseSync {
     if (this.#db) return this.#db;
-    mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
     this.#checkPath(true);
     let db: DatabaseSync;
     try {
@@ -218,6 +263,7 @@ export class AccountsStore {
       this.#checkPath(false);
       db.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}; PRAGMA foreign_keys = ON;`);
       db.exec(SCHEMA);
+      migrateAccounts(db);
       // A database made before review round 1 gains the revoke column.
       const cols = (db.prepare("PRAGMA table_info(judge_codes)").all() as Row[]).map((c) => String(c.name));
       if (!cols.includes("revoke_due")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_due INTEGER NOT NULL DEFAULT 0");
@@ -233,22 +279,7 @@ export class AccountsStore {
   }
 
   #checkPath(create: boolean): void {
-    let st: ReturnType<typeof lstatSync>;
-    try {
-      st = lstatSync(this.file);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT" || !create) throw new AccountsFileError(`The accounts database could not be checked: ${this.file}`);
-      try {
-        closeSync(openSync(this.file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw new AccountsFileError(`The accounts database could not be made: ${this.file}`);
-      }
-      return this.#checkPath(false);
-    }
-    if (st.isSymbolicLink()) throw new AccountsFileError(`The accounts database is a symbolic link. Remove it: ${this.file}`);
-    if (!st.isFile()) throw new AccountsFileError(`The accounts database is not a regular file: ${this.file}`);
-    if (typeof process.getuid === "function" && st.uid !== process.getuid()) throw new AccountsFileError(`The accounts database belongs to another user: ${this.file}`);
-    if ((st.mode & 0o077) !== 0) chmodSync(this.file, 0o600);
+    checkPrivateFile(this.file, "The accounts database", create, (m) => new AccountsFileError(m));
   }
 
   close(): void {
@@ -317,13 +348,43 @@ export class AccountsStore {
     });
   }
 
+  // The account of a Better Auth user, made the first time the user is
+  // seen (0020, B5). Email and name follow Better Auth's. A read only,
+  // unless the account is new or they changed.
+  userAccount(identity: { userId: string; email: string; name: string | null }): Account {
+    if (!AUTH_USER_ID.test(identity.userId)) throw new Error("no such user");
+    const name = identity.name && identity.name.trim() !== "" ? identity.name.trim().slice(0, 200) : null;
+    const email = identity.email.slice(0, 320);
+    const found = this.#read((db) => db.prepare("SELECT id, email, name FROM accounts WHERE auth_user = ? AND deleted_at IS NULL").get(identity.userId) as Row | undefined);
+    if (found && found.email === email && (found.name ?? null) === name) return this.account(String(found.id))!;
+    return this.#tx((db) => {
+      const again = db.prepare("SELECT id FROM accounts WHERE auth_user = ? AND deleted_at IS NULL").get(identity.userId) as Row | undefined;
+      if (again) {
+        db.prepare("UPDATE accounts SET email = ?, name = ? WHERE id = ?").run(email, name, String(again.id));
+        return this.#account(db, String(again.id))!;
+      }
+      const id = randomId("a", 16);
+      db.prepare("INSERT INTO accounts (id, kind, auth_user, email, name, created_at) VALUES (?, 'user', ?, ?, ?, ?)").run(id, identity.userId, email, name, this.#now());
+      return this.#account(db, id)!;
+    });
+  }
+
+  // The account of a Better Auth user, or null, never made.
+  accountOfUser(userId: string): Account | null {
+    if (!AUTH_USER_ID.test(userId)) return null;
+    return this.#read((db) => {
+      const r = db.prepare("SELECT id FROM accounts WHERE auth_user = ? AND deleted_at IS NULL").get(userId) as Row | undefined;
+      return r ? this.#account(db, String(r.id)) : null;
+    });
+  }
+
   // Delete account: the sessions go, and the account keeps only what the
-  // ledger needs. Its email, name and Google subject are removed. Ledger
-  // rows stay, for accounting.
+  // ledger needs. Its email, name, Google subject and Better Auth user are
+  // removed. Ledger rows stay, for accounting.
   deleteAccount(id: string): void {
     this.#tx((db) => {
       db.prepare("DELETE FROM sessions WHERE account_id = ?").run(id);
-      db.prepare("UPDATE accounts SET email = NULL, name = NULL, google_sub = NULL, deleted_at = ? WHERE id = ? AND deleted_at IS NULL").run(this.#now(), id);
+      db.prepare("UPDATE accounts SET email = NULL, name = NULL, google_sub = NULL, auth_user = NULL, deleted_at = ? WHERE id = ? AND deleted_at IS NULL").run(this.#now(), id);
     });
   }
 
@@ -725,8 +786,8 @@ export class AccountsStore {
     });
   }
 
-  // Redeems a code. With `attachTo`, the code's cap goes to that Google
-  // account, once. Without it, the code is its own sign-in: the first use
+  // Redeems a code. With `attachTo`, the code's cap goes to that account,
+  // once. Without it, the code is its own sign-in: the first use
   // makes a judge account and grants the cap, and a later use opens the
   // same account again. Returns the account. Each code grants its cap
   // once.
@@ -746,14 +807,14 @@ export class AccountsStore {
           throw new JudgeCodeError("used", "That judge code was already used. Each code works once.");
         }
         if (!owner || owner.deleted) throw new JudgeCodeError("account_deleted", "The account made with that judge code was deleted. Ask for a new code.");
-        if (owner.kind !== "judge") throw new JudgeCodeError("attached", "That judge code belongs to a Google account. Sign in with Google instead.");
+        if (owner.kind !== "judge") throw new JudgeCodeError("attached", "That judge code was added to an account with an email address. Sign in with that email instead.");
         return owner;
       }
       let accountId: string;
       if (attachTo !== null) {
         const target = this.#account(db, attachTo);
         if (!target || target.deleted) throw new Error("no such account");
-        if (target.kind !== "google") throw new JudgeCodeError("judge_account", "This account was made with a judge code, so it cannot take another one.");
+        if (target.kind === "judge") throw new JudgeCodeError("judge_account", "This account was made with a judge code, so it cannot take another one.");
         if (db.prepare("SELECT 1 FROM judge_codes WHERE account_id = ?").get(attachTo)) throw new JudgeCodeError("has_code", "This account already has a judge code. Each account takes one.");
         accountId = attachTo;
       } else {

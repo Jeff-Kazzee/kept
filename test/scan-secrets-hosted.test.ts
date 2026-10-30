@@ -78,3 +78,22 @@ describe("the secret scan in hosted mode", () => {
     expect(out).not.toContain(code);
   });
 });
+
+describe("the secret scan and Better Auth (0020)", () => {
+  it("finds a Better Auth secret or dashboard key assigned with a value, and not a template or a reference", () => {
+    const value = ["Xq7", "Lm2Pz9", "Rt4Vb8Nw1"].join("");
+    for (const line of [`BETTER_AUTH_SECRET=${value}`, `export BETTER_AUTH_API_KEY="${value}"`]) expect(hasSecret(line), line).toBe(true);
+    for (const line of ["BETTER_AUTH_SECRET=", "BETTER_AUTH_SECRET=$(openssl rand -base64 32)", "BETTER_AUTH_API_KEY=<your key>", "BETTER_AUTH_URL=https://the-little-ai-co.tail374dd0.ts.net:10000"]) expect(hasSecret(line), line).toBe(false);
+  });
+
+  it("knows the sign-in database by name, and a copy of it under any name", async () => {
+    for (const name of ["data/hosted/auth.sqlite", "auth.sqlite-wal", "auth.sqlite-shm"]) expect(isSecretFileName(name), name).toBe(true);
+    const dir = mkdtempSync(path.join(tmpdir(), "scan-auth-"));
+    dirs.push(dir);
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(path.join(dir, "x.sqlite"));
+    db.exec(`CREATE TABLE "passkey" ("id" text not null primary key, "publicKey" text not null);`);
+    db.close();
+    expect(sqliteSecretFields(readFileSync(path.join(dir, "x.sqlite")))).toEqual([ACCOUNTS_DB]);
+  });
+});
