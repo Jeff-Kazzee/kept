@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { JS_BUDGET_BYTES, firstLoadScripts, precompress } from "../scripts/precompress.ts";
-import { BuildError, CONTENT_SECURITY_POLICY, IMMUTABLE, createStaticHandler, loadBuild, pickEncoding, readBuildFile } from "../server/static.ts";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { BuildError, CONTENT_SECURITY_POLICY, FIRST_LOAD_READS, IMMUTABLE, createStaticHandler, loadBuild, pickEncoding, readBuildFile, withPreloads } from "../server/static.ts";
 
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -33,8 +34,8 @@ function build() {
 
 type Res = { status: number; headers: Record<string, string | string[] | undefined>; body: Buffer };
 
-async function serve(dir: string) {
-  const handler = createStaticHandler(dir);
+async function serve(dir: string, preload: readonly string[] = []) {
+  const handler = createStaticHandler(dir, { preload });
   const server = createServer(handler);
   servers.push(server);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
@@ -58,7 +59,8 @@ describe("production build serving", () => {
     expect(out.map((c) => c.file).sort()).toEqual(["assets/index-abc123.css", "assets/index-abc123.js", "assets/vendor-def456.js", "icon.svg", "index.html"]);
     for (const c of out) expect(c.br).toBeLessThanOrEqual(c.raw + 20);
     expect(firstLoadScripts(INDEX)).toEqual(["assets/index-abc123.js", "assets/vendor-def456.js"]);
-    expect(JS_BUDGET_BYTES).toBe(150 * 1024);
+    // 0019, P18: the budget tightened from 150 KB to 100 KB.
+    expect(JS_BUDGET_BYTES).toBe(100 * 1024);
   });
 
   it("sends brotli or gzip as accepted, immutable caching on hashed assets and no-cache on index.html", async () => {
@@ -160,3 +162,42 @@ describe("production build serving", () => {
     expect(() => readBuildFile(dir, "/assets")).toThrow(/not a regular file/);
   });
 });
+
+describe("0019, P17: the first reads start with the page", () => {
+  it("local mode's index.html preloads each first read as a fetch, in every encoding, and the CSP is unchanged", async () => {
+    const dir = build();
+    precompress(dir);
+    const get = await serve(dir, FIRST_LOAD_READS);
+    expect(FIRST_LOAD_READS).toEqual(["/api/session", "/api/state", "/api/settings", "/api/activity", "/api/google", "/api/chat"]);
+    const plain = (await get("/")).body.toString("utf8");
+    for (const read of FIRST_LOAD_READS) expect(plain).toContain(`<link rel="preload" href="${read}" as="fetch" crossorigin>`);
+    // Before </head>, so the browser starts them before the script runs.
+    expect(plain.indexOf('rel="preload"')).toBeLessThan(plain.indexOf("</head>"));
+    const br = await get("/", { "Accept-Encoding": "br" });
+    expect(br.headers["content-encoding"]).toBe("br");
+    expect(brotliDecompressSync(br.body).toString("utf8")).toBe(plain);
+    const gz = await get("/", { "Accept-Encoding": "gzip" });
+    expect(gunzipSync(gz.body).toString("utf8")).toBe(plain);
+    // A path the app owns gets the same page.
+    expect((await get("/connections")).body.toString("utf8")).toBe(plain);
+    expect((await get("/")).headers["content-security-policy"]).toBe(CONTENT_SECURITY_POLICY);
+    // The ETag is the page's own, so a cached copy without the preloads is replaced.
+    const bare = await serve(dir);
+    expect((await get("/")).headers.etag).not.toBe((await bare("/")).headers.etag);
+  });
+
+  it("the hosted site has none: its reads need a session first", async () => {
+    const dir = build();
+    precompress(dir);
+    const get = await serve(dir);
+    expect((await get("/")).body.toString("utf8")).not.toContain('rel="preload"');
+    expect(withPreloads(INDEX, [])).toBe(INDEX);
+  });
+
+  it("main.ts passes the preloads only in local mode", async () => {
+    const { readFileSync } = await import("node:fs");
+    const main = readFileSync(new URL("../server/main.ts", import.meta.url), "utf8");
+    expect(main).toMatch(/createStaticHandler\(fromPackage\("dist\/ui"\), \{ preload: config\.mode === "local" \? FIRST_LOAD_READS : \[\] \}\)/);
+  });
+});
+

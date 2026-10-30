@@ -7,6 +7,7 @@
 // inline scripts, and requests only to this origin.
 import { createHash } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
@@ -134,11 +135,37 @@ export function pickEncoding(acceptEncoding: string | undefined, entry: Pick<Ent
   return null;
 }
 
+// 0019, P17: the reads the page makes before it can show the case. In
+// local mode index.html asks for them as preloads, so they run while the
+// script loads instead of after it. GET routes need no header (guard.ts),
+// so the page's own fetch takes the preloaded answer. The hosted site has
+// none: its reads need a session first.
+export const FIRST_LOAD_READS = ["/api/session", "/api/state", "/api/settings", "/api/activity", "/api/google", "/api/chat"] as const;
+
+// index.html with a preload link for each read, before </head>.
+export function withPreloads(html: string, reads: readonly string[]): string {
+  if (reads.length === 0) return html;
+  const links = reads.map((r) => `<link rel="preload" href="${r}" as="fetch" crossorigin>`).join("\n    ");
+  return html.replace("</head>", `  ${links}\n  </head>`);
+}
+
+export type StaticOptions = { preload?: readonly string[] };
+
 // A request handler for every path outside /api/. A path with no file
 // extension that is not a file gets index.html, so the app can own its
 // paths. A missing file with an extension is a 404.
-export function createStaticHandler(root: string) {
+export function createStaticHandler(root: string, options: StaticOptions = {}) {
   const files = loadBuild(root);
+  if (options.preload && options.preload.length > 0) {
+    const raw = Buffer.from(withPreloads(files.get("/index.html")!.raw.toString("utf8"), options.preload));
+    files.set("/index.html", {
+      ...files.get("/index.html")!,
+      raw,
+      etag: `"${createHash("sha256").update(raw).digest("base64url").slice(0, 27)}"`,
+      br: brotliCompressSync(raw),
+      gzip: gzipSync(raw, { level: 9 }),
+    });
+  }
   const index = files.get("/index.html")!;
   return function serveStatic(req: IncomingMessage, res: ServerResponse): void {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);

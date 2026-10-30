@@ -43,7 +43,7 @@ import { createHostedApp } from "./hosted.ts";
 import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
 import { apiPreamble, secureRequest } from "./http.ts";
 import { requestLogEnabled, requestLogger } from "./request-log.ts";
-import { API_SECURITY_HEADERS, createStaticHandler } from "./static.ts";
+import { API_SECURITY_HEADERS, FIRST_LOAD_READS, createStaticHandler } from "./static.ts";
 import { createWorkspace, send, serveApi } from "./workspace.ts";
 
 const HOST = "127.0.0.1";
@@ -75,7 +75,8 @@ let ui: (req: IncomingMessage, res: ServerResponse) => void;
 let closeUi = async () => {};
 if (serveBuild) {
   try {
-    ui = createStaticHandler(fromPackage("dist/ui"));
+    // 0019, P17: local mode starts its first reads with the page.
+    ui = createStaticHandler(fromPackage("dist/ui"), { preload: config.mode === "local" ? FIRST_LOAD_READS : [] });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(2);
