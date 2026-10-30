@@ -79,11 +79,16 @@ export type ChatViewProps = {
 
 export function ChatView(props: ChatViewProps) {
   const { state, run, chat, streaming, scripted, send, onStop, onShowSlot, onLoadCalendar, onLoadDemo, fixtures, loadFixtures, modelLabel = null, firstWindow, opensFromServer = false } = props;
-  const [windowed, setWindowed] = useState(firstWindow !== undefined);
+  // 0019, round 3: the older messages join in steps of WINDOW_STEP, each a
+  // transition after a pause, so no single task draws them all.
+  const [shown, setShown] = useState(firstWindow ?? Number.POSITIVE_INFINITY);
+  const windowed = shown < chat.messages.length;
   useEffect(() => {
-    if (windowed) startTransition(() => setWindowed(false));
-  }, [windowed]);
-  const from = windowed && firstWindow !== undefined ? Math.max(0, chat.messages.length - firstWindow) : 0;
+    if (!windowed) return;
+    const t = setTimeout(() => startTransition(() => setShown((n) => n + WINDOW_STEP)), WINDOW_PAUSE_MS);
+    return () => clearTimeout(t);
+  }, [windowed, shown]);
+  const from = windowed ? Math.max(0, chat.messages.length - shown) : 0;
   // Round 2, finding 5: turns out of view are skipped only once every turn
   // has been laid out, a frame after the whole thread rendered.
   const [settled, setSettled] = useState(false);
@@ -408,9 +413,10 @@ export function ChatView(props: ChatViewProps) {
 
 // The composer, subscribed to the draft store, so a key press renders it
 // alone (0019, P19).
-function DraftComposer({ drafts, onSend, ...rest }: { drafts: DraftStore; onSend: (text: string) => void } & Omit<Parameters<typeof Composer>[0], "value" | "onChange" | "onSend">) {
-  const value = useSyncExternalStore(drafts.subscribe, drafts.get, drafts.get);
-  return <Composer value={value} onChange={drafts.set} onSend={() => onSend(drafts.get())} {...rest} />;
+// 0019, round 3: the field keeps its own text, so a key press renders
+// nothing here (Composer, `drafts`).
+function DraftComposer({ drafts, onSend, ...rest }: { drafts: DraftStore; onSend: (text: string) => void } & Omit<Parameters<typeof Composer>[0], "value" | "onChange" | "onSend" | "drafts">) {
+  return <Composer drafts={drafts} onSend={() => onSend(drafts.get())} {...rest} />;
 }
 
 export const STARTERS = ["What is confirmed?", "What should I bring?"];
@@ -687,6 +693,8 @@ export function followTop(el: HTMLElement, streaming: boolean): number {
 }
 
 const NO_CHIPS: FactChip[] = [];
+export const WINDOW_STEP = 8;
+export const WINDOW_PAUSE_MS = 16;
 
 // Round 2, finding 5: a turn with a card the person must act on: a reply,
 // Muse round 2, finding 4: so is a turn with slot chips or an action that

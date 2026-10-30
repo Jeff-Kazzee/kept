@@ -1,9 +1,10 @@
-import { StrictMode } from "react";
+import { StrictMode, startTransition } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { api, type BootData } from "./api.ts";
 import { Root } from "./App.tsx";
 import { DEFAULT_SETTINGS, type Settings } from "./contract.ts";
 import { setCaseZone } from "./format.ts";
+import { setRenderedView } from "./layout.ts";
 import { loadCaseCards } from "./case/lazyCards.tsx";
 import { loadPanel } from "./schedule/lazyPanel.tsx";
 import "./styles.css";
@@ -30,6 +31,7 @@ if (boot) {
   const initial = boot;
   api.adoptBoot(initial);
   setCaseZone((initial.settings as Settings | null)?.timezone ?? DEFAULT_SETTINGS.timezone);
+  setRenderedView(initial.view);
   // The parts the server rendered hydrate with their code in place, so an
   // update before their chunk arrived never replaces what the server drew.
   // The page is on screen meanwhile. Not a top-level await: those chunks
@@ -37,12 +39,16 @@ if (boot) {
   void Promise.all([loadCaseCards(), loadPanel()])
     .catch(() => {})
     .then(() =>
-      hydrateRoot(
-        root,
-        <StrictMode>
-          <Root initial={{ session: { mode: "local" }, boot: initial }} />
-        </StrictMode>,
-      ),
+      // 0019, round 3: a transition, so React hydrates in slices and no
+      // single task holds the page.
+      startTransition(() => {
+        hydrateRoot(
+          root,
+          <StrictMode>
+            <Root initial={{ session: { mode: "local" }, boot: initial }} />
+          </StrictMode>,
+        );
+      }),
     );
 } else {
   createRoot(root).render(

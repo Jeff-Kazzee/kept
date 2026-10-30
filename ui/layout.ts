@@ -10,6 +10,14 @@ export const LAPTOP = "(min-width: 1024px)";
 // The sidebar is a rail from this width up, and a drawer below it (0015).
 export const TABLET_UP = "(min-width: 768px)";
 
+// 0019, round 3: the layout a server-rendered page was rendered in, set
+// before the render on both sides from the boot data, so hydration reads
+// the same answers. A phone is rendered as a phone (the browser's mobile
+// hint), so its first paint carries no hidden schedule to hydrate.
+let renderedView: "phone" | "laptop" = "laptop";
+export const setRenderedView = (v: "phone" | "laptop" | undefined) => void (renderedView = v ?? "laptop");
+export const renderedAs = () => renderedView;
+
 // 0019, P30: the server renders a laptop, so `serverValue` is what a
 // media query reads there and while the page hydrates. React then renders
 // again with the device's own answer.

@@ -83,7 +83,7 @@ if (serveBuild) {
     // renderer (dist/ssr). The hosted site does neither.
     const local = config.mode === "local";
     const ssrEntry = fromPackage("dist/ssr/entry-server.js");
-    const ssr = local && existsSync(ssrEntry) ? ((await import(pathToFileURL(ssrEntry).href)) as { renderCase: (boot: Boot) => Promise<string> }) : null;
+    const ssr = local && existsSync(ssrEntry) ? ((await import(pathToFileURL(ssrEntry).href)) as { renderCase: (boot: Boot & { view: "phone" | "laptop" }) => Promise<string> }) : null;
     ui = createStaticHandler(fromPackage("dist/ui"), {
       preload: local ? FIRST_LOAD_READS : [],
       ...(ssr
@@ -94,7 +94,11 @@ if (serveBuild) {
               // A case that kept moving during the read is not rendered: the
               // page reads it on its own.
               if (!boot) return null;
-              return { html: await ssr.renderCase(boot), boot };
+              // 0019, round 3: the browser's mobile hint (sent by default)
+              // picks the layout the screen is rendered in.
+              const view: "phone" | "laptop" = req.headers["sec-ch-ua-mobile"] === "?1" ? "phone" : "laptop";
+              const shown = { ...boot, view };
+              return { html: await ssr.renderCase(shown), boot: shown };
             },
           }
         : {}),

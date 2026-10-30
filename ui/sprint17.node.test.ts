@@ -21,7 +21,10 @@ import { installTestDom, mount } from "./test-dom.ts";
 import { PART_FAILED, onDemand } from "./components/onDemand.tsx";
 
 beforeAll(() => {
-  installTestDom();
+  const doc = installTestDom();
+  // react-dom checks this when it loads to listen for "input", as a
+  // browser has it.
+  (doc as unknown as { oninput: null }).oninput = null;
   setCaseZone("America/Denver");
 });
 
@@ -564,6 +567,54 @@ describe("Muse round 2, finding 7: what a part's boundary says, and siblings", (
     expect(view.container.querySelectorAll(".part-error")).toHaveLength(0);
     expect(view.container.querySelectorAll(".hello").map((e) => e.textContent)).toEqual(["Hello one", "Hello two"]);
     errors.mockRestore();
+    await view.unmount();
+  });
+});
+
+describe("0019, round 3: a key press in the composer renders nothing", () => {
+  it("commits nothing on a key press, not even when the text turns non-empty or empty, and Send follows the text", async () => {
+    const { Profiler, act } = await import("react");
+    let commits = 0;
+    const view = await mount(
+      createElement(
+        Profiler,
+        { id: "chat", onRender: () => void commits++ },
+        createElement(
+          AgentContext.Provider,
+          { value: DEFAULT_AGENT },
+          createElement(ChatView, {
+            state,
+            run: async () => {},
+            chat: { status: "ready", chatVersion: 1, messages: [answer("a1", [])], pending: null, declinedText: {}, toolsByMessage: {} },
+            streaming: false,
+            scripted: false,
+            send: async () => {},
+            onShowSlot: () => {},
+            onLoadCalendar: async () => {},
+            onLoadDemo: async () => null,
+            fixtures: [],
+          }),
+        ),
+      ),
+    );
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    const input = view.find("#chat-input") as unknown as { value: string; dispatchEvent(e: unknown): void };
+    const send = () => view.find(".send-btn") as unknown as { getAttribute(a: string): string | null };
+    const { TestElement, TestEvent } = await import("./test-dom.ts");
+    // Types as a person does, past React's value tracker.
+    const type = async (v: string) =>
+      act(async () => {
+        Object.getOwnPropertyDescriptor(TestElement.prototype, "value")!.set!.call(input, v);
+        input.dispatchEvent(new TestEvent("input", { bubbles: true }));
+      });
+    expect(send().getAttribute("disabled")).not.toBeNull();
+    commits = 0;
+    await type("W");
+    expect((send() as unknown as { disabled: boolean }).disabled).toBe(false);
+    for (const v of ["Wh", "Whe", "When", "When i", "When is"]) await type(v);
+    await type("");
+    expect((send() as unknown as { disabled: boolean }).disabled).toBe(true);
+    expect(commits).toBe(0);
     await view.unmount();
   });
 });

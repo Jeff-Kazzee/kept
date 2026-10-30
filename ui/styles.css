@@ -880,9 +880,9 @@ details[open] > :not(summary) { animation: rise var(--dur-2) var(--ease); }
   background: var(--raised); box-shadow: var(--shadow-float);
   transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
 }
-@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .composer { -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2); }
-}
+/* 0019, round 3: no backdrop blur. Nothing scrolls under the composer,
+   and the blur made each key press repaint the page. */
+
 .composer:focus-within { border-color: var(--accent); box-shadow: var(--shadow-float), 0 0 0 3px var(--accent-soft); }
 .composer > * { min-width: 0; }
 .composer textarea {
