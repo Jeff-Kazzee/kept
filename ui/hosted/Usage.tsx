@@ -179,7 +179,7 @@ export function DeleteAccountPanel({ run, onDeleted }: { run: Run; onDeleted: ()
       <h2>
         <Icon name="trash" size="sm" /> Delete account
       </h2>
-      <p className="small">Delete account erases your case, its chat and activity, your settings and your Google connection on this site, and signs you out everywhere. The record of what you were charged stays, without your email. This cannot be undone.</p>
+      <p className="small">Delete account erases your case, its chat and activity, your settings, your password and passkeys, and your Google connection on this site, and signs you out everywhere. The record of what you were charged stays, without your email. This cannot be undone.</p>
       <label className="field" htmlFor="delete-account-confirm">
         <span>Type {DELETE_CONFIRMATION} to confirm</span>
         <input id="delete-account-confirm" name="delete-account-confirm" className="input" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" autoCapitalize="characters" spellCheck={false} />

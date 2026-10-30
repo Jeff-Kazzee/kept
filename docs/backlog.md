@@ -54,7 +54,8 @@ Rules:
 | 12 | Failure testing and quality | All | Oct 28 to 31 | Next |
 | 13 | Accounts, judge access and usage credits | Hosted app | Oct 28 to 30 | Next |
 | 14 | Paid plans with Stripe | Hosted app | Oct 30 to 31 | Planned |
-| 15 | Public hosting through a Cloudflare Tunnel | Hosted app | Nov 1 | Planned |
+| 15 | Public hosting (folded into sprint 18: Tailscale Funnel) | Hosted app | Nov 1 | Moved to 18 |
+| 18 | Accounts through Better Auth, and the hosted app live | Hosted app | Oct 30 to 31 | Built, go-live open |
 | 16 | Submission build | All | Nov 2 to 4 | Planned |
 
 On 2026-10-28 the plan changed to an agent-first app: sprint 8 is the
@@ -481,8 +482,9 @@ public site runs on this server through a Cloudflare Tunnel.
 - [x] SP13.5 Judge access codes with a cap each, a total cap and an off
   switch. An admin command creates and lists them.
 - [x] SP13.6 Usage page: balance, what each turn cost, and the plan.
-- [ ] SP13.7 Live checks (coordinator): a real Sign in with Google and a
-  Gmail connect inside a hosted account. The live Meta check on `016be1b`
+- [ ] SP13.7 Live checks (coordinator): a Gmail connect inside a hosted
+  account. (Sign in with Google was replaced by Better Auth in sprint 18,
+  0020.) The live Meta check on `016be1b`
   passed: charges matched Meta's usage times 3, and `max_output_tokens`
   was accepted.
 - [ ] Confirm or change the decisions in
@@ -511,8 +513,8 @@ recording (sprint 16) waits for this sprint.
 - [x] SP13B.6 Tablet: the icon rail. Phone: the modal drawer from the
   menu button with the avatar.
 - [x] SP13B.7 Settings left the panel, and every way in moved with it.
-- [ ] A Google photo for the avatar: needs the `profile` scope in the
-  Google console and the server (0014 J16 asks for name and email only).
+- [ ] ~~A Google photo for the avatar~~: dropped, accounts no longer sign in
+  with Google (0020, K1).
 - [ ] Confirm or change Z1 to Z9 in 0015.
 
 ## Sprint 13C: fixes from the first live Gmail and Calendar run
@@ -622,9 +624,45 @@ account.
 
 ## Sprint 15: public hosting
 
-Branch `sprint/15-hosting`. A Cloudflare Tunnel from this server to Jeff's
-domain, the host allowlist, the Google redirect URIs on that domain,
-backups, logs and limits. Publishing needs Jeff's approval.
+Folded into sprint 18 (0020): Tailscale Funnel on port 10000 in place of a
+Cloudflare Tunnel, no Google redirect URIs, and the backups, logs and
+limits below.
+
+## Sprint 18: accounts through Better Auth, and the hosted app live
+
+Branch `sprint/18-better-auth`. Jeff decided on 2026-10-30 (K1 to K5 in
+`docs/decisions/0020-better-auth.md`): no more Google console, Better Auth
+for accounts, and the site live at
+`https://the-little-ai-co.tail374dd0.ts.net:10000`.
+
+- [x] B1 Better Auth on node:sqlite in `data/hosted/auth.sqlite`, its
+  migrations at start, its handler at `/api/auth/*` in hosted mode only.
+- [x] B2 Email and password, rate limits from Better Auth and the app, no
+  email, and `pnpm admin users reset-password`.
+- [x] B3 Passkeys (`@better-auth/passkey` 1.7.14), relying party from the
+  public origin.
+- [x] B4 Sign in with Google removed from hosted accounts. Gmail and
+  Calendar for test accounts kept.
+- [x] B5 Better Auth's user mapped to one app account. Judge codes,
+  credits, caps, Delete account and `account_busy` kept.
+- [x] B6 HttpOnly `__Secure-` session cookie, the public origin as the only
+  trusted origin, the cross-origin refusal tested.
+- [x] B7 The dashboard plugin, off without its key, and what it sends
+  written down. Sentinel off.
+- [x] B8 `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` and `BETTER_AUTH_API_KEY`
+  in `.env.schema`.
+- [x] B9 The sign-in screen and Add a passkey, with the existing classes.
+- [x] B10 `scripts/hosted/start.sh` and a systemd user unit, not
+  installed.
+- [x] B11 `APP_TRUSTED_PROXY=tailscale`, and the public host with its port.
+- [x] B12 `pnpm admin backup` (VACUUM INTO) and the request log in hosted
+  mode.
+- [ ] Go live (coordinator, after Jeff's approval): the env file, the unit
+  and the Funnel command in `docs/hosted.md`, "Going live".
+- [ ] Live model checks on this branch (coordinator).
+- [ ] Restyle the sign-in screen with sprint 17's look (coordinator, after
+  both merge).
+- [ ] Confirm or change the choices marked proposed in 0020.
 
 ## Sprint 16: submission build
 

@@ -1,7 +1,8 @@
 # The hosted site
 
 The app runs in one of two modes. The design and every choice behind it
-are in `docs/decisions/0014-accounts-and-credits.md`.
+are in `docs/decisions/0014-accounts-and-credits.md`, and accounts through
+Better Auth in `docs/decisions/0020-better-auth.md`.
 
 ## Modes
 
@@ -9,7 +10,8 @@ are in `docs/decisions/0014-accounts-and-credits.md`.
   on your own computer. One case, no sign-in, your Meta key in Connections or
   `MODEL_API_KEY`, and Sign in with ChatGPT. Nothing below applies.
 - **Hosted** (`APP_MODE=hosted`): the public site. Each person signs in
-  with Google or a judge code and gets a workspace of their own: a case,
+  with an email and password, a passkey or a judge code, and gets a
+  workspace of their own: a case,
   settings and a Google connection that no other account can reach. The
   assistant uses Meta's Muse models on the server's key, paid from the
   person's usage credit. A person's own Meta key is not offered, and Sign
@@ -20,49 +22,110 @@ The MCP server runs in local mode only.
 
 ## Running hosted mode
 
+The hosted instance runs from `scripts/hosted/start.sh`, beside the local
+demo: port 5300 on 127.0.0.1, its own data folder, Tailscale as the
+trusted proxy, the request log on, and the production build (`pnpm build`
+first). It will not start without `BETTER_AUTH_SECRET` (32 bytes or more),
+`BETTER_AUTH_URL`, both caps and `MODEL_API_KEY`, and it never prints a
+value. For a check on this computer:
+
 ```sh
-APP_MODE=hosted MODEL_API_KEY=... GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... \
+BETTER_AUTH_SECRET=... BETTER_AUTH_URL=http://localhost:5300 MODEL_API_KEY=... \
   APP_DAILY_COST_CAP_USD=<amount> APP_JUDGE_TOTAL_CAP_USD=<amount> \
-  APP_ALLOWED_HOSTS=appointments.example.com pnpm start
+  APP_HOSTED_DATA=/tmp/hosted-check scripts/hosted/start.sh
 ```
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `APP_MODE` | `local` | `hosted` turns on accounts, sessions, credits and judge codes. |
+| `APP_MODE` | `local` | `hosted` turns on accounts, sessions, credits and judge codes. The start script sets it. |
+| `BETTER_AUTH_SECRET` | none, required | Signs the session cookies. At least 32 random bytes, such as `openssl rand -base64 32`. Never logged or returned. |
+| `BETTER_AUTH_URL` | none, required | The site's public origin, with its port: `https://the-little-ai-co.tail374dd0.ts.net:10000`. The only trusted origin, the passkey origin, and its host name is the passkey relying party. Its host, with the port, is allowed by the host check. `http://localhost:<port>` for a local check. |
+| `BETTER_AUTH_API_KEY` | none | Turns the Better Auth dashboard plugin on. Off without it. See below. |
+| `BETTER_AUTH_API_URL`, `BETTER_AUTH_KV_URL` | Better Auth's | The dashboard's addresses, only to change them. |
 | `MODEL_API_KEY` | none | The Meta key that usage credits pay for. Without it every assistant step is refused with a plain message. |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | Sign in with Google, and the Gmail and Calendar connection. Without them only judge codes sign in. |
-| `APP_ALLOWED_HOSTS` | none | The site's public host name, for the host check and the HTTPS redirect URIs. |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | The Gmail and Calendar connection for test accounts (0012). Not a sign-in. |
+| `APP_ALLOWED_HOSTS` | none | More host names for the host check. The public origin's host is added on its own. |
 | `APP_MARKUP` | `3` | What a person pays per unit of model cost. At least 1, at most two decimals. |
 | `APP_DAILY_COST_CAP_USD` | none, required | The most the server key may cost in one UTC day, across all accounts. |
 | `APP_JUDGE_TOTAL_CAP_USD` | none, required | The most all judge codes together may grant. |
 | `APP_SERVER_KEY` | `on` | `off` stops every call on the server key, whatever the balances say. |
-| `APP_TRUSTED_PROXY` | `none` | `cloudflare` reads the client's address from `CF-Connecting-IP`, only on a connection from this server, as cloudflared makes. `none` uses the connection's own address, and no forwarding header counts. |
+| `APP_TRUSTED_PROXY` | `none` | `tailscale` reads the visitor's address from `X-Forwarded-For`, only on a connection from this server and only as one plain address, as Tailscale serve and Funnel set it. `cloudflare` reads `CF-Connecting-IP` the same way. `none` uses the connection's own address. The start script sets `tailscale`. |
+| `APP_HOSTED_DATA` | `~/.local/share/appointments-hosted` | The start script's data folder, mode 700. |
 
-Neither cap has a default (J19). While either is unset the server key is
-off: the start log names the missing setting, and every assistant step
-answers that Meta usage is paused. A value that does not parse stops the
-app at start. Local mode reads none of these settings but `APP_MODE`.
+Neither cap has a default (J19). While either is unset the app turns the
+server key off, and the start script does not start at all. A value that
+does not parse stops the app at start. Local mode reads none of these
+settings but `APP_MODE`.
 
-At start the app prints the Google redirect URIs to register in the OAuth
-client: `/auth/signin/callback` for sign-in and `/auth/google/callback` for
-the Gmail and Calendar connection, on each host. Sign in with Google asks
-for `openid email profile` only: the account learns the person's name and
-email.
+The data lives in the data folder (`APP_DB`'s folder):
 
-The data lives beside `APP_DB` (default `data/`):
-
-- `data/hosted/accounts.sqlite`: accounts, sessions, the usage ledger and
-  judge codes. Mode 600. Session tokens and judge codes are stored as
-  hashes only.
-- `data/accounts/<account id>/`: one workspace per account, with its own
+- `hosted/auth.sqlite`: Better Auth's users, password hashes, passkeys and
+  sessions. Mode 600.
+- `hosted/accounts.sqlite`: the app's accounts (each linked to its Better
+  Auth user by id), judge sessions, the usage ledger and judge codes. Mode
+  600. Judge sessions and codes are stored as hashes only.
+- `accounts/<account id>/`: one workspace per account, with its own
   `app.sqlite` and `app-secrets.sqlite`.
+
+## Accounts
+
+- **Email and password.** "Make an account" takes an email, an optional
+  name and a password of at least 10 characters, and signs in at once.
+  There is no email verification and no reset email: the site sends no
+  mail. A person who forgot their password asks the coordinator:
+
+  ```sh
+  pnpm admin users list
+  pnpm admin users reset-password --email person@example.com
+  ```
+
+  `reset-password` prints a new password once and signs that account out
+  everywhere. Its passkeys keep working.
+- **Passkeys.** After signing in, "Add a passkey" in the account menu
+  saves one on the device. "Use a passkey" on the sign-in screen signs in
+  with it alone.
+- **Judge codes.** As below. A code may also be added in the sign-up form.
+- Better Auth allows 3 sign-in or sign-up tries per address in 10
+  seconds. The app adds its own limits per address: 20 sign-in tries in 10
+  minutes and 10 sign-ups an hour. Better Auth refuses any write to
+  `/api/auth/*` whose origin is not `BETTER_AUTH_URL`.
+- The session is an HttpOnly cookie, `__Secure-appt.session_token` over
+  HTTPS, `SameSite=Lax`, for 30 days. No answer the page reads holds its
+  token.
+
+## The Better Auth dashboard plugin
+
+Off unless `BETTER_AUTH_API_KEY` is set. The start log says whether it is
+on. When it is on (read from `@better-auth/infra` 0.4.25's source):
+
+- **What it sends** to `https://dash.better-auth.com`: an event for each
+  sign-up, sign-in, failed email sign-in, sign-out, session made or
+  ended, password set, passkey sign-in and user deleted, each with the
+  user's id, email and name, the session id, the sign-in method, the
+  browser's user agent and the visitor's IP address. A failed sign-in
+  sends the email that was typed. Never a password, a password hash or a
+  session token.
+- **What it lets the dashboard do**: routes under `/api/auth/dash/*`
+  accept a token signed by Better Auth's cloud for this key. Through them
+  the dashboard can list, make, change, ban and delete users, set a
+  password, end sessions, sign in as a user, and read and write any table
+  of `auth.sqlite`. It cannot reach `accounts.sqlite`, so credits and
+  judge codes are out of its reach. A user deleted there loses its app
+  account and workspace too.
+- The sign-in screen's privacy line says that sign-in events, with the
+  email and network address, also go to Better Auth.
+
+Sentinel, Better Auth's abuse protection, is off: it calls Better Auth's
+hosted security service on every sign-in, a separate service with a cost
+that was not shown. Better Auth's and the app's own rate limits are on.
 
 ## Judge codes
 
 Each judge gets a code with a cap. The code signs them in on its own, so
-they need no Google account. A judge who signs in with Google can add the
-code to that account on the Usage page, from the account menu at the
-bottom of the sidebar. Each code grants its cap once.
+they need no account. A judge with an email account can add the code in
+the sign-up form, or later on the Usage page, from the account menu at the
+bottom of the sidebar. Each code grants its cap once, and a code added to
+an email account no longer signs in on its own.
 
 ```sh
 pnpm admin judges create --label "Judge Ada" --cap-usd 5 --expires 2026-11-30
@@ -89,11 +152,10 @@ pnpm admin judges revoke --id j0123456789ab
   already spent. A new code or a grant past it is refused.
 
 Judges open the site, choose "I have a judge code", or go straight to
-`/judge`. Code tries are limited to 10 per address in 15 minutes, and
-Google sign-in starts to 10 per address in 10 minutes. Behind the tunnel,
-set `APP_TRUSTED_PROXY=cloudflare`, or every visitor shares the tunnel's
-one address. The site counts a request as HTTPS only when a proxy on this
-server says so in `X-Forwarded-Proto`, as cloudflared does.
+`/judge`. Code tries are limited to 10 per address in 15 minutes. Behind
+Funnel, `APP_TRUSTED_PROXY=tailscale` (the start script sets it), or every
+visitor shares one address. The site counts a request as HTTPS only when a
+proxy on this server says so in `X-Forwarded-Proto`, as Tailscale does.
 
 The app keeps the workspaces of recent visitors open, up to 256. When all
 of them are busy at once, a new visitor reads that the site is busy and
@@ -135,7 +197,59 @@ billing waits until after the hackathon) and a rough cost per turn for each mode
 ## Delete account
 
 Delete account, in Settings from the account menu, erases the account's workspace (its case, chat,
-activity, settings and Google connection, after revoking the Google grant)
-and every session. It is refused, with nothing changed, while a step of
-the account is still running. The ledger keeps its rows for accounting, with the
-email, name and Google subject removed.
+activity, settings and Google connection, after revoking the Google grant),
+then the Better Auth user with its password, passkeys and every session.
+It is refused, with nothing changed, while a step of the account is still
+running. The ledger keeps its rows for accounting, with the email and name
+removed. The same email may sign up again, as a new, empty account.
+
+## Backups and logs
+
+```sh
+pnpm admin backup --to ~/appointments-backups/2026-10-31
+```
+
+copies `accounts.sqlite` and `auth.sqlite` with SQLite's `VACUUM INTO`,
+safe while the app runs, into a new folder of mode 700, each file mode
+600. Run it with the instance's `APP_DB` (the start script's data folder
+plus `/app.sqlite`). It refuses a folder that already exists. Keep the
+backups on this server: they hold emails, password hashes and session
+tokens.
+
+The request log is on in the hosted instance: one line per API request
+with the method, the path (every value in it as `*`), the status and the
+time. Never a body, a header, a cookie, a query string, an email, a
+password or a token. Better Auth's own warnings go to the same log, with
+every email address replaced by `[email]`.
+
+## Going live
+
+The coordinator's step, after Jeff's approval. The writer changed no
+Tailscale configuration.
+
+1. Jeff's env file for the instance, mode 600, outside git, holds
+   `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL=https://the-little-ai-co.tail374dd0.ts.net:10000`,
+   `MODEL_API_KEY`, `APP_DAILY_COST_CAP_USD`, `APP_JUDGE_TOTAL_CAP_USD`,
+   and, if Jeff wants the dashboard, `BETTER_AUTH_API_KEY`. Optionally
+   `APP_HOSTED_DATA` and `NODE_BIN` (Node 24 or later, if `node` is not on
+   the unit's PATH).
+2. In the checkout the unit names: `pnpm install --frozen-lockfile` and
+   `pnpm build`.
+3. Copy `scripts/hosted/appointments-hosted.service` to
+   `~/.config/systemd/user/`, set its `EnvironmentFile` to the env file
+   and its paths to the checkout, then
+   `systemctl --user daemon-reload` and
+   `systemctl --user enable --now appointments-hosted.service`.
+   `journalctl --user -u appointments-hosted` shows the start lines: hosted
+   mode, the caps, whether the dashboard plugin is on.
+4. Check it on this server: `curl -s -H 'Host: the-little-ai-co.tail374dd0.ts.net:10000' http://127.0.0.1:5300/api/session`
+   answers `{"mode":"hosted","signedIn":false,...}`.
+5. Turn Funnel on for port 10000 to the instance (Tailscale 1.104 on this
+   server, with `sudo` unless `jeff` is Tailscale's operator):
+   `tailscale funnel --bg --https=10000 http://127.0.0.1:5300`.
+   `tailscale funnel status` checks it, and
+   `tailscale funnel --https=10000 off` stops only this one. Never
+   `tailscale funnel reset`: it would also stop the Hermes dashboard on 443.
+6. From outside the tailnet, open the public address, make an account, add
+   a passkey, and redeem a judge code made with `pnpm admin judges create`.
+

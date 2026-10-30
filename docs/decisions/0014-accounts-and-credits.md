@@ -29,7 +29,9 @@ Code: `src/hosted/` (`config.ts`, `prices.ts`, `store.ts`, `metered.ts`,
   and $100, which sprint 14 adds through Stripe). Every model call on the
   server key is charged at 3 times that model's token cost. The plans must
   be profitable, so metering must be exact and fail closed.
-- **J16.** Accounts sign in with Google (name and email only).
+- **J16.** Accounts sign in with Google (name and email only). Replaced on
+  2026-10-30 by 0020: accounts sign in through Better Auth, with an email
+  and password or a passkey, and Google is no longer a sign-in.
 - **J17.** The public site runs on this server through a Cloudflare Tunnel
   (sprint 15). Sprint 13 builds everything it needs offline.
 
