@@ -712,19 +712,22 @@ after the event was added (`docs/decisions/0022-calendar-answer.md`).
 
 - [x] Cause: "tentative", the status `calendar_sync_slot` gives, was a
   status word the state check could not map, so the true answer failed.
-- [x] C1, C2 "Tentative" maps to requested and change proposed. "On the
-  calendar" is true of a slot whose event this turn's write left.
+- [x] C1, C2 "Tentative" maps to requested and change proposed, and said
+  of the calendar or an event it needs this turn's event fact. "On the
+  calendar" follows the slot's last event fact.
 - [x] C3 `slot_label` and `slot_state` in the sync result, and the retry
   hint names the event's states.
 - [x] C4 A sentence that opens with an action verb, without "I", must match
   the turn's activity.
 - [x] C5 Copied history notes are removed from the answer.
-- [x] C6 The clash answer names the event by its summary.
+- [x] C6 withdrawn in fix round 1: event titles are untrusted, and the
+  schedule's calendar row already names the clashing event.
+- [x] Fix round 1: Muse Wonder's findings 1 to 7 (0022, "Fix round 1"),
+  live again 10 of 10 and the story with Undo and put back.
 - [x] Live: the calendar step 10 of 10 answered with no fallback, Undo and
   put back answered, chat eval sends 0, unsupported states 0, clinical 0.
 - [ ] Review of `dev..sprint/20-calendar-answer` (coordinator).
 - [ ] A recorded take of the demo story on the real Google (coordinator).
-- [ ] Confirm or change the choice marked proposed in 0022.
 
 ## Sprint 16: submission build
 

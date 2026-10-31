@@ -4,10 +4,14 @@ Status: sprint 20, from the coordinator's handoff of 2026-10-31. Choices
 marked (proposed) are the writer's and wait for Jeff. Every rule of 0007,
 0009, 0016 to 0018 and 0021 stands.
 
-Code: `src/agent/grounding.ts`, `src/agent/agent.ts`, `src/google/tools.ts`,
-and the placeholder chat recordings (`pnpm demo:recordings`, because the
-agent's instructions changed). Tests: `test/sprint20-calendar-answer.test.ts`
-(new).
+Code: `src/agent/grounding.ts`, `src/agent/agent.ts`, `src/agent/tools.ts`,
+`src/google/tools.ts`, and the placeholder chat recordings
+(`pnpm demo:recordings`, because the agent's instructions changed and then
+changed back). Tests: `test/sprint20-calendar-answer.test.ts` (new).
+
+Fix round 1 (Muse Wonder's review of `52ab27c..435050c`) changed C1, C2,
+C4, C5 and withdrew C6. The sections below give the state after it, and
+"Fix round 1" at the end lists each finding.
 
 ## What happened
 
@@ -45,31 +49,41 @@ on a retry that no longer mentioned the calendar.
 
 The model told the truth. The check was wrong.
 
-## C1. "Tentative" is a state word
+## C1. "Tentative" is a state word, of the slot or of its event
 
 The app's event is tentative exactly while its slot is requested or a
 change is proposed, and confirmed when the slot is (0016,
-`calendar_sync_slot`). So "tentative" and "tentatively" now map to the
-slot states requested and change proposed, in the same synonym table as
-"requested" and "confirmed", and leave the unmapped list. The check stays
-as strict as for any state word: "Friday 11/13 9:15 AM is tentative" fails
-while Friday is offered, "Monday is tentative" fails once Monday is
-confirmed, and "Monday is not tentative" fails while it is requested.
+`calendar_sync_slot`). So in a clause that names no calendar or event,
+"tentative" and "tentatively" map to the slot states requested and change
+proposed, in the same synonym table as "requested" and "confirmed", and
+leave the unmapped list.
+
+In a clause that names the calendar or an event ("to your Google Calendar
+as tentative", "its calendar event is tentative"), "tentative" and
+"confirmed" are said of the app's event, and need this turn's event fact
+for the named slot with that status. With no event fact the positive word
+fails. A negated one ("not confirmed on your calendar yet") with no event
+fact is read of the slot.
+
+Event facts come from every tool that knows the app's event: the calendar
+sync and removal (the status it left, or null when it left none or the
+person removed the event), `calendar_list` (each event the app added, with
+its slot's state), and `undo` of a calendar entry (none after undoing an
+add, the event as it was before an update or a removal). The last one in
+the turn counts.
 
 ## C2. "On the calendar" after a calendar write
 
-"On the calendar" meant confirmed only. After a sync, "Monday 11/16 1:00 PM
-is on the calendar" is true of the requested slot. Each calendar write's
-fact now carries `event`: the status of the app's event it left, or null
-when it left none (removed, nothing to add, or removed by the person). "On
-the calendar" is true of a confirmed slot or of a slot whose last write in
-the turn left an event, so "still on the calendar" after a removal fails.
-"On your calendar" stays unchecked as a state, as before; the action check
-holds "I put it on your calendar".
+"On the calendar" meant confirmed only. For a slot with an event fact this
+turn it now means the fact shows an event, whatever the slot's state. For a
+slot without one it still means confirmed. So "still on the calendar" fails
+after a removal, for a confirmed slot too, and after an add and its undo in
+one turn. "On your calendar" stays unchecked as a state, as before; the
+action check holds "I put it on your calendar".
 
-Limit: an Undo of a calendar entry gives the slots' facts without `event`,
-so in a turn that both adds an event and undoes it, the add's fact still
-stands for "on the calendar". No live turn did both.
+A date without a time that names several slots fitting a state word
+differently, such as "Monday 11/16 is tentative" with one Monday slot
+requested and one offered, fails: the answer needs the time.
 
 ## C3. The answer names both states
 
@@ -92,22 +106,43 @@ report and must match this turn's activity. Verbs no tool does (confirmed,
 canceled, booked, sent and the rest) stay with the subject form, because a
 sentence such as "Confirmed: Thursday 11/12 10:30 AM." states a slot's state.
 
+Fix round 1 widened it: the verb may follow "just", "now",
+"successfully", "also" or "then"; each verb joined to it by "and", "then"
+or a comma is checked too ("Accepted the facts and added Monday" needs both
+actions, and "and confirmed Monday" never passes); and the passive "was
+added", "were removed" or "has been put back" is a report unless the
+sentence says it was earlier ("already", "earlier", "before"). A sentence
+that names another actor ("by the office", "by you"), asks a question, or
+suggests what the person can do ("if you want", "you can") reports
+nothing, and "removed in Google Calendar" is the person's removal there,
+which the sync reports (0018, H6).
+
 ## C5. Copied history notes are removed (found in testing)
 
 Earlier answers go back to the model with code-written notes such as
 "(Actions taken, by activity id: a7. get_activity shows them.)". In 3 of
 the 14 live turns before this change the model copied one into its answer,
-and the page would show it. Code now removes such a note from the
-final text before the checks (`answerText`). Other parentheses stay.
+and the page would show it. Code now removes such notes from the end of the
+final text before the checks (`answerText`): only the exact shapes
+`historyItem` writes, "(Cards shown: ... .)" and "(Actions taken, by
+activity id: a7, a8. get_activity shows them.)", with "Action" and "it" for
+the singular the model wrote once. A note anywhere else, a parenthesis that
+only starts like one, and other parentheses stay.
 
-## C6. The clash answer names the event
+## C6. Withdrawn: the clash answer does not name the event
 
-One instruction is added: "When a time clashes with a calendar event, name
-the event by its summary and give its start as the tools label it." In the
-live runs after it the clash answer read "Friday 11/13 9:15 AM clashes with
-Team standup Friday 11/13 9:00 AM." (proposed: the summary is the person's
-own calendar text, untrusted for instructions, and every date and time in
-it is still checked.)
+Round 1 asked the model to name a clashing event by its summary. An event's
+title is text anyone with access to the calendar writes (on the shared demo
+calendar, any judge), and the check reads only its dates, times and state
+words, so the rest of a title would reach the answer unchecked. Binding a
+title to the event at its start would refuse the model's natural
+paraphrases ("your 9:00 AM standup"). So the instruction is gone, as the
+review allowed. The clash answer is right without the title ("Friday 11/13
+9:15 AM clashes with Friday 11/13 9:00 AM."), and code already shows the
+title: the schedule's calendar row names the event and marks the
+appointments it clashes with (0019, P11). The tools still give the title
+only as `untrusted_text`, and an answer that repeats an injected title's
+claim fails the state check (tested).
 
 ## Live numbers
 
@@ -138,3 +173,41 @@ recordings. Never the Dana account.
 - Spend (the eval's price estimate): 27 live chat turns and 95 agent calls
   for the calendar runs, about $0.34, and 23 chat turns for the eval, about
   $0.34. Together 50 turns, about $0.68, of the 60 turns and $6 allowed.
+
+## Fix round 1
+
+Muse Wonder reviewed `52ab27c..435050c`: do not merge, three high, three
+medium, one low. Each finding and how it was closed, each with tests in
+`test/sprint20-calendar-answer.test.ts`:
+
+1. High, "tentative" and event "confirmed" checked against the slot only.
+   Closed by C1: in a clause naming the calendar or an event, the word
+   needs this turn's event fact with that status. Tests: the person removed
+   the event, no write or read at all, a change-proposed slot's event
+   called confirmed, and a read-only turn after `calendar_list`.
+2. High, "on the calendar" with a confirmed slot after a removal, and an
+   add and its undo in one turn. Closed by C2 and the undo tool's event
+   fact. Tests: the confirmed case, and one turn through the real tools
+   (`calendar_sync_slot`, `get_activity`, `undo`) where "no longer on the
+   calendar" passes and "on the calendar as tentative" falls back.
+3. High, clash titles. Closed by withdrawing C6. Tests: the instruction is
+   gone, an injected title reaches the model only as `untrusted_text`, and
+   answers that obey it fall back; a real title passes.
+4. Medium, a date without a time borrowing another slot's fit. Closed in
+   C2: mixed fits on one date fail. Tests: two Monday slots.
+5. Medium, the subjectless check. Closed in C4. Tests: "Just added", "Now
+   put ... back", the passive, joined verbs, "by the office", a
+   suggestion, "already ... earlier", and "removed in Google Calendar".
+6. Medium, note stripping. Closed in C5. Tests: exact notes at the end are
+   removed, and a mid-text note, "(Action taken: not yet)" and a lookalike
+   stay.
+7. Low, missing tests. Added as listed under 1 to 3.
+
+Live after fix round 1, as before: the calendar step 10 times, answered 10
+of 10 on the first answer, no retry, no fallback ("I put Monday 11/16 1:00
+PM on your calendar as tentative.", "Added Monday 11/16 1:00 PM to your
+calendar as tentative."). The full story with Undo and put back, 6 turns,
+all answered; the clash answer: "Yes. Friday 11/13 9:15 AM clashes with
+Friday 11/13 9:00 AM. Monday 11/16 1:00 PM has no clash." 16 turns and 53
+agent calls, about $0.14. With the first round, 66 turns and about $0.82.
+
