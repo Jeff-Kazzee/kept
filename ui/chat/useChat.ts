@@ -7,13 +7,17 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 export const STOPPED_TEXT = "You stopped this answer. The app may still save what it finished.";
 import { errorSentence } from "../format.ts";
 import { chatReducer, initialChat } from "./state.ts";
-import type { ChatTransport } from "./types.ts";
+import type { ChatLog, ChatTransport } from "./types.ts";
 
 // `onCard` runs when a card arrives during a turn. A card names something a
 // tool just wrote, such as an imported message, so the page reads the case
 // again to render it live instead of as missing.
-export function useChat(transport: ChatTransport, reloadKey: string, onTurnEnd: () => void, onCard: () => void = onTurnEnd) {
-  const [chat, dispatch] = useReducer(chatReducer, initialChat);
+// `initial`: the stored chat, when the shell already read it with the case
+// (0019, P17). The first render then shows it, and the hook does not read
+// it again until the case changes.
+export function useChat(transport: ChatTransport, reloadKey: string, onTurnEnd: () => void, onCard: () => void = onTurnEnd, initial?: ChatLog | null) {
+  const [chat, dispatch] = useReducer(chatReducer, initial, (log) => (log === undefined ? initialChat : chatReducer(initialChat, { type: "loaded", log })));
+  const skipFirst = useRef(initial !== undefined);
   const streaming = chat.pending?.status === "streaming";
   const streamingRef = useRef(false);
   streamingRef.current = streaming;
@@ -31,6 +35,10 @@ export function useChat(transport: ChatTransport, reloadKey: string, onTurnEnd: 
   // The case changed (another tab, an agent, Delete case): read the chat
   // again, unless a turn is streaming.
   useEffect(() => {
+    if (skipFirst.current) {
+      skipFirst.current = false;
+      return;
+    }
     if (!streamingRef.current) void load();
   }, [load, reloadKey]);
 

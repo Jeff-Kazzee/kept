@@ -15,7 +15,8 @@
 import { WITHHELD_USER_TEXT } from "../../src/agent/types.ts";
 import { SCOPE_DECLINE, hasClinicalContent } from "../../src/domain/scope.ts";
 import type { AppState, FixtureScenario, MessageView } from "../api.ts";
-import type { ActivityEntry, ActivityLog, GoogleStatus } from "../contract.ts";
+import type { AgentBackend } from "../agentApi.ts";
+import { CALENDAR_KINDS, type ActivityEntry, type ActivityLog, type GoogleStatus } from "../contract.ts";
 import type { Card, ChatErrorCode, ChatEvent, ChatLog, ChatMessage, ChatTransport, FactChip } from "./types.ts";
 
 // The parts of the page's API the mock uses.
@@ -41,30 +42,102 @@ export type MockOptions = {
   // The server's Google status, so an email question says whether Google
   // is connected.
   google?: (() => Promise<GoogleStatus | null>) | null;
+  // Scripted entries the chat keeps for what only the live agent can do
+  // with Google (0019, P21). Without it, "add it to my calendar" says the
+  // scripted chat cannot.
+  scriptedLog?: ScriptedLog | null;
 };
+
+// 0019, P21 (proposed): a demo-length transcript needs a Google Calendar
+// receipt with Undo, and the scripted chat has no Google. These entries
+// live in the tab only, are marked as scripted in their words, and never
+// reach the server. `scriptedBackend` shows them in the activity and undoes
+// them here. Like the rest of this file, they are in development and check
+// builds only.
+export const SCRIPTED_PREFIX = "scripted-";
+export type ScriptedLog = { entries: ActivityEntry[]; add(e: ActivityEntry): void; undo(id: string): boolean; clear(): void };
+
+export function createScriptedLog(storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null = null): ScriptedLog {
+  const key = `${MOCK_MARKER}-entries`;
+  let entries: ActivityEntry[] = [];
+  try {
+    entries = JSON.parse(storage?.getItem(key) ?? "[]") as ActivityEntry[];
+  } catch {
+    entries = [];
+  }
+  const save = () => {
+    try {
+      storage?.setItem(key, JSON.stringify(entries));
+    } catch {
+      // Kept in memory.
+    }
+  };
+  return {
+    get entries() {
+      return entries;
+    },
+    add(e) {
+      entries = [e, ...entries];
+      save();
+    },
+    undo(id) {
+      const found = entries.find((e) => e.id === id && e.undoable && !e.undone);
+      if (!found) return false;
+      entries = entries.map((e) => (e.id === id ? { ...e, undone: true, undoneAt: new Date().toISOString() } : e));
+      save();
+      return true;
+    },
+    clear() {
+      entries = [];
+      storage?.removeItem(key);
+    },
+  };
+}
+
+// The real backend, with the scripted entries joined into the activity,
+// newest first, and their Undo kept in the tab.
+export function scriptedBackend(base: AgentBackend, log: ScriptedLog): AgentBackend {
+  return {
+    ...base,
+    activity: async () => {
+      const real = await base.activity();
+      if (!real) return real;
+      const all = [...log.entries, ...real.entries].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+      return { ...real, entries: all };
+    },
+    undo: async (id, expectedVersion) => {
+      if (!id.startsWith(SCRIPTED_PREFIX)) return base.undo(id, expectedVersion);
+      log.undo(id);
+      return {};
+    },
+  };
+}
 
 // Also the marker test/bundle.test.ts looks for: it must not be in the
 // production bundle.
 export const MOCK_MARKER = "appointments-mock-chat";
 const STORE_KEY = MOCK_MARKER;
+// The demo messages the office sent by email, in the order it sent them.
+const DEMO_EMAILS = ["m1", "m2"];
 
 
 
 const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
 // Which script a message runs. Exported for tests.
-export function intentOf(text: string): "message" | "gmail" | "status" | "conflict" | "reply" | "checklist" | "help" {
+export function intentOf(text: string): "message" | "gmail" | "calendar" | "status" | "conflict" | "reply" | "checklist" | "help" {
   const t = text.trim();
   if (t.includes("\n") || t.length >= 90) return "message";
+  if (/\b(add|put)\b.*\bcalendar\b/i.test(t)) return "calendar";
   if (/\b(e-?mail|gmail|inbox)\b/i.test(t)) return "gmail";
   if (/\b(bring|checklist|to do)\b/i.test(t)) return "checklist";
   if (/\b(reply|draft|answer the office)\b/i.test(t)) return "reply";
-  if (/\b(conflict|change|should i|next step|decide|question|move[ds]?)\b/i.test(t)) return "conflict";
+  if (/\b(conflict|clash(es)?|change|should i|next step|decide|question|move[ds]?)\b/i.test(t)) return "conflict";
   if (/\b(confirm(ed)?|schedule|status|appointments?|where do)\b/i.test(t)) return "status";
   return "help";
 }
 
-export function createMockTransport({ api, now = () => new Date().toISOString(), delayMs = 18, storage = null, activity = null, google = null }: MockOptions): ChatTransport & { reset(): void } {
+export function createMockTransport({ api, now = () => new Date().toISOString(), delayMs = 18, storage = null, activity = null, google = null, scriptedLog = null }: MockOptions): ChatTransport & { reset(): void } {
   type Saved = { log: ChatLog; generation: number | null; seq: number };
   let saved: Saved | null = null;
   try {
@@ -90,11 +163,15 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
     reset() {
       log = { chatVersion: 0, messages: [] };
       storage?.removeItem(STORE_KEY);
+      scriptedLog?.clear();
     },
     async load() {
       // Delete case moves the generation and erases the chat.
       const g = (await api.state()).generation;
-      if (generation !== null && g !== generation) log = { chatVersion: 0, messages: [] };
+      if (generation !== null && g !== generation) {
+        log = { chatVersion: 0, messages: [] };
+        scriptedLog?.clear();
+      }
       generation = g;
       persist();
       return structuredClone(log);
@@ -233,6 +310,26 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
           break;
         }
         case "gmail": {
+          // 0019, P21: with the demo calendar loaded, the scripted chat
+          // adds the next two demo messages the office sent by email, as
+          // pastes, so a demo-length transcript has two emails. It says it
+          // did not search Gmail.
+          const st0 = await api.state();
+          if (st0.case.calendar) {
+            fixtures ??= (await api.fixtures()).flatMap((s) => s.messages);
+            const have = new Set(st0.messages.map((m) => m.id));
+            const emails = fixtures.filter((m) => DEMO_EMAILS.includes(m.id) && !have.has(m.id)).slice(0, 2);
+            if (emails.length > 0) {
+              const words: string[] = [];
+              for (const m of emails) {
+                const outcome = await takeIn({ ...m, channel: "email" });
+                if (outcome) words.push(outcome.words);
+              }
+              say(`This is the scripted chat, so I did not search Gmail. I added ${emails.length === 1 ? "the demo email" : `the ${emails.length} demo emails`} as messages from the office.`);
+              for (const w of words) say(w);
+              break;
+            }
+          }
           // The scripted chat never reads Gmail. It says where Google
           // stands, from the server's status.
           const g = await google?.().catch(() => null);
@@ -247,6 +344,32 @@ export function createMockTransport({ api, now = () => new Date().toISOString(),
                     ? "Google needs you to sign in again. Reconnect it in Connections, and the assistant can search your email for messages about appointments."
                     : "Gmail is not connected. Connect Google in Connections, and the assistant can search your email for messages about appointments.",
           );
+          break;
+        }
+        case "calendar": {
+          // 0019, P21: a scripted Google Calendar receipt for the
+          // confirmed or requested appointment, with Undo kept in the tab.
+          const st = await tool("sync_calendar", "Updating your online calendar", () => api.state());
+          const slot = ["requested", "confirmed", "change_proposed"].map((k) => st?.case.slots.find((s) => s.state === k)).find(Boolean);
+          if (!scriptedLog || !slot) {
+            say(!slot ? "There is no confirmed or requested appointment to add yet." : "This is the scripted chat, so I cannot write to Google Calendar.");
+            break;
+          }
+          const words = slot.state === "requested" ? "requested" : "confirmed";
+          const entry: ActivityEntry = {
+            id: `${SCRIPTED_PREFIX}${nextId("calendar")}`,
+            at: now(),
+            actor: "agent",
+            kind: CALENDAR_KINDS.added,
+            summary: `Added ${slot.label} to Google Calendar as ${words}. Scripted, nothing was written.`,
+            target: { type: "slot", id: slot.key },
+            undoable: true,
+            undone: false,
+          };
+          scriptedLog.add(entry);
+          act(entry);
+          say(`I added ${slot.label} to your calendar as ${words}. This is the scripted chat, so nothing was written to Google.`);
+          chips.push({ slotKey: slot.key, label: slot.label, stateLabel: slot.stateLabel, evidenceIds: slot.evidenceIds });
           break;
         }
         case "status": {

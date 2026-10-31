@@ -1,6 +1,6 @@
 // Layout helpers for the shell: which layout the window has, and finding a
 // fact chip again to give focus back to it.
-import { useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 // The schedule is a column (or a rail) beside the chat from this width up,
 // and a sheet below it (styles.css uses the same breakpoints). The sidebar
@@ -10,16 +10,27 @@ export const LAPTOP = "(min-width: 1024px)";
 // The sidebar is a rail from this width up, and a drawer below it (0015).
 export const TABLET_UP = "(min-width: 768px)";
 
-export function useMedia(query: string): boolean {
-  const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
-  useEffect(() => {
-    const list = window.matchMedia(query);
-    const update = () => setMatches(list.matches);
-    update();
-    list.addEventListener("change", update);
-    return () => list.removeEventListener("change", update);
-  }, [query]);
-  return matches;
+// 0019, round 3: the layout a server-rendered page was rendered in, set
+// before the render on both sides from the boot data, so hydration reads
+// the same answers. A phone is rendered as a phone (the browser's mobile
+// hint), so its first paint carries no hidden schedule to hydrate.
+let renderedView: "phone" | "laptop" = "laptop";
+export const setRenderedView = (v: "phone" | "laptop" | undefined) => void (renderedView = v ?? "laptop");
+export const renderedAs = () => renderedView;
+
+// 0019, P30: the server renders a laptop, so `serverValue` is what a
+// media query reads there and while the page hydrates. React then renders
+// again with the device's own answer.
+export function useMedia(query: string, serverValue = false): boolean {
+  const subscribe = useCallback(
+    (change: () => void) => {
+      const list = window.matchMedia(query);
+      list.addEventListener("change", change);
+      return () => list.removeEventListener("change", change);
+    },
+    [query],
+  );
+  return useSyncExternalStore(subscribe, () => window.matchMedia(query).matches, () => serverValue);
 }
 
 // Moves focus to an element once it can take it. A sheet or the drawer
@@ -30,7 +41,9 @@ export function focusSoon(target: () => HTMLElement | null, frames = 30): void {
     requestAnimationFrame(() => {
       const el = target();
       el?.focus({ preventScroll: true });
-      if (el && document.activeElement !== el && left > 0) attempt(left - 1);
+      // 0019: also while the target is not there yet, as a sheet that
+      // mounts on its first open (P19).
+      if ((!el || document.activeElement !== el) && left > 0) attempt(left - 1);
     });
   attempt(frames);
 }

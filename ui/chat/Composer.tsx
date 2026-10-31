@@ -28,9 +28,17 @@ export function composerRows(value: string, charsPerLine = Number.POSITIVE_INFIN
 export const AVERAGE_CHAR_PX = 8.4;
 export const charsPerLine = (innerWidthPx: number) => Math.max(8, Math.floor(innerWidthPx / AVERAGE_CHAR_PX));
 
+// 0019, round 3: the composer's text can live in the field itself, with a
+// small store beside it (`drafts`). Then a key press re-renders nothing,
+// and the composer renders again only when the text turns empty or
+// non-empty or its row count changes. A text set from outside (a demo
+// message, a lost turn, a clear after sending) is written to the field.
+export type Drafts = { get(): string; set(next: string): void; subscribe(f: () => void): () => void };
+
 export function Composer({
-  value,
+  value: controlledValue,
   onChange,
+  drafts,
   onSend,
   disabled,
   busy,
@@ -40,8 +48,11 @@ export function Composer({
   model = null,
   onStop,
 }: {
-  value: string;
-  onChange: (v: string) => void;
+  // Controlled: the text and its setter. Or `drafts`, for a field that
+  // keeps its own text.
+  value?: string;
+  onChange?: (v: string) => void;
+  drafts?: Drafts;
   onSend: () => void;
   disabled: boolean;
   busy: boolean;
@@ -67,6 +78,37 @@ export function Composer({
     observer.observe(el);
     return () => observer.disconnect();
   }, [inputRef]);
+
+  // The field's text, from the store when it keeps its own.
+  // With a store, the send button's disabled state follows the text on the
+  // element itself, so turning non-empty renders nothing either. A render
+  // reads the same emptiness, so React and the element agree.
+  const empty = drafts ? drafts.get().trim() === "" : (controlledValue ?? "").trim() === "";
+  const sendRef = useRef<HTMLButtonElement>(null);
+  const blockedRef = useRef(false);
+  const blocked = disabled || busy;
+  blockedRef.current = blocked;
+  const [ownRows, setOwnRows] = useState(() => (drafts ? composerRows(drafts.get(), perLine) : 1));
+  // Compared here first: a same-value setState can still cost a render.
+  const rowsNow = useRef(ownRows);
+  rowsNow.current = ownRows;
+  const rows = drafts ? ownRows : composerRows(controlledValue ?? "", perLine);
+  useEffect(() => {
+    if (!drafts) return;
+    const sync = () => {
+      const el = inputRef.current;
+      const v = drafts.get();
+      if (el && el.value !== v) el.value = v;
+      if (sendRef.current) sendRef.current.disabled = blockedRef.current || v.trim() === "";
+      const r = composerRows(v, perLine);
+      if (r !== rowsNow.current) {
+        rowsNow.current = r;
+        setOwnRows(r);
+      }
+    };
+    sync();
+    return drafts.subscribe(sync);
+  }, [drafts, perLine, inputRef]);
 
   return (
     <form
@@ -98,12 +140,12 @@ export function Composer({
         ref={inputRef}
         id="chat-input"
         name="message"
-        rows={composerRows(value, perLine)}
-        value={value}
+        rows={rows}
+        {...(drafts ? { defaultValue: drafts.get() } : { value: controlledValue ?? "" })}
         maxLength={MAX_MESSAGE}
         disabled={disabled}
         placeholder={disabled ? "The chat is not available" : "Ask about your appointments, or paste a message from the office"}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => (drafts ? drafts.set(e.target.value) : onChange?.(e.target.value))}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
@@ -148,7 +190,7 @@ export function Composer({
             <Icon name="stop" />
           </button>
         ) : (
-          <button type="submit" className="send-btn" disabled={disabled || busy || value.trim() === ""} aria-label="Send">
+          <button ref={sendRef} type="submit" className="send-btn" disabled={blocked || empty} aria-label="Send">
             <Icon name="send" />
           </button>
         )}

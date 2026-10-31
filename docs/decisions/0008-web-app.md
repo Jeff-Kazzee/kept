@@ -53,6 +53,10 @@ paired session cookie. `/api/chat` follows the same rule for POST and GET.
 The types and fixed sentences are 7A's, in `src/agent/types.ts`. The page
 imports them (`ui/chat/types.ts` adds only how it reaches the chat).
 
+Superseded in part by `0019-polish.md` (2026-10-30): W6's "system fonts
+only" is now Inter, self-hosted with no dependency, and P2's budget is
+100 KB.
+
 ## Coordinator decisions
 
 - W1. Laptop (1024 px and up): the chat is the main column and the

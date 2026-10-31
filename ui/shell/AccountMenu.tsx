@@ -7,7 +7,7 @@ import { useId } from "react";
 import { Icon } from "../components/Icon.tsx";
 import { useMenu } from "../components/Menu.tsx";
 import type { SignedInSession } from "../hosted/session.ts";
-import { ThemeSetting } from "../pages/Settings.tsx";
+import { ThemeSetting } from "../pages/shared.tsx";
 import { itemsFor, type Mode, type Person, type View } from "./shell.ts";
 
 const NOTES: Partial<Record<string, string>> = {
@@ -53,7 +53,6 @@ export function AccountMenu({
         data-account-button=""
         aria-expanded={menu.open}
         aria-controls={id}
-        aria-label={`Account: ${who.name}, ${who.line}`}
         title={compact ? `${who.name} · ${who.line}` : undefined}
         onClick={() => menu.setOpen((o) => !o)}
       >
@@ -65,6 +64,10 @@ export function AccountMenu({
         <span className="side-label person-more">
           <Icon name="more" size="sm" />
         </span>
+        {/* 0019: the name is the visible words and then what the button
+            opens, so voice control can say what it sees. Folded to the
+            rail, the words are for screen readers only. */}
+        <span className="sr-only">{compact ? `${who.name}, ${who.line}, account menu` : ", account menu"}</span>
       </button>
       <div ref={menu.menuRef} id={id} className="menu account-menu" hidden={!menu.open}>
         {session && (

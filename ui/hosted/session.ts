@@ -12,12 +12,14 @@ import { WebAuthnError, startAuthentication, startRegistration } from "@simplewe
 import { ApiError } from "../api.ts";
 
 // "google" is an account from before 0020. It can no longer sign in.
-export type HostedAccount = { kind: "user" | "judge" | "google"; email: string | null; name: string | null };
+// `owner`: an opaque key of the app account, the same for every session of
+// it, for the page's per-account caches (sprint 19 round 2). Not a secret.
+export type HostedAccount = { kind: "user" | "judge" | "google"; email: string | null; name: string | null; owner?: string };
 
 export type SessionInfo =
   | { mode: "local" }
   | { mode: "hosted"; signedIn: false; passwordMin: number; dashboard?: boolean; publicSignup?: boolean; waitlistUrl?: string | null }
-  | { mode: "hosted"; signedIn: true; account: HostedAccount; balanceMicros: number; balance: string; expiresAt: number; passwordMin: number; dashboard?: boolean; publicSignup?: boolean };
+  | { mode: "hosted"; signedIn: true; account: HostedAccount; balanceMicros: number; balance: string; expiresAt: number; passwordMin: number; dashboard?: boolean; publicSignup?: boolean; waitlistUrl?: string | null };
 
 export type SignedInSession = Extract<SessionInfo, { signedIn: true }>;
 

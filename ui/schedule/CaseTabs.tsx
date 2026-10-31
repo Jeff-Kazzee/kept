@@ -12,7 +12,7 @@ import { Icon, type IconName } from "../components/Icon.tsx";
 import { InfoTip } from "../components/InfoTip.tsx";
 import { UntrustedBox } from "../components/Untrusted.tsx";
 import type { ActivityActor, ActivityEntry } from "../contract.ts";
-import { clockTime, shortTime, stampTime, wallParts } from "../format.ts";
+import { clockTime, relativeTime, shortTime, stampTime, wallParts } from "../format.ts";
 
 // What the office asked the user to bring or do, each with its quote and
 // source. Built from accepted evidence, so these are not model output.
@@ -128,7 +128,7 @@ export function ActivityPanel({ entries }: { entries: ActivityEntry[] }) {
               // 0018, H5: an event the person removed in Google since.
               const gone = removedInGoogle(activity, google?.calendarOwn, e);
               return (
-                <li key={e.id} className={`activity-row${e.undone ? " is-undone" : ""}`}>
+                <li key={e.id} className={`activity-row actor-${e.actor}${e.undone ? " is-undone" : ""}`}>
                   <span className={`avatar avatar-${e.actor}`} aria-hidden="true">
                     <Icon name={ACTOR_ICONS[e.actor]} size="sm" />
                   </span>
@@ -137,7 +137,8 @@ export function ActivityPanel({ entries }: { entries: ActivityEntry[] }) {
                     <p className="activity-meta">
                       <span>{ACTOR_WORDS[e.actor]}</span>
                       <time dateTime={e.at} title={shortTime(e.at)}>
-                        {clockTime(e.at)}
+                        <span aria-hidden="true">{relativeTime(e.at)}</span>
+                        <span className="sr-only">{shortTime(e.at)}</span>
                       </time>
                       {e.undone && <span>Undone{e.undoneAt ? ` ${clockTime(e.undoneAt)}` : ""}</span>}
                       {gone && <span>Since removed in Google Calendar</span>}

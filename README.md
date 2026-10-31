@@ -178,7 +178,9 @@ web app, `docs/decisions/0009-agent-first.md` for the agent that acts,
 the activity log and the case time zone,
 `docs/decisions/0010-providers.md` for the model providers and sign-in,
 and `docs/decisions/0011-ui-polish.md` for the agent UI, with
-`docs/decisions/0015-shell-layout.md` for its sidebar shell. `docs/diagrams.md` shows the slot states and the agent change
+`docs/decisions/0015-shell-layout.md` for its sidebar shell and
+`docs/decisions/0019-polish.md` for its design system and performance.
+`docs/diagrams.md` shows the slot states and the agent change
 flow.
 
 ## Commands

@@ -24,6 +24,7 @@
 // account's workspace only. A person's own Meta key and ChatGPT sign-in
 // are refused here. Codes, passwords and session tokens never reach a log
 // line or a JSON answer.
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { DELETE_CONFIRMATION } from "../src/case/constants.ts";
@@ -44,7 +45,8 @@ import { GOOGLE_CALLBACK_PATH, googleRedirectUris } from "./google.ts";
 import { appHosts, hostAllowed } from "./hosts.ts";
 import { apiPreamble, trustedSecure } from "./http.ts";
 import { API_SECURITY_HEADERS } from "./static.ts";
-import { CHATGPT_HOSTED_TEXT, MAX_BODY, createWorkspace, send, serveApi, type Workspace } from "./workspace.ts";
+import { LIVE_PATH, LIVE_CHECK_MS, parseSince, waitForChange, type Live } from "./live.ts";
+import { BOOT_PATH, CHATGPT_HOSTED_TEXT, MAX_BODY, bootOf, createWorkspace, liveOf, send, serveApi, type Workspace } from "./workspace.ts";
 import { AccountClosedError, WorkspaceBusyError, Workspaces, WorkspacesFullError } from "./workspaces.ts";
 
 export type HostedOptions = {
@@ -77,6 +79,8 @@ export const SIGNUP_CLOSED_TEXT = "New accounts are not open on this site yet. J
 export const AUTH_BODY_TEXT = "That request was too large, or did not say its size. Nothing was saved.";
 export const ACCOUNT_BUSY_TEXT = "The accounts database is busy just now. Try again in a moment. Nothing was changed.";
 export const SITE_BUSY_TEXT = "This site is busy just now. Try again in a minute. Nothing was saved.";
+// How often a held live read asks again whether its session still holds.
+export const LIVE_SESSION_MS = 8 * LIVE_CHECK_MS;
 export const DEMO_CONNECTED_TEXT = "The demo Gmail and Calendar are connected for every judge. You can close this page.";
 export const DELETE_ACCOUNT_BUSY_TEXT = "The assistant is still working on something for this account. Wait for it to finish, then delete the account again. Nothing was deleted.";
 
@@ -109,6 +113,9 @@ export const PLANS = [
 const JudgeBody = z.object({ code: z.string().max(200) }).strict();
 const EmptyBody = z.object({}).strict();
 const DeleteBody = z.object({ confirmation: z.string().max(20) }).strict();
+
+// The page's key for an account (sprint 19 round 2).
+export const ownerKey = (accountId: string) => createHash("sha256").update(`appointments-page-owner:${accountId}`).digest("hex").slice(0, 24);
 
 // The judge code session's cookie. Email accounts use Better Auth's.
 export const sessionCookieName = (port: number, secure: boolean) => (secure ? "__Host-appt_session" : `appt_session_${port}`);
@@ -323,13 +330,17 @@ export async function createHostedApp(o: HostedOptions) {
     return {
       mode: "hosted" as const,
       signedIn: true,
-      account: { kind: account.kind, email: account.email, name: account.name },
+      // `owner` keys the page's per-account caches (0019's first read and
+      // reply ticks): a hash, so the id itself never reaches the page.
+      account: { kind: account.kind, email: account.email, name: account.name, owner: ownerKey(account.id) },
       balanceMicros: balance,
       balance: formatBalance(balance),
       expiresAt,
       passwordMin: PASSWORD_MIN,
       dashboard: auth.dashboardOn,
       publicSignup: o.auth.publicSignup,
+      // So the sign-in screen after a sign-out still shows the waitlist line.
+      waitlistUrl: o.auth.publicSignup ? null : o.auth.waitlistUrl,
     };
   };
 
@@ -564,15 +575,29 @@ export async function createHostedApp(o: HostedOptions) {
     if (path === "/api/settings" && method === "GET") {
       const r = await ws.api({ method, path, body: undefined });
       if (r.status !== 200) return send(res, r.status, r.body), true;
-      const view = r.body as { models: Array<{ id: string }> } & Record<string, unknown>;
-      send(res, 200, {
-        ...view,
-        hosted: { chatgptAvailable: false, chatgptText: CHATGPT_HOSTED_TEXT },
-        models: view.models.map((m) => ({ ...m, turnCost: turnCostWords(m.id, config.markupHundredths) })),
-      });
+      send(res, 200, hostedSettings(r.body));
+      return true;
+    }
+    // Sprint 19 round 2: the first read (0019) with the hosted site's own
+    // settings view, so the page starts as GET /api/settings would.
+    if (path === BOOT_PATH && method === "GET") {
+      const boot = await bootOf(ws);
+      if (!boot) return send(res, 503, { error: "boot_unavailable", message: "The case changed during the read. Read it again." }), true;
+      send(res, 200, { ...boot, settings: boot.settings === null ? null : hostedSettings(boot.settings) });
       return true;
     }
     return false;
+  }
+
+  // The settings view on the hosted site: ChatGPT not offered here, and a
+  // rough cost per turn for each model.
+  function hostedSettings(body: unknown) {
+    const view = body as { models: Array<{ id: string }> } & Record<string, unknown>;
+    return {
+      ...view,
+      hosted: { chatgptAvailable: false, chatgptText: CHATGPT_HOSTED_TEXT },
+      models: view.models.map((m) => ({ ...m, turnCost: turnCostWords(m.id, config.markupHundredths) })),
+    };
   }
 
   // A plain page for the person who opened the demo-connect link. Codes
@@ -626,6 +651,33 @@ export async function createHostedApp(o: HostedOptions) {
       const who = await sessionOf(req, res);
       if (!who) return send(res, 401, { error: "signed_out", message: SIGNED_OUT_TEXT });
       const accountId = who.account.id;
+      // Round 2, finding 4: the held live read. Each check looks at this
+      // account's workspace only if it is open, and the session (Better
+      // Auth's or a judge code's) is read again every LIVE_SESSION_MS, so a
+      // held request keeps nothing open and ends with its session.
+      const since = req.method === "GET" && url.pathname === LIVE_PATH ? parseSince(url.search) : null;
+      if (since) {
+        let gone = false;
+        let checked = now();
+        const read = async (): Promise<Live> => {
+          if (now() - checked >= LIVE_SESSION_MS) {
+            checked = now();
+            const again = await sessionOf(req, null).catch(() => null);
+            if (again?.account.id !== accountId) gone = true;
+          }
+          // Round 2, finding 9: a look that does not count as use.
+          return (await workspaces.peek(accountId, (ws) => liveOf(ws))) ?? since;
+        };
+        let live: Live | null = null;
+        try {
+          live = await waitForChange(read, since, { closed: () => gone || res.destroyed || res.writableEnded });
+        } catch {
+          live = null;
+        }
+        if (live && !gone && !res.destroyed) send(res, 200, live);
+        else if (!res.destroyed && !res.writableEnded) send(res, 401, { error: "signed_out", message: SIGNED_OUT_TEXT });
+        return;
+      }
       await workspaces.use(accountId, async (ws) => {
         if (await hostedOnly(ws, req, res, url.pathname, input)) return;
         await withUsageScope({ route: routeOf(url.pathname), turn: null }, () =>

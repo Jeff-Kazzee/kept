@@ -34,7 +34,9 @@ describe("0015: the shell", () => {
     expect(css).toMatch(/--side-w: 248px;/);
     expect(css).toMatch(/--rail-w: 64px;/);
     expect(css).toMatch(/--sidebar: light-dark\(#[0-9a-f]{6}, #[0-9a-f]{6}\);/);
-    expect(rule(".sidebar")).toMatch(/background: var\(--sidebar\)/);
+    // 0019, P34: Steel's sidebar is night glass in both themes.
+    expect(css).toMatch(/--sidebar-glass: rgb\(/);
+    expect(rule(".sidebar")).toMatch(/background: var\(--sidebar-glass\)/);
     expect(css).toMatch(/\.app\[data-side="full"\] \{ grid-template-columns: var\(--side-w\) minmax\(0, 1fr\); \}/);
   });
 
@@ -56,8 +58,10 @@ describe("0015: the shell", () => {
   });
 
   it("review C4: the suggestion row fades at its edge, with room for the last chip to scroll clear of the fade", () => {
-    const row = rule(".composer-inner > .chips");
-    expect(row).toMatch(/padding: 0 48px 2px 0/);
+    // 0019, P8: the row is the composer area's follow-up row.
+    const row = rule(".followup-chips");
+    expect(row).toMatch(/padding: 0 var\(--s-6\) var\(--s-px\) 0/);
     expect(row).toMatch(/mask-image: linear-gradient\(to right, black calc\(100% - 48px\), transparent\)/);
+    expect(row).toMatch(/scroll-snap-type: x mandatory/);
   });
 });

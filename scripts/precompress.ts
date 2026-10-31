@@ -1,7 +1,7 @@
 // Runs after `vite build` (see `pnpm build`). Writes a brotli (.br) and a
 // gzip (.gz) copy beside every text file of the UI build, so the server
 // sends them without compressing on each request. Then it checks the
-// JavaScript budget: the scripts index.html loads must stay under 150 KB
+// JavaScript budget: the scripts index.html loads must stay under 100 KB (0019, P18)
 // gzipped. Over budget, it exits 1.
 //
 //   node scripts/precompress.ts [dir]    dir defaults to dist/ui
@@ -10,7 +10,7 @@ import path from "node:path";
 import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 import { fromPackage } from "../src/paths.ts";
 
-export const JS_BUDGET_BYTES = 150 * 1024;
+export const JS_BUDGET_BYTES = 100 * 1024;
 const COMPRESSIBLE = new Set([".html", ".js", ".css", ".svg", ".json", ".txt", ".webmanifest"]);
 
 function files(dir: string): string[] {

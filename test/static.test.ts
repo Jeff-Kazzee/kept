@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { JS_BUDGET_BYTES, firstLoadScripts, precompress } from "../scripts/precompress.ts";
-import { BuildError, CONTENT_SECURITY_POLICY, IMMUTABLE, createStaticHandler, loadBuild, pickEncoding, readBuildFile } from "../server/static.ts";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { BuildError, CONTENT_SECURITY_POLICY, FIRST_LOAD_READS, IMMUTABLE, bootBlock, createStaticHandler, loadBuild, pickEncoding, readBuildFile, withPreloads, withRendered, type StaticOptions } from "../server/static.ts";
 
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -33,8 +34,8 @@ function build() {
 
 type Res = { status: number; headers: Record<string, string | string[] | undefined>; body: Buffer };
 
-async function serve(dir: string) {
-  const handler = createStaticHandler(dir);
+async function serve(dir: string, preload: readonly string[] = [], render?: StaticOptions["render"]) {
+  const handler = createStaticHandler(dir, { preload, ...(render ? { render } : {}) });
   const server = createServer(handler);
   servers.push(server);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
@@ -58,7 +59,8 @@ describe("production build serving", () => {
     expect(out.map((c) => c.file).sort()).toEqual(["assets/index-abc123.css", "assets/index-abc123.js", "assets/vendor-def456.js", "icon.svg", "index.html"]);
     for (const c of out) expect(c.br).toBeLessThanOrEqual(c.raw + 20);
     expect(firstLoadScripts(INDEX)).toEqual(["assets/index-abc123.js", "assets/vendor-def456.js"]);
-    expect(JS_BUDGET_BYTES).toBe(150 * 1024);
+    // 0019, P18: the budget tightened from 150 KB to 100 KB.
+    expect(JS_BUDGET_BYTES).toBe(100 * 1024);
   });
 
   it("sends brotli or gzip as accepted, immutable caching on hashed assets and no-cache on index.html", async () => {
@@ -160,3 +162,113 @@ describe("production build serving", () => {
     expect(() => readBuildFile(dir, "/assets")).toThrow(/not a regular file/);
   });
 });
+
+describe("0019, P17: the first reads start with the page", () => {
+  it("local mode's index.html preloads each first read as a fetch, in every encoding, and the CSP is unchanged", async () => {
+    const dir = build();
+    precompress(dir);
+    const get = await serve(dir, FIRST_LOAD_READS);
+    expect(FIRST_LOAD_READS).toEqual(["/api/session", "/api/boot"]);
+    const plain = (await get("/")).body.toString("utf8");
+    for (const read of FIRST_LOAD_READS) expect(plain).toContain(`<link rel="preload" href="${read}" as="fetch" crossorigin>`);
+    // Before </head>, so the browser starts them before the script runs.
+    expect(plain.indexOf('rel="preload"')).toBeLessThan(plain.indexOf("</head>"));
+    const br = await get("/", { "Accept-Encoding": "br" });
+    expect(br.headers["content-encoding"]).toBe("br");
+    expect(brotliDecompressSync(br.body).toString("utf8")).toBe(plain);
+    const gz = await get("/", { "Accept-Encoding": "gzip" });
+    expect(gunzipSync(gz.body).toString("utf8")).toBe(plain);
+    // A path the app owns gets the same page.
+    expect((await get("/connections")).body.toString("utf8")).toBe(plain);
+    expect((await get("/")).headers["content-security-policy"]).toBe(CONTENT_SECURITY_POLICY);
+    // The ETag is the page's own, so a cached copy without the preloads is replaced.
+    const bare = await serve(dir);
+    expect((await get("/")).headers.etag).not.toBe((await bare("/")).headers.etag);
+  });
+
+  it("the hosted site has none: its reads need a session first", async () => {
+    const dir = build();
+    precompress(dir);
+    const get = await serve(dir);
+    expect((await get("/")).body.toString("utf8")).not.toContain('rel="preload"');
+    expect(withPreloads(INDEX, [])).toBe(INDEX);
+  });
+
+  it("main.ts passes the preloads only in local mode", async () => {
+    const { readFileSync } = await import("node:fs");
+    const main = readFileSync(new URL("../server/main.ts", import.meta.url), "utf8");
+    expect(main).toMatch(/const local = config\.mode === "local";/);
+    expect(main).toMatch(/preload: local \? FIRST_LOAD_READS : \[\]/);
+    // P30: the server render is local mode only too.
+    expect(main).toMatch(/const ssr = local && existsSync\(ssrEntry\)/);
+  });
+});
+
+describe("0019, P30: the server-rendered case screen", () => {
+  const ROOTED = INDEX.replace("<body>", '<body><div id="root"></div>').replace('<div id="root"></div><div id="root"></div>', '<div id="root"></div>');
+
+  it("puts the case's HTML in #root and its boot data after it as a JSON block that no message can close", () => {
+    const boot = { state: { generation: 7 }, chat: { messages: [{ text: "</script><script>alert(1)</script> <!-- \u2028" }] } };
+    const block = bootBlock(boot);
+    expect(block.startsWith('<script id="boot" type="application/json">')).toBe(true);
+    const json = block.slice(block.indexOf(">") + 1, block.lastIndexOf("</script>"));
+    expect(json).not.toMatch(/<|\u2028/);
+    expect(JSON.parse(json)).toEqual(boot);
+    const page = withRendered('<body><div id="root"></div></body>', { html: "<main>case $& $1</main>", boot });
+    expect(page).toContain('<div id="root" data-server-rendered=""><main>case $& $1</main></div><script id="boot"');
+    expect(page.match(/<\/script>/g)).toHaveLength(1);
+  });
+
+  it("serves the rendered page with no-store and no ETag, falls back to the plain page when the render fails, and never renders the scripted chat", async () => {
+    const dir = build();
+    writeFileSync(path.join(dir, "index.html"), ROOTED);
+    precompress(dir);
+    let fail = false;
+    const get = await serve(dir, ["/api/boot"], async () => {
+      if (fail) throw new Error("no");
+      return { html: "<p>rendered</p>", boot: { state: { generation: 1 } } };
+    });
+    const r = await get("/", { "Accept-Encoding": "br" });
+    expect(r.headers["cache-control"]).toBe("no-store");
+    expect(r.headers.etag).toBeUndefined();
+    expect(r.headers["content-security-policy"]).toBe(CONTENT_SECURITY_POLICY);
+    const page = brotliDecompressSync(r.body).toString("utf8");
+    expect(page).toContain("<p>rendered</p>");
+    expect(page).toContain('id="boot"');
+    // Its data is inline, so it preloads none.
+    expect(page).not.toContain('rel="preload" href="/api/boot"');
+    expect((await get("/?mockchat=1")).body.toString("utf8")).not.toContain("<p>rendered</p>");
+    // Muse round 2, finding 6: only the case's own address is rendered.
+    let renders = 0;
+    const counting = await serve(dir, [], async () => (renders++, { html: "<p>rendered</p>", boot: {} }));
+    for (const stray of ["/x", "/settings", "/wp-login"]) expect((await counting(stray)).body.toString("utf8")).not.toContain("<p>rendered</p>");
+    expect(renders).toBe(0);
+    expect((await counting("/")).body.toString("utf8")).toContain("<p>rendered</p>");
+    expect(renders).toBe(1);
+    // Finding 8: a refused encoding is never sent.
+    const plainBody = await counting("/", { "Accept-Encoding": "br;q=0, gzip;q=0" });
+    expect(plainBody.headers["content-encoding"]).toBeUndefined();
+    expect(plainBody.body.toString("utf8")).toContain("<p>rendered</p>");
+    const gz = await counting("/", { "Accept-Encoding": "br;q=0, gzip" });
+    expect(gz.headers["content-encoding"]).toBe("gzip");
+    expect(gunzipSync(gz.body).toString("utf8")).toContain("<p>rendered</p>");
+    const errors: unknown[] = [];
+    const log = console.error;
+    console.error = (...a: unknown[]) => void errors.push(a);
+    fail = true;
+    const plain = (await get("/")).body.toString("utf8");
+    console.error = log;
+    expect(plain).not.toContain("<p>rendered</p>");
+    expect(plain).toContain('rel="preload" href="/api/boot"');
+    expect(errors).toHaveLength(1);
+  });
+
+  it("the hosted site renders nothing on the server: one account's HTML is never made or kept for another", async () => {
+    const { readFileSync } = await import("node:fs");
+    const hosted = readFileSync(new URL("../server/hosted.ts", import.meta.url), "utf8");
+    expect(hosted).not.toMatch(/renderCase|render:/);
+    const main = readFileSync(new URL("../server/main.ts", import.meta.url), "utf8");
+    expect(main).toMatch(/if \(!renderWorkspace \|\| !hostAllowed\(allowed, req\.headers\.host\)\) return null;/);
+  });
+});
+

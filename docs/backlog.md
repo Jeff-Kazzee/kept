@@ -714,6 +714,56 @@ Branch `sprint/16-submission`.
 - [ ] SP16.5 Fast-forward `prod`. Publish only with Jeff's approval. Submit
   before the deadline.
 
+## Sprint 17: design, UX and performance polish
+
+Branch `sprint/17-polish`. Decisions: `docs/decisions/0019-polish.md`.
+
+- [x] P1 Inter, self-hosted and preloaded, with a metric-matched fallback
+  and a tighter type scale.
+- [x] P2 Tokens for every color, space, radius, surface, elevation and
+  motion, with a test against raw values.
+- [x] P3 Quiet, plain and emphasized cards. Receipts in one quiet group.
+- [x] P4 One inline icon set.
+- [x] P5 A turn reads as one unit, with a folding receipt group and an
+  Undo per row.
+- [x] P6 Slot chips only for new or changed times.
+- [x] P7 A calm live step list that folds into the turn's closing line.
+- [x] P8 Follow-up chips in the composer's own row, never over the
+  transcript.
+- [x] P9 The welcome with three start cards and the connections.
+- [x] P10 The reply card with its read back progress.
+- [x] P11 Today and both sides of a clash marked in the agenda.
+- [x] P12 One compact "Waiting for you" card, and "Ask about this
+  change".
+- [x] P13 The activity timeline with relative times.
+- [x] P14 Motion tokens, transform and opacity only, off under reduced
+  motion.
+- [x] P15 Skeletons in the shell's shape, and no welcome while the chat
+  loads.
+- [x] P16 The phone sheet's handle and snap points, 44 px targets,
+  nothing sideways.
+- [x] P17 First reads preloaded in local mode, fixtures on demand.
+- [x] P18 Code split, first load 97.8 KB gzipped, budget 100 KB.
+- [x] P19 Content visibility, memoized turns, layout read once per frame.
+- [x] P20 The poll backs off when quiet and stops while hidden.
+- [x] The scripted chat plays a demo-length transcript (P21).
+- [x] LCP under 1.2 s on a 4x slowed phone with a stored chat: 848 ms
+  in round 2, with the server render (P30).
+- [x] Round 2: the eight Muse Wonder findings closed (0019, round 2), one
+  held live read, GET /api/boot, the server-rendered case screen.
+- [ ] Round 2 targets not met: INP under 50 ms (112 ms) and first-load JS
+  under 80 KB counting the hydrated chunks (113.1 KB). Follow-up.
+- [x] Round 3: the Steel look (0019, P34, proposed), the Muse Wonder
+  round 2 findings closed, a composer that renders nothing on a key press,
+  phone-layout server render and sliced hydration.
+- [ ] Jeff confirms Steel over Fog (P34).
+- [ ] Round 3 targets not met: INP under 50 ms (first key 72 ms, a facts
+  card 120 ms), no task over 100 ms after the first paint (hydration
+  commit 105 to 190 ms), first-load JS under 80 KB (not without replacing
+  React). Follow-up.
+- [ ] Jeff reviews the before and after screenshots.
+- [ ] Confirm or change the choices marked proposed in 0019 (P21 to P34).
+
 ## Sprint 10: model providers and sign-in
 
 Branch `sprint/10-providers`. See `docs/decisions/0010-providers.md`.

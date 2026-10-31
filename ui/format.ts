@@ -54,6 +54,19 @@ export function emailTime(iso: string, zone = caseZone): string {
 }
 
 // "10:02 AM", for a timeline row under its day.
+// 0019, P13: "Just now", "2 min ago", "3 h ago", or the clock time once it
+// is longer ago than that. The full time shows on hover.
+export function relativeTime(iso: string, now = Date.now(), zone = caseZone): string {
+  const ms = now - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return clockTime(iso, zone);
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "Just now";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.floor(min / 60);
+  if (h < 6) return `${h} h ago`;
+  return clockTime(iso, zone);
+}
+
 export function clockTime(iso: string, zone = caseZone): string {
   const p = parts(formatter("short", zone), Date.parse(iso));
   return `${p.hour}:${p.minute} ${p.dayPeriod}`;

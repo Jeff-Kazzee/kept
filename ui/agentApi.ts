@@ -66,13 +66,13 @@ export async function retryBusy<T>(write: () => Promise<T>, wait = (ms: number) 
 
 // What the sign-out answers: the settings, and a notice when ChatGPT did
 // not confirm the sign-out on its side.
+// The settings as the page keeps them, from the route or the first read.
+export const normalizeSettings = (raw: Settings | null): Settings | null => (raw ? { ...raw, modelNotice: raw.modelNotice ?? null } : null);
+
 export type SignOutAnswer = Settings & { notice: string | null };
 
 export const realBackend: AgentBackend = {
-  settings: async () => {
-    const raw = await orNull(() => request<Settings>("GET", "/api/settings"));
-    return raw ? { ...raw, modelNotice: raw.modelNotice ?? null } : null;
-  },
+  settings: async () => normalizeSettings(await orNull(() => request<Settings>("GET", "/api/settings"))),
   setTimezone: (timezone, expectedVersion, from) =>
     retryBusy(() => request("PUT", "/api/settings/timezone", { timezone, expectedVersion, ...(from === "browser" ? { source: "browser" } : {}) })),
   setProvider: (provider, expectedVersion) => retryBusy(() => request("PUT", "/api/settings/provider", { provider, expectedVersion })),

@@ -14,49 +14,11 @@ import { clockTime, wallNow, zoneWithShortName } from "../format.ts";
 import { dateLabel } from "../../src/slots/labels.ts";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon, type IconName } from "../components/Icon.tsx";
-import { THEME_EVENT, readTheme, saveTheme, type ThemeChoice } from "../theme.ts";
+import { CASE_DELETED_PENDING_TEXT, CASE_DELETED_SHARED_TEXT, CASE_DELETED_TEXT, ThemeSetting, zoneSourceWords } from "./shared.tsx";
 import { DeleteAccountPanel, HostedProviderSetting, UsageSection } from "../hosted/Usage.tsx";
 
-const THEMES: Array<{ value: ThemeChoice; label: string; icon: IconName }> = [
-  { value: "dark", label: "Dark", icon: "moon" },
-  { value: "light", label: "Light", icon: "sun" },
-  { value: "system", label: "System", icon: "monitor" },
-];
+export { CASE_DELETED_PENDING_TEXT, CASE_DELETED_SHARED_TEXT, CASE_DELETED_TEXT, ThemeSetting, ZoneNotice, caseDeletedShown, zoneMismatch, zoneSourceWords } from "./shared.tsx";
 
-// The theme switch, in Settings and in the account menu. Both stay in step
-// through the theme event (Z7).
-export function ThemeSetting({ compact = false }: { compact?: boolean }) {
-  const uid = useId();
-  const [choice, setChoice] = useState<ThemeChoice>(() => (typeof localStorage === "undefined" ? "dark" : readTheme()));
-  useEffect(() => {
-    const update = (e: Event) => setChoice((e as CustomEvent<ThemeChoice>).detail);
-    window.addEventListener(THEME_EVENT, update);
-    return () => window.removeEventListener(THEME_EVENT, update);
-  }, []);
-  return (
-    <fieldset className={compact ? "stack-xs theme-compact" : "stack-sm"}>
-      <legend className={compact ? "menu-label" : "field-label"}>Theme</legend>
-      <div className="segmented">
-        {THEMES.map((t) => (
-          <label key={t.value} htmlFor={`${uid}-${t.value}`}>
-            <input
-              id={`${uid}-${t.value}`}
-              type="radio"
-              name={`${uid}-theme`}
-              value={t.value}
-              checked={choice === t.value}
-              onChange={() => {
-                setChoice(t.value);
-                saveTheme(t.value);
-              }}
-            />
-            <Icon name={t.icon} size="sm" /> {t.label}
-          </label>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
 
 // Connections: the model provider and the model, and Google.
 export function ConnectionsPage({ modelClient, run }: { modelClient: string; run: Run }) {
@@ -133,45 +95,6 @@ export function UsagePage({ run }: { run: Run }) {
   return (
     <div className="stack settings">
       <UsageSection run={run} />
-    </div>
-  );
-}
-
-const SOURCE_WORDS: Record<Settings["timezoneSource"], string> = {
-  you: "Set by you",
-  agent: "Set by the assistant",
-  browser: "From the first browser that opened the app",
-  default: "The app's default",
-};
-
-// 0016, H3: where the zone came from. "From this device" only when this
-// device's zone is the case's zone.
-export function zoneSourceWords(source: Settings["timezoneSource"], zone: string, device: string | null): string {
-  return source === "browser" && device === zone ? "From this device" : SOURCE_WORDS[source];
-}
-
-// 0016, H3: the zone came from a browser or the default and differs from
-// this device's. Null when there is nothing to say.
-export function zoneMismatch(settings: Pick<Settings, "timezone" | "timezoneSource">, device: string | null): string | null {
-  if (!device || device === settings.timezone) return null;
-  return settings.timezoneSource === "browser" || settings.timezoneSource === "default" ? device : null;
-}
-
-// A short notice with one button. The zone changes only when the person
-// presses it.
-export function ZoneNotice({ settings, device, run, save }: { settings: Settings; device: string | null; run: Run; save: (zone: string) => Promise<unknown> }) {
-  const other = zoneMismatch(settings, device);
-  if (!other) return null;
-  const from = settings.timezoneSource === "browser" ? "set by the first browser that opened the app" : "the app's default";
-  return (
-    <div className="offline zone-notice" role="status">
-      <Icon name="globe" size="sm" />
-      <span>
-        Times show in {settings.timezone}, {from}. This device uses {other}.
-      </span>
-      <ActionButton run={run} size="sm" variant="ghost" action={() => save(other)}>
-        Use {other}
-      </ActionButton>
     </div>
   );
 }
@@ -610,18 +533,6 @@ function CalendarReadButton({ run, onRead }: { run: Run; onRead: (read: Calendar
       {reading ? "Reading the calendar…" : "Read the calendar again"}
     </ActionButton>
   );
-}
-
-// What the page says once Delete case finished (0017, E5).
-export const CASE_DELETED_TEXT = "The case was deleted. Its messages, facts, replies, chat and activity are erased. Events it added to Google Calendar stay there.";
-// 0021, D6: the shared demo calendar loses the case's events.
-export const CASE_DELETED_SHARED_TEXT = "The case was deleted. Its messages, facts, replies, chat and activity are erased, and so are the events it added to the demo calendar.";
-
-// Fix round 1, R7: the sentence stays on the page while the new, empty case
-// is the one shown, so until the next thing done in the case. A Delete case
-// is seen by its generation moving on.
-export function caseDeletedShown(deletedFrom: number | null, state: { generation: number; caseVersion: number }): boolean {
-  return deletedFrom !== null && state.generation !== deletedFrom && state.caseVersion === 0;
 }
 
 // Delete case. The only permanent deletion, with its own typed

@@ -10,6 +10,11 @@ import { Icon } from "../components/Icon.tsx";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { UntrustedBox } from "../components/Untrusted.tsx";
 import { shortTime } from "../format.ts";
+import { readbackDone, readbackKey, readbackSnapshot, scopeReadback, setSharedReadback, subscribeReadback, type Readback } from "./readback.ts";
+
+// The reply card's readback lives in readback.ts, so the shell can scope it
+// without loading this card (0019, P18).
+export { readbackDone, readbackKey, scopeReadback, setSharedReadback, type Readback };
 
 const ORIGIN_LABELS: Record<DraftView["origin"], string> = {
   choice: "Started from your answer to the question",
@@ -87,54 +92,6 @@ export function SentCard({ sent }: { sent: SentView }) {
   );
 }
 
-// The fields the user ticked and the reply-stream version they were ticked
-// at. Approval states that version, so the server refuses a readback made
-// before a later edit.
-export type Readback = { at: number; names: ReadonlySet<string> };
-
-// True when every field was ticked at the current version. A saved edit or
-// any other change to the draft moves the version, so old ticks no longer
-// count.
-export function readbackDone(read: Readback, draft: DraftView, version: number): boolean {
-  return read.at === version && draft.fields.every((f) => read.names.has(f.name));
-}
-
-// 0016, H5: the draft shows in the chat and in the schedule panel. Both
-// cards read one readback, so a tick in one shows in the other. It belongs
-// to the draft as shown: a new draft, a saved edit, any new version or
-// changed fields start it empty again. Not saved, as before.
-type SharedReadback = { key: string; read: Readback; confirmClaim: boolean };
-let sharedReadback: SharedReadback | null = null;
-const readbackListeners = new Set<() => void>();
-const subscribeReadback = (f: () => void) => {
-  readbackListeners.add(f);
-  return () => void readbackListeners.delete(f);
-};
-const readbackSnapshot = () => sharedReadback;
-
-export function setSharedReadback(key: string, change: (prev: SharedReadback) => Omit<SharedReadback, "key">): void {
-  const prev = sharedReadback?.key === key ? sharedReadback : null;
-  const at = prev?.read.at ?? Number(key.split("|")[1]);
-  sharedReadback = { key, ...change(prev ?? { key, read: { at, names: new Set() }, confirmClaim: false }) };
-  for (const f of readbackListeners) f();
-}
-
-// The case generation is part of it, so after Delete case a new draft with
-// the same id, version and text starts with no ticks (fix round 1, R5).
-// Fix round 2, N6: the readback belongs to one session. When the page's
-// session or account changes, including a sign-out, it is cleared, so ticks
-// never reach another account's draft in the same tab.
-let readbackOwner: string | null = null;
-export function scopeReadback(owner: string): void {
-  if (owner === readbackOwner) return;
-  readbackOwner = owner;
-  if (sharedReadback === null) return;
-  sharedReadback = null;
-  for (const f of readbackListeners) f();
-}
-
-export const readbackKey = (draft: DraftView, version: number, generation = 0) =>
-  [draft.id, version, generation, draft.text, JSON.stringify(draft.fields.map((f) => [f.name, f.value]))].join("|");
 
 export function DraftCard({ draft, version, generation = 0, profileVersion = 0, run }: { draft: DraftView; version: number; generation?: number; profileVersion?: number; run: Run }) {
   const [text, setText] = useState(draft.text);
@@ -162,14 +119,22 @@ export function DraftCard({ draft, version, generation = 0, profileVersion = 0, 
     });
 
   return (
-    <section className="card reply-draft" aria-label="Reply draft">
+    <section className="card card-emphasis reply-draft" aria-label="Reply draft">
       <div className="card-head">
         <div className="card-title">
-          <Icon name="reply" /> {draft.title}: {draft.slotLabel}
+          <span className="card-icon" aria-hidden="true">
+            <Icon name="reply" />
+          </span>
+          <span className="stack-xs">
+            <span className="card-kicker">Reply to the office</span>
+            <span>
+              {draft.title}: {draft.slotLabel}
+            </span>
+          </span>
         </div>
         <span className="model-tag">{ORIGIN_LABELS[draft.origin]}</span>
       </div>
-      <p className="small">{draft.asserts}</p>
+      <p className="small muted">{draft.asserts}</p>
       {!draft.valid && (
         <p className="warn-box" role="status">
           {draft.invalidNotice} ({draft.problems.join(", ")})
@@ -177,7 +142,17 @@ export function DraftCard({ draft, version, generation = 0, profileVersion = 0, 
       )}
 
       <div className="stack-sm">
-        <h3>Read back every field before you approve</h3>
+        <div className="readback-head">
+          <h3>Read back every field before you approve</h3>
+          {/* 0019, P10: how far the read back is. */}
+          {/* Round 2, finding 8: screen readers hear the count as it moves. */}
+          <span className={`readback-progress${allRead ? " is-done" : ""}`}>
+            <span className="tabular" role="status" aria-live="polite">
+              {ticked} of {draft.fields.length} checked
+            </span>
+            <progress className="progress" value={ticked} max={Math.max(1, draft.fields.length)} aria-hidden="true" />
+          </span>
+        </div>
         <p className="small muted">
           Tick each field after you check it against its source. Your ticks are not saved. If you close and reopen the app, the draft and your edit are kept, and you read each field again.
         </p>
@@ -264,7 +239,9 @@ export function DraftCard({ draft, version, generation = 0, profileVersion = 0, 
           {ticked} of {draft.fields.length} fields read.
         </p>
       ) : null}
-      <p className="small muted">Sending is simulated. Nothing leaves this app.</p>
+      <p className="simulated-line small">
+        <Icon name="info" size="sm" /> Sending is simulated. Nothing leaves this app.
+      </p>
     </section>
   );
 }

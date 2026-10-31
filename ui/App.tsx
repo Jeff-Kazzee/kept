@@ -7,35 +7,36 @@
 // page opens in the work area in place of the case. The shell reads the
 // case, the settings and the activity together, and gives the settings and
 // activity to every part through AgentContext.
-import { scopeReadback } from "./case/ReplyCard.tsx";
+import { caseNeedsCards, loadCaseCards } from "./case/lazyCards.tsx";
+import { onDemand } from "./components/onDemand.tsx";
+import { scopeReadback } from "./case/readback.ts";
+import { readBoot, scopeBoot } from "./boot.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { realBackend, type AgentBackend } from "./agentApi.ts";
+import { normalizeSettings, realBackend, type AgentBackend } from "./agentApi.ts";
 import { AgentContext, type AgentState } from "./agent/AgentContext.tsx";
 import { keep, sendDeviceZone, settle } from "./agent/reads.ts";
 import { runUndo, serialUndo } from "./agent/undo.ts";
-import { api, type AppState, type FixtureScenario } from "./api.ts";
+import { api, type AppState, type BootData, type FixtureScenario } from "./api.ts";
 import type { Run } from "./components/ActionButton.tsx";
 import { LoadError } from "./components/LoadError.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { DEFAULT_SETTINGS, deviceZone, type ActivityLog, type GoogleStatus, type Settings } from "./contract.ts";
 import { ChatView } from "./chat/ChatView.tsx";
-import { DEMO_IDS } from "./chat/demo.ts";
-import { createMockTransport } from "./chat/mockStream.ts";
+import { DEMO_IDS, createFixturesLoader } from "./chat/demo.ts";
+import type { ScriptedLog } from "./chat/mockStream.ts";
 import { realTransport } from "./chat/transport.ts";
-import type { ChatTransport } from "./chat/types.ts";
+import type { ChatLog, ChatTransport } from "./chat/types.ts";
 import { useChat } from "./chat/useChat.ts";
 import { errorSentence, setCaseZone, signInReturn } from "./format.ts";
-import { SchedulePanel, TABS, railLabel, waitingCount, type PanelTab } from "./schedule/SchedulePanel.tsx";
-import { slotElementId } from "./schedule/Agenda.tsx";
+import { TABS, railLabel, slotElementId, waitingCount, type PanelTab } from "./schedule/tabs.ts";
+import { SchedulePanel, loadPanel } from "./schedule/lazyPanel.tsx";
 import { useLiveRefresh } from "./useLiveRefresh.ts";
-import { LAPTOP, TABLET_UP, chipRef, findChip, focusSoon, useMedia, type ChipRef } from "./layout.ts";
-import { ConnectionsPage, SettingsPage, UsagePage, ZoneNotice, caseDeletedShown } from "./pages/Settings.tsx";
+import { LAPTOP, TABLET_UP, chipRef, findChip, focusSoon, renderedAs, useMedia, type ChipRef } from "./layout.ts";
+import { ZoneNotice, caseDeletedShown } from "./pages/shared.tsx";
 import { Avatar } from "./shell/AccountMenu.tsx";
-import { AgentAccessPage, PageFrame } from "./shell/Pages.tsx";
 import { Sidebar, type SideLayout } from "./shell/Sidebar.tsx";
 import { Toasts, type Toast } from "./shell/Toasts.tsx";
 import { VIEW_TITLES, openersFor, person, shellModes, readFolded, saveFolded, setupLink, viewIn, type ToastLink, type View } from "./shell/shell.ts";
-import { SignIn } from "./hosted/SignIn.tsx";
 import { AuthError, accountAuth, hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
 
 
@@ -46,13 +47,47 @@ import { AuthError, accountAuth, hostedApi, hostedSignInError, signedOut, type S
 // bundle. A production page ignores ?mockchat=1. Every route is the
 // server's, in every build (0011, U51).
 const fakesBuilt = import.meta.env.DEV || import.meta.env.APP_FAKES === true;
-const scriptedChat = () => fakesBuilt && new URLSearchParams(window.location.search).get("mockchat") === "1";
+type ScriptedModule = typeof import("./chat/mockStream.ts");
+// Started with the page, beside the first reads.
+const scriptedLoad: Promise<ScriptedModule> | null = fakesBuilt && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("mockchat") === "1" ? import("./chat/mockStream.ts") : null;
+const scriptedChat = () => fakesBuilt && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("mockchat") === "1";
+
+// 0019, P18: what is not on the case screen loads on demand. Each import
+// is one function, so every caller (the sidebar, the account menu, a
+// toast, the model pill, Open Usage) opens the same chunk, and the idle
+// prefetch below warms it.
+const pages = onDemand(() => import("./shell/PageView.tsx"));
+export const loadPages = pages.ensure;
+const PageView = pages.part((m) => m.default, "PageView", <PageLoading />);
+// The case's cards start loading with the page, beside the first reads,
+// and so does the panel on a laptop (0019, P18).
+// On a phone or a tablet the panel is a closed sheet, so its chunk waits
+// for the sheet or the idle prefetch.
+if (typeof matchMedia === "function" && matchMedia(LAPTOP).matches) void loadPanel().catch(() => {});
+// A server-rendered page starts what its screen uses in main.tsx instead.
+if (typeof document === "undefined" || document.getElementById("boot") === null) void loadCaseCards().catch(() => {});
+const signIn = onDemand(() => import("./hosted/SignIn.tsx"));
+const SignIn = signIn.part((m) => m.SignIn, "SignIn", <main className="loading" aria-busy="true" />);
+
+// While a page's chunk loads: the page's frame, quiet, so nothing jumps.
+function PageLoading() {
+  return (
+    <div className="page-inner" aria-busy="true">
+      <span className="skeleton-line w-40" />
+      <span className="skeleton-block" />
+    </div>
+  );
+}
 
 // The page first asks which mode the server runs in (0014). Local mode is
 // the app as it was. The hosted site shows the sign-in screen until a
 // session is open, and the app after.
-export function Root() {
-  const [session, setSession] = useState<SessionInfo | null>(null);
+// 0019, P30: a page the server rendered passes what it rendered from, so
+// the first render here is the same, and React hydrates it.
+export type Initial = { session: SessionInfo; boot: BootData };
+
+export function Root({ initial }: { initial?: Initial } = {}) {
+  const [session, setSession] = useState<SessionInfo | null>(initial?.session ?? null);
   const [failed, setFailed] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const load = useCallback(async () => {
@@ -65,9 +100,10 @@ export function Root() {
   }, []);
   const toSignIn = useCallback((text: string | null) => {
     setNotice(text);
-    setSession((s) => (s && s.mode === "hosted" ? { mode: "hosted", signedIn: false, passwordMin: s.passwordMin, ...(s.dashboard !== undefined ? { dashboard: s.dashboard } : {}), ...(s.publicSignup !== undefined ? { publicSignup: s.publicSignup } : {}) } : s));
+    setSession((s) => (s && s.mode === "hosted" ? { mode: "hosted", signedIn: false, passwordMin: s.passwordMin, ...(s.dashboard !== undefined ? { dashboard: s.dashboard } : {}), ...(s.publicSignup !== undefined ? { publicSignup: s.publicSignup } : {}), ...(s.waitlistUrl !== undefined ? { waitlistUrl: s.waitlistUrl } : {}) } : s));
   }, []);
   useEffect(() => {
+    if (initial) return;
     // A sign-in this site cannot finish, such as ChatGPT's, comes back as
     // /?signInError=<code>.
     const params = new URLSearchParams(window.location.search);
@@ -85,13 +121,16 @@ export function Root() {
     );
   }, []);
   if (failed) return <LoadError message={failed} onRetry={() => void load()} />;
-  return <RootView session={session} notice={notice} setNotice={setNotice} setSession={setSession} toSignIn={toSignIn} />;
+  return <RootView session={session} notice={notice} setNotice={setNotice} setSession={setSession} toSignIn={toSignIn} boot={initial?.boot} />;
 }
 
 // Who the page is open for: local, signed out, or one hosted account. Kept
 // in memory only.
+// Sprint 19 round 2: a hosted account is named by the server's opaque
+// `owner`, one per app account, so two judges (who have no email) never
+// share a first read or reply ticks.
 export const sessionOwner = (s: SessionInfo | null) =>
-  !s ? "none" : s.mode === "local" ? "local" : s.signedIn ? `hosted:${s.account.kind}:${s.account.email ?? s.account.name ?? ""}` : "signed-out";
+  !s ? "none" : s.mode === "local" ? "local" : s.signedIn ? `hosted:${s.account.owner ?? `${s.account.kind}:${s.account.email ?? s.account.name ?? ""}`}` : "signed-out";
 
 function RootView({
   session,
@@ -99,15 +138,19 @@ function RootView({
   setNotice,
   setSession,
   toSignIn,
+  boot,
 }: {
+  boot?: BootData;
   session: SessionInfo | null;
   notice: string | null;
   setNotice: (t: string | null) => void;
   setSession: (s: SessionInfo) => void;
   toSignIn: (text: string | null) => void;
 }) {
-  // Fix round 2, N6: reply ticks belong to this session and account.
+  // Fix round 2, N6: reply ticks belong to this session and account. So
+  // does the first read (Muse round 2, finding 1).
   scopeReadback(sessionOwner(session));
+  scopeBoot(sessionOwner(session));
   if (!session) {
     return (
       <main className="loading" aria-busy="true">
@@ -132,7 +175,7 @@ function RootView({
       />
     );
   }
-  return <App hosted={session.mode === "hosted" ? session : null} welcome={notice} onSession={setSession} onSignedOut={toSignIn} />;
+  return <App hosted={session.mode === "hosted" ? session : null} welcome={notice} onSession={setSession} onSignedOut={toSignIn} boot={boot} />;
 }
 
 export function App({
@@ -140,7 +183,8 @@ export function App({
   welcome = null,
   onSession = () => {},
   onSignedOut = () => {},
-}: { hosted?: SignedInSession | null; welcome?: string | null; onSession?: (s: SessionInfo) => void; onSignedOut?: (text: string | null) => void } = {}) {
+  boot,
+}: { hosted?: SignedInSession | null; welcome?: string | null; onSession?: (s: SessionInfo) => void; onSignedOut?: (text: string | null) => void; boot?: BootData } = {}) {
   const scripted = useMemo(scriptedChat, []);
   // Read through refs, so a new balance does not start another read.
   const hostedRef = useRef(hosted);
@@ -149,11 +193,22 @@ export function App({
   onSessionRef.current = onSession;
   const onSignedOutRef = useRef(onSignedOut);
   onSignedOutRef.current = onSignedOut;
-  const backend: AgentBackend = realBackend;
-  const [state, setState] = useState<AppState | null>(null);
-  const [settings, setSettings] = useState<Settings | null>(null);
-  const [activity, setActivity] = useState<ActivityLog | null>(null);
-  const [google, setGoogle] = useState<GoogleStatus | null>(null);
+  // The scripted chat's own entries (0019, P21), in development and check
+  // builds only.
+  // The module loads only in those builds, and only with ?mockchat=1, so
+  // no part of it reaches the production bundle (0019, P18).
+  const [mock, setMock] = useState<ScriptedModule | null>(null);
+  useEffect(() => {
+    if (fakesBuilt && scripted) void (scriptedLoad ?? import("./chat/mockStream.ts")).then((m) => setMock(m));
+  }, [scripted]);
+  const scriptedLog = useMemo(() => (fakesBuilt && mock ? mock.createScriptedLog(sessionStorage) : null), [mock]);
+  const backend: AgentBackend = useMemo(() => (fakesBuilt && mock && scriptedLog ? mock.scriptedBackend(realBackend, scriptedLog) : realBackend), [mock, scriptedLog]);
+  // A server-rendered page starts from its boot data (0019, P30).
+  const [state, setState] = useState<AppState | null>(boot?.state ?? null);
+  const [firstChat, setFirstChat] = useState<ChatLog | null | undefined>((boot?.chat as ChatLog | null | undefined) ?? undefined);
+  const [settings, setSettings] = useState<Settings | null>(() => normalizeSettings((boot?.settings as Settings | null) ?? null));
+  const [activity, setActivity] = useState<ActivityLog | null>((boot?.activity as ActivityLog | null) ?? null);
+  const [google, setGoogle] = useState<GoogleStatus | null>((boot?.google as GoogleStatus | null) ?? null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
@@ -179,13 +234,45 @@ export function App({
   // reads as null: the default zone, and the case history in Activity. Any
   // other failure keeps the last good value (Muse round 1, finding 5).
   const reads = useRef(0);
-  const last = useRef<{ settings: Settings | null; activity: ActivityLog | null; google: GoogleStatus | null }>({ settings: null, activity: null, google: null });
+  const firstRender = useRef(!boot);
+  const last = useRef<{ settings: Settings | null; activity: ActivityLog | null; google: GoogleStatus | null }>({ settings, activity, google });
   const [degraded, setDegraded] = useState(false);
+  // On first load with no zone set, the page sends this device's zone.
+  // It counts as done once sent, or when someone else set the settings
+  // first. A failed send is tried again at the next read (finding 8).
+  const sendZoneOnce = useCallback(
+    async (s: Settings | null, stale: () => boolean) => {
+      if (!s || s.timezoneSource !== "default" || sentZone.current) return;
+      const zone = deviceZone();
+      sentZone.current = true;
+      if (!zone) return;
+      const outcome = await sendDeviceZone(backend, s, zone);
+      if (outcome === "failed") sentZone.current = false;
+      else if (!stale()) void refreshRef.current();
+    },
+    [backend],
+  );
   const refresh = useCallback(async () => {
     const mine = ++reads.current;
     const stale = () => mine !== reads.current;
     try {
-      const [next, sRead, aRead, gRead] = await Promise.all([api.state(), settle(() => backend.settings()), settle(() => backend.activity()), settle(() => backend.google())]);
+      const boot = firstRender.current ? await readBoot(scripted, sessionOwner(hostedRef.current ?? { mode: "local" })) : null;
+      firstRender.current = false;
+      const [next, sRead, aRead, gRead] = boot
+        ? [
+            boot.state,
+            { ok: true as const, value: normalizeSettings(boot.settings as Settings | null) },
+            { ok: true as const, value: boot.activity as ActivityLog | null },
+            { ok: true as const, value: boot.google as GoogleStatus | null },
+          ]
+        : await Promise.all([api.state(), settle(() => backend.settings()), settle(() => backend.activity()), settle(() => backend.google())]);
+      if (stale()) return;
+      // 0019, P18: the first render of a case that shows these cards waits
+      // for their chunk, which started with the page, so no placeholder is
+      // swapped for a card in view.
+      if (caseNeedsCards(next)) await loadCaseCards().catch(() => {});
+      // The first render of the case shows the stored chat with it.
+      if (boot) setFirstChat((boot.chat as ChatLog | null) ?? undefined);
       if (stale()) return;
       // The balance moves with every turn on the hosted site.
       if (hostedRef.current) void hostedApi.session().then((x) => onSessionRef.current(x), () => {});
@@ -201,39 +288,34 @@ export function App({
       setDegraded(!sRead.ok || !aRead.ok || !gRead.ok);
       setState(next);
       setLoadError(null);
-      // On first load with no zone set, the page sends this device's zone.
-      // It counts as done once sent, or when someone else set the settings
-      // first. A failed send is tried again at the next read (finding 8).
-      if (s && s.timezoneSource === "default" && !sentZone.current) {
-        const zone = deviceZone();
-        if (!zone) {
-          sentZone.current = true;
-          return;
-        }
-        sentZone.current = true;
-        const outcome = await sendDeviceZone(backend, s, zone);
-        if (outcome === "failed") sentZone.current = false;
-        else if (!stale()) void refreshRef.current();
-      }
+      await sendZoneOnce(s, stale);
+      return true;
     } catch (e) {
-      if (signedOut(e)) return onSignedOutRef.current("Your session ended. Sign in again.");
+      if (signedOut(e)) {
+        onSignedOutRef.current("Your session ended. Sign in again.");
+        return false;
+      }
       if (!stale()) setLoadError(errorSentence(e));
+      return false;
     }
-  }, [backend]);
+  }, [backend, scripted, sendZoneOnce]);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
 
   useEffect(() => {
-    void refresh();
+    // The scripted chat reads through its own backend, once it is in.
+    if (scripted && !mock) return;
+    // A server-rendered page shows its boot data, and the live read catches
+    // anything newer. It only sends the device's zone when none is set.
+    if (boot && !scripted) void sendZoneOnce(settings, () => false);
+    else void refresh();
     const back = signInReturn(new URLSearchParams(window.location.search));
     if (back) {
       toast(back.kind, back.text);
       window.history.replaceState(null, "", `${window.location.pathname}${back.rest ? `?${back.rest}` : ""}`);
     }
-  }, [refresh, toast]);
+  }, [refresh, toast, scripted, mock]);
 
-  // A change by an agent, the chat or another tab shows without a reload.
-  useLiveRefresh(state?.live ?? null, refresh);
 
   // Runs an action, says what went wrong in a plain sentence, and reloads
   // the case. A 409 means the record changed since it was shown, so the
@@ -255,6 +337,8 @@ export function App({
   // read of the activity (Muse round 1, findings 3 and 4). A refusal shows
   // its reason beside the entry.
   const [blocked, setBlocked] = useState<Record<string, string>>({});
+  const [blockedAt, setBlockedAt] = useState<Record<string, number>>({});
+  const refusalTick = useRef(0);
   const [undoing, setUndoing] = useState(false);
   const serial = useRef(serialUndo());
   const undo = useCallback(
@@ -264,7 +348,11 @@ export function App({
         setBlocked((b) => Object.fromEntries(Object.entries(b).filter(([k]) => !ids.includes(k))));
         try {
           const out = await runUndo(backend, ids);
-          if (out.blocked) setBlocked((b) => ({ ...b, [out.blocked!.id]: errorSentence(out.blocked!.error) }));
+          if (out.blocked) {
+            const id = out.blocked.id;
+            setBlocked((b) => ({ ...b, [id]: errorSentence(out.blocked!.error) }));
+            setBlockedAt((t) => ({ ...t, [id]: ++refusalTick.current }));
+          }
           if (out.error) toast("error", errorSentence(out.error));
           await refresh();
         } finally {
@@ -275,7 +363,7 @@ export function App({
     [backend, refresh, toast],
   );
 
-  if (!state) {
+  if (!state || (scripted && !mock)) {
     // Loading: a skeleton of the chat and the schedule. A failed load: the
     // reason in a sentence and Try again.
     return loadError ? (
@@ -290,6 +378,7 @@ export function App({
           <span className="skeleton-line w-80" />
           <span className="skeleton-line w-60" />
           <span className="skeleton-block" />
+          <span className="skeleton-composer" />
         </div>
         <div className="skeleton-panel" aria-hidden="true">
           <span className="skeleton-line w-40" />
@@ -308,12 +397,17 @@ export function App({
       toasts={toasts}
       setToasts={setToasts}
       scripted={scripted}
+      initialChat={firstChat}
+      fromServer={boot !== undefined}
+      mock={mock}
+      scriptedLog={scriptedLog}
       backend={backend}
       settings={settings}
       activity={activity}
       google={google}
       undo={undo}
       blocked={blocked}
+      blockedAt={blockedAt}
       undoing={undoing}
       degraded={degraded}
       hosted={hosted}
@@ -330,12 +424,17 @@ function Shell({
   toasts,
   setToasts,
   scripted,
+  initialChat,
+  fromServer,
+  mock,
+  scriptedLog,
   backend,
   settings,
   activity,
   google,
   undo,
   blocked,
+  blockedAt,
   undoing,
   degraded,
   hosted,
@@ -345,27 +444,52 @@ function Shell({
   onSignedOut: (text: string | null) => void;
   state: AppState;
   run: Run;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<boolean | void>;
   toast: (kind: Toast["kind"], text: string, link?: ToastLink) => void;
   toasts: Toast[];
   setToasts: (f: (t: Toast[]) => Toast[]) => void;
   scripted: boolean;
+  initialChat: ChatLog | null | undefined;
+  // The page hydrates what the server rendered (0019, P30).
+  fromServer: boolean;
+  mock: ScriptedModule | null;
+  scriptedLog: ScriptedLog | null;
   backend: AgentBackend;
   settings: Settings | null;
   activity: ActivityLog | null;
   google: GoogleStatus | null;
   undo: AgentState["undo"];
   blocked: AgentState["blocked"];
+  blockedAt: AgentState["blockedAt"];
   undoing: boolean;
   degraded: boolean;
 }) {
   const transport: ChatTransport = useMemo(
-    () => (fakesBuilt && scripted ? createMockTransport({ api, storage: sessionStorage, activity: () => backend.activity(), google: () => backend.google() }) : realTransport),
-    [scripted, backend],
+    () => (fakesBuilt && scripted && mock ? mock.createMockTransport({ api, storage: sessionStorage, activity: () => backend.activity(), google: () => backend.google(), scriptedLog }) : realTransport),
+    [scripted, mock, backend, scriptedLog],
   );
-  const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh());
+  const { chat, send, streaming, stop } = useChat(transport, `${state.live.generation}:${state.live.seq}`, () => {}, () => void refresh(), scripted ? undefined : initialChat);
+  // A change by an agent, the chat or another tab shows without a reload,
+  // the moment the server sees it (round 2, finding 4).
+  useLiveRefresh(state.live, refresh);
   const mode = hosted ? "hosted" : "local";
   const [sheetOpen, setSheetOpen] = useState(false);
+  // 0019, P19: on a phone or a tablet the schedule is a closed sheet at
+  // first, so its contents render the first time it opens, not with the
+  // first paint. It stays mounted after, so its scroll and folds stay.
+  const [sheetUsed, setSheetUsed] = useState(false);
+  useEffect(() => {
+    if (sheetOpen) setSheetUsed(true);
+  }, [sheetOpen]);
+  // Set once the shell is on screen, so what the page opens with is not
+  // faded in (0019, P30).
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
+  // The phone sheet's height (0019, P16). It opens full.
+  const [snap, setSnap] = useState<Snap>("full");
+  useEffect(() => {
+    if (sheetOpen) setSnap("full");
+  }, [sheetOpen]);
   // The generation a Delete case left (0017, fix round 1, R7).
   const [deletedFrom, setDeletedFrom] = useState<number | null>(null);
   const [railed, setRailed] = useState(false);
@@ -375,17 +499,24 @@ function Shell({
   // The view the work area shows (0015). A page covers the case, which
   // stays mounted under it, so the chat, its scroll and the draft stay.
   const [view, setView] = useState<View>("case");
-  const [folded, setFolded] = useState(readFolded);
-  const device = useMemo(deviceZone, []);
+  // Read after the first render, so a server-rendered page hydrates as it
+  // was rendered (0019, P30).
+  const [folded, setFolded] = useState(false);
+  const [device, setDevice] = useState<string | null>(null);
+  useEffect(() => {
+    setFolded(readFolded());
+    setDevice(deviceZone());
+  }, []);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const sheetToggle = useRef<HTMLButtonElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const drawerClose = useRef<HTMLButtonElement>(null);
   const title = useRef<HTMLHeadingElement>(null);
-  const laptop = useMedia(LAPTOP);
-  const phone = !useMedia(TABLET_UP);
+  const laptop = useMedia(LAPTOP, renderedAs() === "laptop");
+  const phone = !useMedia(TABLET_UP, renderedAs() === "laptop");
   const online = useOnline();
   const layout: SideLayout = phone ? "drawer" : laptop && !folded ? "full" : "rail";
+  const panelMounted = laptop || sheetOpen || sheetUsed;
   // What is modal and what is inert (shellModes, 0015).
   const { pageOpen, sheetModal, drawerModal, inert } = shellModes({ laptop, phone, sheetOpen, drawerOpen, railed, view });
   // The fact chip that opened the schedule. Focus goes back to it when the
@@ -395,8 +526,12 @@ function Shell({
   const giveBackFocus = (fallback: HTMLElement | null) => {
     const ref = returnTo.current;
     returnTo.current = null;
-    // After React has rendered the chat again.
-    requestAnimationFrame(() => ((ref ? findChip(document, ref) : null) ?? fallback)?.focus());
+    // After React has rendered the chat again. Round 2, finding 6: through
+    // focusSoon, so it waits while the chip is not there yet or still inert.
+    focusSoon(() => {
+      const el = (ref ? findChip(document, ref) : null) ?? fallback;
+      return el && !el.closest("[inert]") ? el : null;
+    });
   };
   // What opened the sheet when it was not a fact chip, such as Open
   // Activity on the Agent access page. Focus goes back to it (Muse round 1,
@@ -410,7 +545,9 @@ function Shell({
   };
   const closeRef = useRef(closeSchedule);
   closeRef.current = closeSchedule;
-  const focusPanel = () => focusSoon(() => document.getElementById("panel-title"));
+  // The panel's chunk may still be loading on a phone (0019, P18), so focus
+  // waits for it.
+  const focusPanel = () => void loadPanel().then(() => focusSoon(() => document.getElementById("panel-title")), () => {});
   const openPanel = (t?: PanelTab) => {
     const from = document.activeElement;
     // A page's button goes away with the page, so focus then goes back to
@@ -453,11 +590,30 @@ function Shell({
   const closeDrawerRef = useRef(closeDrawer);
   closeDrawerRef.current = closeDrawer;
 
+  // 0019, P17: the fixtures load only when the person opens the demo or the
+  // import sheet, or once the demo is in the case (for "Next demo
+  // message"), never on a plain first load.
+  const fixturesLoader = useRef<(() => Promise<FixtureScenario["messages"]>) | null>(null);
+  fixturesLoader.current ??= createFixturesLoader(() => api.fixtures(), setFixtures);
+  const ensureFixtures = fixturesLoader.current;
+  const demoStarted = state.messages.some((m) => DEMO_IDS.includes(m.id));
   useEffect(() => {
-    void api.fixtures().then(
-      (s) => setFixtures(s.flatMap((x) => x.messages).filter((m, i, all) => all.findIndex((y) => y.id === m.id) === i)),
-      () => setFixtures([]),
-    );
+    if (demoStarted) void ensureFixtures();
+  }, [demoStarted, ensureFixtures]);
+
+  // 0019, P18: the cards a conflict, a reply or a question need load as
+  // soon as the case has one, beside the first reads.
+  const needsCards = caseNeedsCards(state);
+  useEffect(() => {
+    if (needsCards) void loadCaseCards().catch(() => {});
+  }, [needsCards]);
+
+  // 0019, P18: once the case is on screen and the browser is idle, the
+  // pages' chunk loads, so opening one later does not wait.
+  useEffect(() => {
+    const idle = (cb: () => void) => (typeof requestIdleCallback === "function" ? requestIdleCallback(cb, { timeout: 4000 }) : setTimeout(cb, 2500));
+    const t = window.setTimeout(() => idle(() => void Promise.all([loadPages(), loadCaseCards(), loadPanel()]).catch(() => {})), 1500);
+    return () => window.clearTimeout(t);
   }, []);
 
   // Escape closes the sheet or the drawer. An open dialog, such as the
@@ -484,11 +640,11 @@ function Shell({
     if (laptop) setRailed(false);
     else setSheetOpen(true);
     setHighlight(slotKey);
-    focusSoon(() => {
+    void loadPanel().then(() => focusSoon(() => {
       const el = document.getElementById(slotElementId(slotKey));
       el?.scrollIntoView({ block: "center" });
       return el;
-    });
+    }), () => {});
   };
 
   const loadCalendar = async (file: File) => {
@@ -513,8 +669,9 @@ function Shell({
         toast("info", "Loaded the demo calendar. Press Enter to send the first demo message.");
       });
     }
+    const list = await ensureFixtures();
     const imported = new Set(state.messages.map((m) => m.id));
-    return fixtures.find((m) => DEMO_IDS.includes(m.id) && !imported.has(m.id)) ?? null;
+    return list.find((m) => DEMO_IDS.includes(m.id) && !imported.has(m.id)) ?? null;
   };
 
   const waiting = waitingCount(state);
@@ -531,11 +688,12 @@ function Shell({
     google,
     undo,
     blocked,
+    blockedAt,
     // Undo waits while a turn streams or another undo runs (finding 4).
     undoBusy: streaming || undoing,
     report: (e) => toast("error", errorSentence(e), setupLink(e)),
     notify: (text) => toast("info", text),
-    reload: refresh,
+    reload: async () => void (await refresh()),
     hosted,
     // S8: the model pill, the setup notice and Open Usage.
     ...openersFor(openView),
@@ -562,7 +720,7 @@ function Shell({
 
   return (
     <AgentContext.Provider value={agent}>
-      <div className="app" data-panel={sheetOpen ? "open" : "closed"} data-rail={railed ? "folded" : "open"} data-side={layout} data-drawer={drawerOpen ? "open" : "closed"} data-view={view}>
+      <div className="app" data-ready={ready || undefined} data-snap={snap} data-panel={sheetOpen ? "open" : "closed"} data-rail={railed ? "folded" : "open"} data-side={layout} data-drawer={drawerOpen ? "open" : "closed"} data-view={view}>
         {/* The top bar comes first in the DOM so Tab meets the fold toggle
             before the sidebar (review r2). The grid places both. */}
         <header className="topbar" inert={inert.topbar}>
@@ -596,6 +754,8 @@ function Shell({
           <h1 ref={title} id="view-title" className="view-title" tabIndex={-1}>
             {VIEW_TITLES[view]}
           </h1>
+          {/* 0019: on a laptop the top bar says how the case stands. */}
+          {view === "case" && <span className="view-sub">{caseLine(state, waiting)}</span>}
           {!pageOpen && (
             <button
               ref={sheetToggle}
@@ -659,6 +819,9 @@ function Shell({
               onLoadCalendar={loadCalendar}
               onLoadDemo={loadDemo}
               fixtures={fixtures}
+              loadFixtures={ensureFixtures}
+              firstWindow={6}
+              opensFromServer={fromServer && !scripted}
               modelLabel={modelLabel}
             />
           </div>
@@ -689,7 +852,8 @@ function Shell({
             aria-modal={sheetModal || undefined}
             inert={inert.panel}
           >
-            {!laptop && <SheetHandle onClose={closeSchedule} />}
+            {!laptop && <SheetHandle onClose={closeSchedule} snap={snap} onSnap={setSnap} />}
+            {panelMounted && (
             <SchedulePanel
               state={state}
               run={run}
@@ -699,23 +863,21 @@ function Shell({
               onClose={laptop ? undefined : closeSchedule}
               onCollapse={laptop ? () => setRailed(true) : undefined}
             />
+            )}
           </div>
-          {pageOpen && (
+          {pageOpen && view !== "case" && (
             <section className="page" aria-labelledby="view-title" inert={inert.page}>
-              <PageFrame onBack={back}>
-                {view === "connections" && <ConnectionsPage modelClient={state.modelClient} run={run} />}
-                {view === "access" && <AgentAccessPage onActivity={() => openPanel("activity")} />}
-                {view === "settings" && (
-                  <SettingsPage
-                    version={state.caseVersion}
-                    erasePending={state.erasePending}
-                    run={run}
-                    caseDeleted={caseDeletedShown(deletedFrom, state)}
-                    onCaseDeleted={() => setDeletedFrom(state.generation)}
-                  />
-                )}
-                {view === "usage" && <UsagePage run={run} />}
-              </PageFrame>
+              <>
+                <PageView
+                  view={view}
+                  state={state}
+                  run={run}
+                  onBack={back}
+                  onActivity={() => openPanel("activity")}
+                  caseDeleted={caseDeletedShown(deletedFrom, state)}
+                  onCaseDeleted={() => setDeletedFrom(state.generation)}
+                />
+              </>
             </section>
           )}
         </main>
@@ -725,10 +887,20 @@ function Shell({
   );
 }
 
+// "4 appointments · 1 waiting for you", written by code from the case.
+export function caseLine(state: Pick<AppState, "case" | "records">, waiting: number): string {
+  const archived = new Set(state.records.filter((r) => r.archived).map((r) => r.id));
+  const n = state.case.slots.filter((s) => !archived.has(s.key)).length;
+  const parts = [n === 0 ? "No appointments yet" : `${n} appointment${n === 1 ? "" : "s"}`];
+  if (waiting > 0) parts.push(`${waiting} waiting for you`);
+  return parts.join(" · ");
+}
+
 // True while the browser says it is online.
 function useOnline(): boolean {
-  const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
+  const [online, setOnline] = useState(true);
   useEffect(() => {
+    setOnline(navigator.onLine);
     const update = () => setOnline(navigator.onLine);
     window.addEventListener("online", update);
     window.addEventListener("offline", update);
@@ -740,21 +912,41 @@ function useOnline(): boolean {
   return online;
 }
 
-// The bottom sheet's handle: a tap or a downward drag closes the sheet.
-function SheetHandle({ onClose }: { onClose: () => void }) {
+// The bottom sheet's handle. A tap closes the sheet. 0019, P16: it snaps
+// to two heights. A drag down from full goes to half, a drag down from half
+// closes it, and a drag up from half goes back to full.
+export type Snap = "full" | "half";
+export function snapAfterDrag(snap: Snap, dy: number): Snap | "close" | null {
+  if (Math.abs(dy) <= 48) return null;
+  if (dy < 0) return "full";
+  return snap === "full" ? "half" : "close";
+}
+
+function SheetHandle({ onClose, snap, onSnap }: { onClose: () => void; snap: Snap; onSnap: (s: Snap) => void }) {
   const start = useRef<number | null>(null);
+  const dragged = useRef(false);
   return (
     <button
       type="button"
       className="sheet-handle"
       aria-label="Close the schedule"
-      onClick={onClose}
+      onClick={() => {
+        if (dragged.current) dragged.current = false;
+        else onClose();
+      }}
       onPointerDown={(e) => {
         start.current = e.clientY;
+        dragged.current = false;
+        // A mouse drag keeps reaching the handle past its edge, as a touch does.
+        e.currentTarget.setPointerCapture?.(e.pointerId);
       }}
       onPointerUp={(e) => {
-        if (start.current !== null && e.clientY - start.current > 48) onClose();
+        const next = start.current === null ? null : snapAfterDrag(snap, e.clientY - start.current);
         start.current = null;
+        if (next === null) return;
+        dragged.current = true;
+        if (next === "close") onClose();
+        else onSnap(next);
       }}
     >
       <span aria-hidden="true" />

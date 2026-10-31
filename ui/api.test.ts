@@ -26,7 +26,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-const READS = new Set(["state", "fixtures", "calendar", "liveVersion"]);
+const READS = new Set(["boot", "adoptBoot", "state", "fixtures", "calendar", "liveVersion"]);
 
 describe("ui api", () => {
   it("reads the case before its first write, then sends the generation on every write", async () => {

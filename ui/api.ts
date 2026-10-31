@@ -157,7 +157,37 @@ export async function request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path
   return json as T;
 }
 
+// Round 2, finding 2: the first render's data, read together on the
+// server, of one live version (server/workspace.ts, bootOf).
+export type BootData = {
+  live: LiveVersion;
+  state: AppState;
+  settings: unknown;
+  activity: unknown;
+  google: unknown;
+  chat: unknown;
+  // 0019, round 3: the layout the server rendered, from the browser's
+  // mobile hint. The page hydrates with it, then follows its own width.
+  view?: "phone" | "laptop";
+};
+
 export const api = {
+  boot: async (): Promise<BootData | null> => {
+    try {
+      const boot = await request<BootData>("GET", "/api/boot");
+      lastGeneration = boot.state.generation;
+      return boot;
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 405)) return null;
+      throw e;
+    }
+  },
+  // A first read the page already holds, as the server wrote it into the
+  // page: the generation it names is the one writes carry.
+  adoptBoot: (boot: BootData) => {
+    lastGeneration = boot.state.generation;
+    return boot;
+  },
   state: async () => {
     const state = await request<AppState>("GET", "/api/state");
     lastGeneration = state.generation;

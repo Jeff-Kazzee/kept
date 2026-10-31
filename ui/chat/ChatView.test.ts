@@ -58,11 +58,14 @@ afterEach(() => {
 });
 
 describe("chat view", () => {
-  it("an empty chat offers a welcome line, three suggestions and the demo", () => {
+  it("0019, P9: an empty chat offers a welcome line, three start cards with icons, and where the connections stand", () => {
     const html = render({ status: "ready", chatVersion: 0, messages: [], pending: null });
-    expect(html).toContain("<h2>What changed with your appointments?</h2>");
-    expect(html.match(/<button type="button" class="chip">/g)).toHaveLength(3);
-    for (const s of ["Paste a message from the office", "What is confirmed?", "What should I bring?", "Try the demo"]) expect(html).toContain(s);
+    expect(html).toContain('<h2 class="display">What changed with your appointments?</h2>');
+    expect(html.match(/<button type="button" class="start-card">/g)).toHaveLength(3);
+    for (const s of ["Check my Gmail for appointment changes", "Paste a message from the office", "Try the demo"]) expect(html).toContain(`<strong>${s}</strong>`);
+    expect(html.match(/<span class="start-icon" aria-hidden="true"><svg/g)).toHaveLength(3);
+    expect(html).toContain('class="connection-status small"');
+    expect(html).toContain("Google not connected");
     expect(html).toContain('id="chat-input"');
     expect(html).toContain('name="message"');
     expect(html).toContain('<label for="chat-input" class="sr-only">Message</label>');
@@ -156,7 +159,8 @@ describe("chat view", () => {
 
   it("J12: the demo offer says the messages are made up and the assistant is live", () => {
     const html = render({ status: "ready", chatVersion: 0, messages: [], pending: null });
-    expect(html).toContain("four made-up messages from Lantern Hill Clinic and a made-up calendar. The assistant is live");
+    // 0019, P9: the sentence starts the demo card's line now.
+    expect(html).toMatch(/four made-up messages from Lantern Hill Clinic and a made-up calendar\. The assistant is live/i);
     expect(html).not.toMatch(/recorded/i);
   });
 

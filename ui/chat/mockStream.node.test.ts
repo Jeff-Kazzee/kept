@@ -11,7 +11,8 @@ import { EventStore } from "../../src/store/event-log.ts";
 import { agentAccess, asFreshPage, fixtureMessage, intake } from "../../test/helpers.ts";
 import type { AppState } from "../api.ts";
 import { WITHHELD_USER_TEXT } from "../../src/agent/types.ts";
-import { createMockTransport, intentOf, type MockApi } from "./mockStream.ts";
+import { createMockTransport, createScriptedLog, intentOf, scriptedBackend, type MockApi } from "./mockStream.ts";
+import type { AgentBackend } from "../agentApi.ts";
 import type { ChatEvent } from "./types.ts";
 import { GOOGLE_OFF, type ActivityLog, type GoogleStatus } from "../contract.ts";
 
@@ -65,6 +66,9 @@ describe("scripted chat", () => {
     expect(intentOf("Show my reply draft")).toBe("reply");
     expect(intentOf("What do I need to bring?")).toBe("checklist");
     expect(intentOf("hello")).toBe("help");
+    // 0019, P21: the clash question and the calendar step of the demo.
+    expect(intentOf("Why does Friday clash with my calendar?")).toBe("conflict");
+    expect(intentOf("Add Monday to my calendar")).toBe("calendar");
   });
 
   it("reads a pasted demo message, accepts its facts through the routes, streams each server entry as an action, and stores the turn", async () => {
@@ -165,5 +169,49 @@ describe("scripted chat", () => {
     const s = (await api.state()) as AppState;
     await call("POST", "/api/case/delete", { expectedVersion: s.caseVersion, confirmation: "DELETE" });
     expect((await mock.load())!.messages).toHaveLength(0);
+  });
+
+  it("0019, P21: with the demo calendar, Gmail adds the two demo emails as pastes and says it did not search Gmail", async () => {
+    const { api, call, turn } = setup();
+    const demo = (await call("GET", "/api/fixtures/calendar")) as { name: string; text: string };
+    await call("POST", "/api/calendar", { name: demo.name, text: demo.text, expectedVersion: ((await api.state()) as AppState).case.calendarVersion });
+    const events = await turn("Check my Gmail for appointment changes");
+    const text = events.filter((e) => e.event === "text.delta").map((e) => (e.data as { text: string }).text).join("");
+    expect(text).toContain("did not search Gmail");
+    const s = (await api.state()) as AppState;
+    expect(s.messages.map((m) => m.id).sort()).toEqual(["m1", "m2"]);
+    expect(s.messages.every((m) => m.message.channel === "email")).toBe(true);
+    expect(events.filter((e) => e.event === "card").map((e) => (e.data as { card: { kind: string } }).card.kind)).toEqual(["claims", "claims"]);
+  });
+
+  it("0019, P21: the scripted calendar receipt stays in the tab, shows in the activity and undoes there, and the server's entries are untouched", async () => {
+    const { api, accept, activity } = setup();
+    const scripted = createScriptedLog(null);
+    const mock = createMockTransport({ api, delayMs: 0, activity, scriptedLog: scripted });
+    const say = async (text: string) => {
+      const events: ChatEvent[] = [];
+      await mock.send(text, (await mock.load())!.chatVersion, (e) => events.push(e));
+      return events;
+    };
+    for (const id of ["m1", "m2", "m3"]) await say(fixtureMessage(id).text);
+    await accept();
+    expect(await say("Add Monday to my calendar")).toBeTruthy();
+    const before = await activity();
+    const added = scripted.entries[0]!;
+    expect(added).toMatchObject({ kind: "calendar_event_added", undoable: true, undone: false });
+    expect(added.id.startsWith("scripted-")).toBe(true);
+    expect(added.summary).toContain("Scripted, nothing was written.");
+    expect(before.entries.some((e) => e.id === added.id)).toBe(false);
+    const undone: string[] = [];
+    const base = { activity: async () => before, undo: async (id: string) => void undone.push(id) } as unknown as AgentBackend;
+    const backend = scriptedBackend(base, scripted);
+    const joined = (await backend.activity())!;
+    expect(joined.entries[0]!.id).toBe(added.id);
+    expect(joined.entries).toHaveLength(before.entries.length + 1);
+    await backend.undo(added.id, 0);
+    expect(scripted.entries[0]!.undone).toBe(true);
+    expect(undone).toEqual([]);
+    await backend.undo(before.entries[0]!.id, 0);
+    expect(undone).toEqual([before.entries[0]!.id]);
   });
 });

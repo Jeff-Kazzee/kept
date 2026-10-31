@@ -246,7 +246,7 @@ describe("K7: APP_PUBLIC_SIGNUP", () => {
     expect(password).toMatch(/^[A-Za-z0-9_-]{20}$/);
     expect((await runAdminAsync(["users", "create", "--email", "existing@example.com"], env)).code).toBe(1);
     expect((await h.signIn(b, "existing@example.com", password)).status).toBe(200);
-    expect((await b.call("GET", "/api/session")).body.account).toEqual({ kind: "user", email: "existing@example.com", name: "Ex Isting" });
+    expect((await b.call("GET", "/api/session")).body.account).toMatchObject({ kind: "user", email: "existing@example.com", name: "Ex Isting" });
     const key = new SoftPasskey();
     const options = await b.auth("GET", "/api/auth/passkey/generate-register-options");
     expect((await b.auth("POST", "/api/auth/passkey/verify-registration", { response: key.register(options.body, h.authConfig.origin) })).status).toBe(200);

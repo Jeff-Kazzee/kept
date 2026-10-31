@@ -7,6 +7,11 @@
 // inline scripts, and requests only to this origin.
 import { createHash } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { promisify } from "node:util";
+import { brotliCompress, brotliCompressSync, constants as zlibConstants, gzip as gzipCb, gzipSync } from "node:zlib";
+
+const brotli = promisify(brotliCompress);
+const gzip = promisify(gzipCb);
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
@@ -134,13 +139,77 @@ export function pickEncoding(acceptEncoding: string | undefined, entry: Pick<Ent
   return null;
 }
 
+// 0019, P17: the reads the page makes before it can show the case. In
+// local mode index.html asks for them as preloads, so they run while the
+// script loads instead of after it. GET routes need no header (guard.ts),
+// so the page's own fetch takes the preloaded answer. The hosted site has
+// none: its reads need a session first.
+// Round 2, finding 2: only the session and the first render's data, read
+// together and naming its generation (GET /api/boot).
+export const FIRST_LOAD_READS = ["/api/session", "/api/boot"] as const;
+
+// index.html with a preload link for each read, before </head>.
+export function withPreloads(html: string, reads: readonly string[]): string {
+  if (reads.length === 0) return html;
+  const links = reads.map((r) => `<link rel="preload" href="${r}" as="fetch" crossorigin>`).join("\n    ");
+  return html.replace("</head>", `  ${links}\n  </head>`);
+}
+
+// 0019, P30: the server-rendered case screen. `render` gives the case's
+// HTML and the boot data it was rendered from, or null to serve the plain
+// page. Local mode only (server/main.ts).
+export type Rendered = { html: string; boot: unknown };
+export type StaticOptions = { preload?: readonly string[]; render?: (req: IncomingMessage) => Promise<Rendered | null> };
+
+// The boot data as a JSON block. Data, not code, so the CSP's script-src
+// 'self' holds. Every "<" is escaped, so no "</script>" or "<!--" in a
+// message can end the block, and the two line separators JSON allows but
+// some parsers do not are escaped too.
+export function bootBlock(boot: unknown): string {
+  const json = JSON.stringify(boot).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+  return `<script id="boot" type="application/json">${json}</script>`;
+}
+
+// index.html with the rendered case in #root and the boot block after it.
+export function withRendered(html: string, rendered: Rendered): string {
+  return html.replace('<div id="root"></div>', () => `<div id="root" data-server-rendered="">${rendered.html}</div>${bootBlock(rendered.boot)}`);
+}
+
 // A request handler for every path outside /api/. A path with no file
 // extension that is not a file gets index.html, so the app can own its
 // paths. A missing file with an extension is a 404.
-export function createStaticHandler(root: string) {
+export function createStaticHandler(root: string, options: StaticOptions = {}) {
   const files = loadBuild(root);
+  if (options.preload && options.preload.length > 0) {
+    const raw = Buffer.from(withPreloads(files.get("/index.html")!.raw.toString("utf8"), options.preload));
+    files.set("/index.html", {
+      ...files.get("/index.html")!,
+      raw,
+      etag: `"${createHash("sha256").update(raw).digest("base64url").slice(0, 27)}"`,
+      br: brotliCompressSync(raw),
+      gzip: gzipSync(raw, { level: 9 }),
+    });
+  }
   const index = files.get("/index.html")!;
+  // The page without preloads, for the rendered case: its data is inline.
+  const template = loadBuild(root).get("/index.html")!.raw.toString("utf8");
+  // A page the server rendered holds this moment's case, so it is never
+  // stored. It is compressed as it is sent.
+  // Muse round 2, findings 6 and 8: compressed off the event loop, in the
+  // encoding the browser accepts (q-values included).
+  const sendRendered = async (req: IncomingMessage, res: ServerResponse, rendered: Rendered) => {
+    const raw = Buffer.from(withRendered(template, rendered));
+    const encoding = pickEncoding(req.headers["accept-encoding"], { br: raw, gzip: raw });
+    const body = encoding === "br" ? await brotli(raw, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } }) : encoding === "gzip" ? await gzip(raw, { level: 6 }) : raw;
+    const headers: Record<string, string> = { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", Vary: "Accept-Encoding", "Content-Length": String(body.length) };
+    if (encoding) headers["Content-Encoding"] = encoding;
+    res.writeHead(200, headers);
+    res.end(req.method === "HEAD" ? undefined : body);
+  };
   return function serveStatic(req: IncomingMessage, res: ServerResponse): void {
+    void serve(req, res);
+  };
+  async function serve(req: IncomingMessage, res: ServerResponse): Promise<void> {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.writeHead(405, { Allow: "GET, HEAD", "Content-Type": "text/plain; charset=utf-8" });
@@ -163,6 +232,18 @@ export function createStaticHandler(root: string) {
       res.end("Not found.");
       return;
     }
+    // The scripted chat of a check build (?mockchat=1) renders on its own.
+    // Muse round 2, finding 6: only the case's own address is rendered, so
+    // a stray path never costs a render.
+    if (pathname === "/" && options.render && !new URL(req.url ?? "/", "http://app.invalid").searchParams.has("mockchat")) {
+      let rendered: Rendered | null = null;
+      try {
+        rendered = await options.render(req);
+      } catch (err) {
+        console.error(`The case screen could not be rendered on the server (${err instanceof Error ? err.name : "error"}). The page renders it itself.`);
+      }
+      if (rendered) return await sendRendered(req, res, rendered);
+    }
     const headers: Record<string, string> = { "Content-Type": entry.type, "Cache-Control": entry.cache, ETag: entry.etag, Vary: "Accept-Encoding" };
     if (req.headers["if-none-match"] === entry.etag) {
       res.writeHead(304, headers);
@@ -175,5 +256,5 @@ export function createStaticHandler(root: string) {
     headers["Content-Length"] = String(body.length);
     res.writeHead(200, headers);
     res.end(req.method === "HEAD" ? undefined : body);
-  };
+  }
 }

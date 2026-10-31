@@ -31,12 +31,14 @@
 //                      the Google OAuth client, for the built-in Gmail and
 //                      Calendar connection (docs/google.md)
 //   APP_MODE, APP_MARKUP, APP_DAILY_COST_CAP_USD, APP_JUDGE_TOTAL_CAP_USD,
-//   APP_SERVER_KEY, APP_TRUSTED_PROXY
+//   APP_SERVER_KEY, APP_TRUSTED_PROXY, APP_DEMO_GOOGLE
 //                      hosted mode (src/hosted/config.ts, docs/hosted.md)
 //   BETTER_AUTH_SECRET, BETTER_AUTH_URL, BETTER_AUTH_API_KEY
 //                      hosted mode's accounts (src/hosted/auth.ts). The
 //                      public origin's host is added to the allowed hosts.
+import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { pathToFileURL } from "node:url";
 import { clientFromEnv } from "../src/google/connection.ts";
 import { AuthFileError, readAuthConfig, type AuthConfig } from "../src/hosted/auth.ts";
 import { ConfigError, readHostedConfig } from "../src/hosted/config.ts";
@@ -49,8 +51,9 @@ import { createHostedApp } from "./hosted.ts";
 import { AllowedHostsError, appHosts, hostAllowed, parseAllowedHosts } from "./hosts.ts";
 import { apiPreamble, secureRequest } from "./http.ts";
 import { requestLogEnabled, requestLogger } from "./request-log.ts";
-import { API_SECURITY_HEADERS, createStaticHandler } from "./static.ts";
-import { createWorkspace, send, serveApi } from "./workspace.ts";
+import { API_SECURITY_HEADERS, FIRST_LOAD_READS, createStaticHandler } from "./static.ts";
+import { LIVE_PATH, parseSince, waitForChange } from "./live.ts";
+import { bootOf, createWorkspace, liveOf, send, serveApi, type Boot, type Workspace } from "./workspace.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.APP_PORT ?? 5180);
@@ -88,7 +91,31 @@ let ui: (req: IncomingMessage, res: ServerResponse) => void;
 let closeUi = async () => {};
 if (serveBuild) {
   try {
-    ui = createStaticHandler(fromPackage("dist/ui"));
+    // 0019, P17: local mode starts its first reads with the page. P30: and
+    // renders the case screen on the server when the build has the
+    // renderer (dist/ssr). The hosted site does neither.
+    const local = config.mode === "local";
+    const ssrEntry = fromPackage("dist/ssr/entry-server.js");
+    const ssr = local && existsSync(ssrEntry) ? ((await import(pathToFileURL(ssrEntry).href)) as { renderCase: (boot: Boot & { view: "phone" | "laptop" }) => Promise<string> }) : null;
+    ui = createStaticHandler(fromPackage("dist/ui"), {
+      preload: local ? FIRST_LOAD_READS : [],
+      ...(ssr
+        ? {
+            render: async (req) => {
+              if (!renderWorkspace || !hostAllowed(allowed, req.headers.host)) return null;
+              const boot = await bootOf(renderWorkspace);
+              // A case that kept moving during the read is not rendered: the
+              // page reads it on its own.
+              if (!boot) return null;
+              // 0019, round 3: the browser's mobile hint (sent by default)
+              // picks the layout the screen is rendered in.
+              const view: "phone" | "laptop" = req.headers["sec-ch-ua-mobile"] === "?1" ? "phone" : "laptop";
+              const shown = { ...boot, view };
+              return { html: await ssr.renderCase(shown), boot: shown };
+            },
+          }
+        : {}),
+    });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(2);
@@ -104,6 +131,8 @@ if (serveBuild) {
   closeUi = () => vite.close();
 }
 
+// The local workspace the server renders the case screen from (P30).
+let renderWorkspace: Workspace | null = null;
 let closeApp: () => void;
 let started: () => void;
 
@@ -124,6 +153,7 @@ if (config.mode === "hosted") {
   };
 } else {
   const ws = createWorkspace({ dbPath: appDbPath(), secretsPath: appSecretsPath(), port: PORT, extraHosts, googleClient, serverMetaKey, logRejected: process.env.APP_LOG_REJECTED === "1" });
+  renderWorkspace = ws;
   closeApp = ws.close;
   server.on("request", async (req, res) => {
     // Refuse requests addressed to any other host name, so a page on another
@@ -150,6 +180,13 @@ if (config.mode === "hosted") {
     if (url.pathname === "/api/session") {
       if (req.method !== "GET") return send(res, 405, { error: "method_not_allowed" });
       return send(res, 200, { mode: "local" });
+    }
+    // Round 2, finding 4: the held live read.
+    const since = req.method === "GET" && url.pathname === LIVE_PATH ? parseSince(url.search) : null;
+    if (since) {
+      const live = await waitForChange(() => liveOf(ws), since, { closed: () => res.destroyed || res.writableEnded });
+      if (live) send(res, 200, live);
+      return;
     }
     await serveApi(ws, { method: req.method ?? "GET", path: url.pathname, body: input.body, generation: input.generation, host: req.headers.host, secure: secureRequest(req) }, res);
   });

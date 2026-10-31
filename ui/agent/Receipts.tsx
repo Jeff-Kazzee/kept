@@ -2,7 +2,10 @@
 // Lantern Hill Clinic · Undo". Facts the agent decided about one message
 // form one receipt. Every other action is its own receipt with the
 // sentence code wrote for it. Undo reverses every entry of the receipt.
-import { useState } from "react";
+// 0019, P5: a turn's receipts sit as rows of one quiet group under its
+// words. With three or more, a one-line summary folds them, and each row
+// keeps its own Undo when opened.
+import { useEffect, useId, useRef, useState } from "react";
 import type { AppState } from "../api.ts";
 import { Icon } from "../components/Icon.tsx";
 import type { ActivityEntry } from "../contract.ts";
@@ -50,18 +53,68 @@ export function groupReceipts(entries: ActivityEntry[], state: Pick<AppState, "e
   return groups;
 }
 
+// The folded group's one line: "3 actions · Accepted 2 facts from Lantern
+// Hill Clinic, and 2 more". Written by code from the receipts' own words.
+export const FOLD_AT = 3;
+// Round 2, finding 8: it counts actions, the entries, not the rows a
+// claims receipt merges them into.
+export function groupSummary(groups: Array<Pick<ReceiptGroup, "text" | "entries">>): string {
+  const entries = groups.flatMap((g) => g.entries);
+  const undone = entries.filter((e) => e.undone).length;
+  const first = groups[0]?.text ?? "";
+  const more = groups.length - 1;
+  const tail = undone > 0 ? ` · ${undone} undone` : "";
+  return `${entries.length} action${entries.length === 1 ? "" : "s"} · ${first}${more > 0 ? `, and ${more} more` : ""}${tail}`;
+}
+
 export function Receipts({ entries, state, skipMessages }: { entries: ActivityEntry[]; state: AppState; skipMessages?: ReadonlySet<string> }) {
-  const { activity, google } = useAgent();
+  const { activity, google, blocked, blockedAt } = useAgent();
+  const uid = useId();
   const groups = groupReceipts(entries, state).filter((g) => g.messageId === null || !skipMessages?.has(g.messageId));
+  // A refused Undo opens the group, so its reason is in view. Round 2,
+  // finding 3: each new refusal opens it again, even after the person
+  // closed it, and brings the reason into view.
+  // Muse round 2, finding 5: keyed on when each refusal came, so the same
+  // refusal again, with the same words, opens the group again too.
+  const refusals = groups
+    .flatMap((g) => g.entries)
+    .filter((e) => blocked[e.id])
+    .map((e) => `${e.id}:${blockedAt[e.id] ?? 0}`)
+    .join("|");
+  const [openChoice, setOpen] = useState<boolean | null>(null);
+  const [seen, setSeen] = useState(refusals);
+  if (refusals !== seen) {
+    setSeen(refusals);
+    if (refusals !== "") setOpen(true);
+  }
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (refusals === "") return;
+    const frame = requestAnimationFrame(() => box.current?.querySelector(".receipt-blocked")?.scrollIntoView?.({ block: "nearest" }));
+    return () => cancelAnimationFrame(frame);
+  }, [refusals]);
   if (groups.length === 0) return null;
+  const folds = groups.length >= FOLD_AT;
+  const open = !folds || (openChoice ?? refusals !== "");
   return (
-    <ul className="receipts" aria-label="What the assistant did">
-      {groups.map((g) => (
-        <li key={g.key}>
-          <Receipt text={g.text} entries={g.entries} gone={g.entries.length === 1 && removedInGoogle(activity, google?.calendarOwn, g.entries[0]!)} />
-        </li>
-      ))}
-    </ul>
+    <div ref={box} className={`receipt-group${folds ? " is-folding" : ""}`}>
+      {folds && (
+        <button type="button" className="receipt-summary" aria-expanded={open} aria-controls={`${uid}-rows`} onClick={() => setOpen(!open)}>
+          <span className="receipt-mark" aria-hidden="true">
+            <Icon name="check" size="sm" />
+          </span>
+          <span className="receipt-text">{groupSummary(groups)}</span>
+          <Icon name="chevronDown" size="sm" />
+        </button>
+      )}
+      <ul id={`${uid}-rows`} className="receipts" aria-label="What the assistant did" hidden={!open}>
+        {groups.map((g) => (
+          <li key={g.key}>
+            <Receipt text={g.text} entries={g.entries} gone={g.entries.length === 1 && removedInGoogle(activity, google?.calendarOwn, g.entries[0]!)} />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

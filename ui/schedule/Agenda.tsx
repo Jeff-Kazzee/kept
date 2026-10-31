@@ -10,7 +10,7 @@ import { actorName, api, type AppState, type EvidenceView, type RecordView } fro
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { StateBadge } from "../components/StateBadge.tsx";
-import { stampTime, wallParts } from "../format.ts";
+import { stampTime, wallNow, wallParts } from "../format.ts";
 import { AgentQuote, UntrustedText } from "../case/Source.tsx";
 import { UntrustedInline } from "../components/Untrusted.tsx";
 import { googleEventState, useAgent } from "../agent/AgentContext.tsx";
@@ -19,7 +19,8 @@ import { googleEventState, useAgent } from "../agent/AgentContext.tsx";
 // instructions (Muse round 1, finding 12).
 export const EVENT_LABEL = "Calendar event title, shown as data";
 
-export const slotElementId = (key: string) => `slot-${slotIdPart(key)}`;
+export { slotElementId } from "./tabs.ts";
+import { slotElementId } from "./tabs.ts";
 
 // A calendar time on the case's clock. A UTC time is moved to the case
 // time zone.
@@ -73,6 +74,8 @@ export function Agenda({
       .map((event): Row => ({ kind: "event", ...icsLocal(event.start), event }))
       .filter((r) => days.has(r.date)),
   ].sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? "").localeCompare(b.time ?? ""));
+  // 0019, P11: today on the case's clock is marked.
+  const today = wallNow().slice(0, 10);
   const byDay = new Map<string, Row[]>();
   for (const r of rows) byDay.set(r.date, [...(byDay.get(r.date) ?? []), r]);
 
@@ -86,10 +89,14 @@ export function Agenda({
       )}
       {[...byDay].map(([date, dayRows]) => {
         const n = dayRows.filter((r) => r.kind === "slot").length;
+        const isToday = date === today;
         return (
-        <section key={date} className="day" aria-label={dateLabel(date)}>
+        <section key={date} className="day" aria-label={`${dateLabel(date)}${isToday ? ", today" : ""}`} data-today={isToday || undefined}>
           <h3 className="day-head">
-            {dateLabel(date)}
+            <span>
+              {dateLabel(date)}
+              {isToday && <span className="today-tag">Today</span>}
+            </span>
             <span className="day-count tabular">
               {n} appointment{n === 1 ? "" : "s"}
             </span>
@@ -98,7 +105,7 @@ export function Agenda({
             r.kind === "slot" ? (
               <SlotRow key={r.slot.key} slot={r.slot} record={records.get(r.slot.key)} state={state} run={run} highlight={highlight === r.slot.key} />
             ) : (
-              <CalendarRow key={`${r.event.uid ?? r.event.summary}-${r.time}`} event={r.event} />
+              <CalendarRow key={`${r.event.uid ?? r.event.summary}-${r.time}`} event={r.event} clashes={clashingSlots(r.event, shown)} />
             ),
           )}
         </section>
@@ -109,9 +116,18 @@ export function Agenda({
   );
 }
 
-function CalendarRow({ event }: { event: IcsEvent }) {
+// 0019, P11: the appointments a calendar event clashes with, so the clash
+// shows on both rows. Matched by the event's start and title, as code's
+// clash check reports them: the event's id, else its title and start.
+export function clashingSlots(event: Pick<IcsEvent, "uid" | "start" | "summary">, slots: SlotView[]): SlotView[] {
+  const same = (c: NonNullable<SlotView["clashes"]>[number]) =>
+    (c.uid !== null && c.uid === event.uid) || (c.summary === event.summary && JSON.stringify(c.start) === JSON.stringify(event.start));
+  return slots.filter((s) => (s.clashes ?? []).some(same));
+}
+
+function CalendarRow({ event, clashes = [] }: { event: IcsEvent; clashes?: SlotView[] }) {
   return (
-    <div className="slot calendar">
+    <div className={`slot calendar${clashes.length > 0 ? " is-clash" : ""}`}>
       <div className="slot-time tabular">{icsTimeText(event.start)}</div>
       <div className="slot-body">
         <div className="slot-line">
@@ -119,6 +135,13 @@ function CalendarRow({ event }: { event: IcsEvent }) {
             <UntrustedInline label={EVENT_LABEL} text={event.summary} />
           </span>
           <span className="badge badge-calendar">Your calendar</span>
+          {clashes.length > 0 && (
+            <span className="marker marker-clash" title={`Clashes with ${clashes.map((s) => s.label).join(" and ")}`}>
+              <Icon name="alert" size="sm" />
+              <span>Clash</span>
+              <span className="sr-only">: with {clashes.map((s) => s.label).join(" and ")}</span>
+            </span>
+          )}
         </div>
         <span className="small muted tabular">
           {icsTimeText(event.start)}

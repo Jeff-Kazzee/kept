@@ -17,3 +17,23 @@ export function nextDemoMessage(fixtures: FixtureMessage[], state: Pick<AppState
   }
   return null;
 }
+
+// 0019, P17: the fixtures load on demand, once. A failed load is tried
+// again at the next call. `onLoad` gets the messages, each id once.
+export function createFixturesLoader(read: () => Promise<FixtureScenario[]>, onLoad: (list: FixtureMessage[]) => void = () => {}) {
+  let pending: Promise<FixtureMessage[]> | null = null;
+  return () => {
+    pending ??= read().then(
+      (s) => {
+        const list = s.flatMap((x) => x.messages).filter((m, i, all) => all.findIndex((y) => y.id === m.id) === i);
+        onLoad(list);
+        return list;
+      },
+      () => {
+        pending = null;
+        return [];
+      },
+    );
+    return pending;
+  };
+}

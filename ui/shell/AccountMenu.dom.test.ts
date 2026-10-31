@@ -54,7 +54,11 @@ describe("the account menu, opened", () => {
 
   it("hosted: starts closed, opens, names the account and balance, and Settings, Usage and Sign out each do their part", async () => {
     const m = await menu("hosted", session);
-    expect(m.account.getAttribute("aria-label")).toBe("Account: Dana Demo, Balance $4.87");
+    // 0019: the name starts with the visible words (label-content-name-mismatch).
+    expect(m.account.getAttribute("aria-label")).toBeNull();
+    expect(m.account.textContent.replace(/\s+/g, " ")).toContain("Dana Demo");
+    expect(m.account.textContent).toContain("Balance $4.87");
+    expect(m.account.textContent).toContain("account menu");
     expect(m.account.querySelector(".person-avatar")!.textContent).toBe("DD");
     expect(m.list.shown).toBe(false);
     await m.open();
@@ -76,7 +80,10 @@ describe("the account menu, opened", () => {
 
   it("local: Settings and the theme, no Usage, no Sign out and no balance", async () => {
     const m = await menu("local", null);
-    expect(m.account.getAttribute("aria-label")).toBe("Account: You, This computer");
+    expect(m.account.getAttribute("aria-label")).toBeNull();
+    expect(m.account.textContent.replace(/\s+/g, " ")).toContain("You");
+    expect(m.account.textContent).toContain("This computer");
+    expect(m.account.textContent).toContain("account menu");
     await m.open();
     expect(m.items()).toEqual(["SettingsTime zone, theme and Delete case"]);
     expect(m.list.textContent).not.toMatch(/Usage|Sign out|Balance/);
@@ -108,7 +115,10 @@ describe("the account menu, opened", () => {
   it("a judge account is named Judge access, never by a code", async () => {
     const judge: SignedInSession = { ...session, account: { kind: "judge", email: null, name: null } };
     const m = await menu("hosted", judge);
-    expect(m.account.getAttribute("aria-label")).toBe("Account: Judge access, Balance $4.87");
+    expect(m.account.getAttribute("aria-label")).toBeNull();
+    expect(m.account.textContent.replace(/\s+/g, " ")).toContain("Judge access");
+    expect(m.account.textContent).toContain("Balance $4.87");
+    expect(m.account.textContent).toContain("account menu");
     await m.open();
     expect(m.list.textContent).toContain("Judge access");
     await m.ui.unmount();

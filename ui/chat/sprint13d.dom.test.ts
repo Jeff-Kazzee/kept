@@ -101,13 +101,18 @@ async function mountChat(chat: ChatState) {
   const container = doc.createElement("div");
   doc.body.appendChild(container);
   const root = createRoot(container as unknown as Element);
+  // 0019, P19: the thread scrolls in the next frame, after React wrote the
+  // DOM, so each render waits one frame.
+  const frame = () => new Promise((r) => setTimeout(r, 5));
   await act(async () => root.render(createElement(ChatView, props(chat))));
+  await act(frame);
   const thread = container.querySelector(".thread")! as unknown as TestElement & { scrollTop: number };
   return {
     container,
     thread,
     async rerender(next: ChatState) {
       await act(async () => root.render(createElement(ChatView, props(next))));
+      await act(frame);
     },
     async scroll(top: number) {
       await act(async () => {
