@@ -721,9 +721,13 @@ after the event was added (`docs/decisions/0022-calendar-answer.md`).
   the turn's activity.
 - [x] C5 Copied history notes are removed from the answer.
 - [x] C6 withdrawn in fix round 1: event titles are untrusted, and the
-  schedule's calendar row already names the clashing event.
+  schedule's calendar row already names the clashing event. Since fix
+  round 2 a repeated title is bound to its event's date and time.
 - [x] Fix round 1: Muse Wonder's findings 1 to 7 (0022, "Fix round 1"),
   live again 10 of 10 and the story with Undo and put back.
+- [x] Fix round 2: the second review's findings 1 to 6 (0022, "Fix round
+  2"): event context by sentence, every calendar phrasing gated, clash
+  titles bound, live again 10 of 10 and Undo and put back.
 - [x] Live: the calendar step 10 of 10 answered with no fallback, Undo and
   put back answered, chat eval sends 0, unsupported states 0, clinical 0.
 - [ ] Review of `dev..sprint/20-calendar-answer` (coordinator).
