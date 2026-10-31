@@ -1,8 +1,9 @@
 # The hosted site
 
 The app runs in one of two modes. The design and every choice behind it
-are in `docs/decisions/0014-accounts-and-credits.md`, and accounts through
-Better Auth in `docs/decisions/0020-better-auth.md`.
+are in `docs/decisions/0014-accounts-and-credits.md`, accounts through
+Better Auth in `docs/decisions/0020-better-auth.md`, and the shared demo
+Gmail and Calendar in `docs/decisions/0021-demo-inbox.md`.
 
 ## Modes
 
@@ -45,7 +46,8 @@ BETTER_AUTH_SECRET=... BETTER_AUTH_URL=http://localhost:5300 MODEL_API_KEY=... \
 | `APP_WAITLIST_URL` | none | An https address, the waitlist on Kept's marketing page (K9). While sign-up is off, the sign-in screen links it under the judge code form: "Not a judge? Kept is coming soon. Join the waitlist." Unset hides the line. |
 | `BETTER_AUTH_API_URL`, `BETTER_AUTH_KV_URL` | Better Auth's | The dashboard's addresses, only to change them. |
 | `MODEL_API_KEY` | none | The Meta key that usage credits pay for. Without it every assistant step is refused with a plain message. |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | The Gmail and Calendar connection for test accounts (0012). Not a sign-in. |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | The Gmail and Calendar connection for test accounts (0012), and the shared demo connection. Not a sign-in. |
+| `APP_DEMO_GOOGLE` | `off` | `on` shares one made-up person's Gmail and Google Calendar with every account that has no Google connection of its own (0021). Needs the Google client. See "The demo Gmail and Calendar" below. |
 | `APP_ALLOWED_HOSTS` | none | More host names for the host check. The public origin's host is added on its own. |
 | `APP_MARKUP` | `3` | What a person pays per unit of model cost. At least 1, at most two decimals. |
 | `APP_DAILY_COST_CAP_USD` | none, required | The most the server key may cost in one UTC day, across all accounts. |
@@ -66,6 +68,9 @@ The data lives in the data folder (`APP_DB`'s folder):
 - `hosted/accounts.sqlite`: the app's accounts (each linked to its Better
   Auth user by id), judge sessions, the usage ledger and judge codes. Mode
   600. Judge sessions and codes are stored as hashes only.
+- `hosted/demo-google.sqlite`: the shared demo Gmail and Calendar
+  connection, its waiting connect link and its calendar cleanups (0021).
+  Mode 600.
 - `accounts/<account id>/`: one workspace per account, with its own
   `app.sqlite` and `app-secrets.sqlite`.
 
@@ -185,6 +190,64 @@ The app keeps the workspaces of recent visitors open, up to 256. When all
 of them are busy at once, a new visitor reads that the site is busy and
 can try again in a minute.
 
+## The demo Gmail and Calendar
+
+Judges cannot connect their own Google: the Google project is in testing
+mode with made-up test users only, and Jeff does not go back into Google's
+console. With `APP_DEMO_GOOGLE=on`, the site holds one connection to the
+made-up demo Google account, and every account without its own Google
+connection uses it: the agent searches and imports from its Gmail (read
+only) and reads and writes its Google Calendar, live, with no Google screen
+for the judge (`docs/decisions/0021-demo-inbox.md`).
+
+- Each account's calendar events carry that account's mark. An account
+  sees the demo calendar's own events and its own app events, never
+  another account's or the local demo's.
+- At most 5 live app events per account, 20 calendar creates or updates
+  per account in 10 minutes, and the usual 8 Google reads per chat turn.
+- Delete case and Delete account remove the account's events. Every hour,
+  and at start, a sweep removes the events of deleted accounts and of
+  expired or revoked judge codes, and every app event older than 7 days.
+  The local demo's events are never touched. The log shows counts only.
+- Connections shows one line, "Demo Gmail and Calendar: a made-up account
+  shared by judges", connected or needs reconnecting, and never the
+  address. Judges get no Connect or Disconnect. The agent is told the inbox
+  and calendar are a made-up person's, shared with other judges.
+- When the connection has expired, the agent's Google tools say the demo
+  Gmail and Calendar need reconnecting, and the rest of the site works.
+
+The commands, on this server, with the instance's env file and `APP_DB`
+(the data folder plus `/app.sqlite`). They need `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET` and `BETTER_AUTH_URL`, and refuse a folder with no
+accounts database:
+
+```sh
+set -a; . <the instance's env file>; set +a
+export APP_DB="${APP_HOSTED_DATA:-$HOME/.local/share/appointments-hosted}/app.sqlite"
+pnpm admin google demo-connect --email <the demo account's address>
+pnpm admin google demo-status
+pnpm admin google demo-disconnect
+```
+
+- `demo-connect` prints a link, good once for 10 minutes. Open it in a
+  browser signed in as the demo Google account and choose Allow (Google
+  says the app is not verified: choose Continue). Google returns to the
+  site's `/auth/google/callback`, which stores the connection and shows
+  "The demo Gmail and Calendar are connected for every judge." No sign-in
+  to the site is needed. With `--email`, any other Google account is
+  refused. The site must be running with `APP_DEMO_GOOGLE=on`.
+- `demo-status` shows whether it is connected, the account's email, when
+  it was connected and when Google ends the consent. The start log shows
+  that date too.
+- `demo-disconnect` revokes the grant at Google and deletes it here.
+
+**Renew it every 7 days.** In testing mode Google ends the consent 7 days
+after it was given, and the connection stops working. Run `demo-connect`
+again before the date `demo-status` shows, open the new link as the demo
+account and choose Allow. The same connection is renewed in place, and
+judges notice nothing. If it lapses, judges read that the demo Gmail and
+Calendar need reconnecting until it is renewed.
+
 ## How credits are priced
 
 Every model call on the server key is charged at `APP_MARKUP` times its
@@ -221,7 +284,8 @@ billing waits until after the hackathon) and a rough cost per turn for each mode
 ## Delete account
 
 Delete account, in Settings from the account menu, erases the account's workspace (its case, chat,
-activity, settings and Google connection, after revoking the Google grant),
+activity, settings and Google connection, after revoking the Google grant,
+and its events in the shared demo calendar),
 then the Better Auth user with its password, passkeys and every session.
 It is refused, with nothing changed, while a step of the account is still
 running. The ledger keeps its rows for accounting, with the email and name
@@ -254,7 +318,9 @@ Tailscale configuration.
 1. Jeff's env file for the instance, mode 600, outside git, holds
    `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL=https://the-little-ai-co.tail374dd0.ts.net:10000`,
    `MODEL_API_KEY`, `APP_DAILY_COST_CAP_USD`, `APP_JUDGE_TOTAL_CAP_USD`,
-   and `APP_WAITLIST_URL` (the here.now waitlist page). Leave
+   `APP_WAITLIST_URL` (the here.now waitlist page), and for the demo Gmail
+   and Calendar `APP_DEMO_GOOGLE=on` with `GOOGLE_CLIENT_ID` and
+   `GOOGLE_CLIENT_SECRET`. Leave
    `BETTER_AUTH_API_KEY` unset (K6) and `APP_PUBLIC_SIGNUP` unset or `off`
    (K7). Optionally `APP_HOSTED_DATA` and `NODE_BIN` (Node 24 or later, if
    `node` is not on the unit's PATH).
@@ -281,4 +347,13 @@ Tailscale configuration.
    403. For an email account, run `pnpm admin users create` with the
    instance's `APP_DB`, sign in through "Sign in to an existing account",
    and add a passkey.
+7. Connect the demo Gmail and Calendar: run
+   `pnpm admin google demo-connect --email <the demo account's address>`
+   as in "The demo Gmail and Calendar" above, and send Jeff the link it
+   prints. It works once, for 10 minutes. Jeff opens it signed in as the
+   demo Google account and chooses Allow. Then
+   `pnpm admin google demo-status` shows it connected with the date the
+   consent ends, and a judge's Connections shows the demo line as
+   connected. Set a reminder to renew it (the same steps) before that
+   date, every 7 days.
 

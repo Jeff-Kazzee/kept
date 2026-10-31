@@ -216,8 +216,30 @@ be reached. You can also remove the app's access in the demo account at
   assessment as well. `calendar.events` is a sensitive scope and needs
   verification. An unverified app that shows the warning is limited to
   100 users over the project's lifetime.
-- The app holds one Google connection per server, for the one person whose
-  case it is.
+- Locally, the app holds one Google connection per server, for the one
+  person whose case it is. On the hosted site each account has its own,
+  and with `APP_DEMO_GOOGLE=on` an account without one uses the shared demo
+  connection below.
+
+## The hosted site's shared demo connection
+
+Judges cannot be added as test users without Google's console, so the
+hosted site can share one made-up account's Gmail and Calendar with every
+account that has no Google connection of its own
+(`docs/decisions/0021-demo-inbox.md`, `docs/hosted.md`, "The demo Gmail
+and Calendar"). It uses the redirect URI already registered for the
+public site, `https://the-little-ai-co.tail374dd0.ts.net:10000/auth/google/callback`,
+so the OAuth client needs no change.
+
+- Connect it with `pnpm admin google demo-connect` on the server, and open
+  the link it prints signed in as the demo account. No app session is
+  needed. `pnpm admin google demo-status` shows when the consent ends.
+- **Renew it every 7 days**, before that date, with the same command: the
+  testing-mode limit above applies to it like any test user's consent.
+- `pnpm admin google demo-disconnect` revokes and deletes it.
+- Gmail stays read-only. Each account's calendar events carry its own
+  mark, each account sees only its own app events, and the site keeps at
+  most 5 live events per account and sweeps old ones.
 
 ## Use your agent's own connectors
 

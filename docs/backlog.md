@@ -56,6 +56,7 @@ Rules:
 | 14 | Paid plans with Stripe | Hosted app | Oct 30 to 31 | Planned |
 | 15 | Public hosting (folded into sprint 18: Tailscale Funnel) | Hosted app | Nov 1 | Moved to 18 |
 | 18 | Accounts through Better Auth, and the hosted app live | Hosted app | Oct 30 to 31 | Built, go-live open |
+| 19 | A shared demo Gmail and Calendar for judges | Hosted app | Oct 31 | Built, live connect open |
 | 16 | Submission build | All | Nov 2 to 4 | Planned |
 
 On 2026-10-28 the plan changed to an agent-first app: sprint 8 is the
@@ -672,6 +673,32 @@ for accounts, and the site live at
 - [ ] Restyle the sign-in screen with sprint 17's look (coordinator, after
   both merge).
 - [ ] Confirm or change the choices marked proposed in 0020.
+
+## Sprint 19: a shared demo Gmail and Calendar for judges
+
+Branch `sprint/19-demo-inbox`, from `sprint/18-better-auth`. Jeff approved
+on 2026-10-31 one shared demo connection, since judges cannot connect their
+own Google (D1 to D10 in `docs/decisions/0021-demo-inbox.md`).
+
+- [x] D1 `APP_DEMO_GOOGLE=on`, hosted only, the connection in
+  `hosted/demo-google.sqlite` (mode 600).
+- [x] D2 `pnpm admin google demo-connect`, `demo-status` and
+  `demo-disconnect`. The callback finishes a demo connect by its
+  single-use state, with no session.
+- [x] D3, D4 Accounts without their own connection use the shared one for
+  every Gmail and Calendar tool. Keys start with `shared:`. Offers stay
+  per account.
+- [x] D5 Each account's events carry its mark. Reads show the calendar's
+  own events and the account's own app events only.
+- [x] D6 5 live events per account, 20 writes per 10 minutes, Delete case
+  and Delete account cleanups, and the hourly sweep.
+- [x] D7, D8 The reconnect sentence, the start log's date, Connections'
+  line, no buttons for judges, and the agent's instruction.
+- [x] D9, D10 Counts only in logs. Local mode unchanged.
+- [ ] Connect the demo account live (coordinator: `demo-connect`, Jeff
+  opens the link), and renew every 7 days.
+- [ ] Live checks with two judge codes (coordinator).
+- [ ] Confirm or change the choices marked proposed in 0021.
 
 ## Sprint 16: submission build
 
