@@ -197,21 +197,29 @@ pnpm admin judges revoke --id p0123456789ab
 - Each browser that signs in with it and has no session from it gets a new
   judge account, its own workspace and the per-judge share, as a ledger
   grant with the source `judge-pool:<id>`. The same browser signing in
-  again keeps its account. Once less than one share is left, a sign-in
+  again keeps its account: the sign-in screen sends a random key kept in
+  the browser, so a retry or a second click, or a sign-in after signing
+  out, opens the account the first one made. Once less than one share is left, a sign-in
   reads "The shared judge pass is used up. Email the address on the
   judges' page for your own code."
 - At most 6 accounts an hour per pass, and 2 an hour from one client
-  address (the trusted proxy's, never loopback). Over either, the sign-in
-  is refused politely and nothing is made.
+  address, both sliding hours counted in the accounts database. The
+  address is the trusted proxy's when it holds one plain address that is
+  not loopback. A bad or loopback claim counts as one shared address.
+  With `APP_TRUSTED_PROXY` unset behind Funnel, every visitor is loopback
+  and only the pass's 6 an hour applies. With `tailscale`, as the start
+  script sets it, each visitor's address is counted too. Over
+  either, the sign-in is refused politely and nothing is made.
 - A pass cannot be added to an email account, and a pass's account takes
   no code.
 - `list` shows each pass with its pool, share, accounts made, granted,
   left and spent. `grant` raises the pool. The accounts already made keep
   their share. `revoke` stops new sign-ins and revokes each account the
-  pass made by the code rules above.
+  pass made by the code rules above. One of its accounts cannot be granted
+  or revoked alone.
 - A pass's workspace is reached only through its browser's session. The
-  sign-in screen and the account menu say so: signing out, or signing in
-  on another browser, starts a fresh account.
+  sign-in screen and the account menu say so: another browser starts a
+  fresh account.
 
 Judges open the site, choose "I have a judge code", or go straight to
 `/judge`. Code tries are limited to 10 per address in 15 minutes. Behind

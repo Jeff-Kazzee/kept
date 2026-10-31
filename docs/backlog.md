@@ -754,6 +754,11 @@ capped pool (`docs/decisions/0023-judge-pool.md`).
 - [x] P10 Migration tested on a file with the old schema and 11 codes.
 - [x] Live on 5330 with temporary data: two jars, two accounts and cases,
   the pool used up, the refusal.
+- [x] Fix round 1: Muse Wonder's findings 1 to 6 (0023, "Fix round 1"):
+  forwarded addresses through one parser, the browser's sign-in key, no
+  hold after expiry, no revoke of one pass account, the per-address hour
+  in the database, the migration in one transaction with a fuller test.
+  Live again on 5330 and 5331.
 - [ ] Review of `dev..sprint/21-judge-pool` (coordinator).
 - [ ] Make the pass on the public instance and put its code in the form
   (Jeff).
