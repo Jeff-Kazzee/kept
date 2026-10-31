@@ -1,6 +1,8 @@
 // The hosted site's sign-in screen (0014, design item 6, and 0020, B9):
 // sign in or sign up with an email and password, use a passkey, or use a
-// judge code. /judge opens the code form at once. A password or a code
+// judge code. /judge opens the code form at once. While public sign-up is
+// off (0020, K7), the screen leads with the judge code, "Make an account"
+// is not shown, and a small link signs in to an existing account. A password or a code
 // goes to the server once, and its field is cleared whatever the answer.
 // Built with the app's existing classes only.
 import { useId, useRef, useState, type FormEvent } from "react";
@@ -12,13 +14,37 @@ import { AuthError, accountAuth, hostedApi, type SessionInfo } from "./session.t
 export const judgePath = (pathname: string) => /^\/judge\/?$/.test(pathname);
 
 type Mode = "signin" | "signup" | "judge";
+
+// K9: the waitlist link, only an https address.
+export function safeWaitlist(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
 type Busy = "password" | "passkey" | "code" | null;
 
 const sentence = (e: unknown) => (e instanceof AuthError ? e.message : errorSentence(e).replace(/ Nothing was saved\.$/, ""));
 
-export function SignIn({ passwordMin = 10, dashboard = false, notice, onSignedIn }: { passwordMin?: number; dashboard?: boolean; notice: string | null; onSignedIn: (s: SessionInfo, problem?: string | null) => void }) {
+export function SignIn({
+  passwordMin = 10,
+  dashboard = false,
+  publicSignup = false,
+  waitlistUrl = null,
+  notice,
+  onSignedIn,
+}: {
+  passwordMin?: number;
+  dashboard?: boolean;
+  publicSignup?: boolean;
+  waitlistUrl?: string | null;
+  notice: string | null;
+  onSignedIn: (s: SessionInfo, problem?: string | null) => void;
+}) {
   const uid = useId();
-  const [mode, setMode] = useState<Mode>(() => (typeof window !== "undefined" && judgePath(window.location.pathname) ? "judge" : "signin"));
+  const [mode, setMode] = useState<Mode>(() => (!publicSignup || (typeof window !== "undefined" && judgePath(window.location.pathname)) ? "judge" : "signin"));
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -196,12 +222,14 @@ export function SignIn({ passwordMin = 10, dashboard = false, notice, onSignedIn
                 {mode === "signup" ? "Make my account" : "Sign in"}
               </button>
             </form>
-            <p className="small muted">
-              {mode === "signup" ? "Already have an account? " : "New here? "}
-              <button type="button" className="link-btn" onClick={() => switchTo(mode === "signup" ? "signin" : "signup")}>
-                {mode === "signup" ? "Sign in" : "Make an account"}
-              </button>
-            </p>
+            {publicSignup && (
+              <p className="small muted">
+                {mode === "signup" ? "Already have an account? " : "New here? "}
+                <button type="button" className="link-btn" onClick={() => switchTo(mode === "signup" ? "signin" : "signup")}>
+                  {mode === "signup" ? "Sign in" : "Make an account"}
+                </button>
+              </p>
+            )}
             <p className="signin-or" aria-hidden="true">
               <span>or</span>
             </p>
@@ -223,9 +251,25 @@ export function SignIn({ passwordMin = 10, dashboard = false, notice, onSignedIn
                 Continue
               </button>
             </form>
-            <button type="button" className="btn btn-block" onClick={() => switchTo("signin")} disabled={busy !== null}>
-              Use an email and password instead
-            </button>
+            {publicSignup ? (
+              <button type="button" className="btn btn-block" onClick={() => switchTo("signin")} disabled={busy !== null}>
+                Use an email and password instead
+              </button>
+            ) : (
+              <p className="small muted">
+                <button type="button" className="link-btn" onClick={() => switchTo("signin")} disabled={busy !== null}>
+                  Sign in to an existing account
+                </button>
+              </p>
+            )}
+            {!publicSignup && safeWaitlist(waitlistUrl) && (
+              <p className="small muted">
+                Not a judge? Kept is coming soon.{" "}
+                <a href={safeWaitlist(waitlistUrl)!} rel="noopener noreferrer">
+                  Join the waitlist.
+                </a>
+              </p>
+            )}
           </>
         )}
         <p className="small muted signin-foot">

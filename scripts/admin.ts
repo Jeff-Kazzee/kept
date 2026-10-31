@@ -12,6 +12,10 @@
 //       unspent credit is removed.
 //   pnpm admin judges grant --id <id> --usd <n>
 //       Raises a code's cap. A redeemed code's account gets the credit.
+//   pnpm admin users create --email <email> [--name <name>]
+//       Makes an email account while public sign-up is off (0020, K7): a
+//       Better Auth user with a random password, printed once. The person
+//       signs in with it, and may add a passkey.
 //   pnpm admin users list
 //       Every email account: its email, when it was made, how many
 //       passkeys it has. Never a password or a session.
@@ -45,6 +49,7 @@ const USAGE = `Usage:
   pnpm admin judges list
   pnpm admin judges revoke --id <id>
   pnpm admin judges grant --id <id> --usd <n>
+  pnpm admin users create --email <email> [--name <name>]
   pnpm admin users list
   pnpm admin users reset-password --email <email>
   pnpm admin backup --to <folder>`;
@@ -155,7 +160,7 @@ export async function runAdminAsync(argv: string[], env: NodeJS.ProcessEnv = pro
   const fail = (line: string, code = 2): AdminResult => ({ code, out, err: [line] });
   let parsed;
   try {
-    parsed = parseArgs({ args: group === "backup" ? (command ? [command, ...rest] : []) : rest, options: { email: { type: "string" }, to: { type: "string" } }, strict: true });
+    parsed = parseArgs({ args: group === "backup" ? (command ? [command, ...rest] : []) : rest, options: { email: { type: "string" }, to: { type: "string" }, name: { type: "string" } }, strict: true });
   } catch (e) {
     return fail(`${e instanceof Error ? e.message : String(e)}\n${USAGE}`);
   }
@@ -197,6 +202,39 @@ export async function runAdminAsync(argv: string[], env: NodeJS.ProcessEnv = pro
       } finally {
         db.close();
       }
+      return { code: 0, out, err: [] };
+    }
+    if (command === "create") {
+      const email = v.email?.trim().toLowerCase();
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return fail(`create needs --email with a full email address.\n${USAGE}`);
+      const name = (v.name ?? "").trim().slice(0, 100);
+      const password = randomBytes(15).toString("base64url");
+      const hash = await hashPassword(password);
+      // Better Auth's own id shape: 32 letters and digits.
+      const id = () => {
+        const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        return [...randomBytes(32)].map((b) => abc[b % abc.length]).join("");
+      };
+      const db = openAuth(env);
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          if (db.prepare("SELECT 1 FROM user WHERE lower(email) = ?").get(email)) throw new Error("An account with that email already exists. Nothing was made.");
+          const at = new Date(now()).toISOString();
+          const userId = id();
+          db.prepare("INSERT INTO user (id, name, email, emailVerified, image, createdAt, updatedAt) VALUES (?, ?, ?, 0, NULL, ?, ?)").run(userId, name, email, at, at);
+          db.prepare("INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) VALUES (?, ?, 'credential', ?, ?, ?, ?)").run(id(), userId, userId, hash, at, at);
+          db.exec("COMMIT");
+        } catch (e) {
+          db.exec("ROLLBACK");
+          throw e;
+        }
+      } finally {
+        db.close();
+      }
+      out.push(`Made an account for ${email}.`);
+      out.push("Its password, shown this once. Give it to the person, who can sign in with it now:");
+      out.push(password);
       return { code: 0, out, err: [] };
     }
     if (command === "reset-password") {

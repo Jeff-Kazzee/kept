@@ -48,7 +48,7 @@ const hostedSettings: Settings = {
 
 describe("the hosted site", () => {
   it("0020, B9: the sign-in screen offers an email and password, a passkey and a judge code, and /judge opens the code form", () => {
-    const page = html(createElement(SignIn, { passwordMin: 10, notice: null, onSignedIn: () => {} }));
+    const page = html(createElement(SignIn, { passwordMin: 10, publicSignup: true, notice: null, onSignedIn: () => {} }));
     expect(page).not.toContain("Google");
     expect(page).toContain('type="email"');
     expect(page).toContain('autoComplete="current-password"');
@@ -59,7 +59,7 @@ describe("the hosted site", () => {
     expect(page).toContain("Your password is stored only as a hash.");
     // The privacy line names Better Auth only when its dashboard is on.
     expect(page).not.toContain("Better Auth");
-    expect(html(createElement(SignIn, { passwordMin: 10, dashboard: true, notice: null, onSignedIn: () => {} }))).toContain("also go to Better Auth");
+    expect(html(createElement(SignIn, { passwordMin: 10, dashboard: true, publicSignup: true, notice: null, onSignedIn: () => {} }))).toContain("also go to Better Auth");
     expect(judgePath("/judge")).toBe(true);
     expect(judgePath("/judge/")).toBe(true);
     expect(judgePath("/judges")).toBe(false);
@@ -69,9 +69,30 @@ describe("the hosted site", () => {
     expect(hostedSignInError("anything")).toMatch(/did not finish/);
   });
 
+  it("0020, K7 and K9: with public sign-up off, the screen leads with the judge code, hides Make an account, and links the waitlist when it is set", () => {
+    const page = html(createElement(SignIn, { passwordMin: 10, publicSignup: false, waitlistUrl: "https://kept.here.now/", notice: null, onSignedIn: () => {} }));
+    expect(page).toContain('name="judge-code"');
+    expect(page.indexOf('name="judge-code"')).toBeLessThan(page.indexOf("Sign in to an existing account"));
+    expect(page).toContain("Sign in to an existing account");
+    expect(page).not.toContain("Make an account");
+    expect(page).not.toContain('type="email"');
+    expect(page).toContain('Not a judge? Kept is coming soon. <a href="https://kept.here.now/" rel="noopener noreferrer">Join the waitlist.</a>');
+    expect(page.indexOf("Not a judge?")).toBeGreaterThan(page.indexOf('name="judge-code"'));
+    // No waitlist setting, or one that is not https: no line.
+    for (const waitlistUrl of [null, "javascript:alert(1)", "http://kept.example/"]) {
+      expect(html(createElement(SignIn, { passwordMin: 10, publicSignup: false, waitlistUrl, notice: null, onSignedIn: () => {} }))).not.toContain("Not a judge?");
+    }
+    // With public sign-up on, the waitlist line never shows.
+    expect(html(createElement(SignIn, { passwordMin: 10, publicSignup: true, waitlistUrl: "https://kept.here.now/", notice: null, onSignedIn: () => {} }))).not.toContain("Not a judge?");
+  });
+
   it("0020: Better Auth's refusals read as the page's own sentences, never the server's text", () => {
     expect(authErrorText(401, { code: "INVALID_EMAIL_OR_PASSWORD", message: "Invalid email or password" })).toBe("That email and password do not match an account. Check them and try again.");
-    expect(authErrorText(422, { code: "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" })).toMatch(/already exists/);
+    // Fix round 1, item 6: a refused sign-up never says an account has the email.
+    for (const code of ["EMAIL_UNAVAILABLE", "USER_ALREADY_EXISTS", "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL"]) {
+      expect(authErrorText(422, { code })).toBe("That email cannot be used here. Try another, or sign in if it is yours.");
+    }
+    expect(authErrorText(403, { error: "signup_closed", message: "New accounts are not open on this site yet. Judges, choose I have a judge code." })).toMatch(/^New accounts are not open/);
     expect(authErrorText(400, { code: "PASSWORD_TOO_SHORT" })).toBe("Use a password of at least 10 characters.");
     expect(authErrorText(429, { message: "Too many requests. Please try again later." })).toBe("Too many tries from here. Wait a minute and try again.");
     expect(authErrorText(429, { error: "rate_limited", message: "Too many tries from this address. Wait a few minutes and try again." })).toMatch(/^Too many tries from this address/);

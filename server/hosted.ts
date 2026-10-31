@@ -30,7 +30,7 @@ import { DELETE_CONFIRMATION } from "../src/case/constants.ts";
 import { toNodeHandler } from "better-auth/node";
 import type { FetchLike } from "../src/google/http.ts";
 import type { OAuthClient } from "../src/google/oauth.ts";
-import { AUTH_BASE_PATH, CLIENT_ADDRESS_HEADER, PASSWORD_MIN, authPath, createAuth, type AuthConfig } from "../src/hosted/auth.ts";
+import { AUTH_BASE_PATH, CLIENT_ADDRESS_HEADER, PASSWORD_MIN, authPath, authRouteServed, createAuth, type AuthConfig } from "../src/hosted/auth.ts";
 import { formatBalance, formatCharge, formatUsd, type HostedConfig } from "../src/hosted/config.ts";
 import { MeteredClient } from "../src/hosted/metered.ts";
 import { PRICES, turnCostMicros } from "../src/hosted/prices.ts";
@@ -44,7 +44,7 @@ import { appHosts, hostAllowed } from "./hosts.ts";
 import { apiPreamble, trustedSecure } from "./http.ts";
 import { API_SECURITY_HEADERS } from "./static.ts";
 import { CHATGPT_HOSTED_TEXT, MAX_BODY, createWorkspace, send, serveApi, type Workspace } from "./workspace.ts";
-import { WorkspaceBusyError, Workspaces, WorkspacesFullError } from "./workspaces.ts";
+import { AccountClosedError, WorkspaceBusyError, Workspaces, WorkspacesFullError } from "./workspaces.ts";
 
 export type HostedOptions = {
   config: HostedConfig;
@@ -71,6 +71,7 @@ export const SIGNED_OUT_TEXT = "Sign in to use the assistant. Nothing was saved.
 export const NOT_OFFERED_TEXT = "On the hosted site the assistant uses usage credits, not your own key. Run the app on your own computer to use your own Meta key. Nothing was saved.";
 export const CHATGPT_HOSTED_REFUSED_TEXT = "Sign in with ChatGPT is not available on the hosted site yet. It works when you run the app on your own computer. Nothing was changed.";
 export const RATE_LIMITED_TEXT = "Too many tries from this address. Wait a few minutes and try again.";
+export const SIGNUP_CLOSED_TEXT = "New accounts are not open on this site yet. Judges, choose I have a judge code.";
 export const AUTH_BODY_TEXT = "That request was too large, or did not say its size. Nothing was saved.";
 export const ACCOUNT_BUSY_TEXT = "The accounts database is busy just now. Try again in a moment. Nothing was changed.";
 export const SITE_BUSY_TEXT = "This site is busy just now. Try again in a minute. Nothing was saved.";
@@ -122,10 +123,11 @@ export function sessionCookie(port: number, secure: boolean, value: string, maxA
   return `${sessionCookieName(port, secure)}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure ? "; Secure" : ""}`;
 }
 
-// Better Auth answers every path under /api/auth (the path Jeff set in
-// its dashboard), but the app's own provider routes there, a person's
-// Meta key and Sign in with ChatGPT, stay the app's: hosted mode refuses
-// them with its own sentences (hostedOnly).
+// Every path under /api/auth (the path Jeff set in Better Auth's
+// dashboard) goes to authRoute, which serves only the routes in
+// authRouteServed and answers 404 for the rest. The app's own provider
+// routes there, a person's Meta key and Sign in with ChatGPT, stay the
+// app's: hosted mode refuses them with its own sentences (hostedOnly).
 export const isBetterAuthPath = (p: string) =>
   (p === AUTH_BASE_PATH || p.startsWith(`${AUTH_BASE_PATH}/`)) && p !== `${AUTH_BASE_PATH}/meta-key` && p !== `${AUTH_BASE_PATH}/chatgpt` && !p.startsWith(`${AUTH_BASE_PATH}/chatgpt/`);
 
@@ -194,6 +196,14 @@ export async function createHostedApp(o: HostedOptions) {
   const workspaces = new Workspaces({
     root: o.workspacesDir ?? workspacesRoot(),
     now,
+    // Fix round 1, item 2: checked again as a request enters, before any
+    // workspace is built, so a request that read its session just before
+    // Delete account finished never makes a fresh workspace for the
+    // deleted account.
+    admit: (accountId) => {
+      const a = store.account(accountId);
+      return a !== null && !a.deleted;
+    },
     ...(o.maxWorkspaces ? { max: o.maxWorkspaces } : {}),
     build: (accountId, files) =>
       createWorkspace({
@@ -272,7 +282,8 @@ export async function createHostedApp(o: HostedOptions) {
 
   // `dashboard` lets the sign-in page say that sign-in events also go to
   // Better Auth's dashboard (B7).
-  const signedOutView = () => ({ mode: "hosted" as const, signedIn: false, passwordMin: PASSWORD_MIN, dashboard: auth.dashboardOn });
+  // `publicSignup` lets the sign-in page offer Make an account (K7).
+  const signedOutView = () => ({ mode: "hosted" as const, signedIn: false, passwordMin: PASSWORD_MIN, dashboard: auth.dashboardOn, publicSignup: o.auth.publicSignup, waitlistUrl: o.auth.publicSignup ? null : o.auth.waitlistUrl });
 
   const accountView = (account: Account, expiresAt: number) => {
     const balance = store.balance(account.id);
@@ -285,6 +296,7 @@ export async function createHostedApp(o: HostedOptions) {
       expiresAt,
       passwordMin: PASSWORD_MIN,
       dashboard: auth.dashboardOn,
+      publicSignup: o.auth.publicSignup,
     };
   };
 
@@ -369,6 +381,11 @@ export async function createHostedApp(o: HostedOptions) {
         return send(res, 413, { error: "body_refused", message: AUTH_BODY_TEXT });
       }
     }
+    const sub = path.slice(AUTH_BASE_PATH.length);
+    if (!authRouteServed(sub, auth.dashboardOn)) return send(res, 404, { error: "not_found" });
+    // K7: while public sign-up is off, the server refuses it, whatever the
+    // page shows.
+    if (sub.startsWith("/sign-up") && !o.auth.publicSignup) return send(res, 403, { error: "signup_closed", message: SIGNUP_CLOSED_TEXT });
     const address = clientAddress(req.headers, req.socket.remoteAddress, config.trustedProxy);
     // Only the app says who the visitor is. The dashboard's visitor
     // headers are dropped, so nothing a client sends makes Better Auth
@@ -376,10 +393,27 @@ export async function createHostedApp(o: HostedOptions) {
     for (const h of [CLIENT_ADDRESS_HEADER, "x-request-id", "x-visitor-id", "x-forwarded-for", "cf-connecting-ip", "true-client-ip"]) delete req.headers[h];
     req.headers[CLIENT_ADDRESS_HEADER] = address;
     if (method === "POST") {
-      const sub = path.slice(AUTH_BASE_PATH.length);
       const limiter = sub.startsWith("/sign-up") ? signupLimit : sub.startsWith("/sign-in") || sub === "/passkey/verify-authentication" ? signinLimit : null;
       const limit = limiter?.take(address);
       if (limit && !limit.ok) return send(res, 429, { error: "rate_limited", message: RATE_LIMITED_TEXT, retryAfterSeconds: limit.retryAfterSeconds });
+      // Fix round 1, item 1: an email or passkey sign-in that succeeds ends
+      // any judge session in this browser and clears its cookie, so a
+      // shared browser never falls back to the judge's account.
+      if (limiter !== null) {
+        const writeHead = res.writeHead;
+        res.writeHead = function (this: ServerResponse, ...args: unknown[]) {
+          const status = typeof args[0] === "number" ? args[0] : res.statusCode;
+          if (status >= 200 && status < 300) {
+            try {
+              endJudge(req);
+            } catch {
+              // The cookie still goes. The session expires on its own.
+            }
+            for (const c of clearJudge()) res.appendHeader("Set-Cookie", c);
+          }
+          return (writeHead as (...a: unknown[]) => ServerResponse).apply(this, args);
+        } as ServerResponse["writeHead"];
+      }
     }
     await authHandler(req, res);
   }
@@ -551,6 +585,8 @@ export async function createHostedApp(o: HostedOptions) {
       if (err instanceof AccountsBusyError) return send(res, 503, { error: "accounts_busy", retryable: true, message: ACCOUNT_BUSY_TEXT });
       // Every open workspace is working (final review, finding 2).
       if (err instanceof WorkspacesFullError) return send(res, 503, { error: "site_busy", retryable: true, message: SITE_BUSY_TEXT });
+      // Fix round 1, item 2: the account was deleted after its session was read.
+      if (err instanceof AccountClosedError) return send(res, 401, { error: "signed_out", message: SIGNED_OUT_TEXT });
       // The account is being deleted.
       if (err instanceof WorkspaceBusyError) return send(res, 409, { error: "account_busy", message: DELETE_ACCOUNT_BUSY_TEXT });
       if (err instanceof AccountsFileError) log(err.message);

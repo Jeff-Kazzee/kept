@@ -780,6 +780,9 @@ export class AccountsStore {
       const c = db.prepare("SELECT * FROM judge_codes WHERE id = ?").get(id) as Row | undefined;
       if (!c) throw new JudgeCodeError("not_found", "No judge code has that id.");
       if (c.revoked_at !== null) throw new JudgeCodeError("revoked", "That code was revoked. Nothing was granted.");
+      // Fix round 1, item 3: an expired code takes no more credit, as it
+      // redeems no more.
+      if (num(c.expires_at) <= this.#now()) throw new JudgeCodeError("expired", "That code has expired. Nothing was granted.");
       if (this.#judgeCommitted(db) + amountMicros > totalCapMicros) throw new JudgeCodeError("total_cap", "That grant would pass the total cap for judge codes. Nothing was granted.");
       db.prepare("UPDATE judge_codes SET cap = cap + ? WHERE id = ?").run(amountMicros, id);
       if (c.account_id !== null) this.#insert(db, { account_id: String(c.account_id), kind: "grant", amount: amountMicros, source: `judge:${id}` });

@@ -16,8 +16,8 @@ export type HostedAccount = { kind: "user" | "judge" | "google"; email: string |
 
 export type SessionInfo =
   | { mode: "local" }
-  | { mode: "hosted"; signedIn: false; passwordMin: number; dashboard?: boolean }
-  | { mode: "hosted"; signedIn: true; account: HostedAccount; balanceMicros: number; balance: string; expiresAt: number; passwordMin: number; dashboard?: boolean };
+  | { mode: "hosted"; signedIn: false; passwordMin: number; dashboard?: boolean; publicSignup?: boolean; waitlistUrl?: string | null }
+  | { mode: "hosted"; signedIn: true; account: HostedAccount; balanceMicros: number; balance: string; expiresAt: number; passwordMin: number; dashboard?: boolean; publicSignup?: boolean };
 
 export type SignedInSession = Extract<SessionInfo, { signedIn: true }>;
 
@@ -77,8 +77,10 @@ export class AuthError extends Error {
 // general sentence, never the server's own text.
 const AUTH_ERRORS: Record<string, string> = {
   INVALID_EMAIL_OR_PASSWORD: "That email and password do not match an account. Check them and try again.",
-  USER_ALREADY_EXISTS: "An account with that email already exists. Sign in instead.",
-  USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL: "An account with that email already exists. Sign in instead.",
+  // Fix round 1, item 6: never more than that the email cannot be used.
+  EMAIL_UNAVAILABLE: "That email cannot be used here. Try another, or sign in if it is yours.",
+  USER_ALREADY_EXISTS: "That email cannot be used here. Try another, or sign in if it is yours.",
+  USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL: "That email cannot be used here. Try another, or sign in if it is yours.",
   PASSWORD_TOO_SHORT: "Use a password of at least 10 characters.",
   PASSWORD_TOO_LONG: "Use a password of at most 128 characters.",
   INVALID_EMAIL: "Enter a full email address, such as name@example.com.",
@@ -88,6 +90,7 @@ const AUTH_ERRORS: Record<string, string> = {
 };
 
 export function authErrorText(status: number, body: { code?: unknown; message?: unknown; error?: unknown } | null): string {
+  if (body?.error === "signup_closed" && typeof body.message === "string") return body.message;
   if (status === 429) return typeof body?.message === "string" && body.error === "rate_limited" ? body.message : "Too many tries from here. Wait a minute and try again.";
   const code = typeof body?.code === "string" ? body.code : "";
   if (AUTH_ERRORS[code]) return AUTH_ERRORS[code]!;

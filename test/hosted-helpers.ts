@@ -106,7 +106,9 @@ export async function startHosted(
     ...options.config,
   };
   // The public origin is the loopback name, so a passkey has a host name.
-  const authConfig = readAuthConfig({ BETTER_AUTH_SECRET: TEST_AUTH_SECRET, BETTER_AUTH_URL: `http://localhost:${port}`, ...options.authEnv });
+  // Most tests make accounts by sign-up, so public sign-up is on unless a
+  // test turns it off (K7).
+  const authConfig = readAuthConfig({ BETTER_AUTH_SECRET: TEST_AUTH_SECRET, BETTER_AUTH_URL: `http://localhost:${port}`, APP_PUBLIC_SIGNUP: "on", ...options.authEnv });
   const publicHost = new URL(authConfig.origin).host;
   const app = await createHostedApp({
     config,

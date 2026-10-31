@@ -74,7 +74,7 @@ describe("app modes", () => {
     expect(s.out()).toContain("APP_DAILY_COST_CAP_USD is not set, so the server key is off.");
     expect(s.out()).toContain("APP_JUDGE_TOTAL_CAP_USD is not set, so the server key is off.");
     expect(s.out()).not.toContain("server-key-for-mode-test");
-    expect(await get(s.port, "/api/session")).toEqual({ status: 200, body: { mode: "hosted", signedIn: false, passwordMin: 10, dashboard: false } });
+    expect(await get(s.port, "/api/session")).toEqual({ status: 200, body: { mode: "hosted", signedIn: false, passwordMin: 10, dashboard: false, publicSignup: false, waitlistUrl: null } });
     expect((await get(s.port, "/api/state")).status).toBe(401);
     const db = path.join(s.dir, "hosted", "accounts.sqlite");
     expect(statSync(db).mode & 0o777).toBe(0o600);

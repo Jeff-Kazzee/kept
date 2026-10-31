@@ -17,7 +17,16 @@
 //                        Optional, off without it. Never logged.
 //   BETTER_AUTH_API_URL, BETTER_AUTH_KV_URL
 //                        the dashboard's addresses, when not Better Auth's
-//                        defaults. Optional.
+//                        defaults. Optional. Jeff keeps the dashboard off for
+//                        the hackathon (0020, K6).
+//   APP_PUBLIC_SIGNUP    on lets anyone make an account with an email and
+//                        password. off, the default (0020, K7), refuses
+//                        sign-up on the server: judges come in with their
+//                        codes, and accounts made with `pnpm admin users
+//                        create` still sign in.
+//   APP_WAITLIST_URL     the waitlist on Kept's marketing page (K9),
+//                        linked from the sign-in screen while public
+//                        sign-up is off. Optional, https. Unset hides it.
 //
 // Better Auth's telemetry is off. Its log lines go through `log` with
 // every email address cut out and no extra values.
@@ -26,7 +35,7 @@ import { DatabaseSync } from "node:sqlite";
 import { dash } from "@better-auth/infra";
 import { passkey } from "@better-auth/passkey";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
-import { createAuthMiddleware } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { getMigrations } from "better-auth/db/migration";
 import { appDbPath } from "../paths.ts";
 import { ConfigError } from "./config.ts";
@@ -62,6 +71,11 @@ export type AuthConfig = {
   // The passkey relying party: the origin's host name, without a port.
   rpId: string;
   secure: boolean;
+  // K7: false refuses email sign-up on the server.
+  publicSignup: boolean;
+  // K9: the marketing page's waitlist, linked from the sign-in screen
+  // while public sign-up is off. Null hides the line.
+  waitlistUrl: string | null;
   dashboard: { apiKey: string; apiUrl: string | null; kvUrl: string | null } | null;
 };
 
@@ -101,12 +115,16 @@ export function readAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
   }
   if (local && u.hostname === "127.0.0.1") throw new ConfigError("BETTER_AUTH_URL cannot use 127.0.0.1: a passkey needs a host name. Use http://localhost:<port> instead.");
   const apiKey = (env.BETTER_AUTH_API_KEY ?? "").trim();
+  const signupRaw = (env.APP_PUBLIC_SIGNUP ?? "").trim().toLowerCase();
+  if (signupRaw !== "" && signupRaw !== "on" && signupRaw !== "off") throw new ConfigError(`APP_PUBLIC_SIGNUP must be on or off. It is "${env.APP_PUBLIC_SIGNUP}".`);
   return {
     secret,
     origin: u.origin,
     host: u.host.toLowerCase(),
     rpId: u.hostname.toLowerCase(),
     secure: u.protocol === "https:",
+    publicSignup: signupRaw === "on",
+    waitlistUrl: httpsUrl(env, "APP_WAITLIST_URL"),
     dashboard: apiKey === "" ? null : { apiKey, apiUrl: httpsUrl(env, "BETTER_AUTH_API_URL"), kvUrl: httpsUrl(env, "BETTER_AUTH_KV_URL") },
   };
 }
@@ -115,6 +133,9 @@ export function readAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
 // social sign-in, and the account changes the app makes itself or does
 // not have yet. Each answers 404.
 export const DISABLED_PATHS = [
+  // Fix round 1, item 1: the page signs out through the app's own
+  // /api/session/signout, which ends a judge session too.
+  "/sign-out",
   "/sign-in/social",
   "/callback/:id",
   "/link-social",
@@ -142,6 +163,26 @@ export const DISABLED_PATHS = [
   "/passkey/update-passkey",
 ];
 
+// Fix round 1, item 4: the Better Auth routes the site serves. Every other
+// path under /api/auth answers 404 before Better Auth sees it, so a route
+// a later version or plugin adds is never served by accident. The
+// dashboard's routes only while its plugin is on (K6: off).
+const AUTH_ROUTES = new Set([
+  "/sign-in/email",
+  "/sign-up/email",
+  "/get-session",
+  "/passkey/generate-register-options",
+  "/passkey/verify-registration",
+  "/passkey/generate-authenticate-options",
+  "/passkey/verify-authentication",
+  "/passkey/list-user-passkeys",
+  "/passkey/delete-passkey",
+]);
+
+export function authRouteServed(subpath: string, dashboardOn: boolean): boolean {
+  return AUTH_ROUTES.has(subpath) || (dashboardOn && /^\/dash\/[a-z0-9/-]+$/.test(subpath));
+}
+
 const EMAIL = /[^\s@<>"'(),;:]+@[^\s@<>"'(),;:]+/g;
 // A Better Auth log line, with every email address cut out and no extra
 // values, which may hold a request's body.
@@ -160,6 +201,17 @@ function withoutTokens(value: unknown): unknown {
     out.session = s;
   }
   return out;
+}
+
+// Fix round 1, item 5: a DISABLED_PATHS entry with a :param, such as
+// /callback/:id, never matches Better Auth's literal disabledPaths check.
+// This plugin answers 404 for any path of that shape, before any route.
+function disabledPatterns(patterns: string[]) {
+  const res = patterns.map((p) => new RegExp(`^${AUTH_BASE_PATH}${p.replace(/:[a-z]+/gi, "[^/]+")}/?$`));
+  return {
+    id: "appt-disabled-patterns",
+    onRequest: async (request: Request) => (res.some((re) => re.test(new URL(request.url).pathname)) ? { response: new Response("Not Found", { status: 404 }) } : undefined),
+  };
 }
 
 // Better Auth's rate limits, kept per instance, so two apps in one
@@ -215,7 +267,9 @@ export function authOptions(o: CreateAuthOptions, db: DatabaseSync): BetterAuthO
     },
     session: { expiresIn: AUTH_SESSION_DAYS * 86_400, updateAge: 86_400 },
     rateLimit: { enabled: true, window: 60, max: 100, customStorage: memoryRateLimit() as never },
-    disabledPaths: DISABLED_PATHS,
+    // Better Auth matches disabledPaths as literal paths, so the entries
+    // with a :param are refused by the disabledPatterns plugin below.
+    disabledPaths: config.publicSignup ? DISABLED_PATHS : [...DISABLED_PATHS, "/sign-up/email"],
     advanced: {
       // __Secure-appt.session_token over HTTPS. Over plain http on
       // localhost, a name with the port in it.
@@ -245,6 +299,11 @@ export function authOptions(o: CreateAuthOptions, db: DatabaseSync): BetterAuthO
     hooks: {
       after: createAuthMiddleware(async (ctx) => {
         const returned = ctx.context.returned as unknown;
+        // Fix round 1, item 6: a refused sign-up says only that the email
+        // cannot be used, not that an account has it.
+        if (returned instanceof APIError && /^USER_ALREADY_EXISTS/.test(String((returned.body as { code?: unknown } | undefined)?.code ?? ""))) {
+          throw new APIError("UNPROCESSABLE_ENTITY", { code: "EMAIL_UNAVAILABLE", message: "That email cannot be used here." });
+        }
         if (!returned || typeof returned !== "object" || returned instanceof Response || returned instanceof Error) return;
         const wrapped = (returned as { _flag?: unknown; body?: unknown })._flag === "json";
         const body = wrapped ? (returned as { body: unknown }).body : returned;
@@ -253,6 +312,7 @@ export function authOptions(o: CreateAuthOptions, db: DatabaseSync): BetterAuthO
       }),
     },
     plugins: [
+      disabledPatterns(DISABLED_PATHS.filter((p) => p.includes(":"))),
       passkey({ rpID: config.rpId, rpName: APP_NAME, origin: config.origin }),
       ...(config.dashboard
         ? [

@@ -65,7 +65,7 @@ export function Root() {
   }, []);
   const toSignIn = useCallback((text: string | null) => {
     setNotice(text);
-    setSession((s) => (s && s.mode === "hosted" ? { mode: "hosted", signedIn: false, passwordMin: s.passwordMin, ...(s.dashboard !== undefined ? { dashboard: s.dashboard } : {}) } : s));
+    setSession((s) => (s && s.mode === "hosted" ? { mode: "hosted", signedIn: false, passwordMin: s.passwordMin, ...(s.dashboard !== undefined ? { dashboard: s.dashboard } : {}), ...(s.publicSignup !== undefined ? { publicSignup: s.publicSignup } : {}) } : s));
   }, []);
   useEffect(() => {
     // A sign-in this site cannot finish, such as ChatGPT's, comes back as
@@ -122,6 +122,8 @@ function RootView({
       <SignIn
         passwordMin={session.passwordMin}
         dashboard={session.dashboard ?? false}
+        publicSignup={session.publicSignup ?? false}
+        waitlistUrl={session.waitlistUrl ?? null}
         notice={notice}
         onSignedIn={(s, problem) => {
           setNotice(problem ?? null);

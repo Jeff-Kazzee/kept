@@ -29,6 +29,10 @@ export const CEILING_FACTOR = 4;
 export class WorkspacesFullError extends Error {
   override name = "WorkspacesFullError";
 }
+// Fix round 1, item 2: the account is deleted, so no workspace is built.
+export class AccountClosedError extends Error {
+  override name = "AccountClosedError";
+}
 export class WorkspaceBusyError extends Error {
   override name = "WorkspaceBusyError";
 }
@@ -44,8 +48,10 @@ export class Workspaces {
   readonly #idleMs: number;
   readonly #max: number;
   readonly #open = new Map<string, Entry>();
+  readonly #admit: (accountId: string) => boolean;
 
-  constructor(options: { root: string; build: Build; now?: () => number; idleMs?: number; max?: number }) {
+  constructor(options: { root: string; build: Build; now?: () => number; idleMs?: number; max?: number; admit?: (accountId: string) => boolean }) {
+    this.#admit = options.admit ?? (() => true);
     this.#root = path.resolve(options.root);
     this.#build = options.build;
     this.#now = options.now ?? Date.now;
@@ -80,7 +86,9 @@ export class Workspaces {
   }
 
   // Runs `fn` with the account's workspace, which stays open while it runs.
+  // Refused, with nothing built, for an account `admit` no longer admits.
   async use<T>(accountId: string, fn: (ws: Workspace) => Promise<T> | T): Promise<T> {
+    if (!this.#admit(accountId)) throw new AccountClosedError("This account was deleted.");
     const e = this.#entry(accountId);
     if (e.deleting) throw new WorkspaceBusyError("This account is being deleted.");
     e.inFlight++;
