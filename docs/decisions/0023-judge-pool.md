@@ -11,8 +11,10 @@ Code: `src/hosted/store.ts`, `server/hosted.ts`, `src/hosted/rate-limit.ts`,
 `ui/hosted/hosted.test.ts` and `ui/shell/AccountMenu.dom.test.ts`.
 
 Fix round 1 (Muse Wonder's review of `e3694d0`) changed P5, P6, P8, P9
-and P10 and added P11 and P12. The sections below give the state after
-it, and "Fix round 1" at the end lists each finding.
+and P10 and added P11 and P12. Fix round 2 (the second review, of
+`434d6e8`, with the coordinator's decisions) changed P5, P6, P9, P10, P11
+and P12 and added P13. The sections below give the state after both, and
+"Fix round 1" and "Fix round 2" at the end list each finding.
 
 ## Why
 
@@ -48,13 +50,20 @@ can cost at most the pool.
   2 an hour per client address across all passes
   (`POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR`, proposed). Both are sliding hours
   counted in the database, in the sign-in's transaction, so they hold
-  across restarts and processes. The address is kept only as a hash of its
-  bucket (an IPv4 address, or an IPv6 address's /64), on the account's
-  row, and the minute sweep clears it once its hour is over. Over either
-  limit: 429, `judge_pool_throttled`, nothing made.
+  across restarts and processes. Only a counted address (P12) is limited
+  per address. Every other sign-in is bound by the pass's 6 an hour and
+  its pool. The address is kept as an unsalted SHA-256 of its bucket (an
+  IPv4 address, or an IPv6 address's /64), on the account's row. That is
+  a rate-limit counter key, not a secret: the space is small enough to
+  find an address from its hash by trying them all, and the same address
+  gives the same value across passes by design. The minute sweep clears
+  it once its hour is over, and the count reads only the last hour either
+  way. Over either limit: 429, `judge_pool_throttled`, nothing made.
 - P6 A browser gets back the account it already has from the same pass,
   with no new account and no second share: by its judge session, or by
-  its sign-in key (P11) (proposed). Any other sign-in makes a new account.
+  its sign-in key while that lasts (P11). Any other sign-in makes a new
+  account. A sign-out, then a sign-in on the same browser, starts a fresh
+  workspace (coordinator's decision, fix round 2).
 - P7 Attaching a pass to an email account is refused
   (`judge_pool_attach`). A pass's account is a judge account, so it takes
   no code (`judge_judge_account`, as before).
@@ -67,10 +76,12 @@ can cost at most the pool.
   stick, as the pass would make that browser a new one.
 - P9 The sign-in hint reads "It signs you in to an account of your own",
   true for both kinds, and adds that with a code shared by several judges
-  the workspace stays on this browser. A pass's account carries
-  `pool: true` in the session view, and the account menu says the
-  workspace stays on this browser: signing in with the pass again here
-  opens it, and another browser starts a fresh one.
+  the workspace stays on this browser while you are signed in, and that
+  signing out, or signing in on another browser, starts a fresh one. A
+  pass's account carries `pool: true` in the session view, and the
+  account menu says: "This workspace stays on this browser while you are
+  signed in. Signing out ends it: a new sign-in with the shared judge pass
+  starts a fresh one."
 - P10 Migration: `judge_pools` is made if missing, and `judge_codes` gains
   `pool_id` (null) with `ALTER TABLE ADD COLUMN`. Every row is kept. The
   test builds a file with the schema of `dev` `058f69a`, 11 codes and real
@@ -83,29 +94,64 @@ can cost at most the pool.
   each column checked inside it, and the pre-0020 accounts rebuild checks
   again inside its own. The switch to WAL runs only on a file not in WAL
   yet, as it takes the whole file: every file the app made is in WAL.
-  Eight processes opening the old file at once all succeed, and each
-  column is added once.
-- P11 The sign-in screen makes one random key per browser (32 bytes,
-  base64url, kept in localStorage as `kept.judge-signin-key`, or one per
-  page without storage) and sends it with every judge code sign-in. A
-  pass stores its hash, bound to the pass's id, on the account's row in
-  the sign-in's transaction (unique). A repeat with the same key, with or
-  without a cookie, gets the same account and a new session, so a
-  retried or doubled first sign-in takes one share. The key reaches no
-  other pass's account, and a per-judge code ignores it. A key of another
-  shape is refused (400). No key works as before. If the key's account
-  was deleted, the key moves to a new account.
+  Eight processes opening the old WAL file at once all succeed, and each
+  column is added once. Several processes converting a file that is not
+  in WAL yet, at the same moment, is out of scope: the app makes every
+  accounts file in WAL from its first open, so no such file exists to
+  migrate. The open has two transactions, the pre-0020 rebuild and the
+  rest. Each is idempotent, and a crash between them is finished by the
+  next open.
+- P11 The sign-in screen makes a random key (32 bytes, base64url, kept in
+  localStorage as `kept.judge-signin-key`, or one per page without
+  storage) and sends it with a judge code sign-in. A pass stores
+  `sha256("judge-pool-signin:<pass id>:<key>")` on the account's row in
+  the sign-in's transaction (unique), never the key. A repeat with the
+  same key, with or without a cookie, gets the same account and a new
+  session, so a retried or doubled first sign-in takes one share. The key
+  reaches no other pass's account, and a per-judge code ignores it. A key
+  of another shape is refused (400). No key works as before.
+  Since fix round 2 the key lasts only for the retry window and while the
+  browser holds that account's session, so it is never a lasting
+  credential for a workspace. The browser forgets it, with the account it
+  opened (`kept.judge-signin-owner`), at sign-out, Delete account, an
+  email or passkey sign-in, and a judge sign-in that ends in any other
+  account, and makes a new one at the next sign-in. The server forgets the
+  binding when that account's session ends by sign-out, or by a sign-in in
+  that browser to another account. A sign-in that opens the same account
+  again keeps it. If the key's account was deleted or is missing, the key
+  moves to a new account. If its row was revoked, the sign-in is refused
+  as revoked and the binding stays, so the key makes no account in its
+  place.
 - P12 The client address (rate-limit.ts): with `APP_TRUSTED_PROXY` none,
   the socket's address, and every forwarding header is ignored. Behind
   cloudflare or tailscale, from a loopback socket, the trusted header must
   hold one plain IP address that is not loopback, by one parser for both.
   A header that is there but holds anything else, a list, or a loopback
-  address becomes `0.0.0.0`, one address all such requests share, counted
-  like any other. Only a socket address with no forwarding header is
-  loopback, and only loopback is not counted per address. The coordinator
-  reports that the public instance runs with no proxy set, though
-  `scripts/hosted/start.sh` sets `tailscale`. With none, Funnel connects
-  from loopback, so the pass's own 6 an hour is the working limit there.
+  address becomes `0.0.0.0`, one address all such requests share. Only a
+  socket address with no forwarding header is loopback. Since fix round 2
+  only a counted address (`countedAddress`: one plain client IP, never
+  loopback and never `0.0.0.0`) has per-address limits. The shared and
+  loopback requests are many visitors at once, so they are bound by the
+  pass's 6 an hour and its pool for accounts, and by one wider shared
+  ceiling for code tries (P13).
+  The live Funnel header shape is not verified. `scripts/hosted/start.sh`
+  sets `tailscale`, the coordinator reports that the public instance runs
+  with no proxy set, and no request through the real Funnel was inspected
+  in this sprint. The design no longer depends on it: whether Funnel sends
+  one plain address, nothing, a list or one shared address, a visitor is
+  either counted on its own address or bound by the shared limits. No
+  shape lets one sender lock real judges out, or gives a sender more than
+  the pass's 6 accounts an hour.
+- P13 Judge code tries (`POST /api/session/judge` and
+  `/api/account/judge-code`): 10 per counted address in 15 minutes, as
+  before, and 300 in 15 minutes shared by every request with no counted
+  address (`JUDGE_SHARED_TRY_LIMIT`, proposed). A code is 256 random
+  bits, so this limit is against floods, not guessing. A try is one hash
+  and one indexed read. 300 is about one try every 3 seconds, enough for a
+  room of judges arriving at once through a proxy that hides their
+  addresses, and high enough that one sender sending junk does not lock
+  them all out quickly. Before, a site with no proxy set gave every
+  visitor one loopback address and 10 tries in 15 minutes between them.
 
 ## Checks
 
@@ -151,3 +197,37 @@ with 429. A real address got its own account. On 5331 with no proxy set:
 seven sign-ins with `CF-Connecting-IP: 127.0.0.1` and an
 `X-Forwarded-For` gave six accounts, then 429 from the pass's own limit.
 Neither code nor key was in a log line.
+
+## Fix round 2
+
+The second review, of `434d6e8`, closed findings 3 to 6 and raised two
+items. The coordinator decided both.
+
+1. The sign-in key was a lasting credential: with the public pass code,
+   it opened a judge's workspace for the pass's whole life, and a shared
+   browser offered the last judge's key by itself. The key now lasts only
+   for the retry window and the signed-in time, on the browser and on
+   the server, and a sign-out starts a fresh workspace (P6, P11). A key
+   whose row is revoked is refused and keeps its binding.
+2. Funnel addressing: with an unknown header shape, the shared `0.0.0.0`
+   could have used up every judge's 2 accounts an hour and the judge
+   route's 10 tries. Neither applies to it now, nor to loopback: the
+   pass's limit, the pool and a shared 300 tries in 15 minutes do (P5,
+   P12, P13).
+3. Tests: the stored key column is the expected hash and not the key; a
+   hold taken before expiry settles after it, with its charge, release
+   and balance; the shared address is not limited per address, for
+   accounts or code tries; the shared ceiling holds; a sign-out and a
+   sign-in to another account end the key, on the server and in the
+   browser. WAL conversion by several processes at once is out of scope
+   (P10), and the address hash is a counter key, not a secret (P5).
+
+Live recheck on 5330 with `APP_TRUSTED_PROXY=cloudflare`, temporary data,
+server key off. A sign-in, a sign-out, then a sign-in on the same browser
+gave a new account, and the old key with no cookie gave a third. Two
+sign-ins with one new key and no cookie gave one account. On a fresh
+pass, `CF-Connecting-IP` junk, 127.0.0.1, "a, b" and ::1 each got an
+account, and twelve wrong codes with a junk header each got 404, none
+429. A real address then got two accounts, and a seventh sign-in on that
+pass was refused with 429, at the pass's 6 an hour. The code was in no
+log line.

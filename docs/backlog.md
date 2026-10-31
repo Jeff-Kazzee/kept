@@ -759,6 +759,13 @@ capped pool (`docs/decisions/0023-judge-pool.md`).
   hold after expiry, no revoke of one pass account, the per-address hour
   in the database, the migration in one transaction with a fuller test.
   Live again on 5330 and 5331.
+- [x] Fix round 2: the second review's items and the coordinator's
+  decisions (0023, "Fix round 2"): the sign-in key only while signed in,
+  no per-address limit on the shared or loopback address, a shared 300
+  code tries in 15 minutes, the stored key hash, the expiry hold and the
+  shared address tested. Live again on 5330.
+- [ ] Verify the real Funnel header shape before relying on per-address
+  limits there (0023, P12).
 - [ ] Review of `dev..sprint/21-judge-pool` (coordinator).
 - [ ] Make the pass on the public instance and put its code in the form
   (Jeff).
