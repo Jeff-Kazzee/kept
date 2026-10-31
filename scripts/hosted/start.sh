@@ -14,7 +14,9 @@
 #   MODEL_API_KEY             the server's Meta key, which credits pay for
 # Optional: APP_WAITLIST_URL (the waitlist link, K9), APP_PUBLIC_SIGNUP
 # (default off: judges only, K7), BETTER_AUTH_API_KEY (the dashboard
-# plugin, kept unset for the hackathon, K6), APP_MARKUP,
+# plugin, kept unset for the hackathon, K6), APP_DEMO_GOOGLE (the shared
+# demo Gmail and Calendar, 0021, with GOOGLE_CLIENT_ID and
+# GOOGLE_CLIENT_SECRET), APP_MARKUP,
 # APP_HOSTED_DATA (the data folder, default ~/.local/share/appointments-hosted),
 # APP_PORT (default 5300), NODE_BIN (default: node on PATH).
 set -euo pipefail

@@ -28,6 +28,18 @@
 //       Copies the accounts and sign-in databases with SQLite's VACUUM
 //       INTO, safe while the app runs, into a new folder of mode 700, each
 //       file mode 600.
+//   pnpm admin google demo-connect [--email <address>]
+//       The shared demo Gmail and Calendar (0021, D2). Prints a link, good
+//       once for 10 minutes. Open it signed in as the demo Google account
+//       and choose Allow: the site's /auth/google/callback stores the
+//       connection. Needs GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and
+//       BETTER_AUTH_URL, as the instance has them. With --email, any other
+//       Google account is refused. Run it again to renew the 7-day consent.
+//   pnpm admin google demo-status
+//       Connected or not, the account's email, when it was connected and
+//       when Google ends the consent. Never a token.
+//   pnpm admin google demo-disconnect
+//       Revokes the grant at Google and deletes it here.
 //
 // APP_JUDGE_TOTAL_CAP_USD caps every code together: a new code or a grant
 // that would pass it is refused. It has no default (J19): while it is
@@ -39,6 +51,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { hashPassword } from "better-auth/crypto";
+import { clientFromEnv } from "../src/google/connection.ts";
+import { DemoGoogle, demoGooglePath } from "../src/google/demo.ts";
+import type { FetchLike } from "../src/google/http.ts";
+import { GOOGLE_CALLBACK_PATH } from "../server/google.ts";
 import { AuthFileError, authPath } from "../src/hosted/auth.ts";
 import { checkPrivateFile } from "../src/hosted/db-file.ts";
 import { ConfigError, formatUsd, parseUsd, readHostedConfig } from "../src/hosted/config.ts";
@@ -52,7 +68,10 @@ const USAGE = `Usage:
   pnpm admin users create --email <email> [--name <name>]
   pnpm admin users list
   pnpm admin users reset-password --email <email>
-  pnpm admin backup --to <folder>`;
+  pnpm admin backup --to <folder>
+  pnpm admin google demo-connect [--email <address>]
+  pnpm admin google demo-status
+  pnpm admin google demo-disconnect`;
 
 export type AdminResult = { code: number; out: string[]; err: string[] };
 
@@ -153,8 +172,9 @@ type Row = Record<string, unknown>;
 
 // The users and backup commands, and every other command through
 // runAdmin. Async, as Better Auth's password hash is.
-export async function runAdminAsync(argv: string[], env: NodeJS.ProcessEnv = process.env, now: () => number = Date.now): Promise<AdminResult> {
+export async function runAdminAsync(argv: string[], env: NodeJS.ProcessEnv = process.env, now: () => number = Date.now, deps: { fetch?: FetchLike } = {}): Promise<AdminResult> {
   const [group, command, ...rest] = argv;
+  if (group === "google") return runGoogle(command, rest, env, now, deps);
   if (group !== "users" && group !== "backup") return runAdmin(argv, env, now);
   const out: string[] = [];
   const fail = (line: string, code = 2): AdminResult => ({ code, out, err: [line] });
@@ -269,6 +289,67 @@ export async function runAdminAsync(argv: string[], env: NodeJS.ProcessEnv = pro
   } catch (e) {
     if (e instanceof Error) return fail(e.message, 1);
     throw e;
+  }
+}
+
+const utc = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
+
+// The shared demo Gmail and Calendar (0021, D2). Works on the instance's
+// data folder: the accounts database must already be there, so a wrong
+// APP_DB never makes a connection the site does not read.
+async function runGoogle(command: string | undefined, rest: string[], env: NodeJS.ProcessEnv, now: () => number, deps: { fetch?: FetchLike }): Promise<AdminResult> {
+  const out: string[] = [];
+  const fail = (line: string, code = 2): AdminResult => ({ code, out, err: [line] });
+  let parsed;
+  try {
+    parsed = parseArgs({ args: rest, options: { email: { type: "string" } }, strict: true });
+  } catch (e) {
+    return fail(`${e instanceof Error ? e.message : String(e)}\n${USAGE}`);
+  }
+  if (command !== "demo-connect" && command !== "demo-status" && command !== "demo-disconnect") return fail(USAGE);
+  if (!existsSync(accountsPath(env))) return fail(`No hosted data at ${path.dirname(accountsPath(env))}. Run this with the instance's APP_DB (its data folder plus /app.sqlite).`);
+  const client = clientFromEnv(env);
+  const demo = new DemoGoogle({ client, file: demoGooglePath(env), now, ...(deps.fetch ? { fetch: deps.fetch } : {}) });
+  try {
+    if (command === "demo-connect") {
+      if (!client) return fail("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not set here. Run this with the instance's env file.");
+      let origin: URL;
+      try {
+        origin = new URL(env.BETTER_AUTH_URL ?? "");
+      } catch {
+        return fail("BETTER_AUTH_URL is not set here. Run this with the instance's env file.");
+      }
+      const local = origin.hostname === "localhost" || origin.hostname === "127.0.0.1";
+      if (origin.protocol !== "https:" && !(origin.protocol === "http:" && local)) return fail("BETTER_AUTH_URL must be an https address, or http on localhost.");
+      const email = parsed.values.email?.trim().toLowerCase() ?? null;
+      if (email !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("--email must be a full email address.");
+      const { authorizeUrl, expiresAt } = demo.startConnect({ redirectUri: `${origin.origin}${GOOGLE_CALLBACK_PATH}`, expectEmail: email });
+      if ((env.APP_DEMO_GOOGLE ?? "").trim().toLowerCase() !== "on") out.push("APP_DEMO_GOOGLE is not on here. The site finishes this link only while it runs with APP_DEMO_GOOGLE=on.");
+      out.push(`Open this link in a browser signed in as the demo Google account${email ? ` (${email})` : ""}, and choose Allow. It works once, until ${utc(new Date(expiresAt).toISOString())}:`);
+      out.push(authorizeUrl);
+      out.push(`Google returns to ${origin.origin}${GOOGLE_CALLBACK_PATH}, which stores the connection. Then pnpm admin google demo-status shows it.`);
+      return { code: 0, out, err: [] };
+    }
+    if (command === "demo-status") {
+      const d = demo.status();
+      if (!client) out.push("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not set here, so the stored connection is shown as it is.");
+      if (d.email === null && !d.needsReconnect) out.push("Demo Gmail and Calendar: not connected. Run pnpm admin google demo-connect.");
+      else {
+        out.push(`Demo Gmail and Calendar: ${d.needsReconnect ? "needs reconnecting" : "connected"}${d.email ? `, as ${d.email}` : ""}.`);
+        if (d.connectedAt) out.push(`Connected ${utc(d.connectedAt)}. Google ends this consent ${utc(d.expiresAt!)} (7 days, testing mode): run demo-connect again before then.`);
+        if (d.expiresAt && Date.parse(d.expiresAt) <= now()) out.push("That time has passed, so the connection has most likely stopped working. Run demo-connect again.");
+      }
+      if (d.pendingUntil) out.push(`A demo-connect link is waiting until ${utc(d.pendingUntil)}.`);
+      return { code: 0, out, err: [] };
+    }
+    const { had, revoked } = await demo.disconnect();
+    out.push(!had ? "Demo Gmail and Calendar were not connected. Nothing to remove." : revoked ? "Revoked the demo connection at Google and deleted it here." : "Deleted the demo connection here. Google did not confirm the revoke: remove the app's access at https://myaccount.google.com/permissions, signed in as the demo account.");
+    return { code: 0, out, err: [] };
+  } catch (e) {
+    if (e instanceof Error) return fail(e.message, 1);
+    throw e;
+  } finally {
+    demo.close();
   }
 }
 

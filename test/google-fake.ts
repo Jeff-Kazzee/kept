@@ -222,7 +222,7 @@ export class FakeGoogle {
       if (sent.id !== undefined && !/^[a-v0-9]{5,1024}$/.test(String(sent.id))) return json(400, { error: { code: 400, errors: [{ reason: "invalid" }] } });
       const id = (sent.id as string | undefined) ?? this.#next("event");
       if (cal.has(id)) return json(409, { error: { code: 409, errors: [{ reason: "duplicate" }] } });
-      const e = { ...sent, id, etag: "", status: (sent.status as string | undefined) ?? "confirmed" } as FakeEvent;
+      const e = { ...sent, id, etag: "", status: (sent.status as string | undefined) ?? "confirmed", created: new Date(this.now).toISOString() } as FakeEvent;
       bump(e);
       cal.set(e.id, e);
       if (this.insertCommitsThenFails) {

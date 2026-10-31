@@ -151,6 +151,10 @@ export type AgentOptions = {
   // credit or the site's guards stop every call, so the turn is refused
   // before the person's message is saved.
   admit?: () => void;
+  // More instructions for a turn, read once as it starts, or null: on the
+  // hosted site, that the Gmail inbox and calendar are a made-up person's,
+  // shared with other judges (0021, D8).
+  extraInstructions?: () => string | null;
 };
 
 export type CallErrorInfo = { turnId: string; call: number; kind: "loop" | "retry"; status: number | null; type: string | null; code: string | null };
@@ -215,6 +219,7 @@ export class CaseAgent {
   readonly #ready: () => boolean;
   readonly #onRejected: NonNullable<AgentOptions["onRejected"]>;
   readonly #admit: () => void;
+  readonly #extraInstructions: () => string | null;
   #busy = false;
   // When the running turn started, by this agent's clock.
   #busySince: number | null = null;
@@ -243,6 +248,7 @@ export class CaseAgent {
     this.#ready = options.ready ?? (() => true);
     this.#onRejected = options.onRejected ?? (() => {});
     this.#admit = options.admit ?? (() => {});
+    this.#extraInstructions = options.extraInstructions ?? (() => null);
   }
 
   get modelLabel(): string {
@@ -342,6 +348,8 @@ export class CaseAgent {
     // its permission.
     const offered = availableTools(this.#services);
     const tools = functionTools(offered);
+    const extra = this.#extraInstructions();
+    const instructions = extra ? `${AGENT_INSTRUCTIONS} ${extra}` : AGENT_INSTRUCTIONS;
     this.#append(input.expectedVersion, [{ type: "chat_user_message", data: { message_id: userId, turn_id: turnId, text, withheld: false } }]);
     emit({ event: "turn.started", data: { turnId, userMessageId: userId } });
     // Finding 11: what the case held when the turn started, apart from the
@@ -410,7 +418,7 @@ export class CaseAgent {
     const call = async (input: InputItem[], kind: "loop" | "retry"): Promise<OutputItem[]> => {
       budget();
       n++;
-      const body = buildToolRequest({ model: this.#model, effort: this.#effort, instructions: AGENT_INSTRUCTIONS, input, tools });
+      const body = buildToolRequest({ model: this.#model, effort: this.#effort, instructions, input, tools });
       report.modelCalls++;
       try {
         const reply = await this.#client.respond({ key: `chat-${turnId}-${n}`, effort: this.#effort, body });

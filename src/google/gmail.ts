@@ -13,7 +13,7 @@
 // accepted the message.
 import { z } from "zod";
 import type { Message } from "../domain/claim.ts";
-import type { GoogleConnection } from "./connection.ts";
+import type { GoogleLink } from "./connection.ts";
 import { GoogleError, apiError } from "./http.ts";
 
 export const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -259,9 +259,9 @@ export function toImport(m: GmailMessage): { source: typeof GMAIL_SOURCE; messag
 }
 
 export class Gmail {
-  readonly #conn: GoogleConnection;
+  readonly #conn: GoogleLink;
 
-  constructor(connection: GoogleConnection) {
+  constructor(connection: GoogleLink) {
     this.#conn = connection;
   }
 

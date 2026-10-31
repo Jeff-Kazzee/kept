@@ -78,6 +78,11 @@ export type GoogleStatus = {
   calendarRead?: CalendarRead;
   // The app's own events each stored read found live, by window (0017).
   calendarOwn?: CalendarOwnSeen[];
+  // On the hosted site with the shared demo Gmail and Calendar, while this
+  // account has no Google connection of its own (0021, D7): whether the
+  // shared one is connected, and whether this account may connect its own
+  // (not a judge). Never the shared account's address.
+  demo?: { connected: boolean; ownConnect: boolean };
 };
 
 export type CalendarOwnSeen = { from: string; to: string; readAt: string; slots: string[] };

@@ -28,8 +28,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { DELETE_CONFIRMATION } from "../src/case/constants.ts";
 import { toNodeHandler } from "better-auth/node";
-import type { FetchLike } from "../src/google/http.ts";
-import type { OAuthClient } from "../src/google/oauth.ts";
+import { DemoGoogle, SWEEP_MS, demoGooglePath, ownerTag } from "../src/google/demo.ts";
+import { GoogleError, type FetchLike } from "../src/google/http.ts";
+import { OAuthError, type OAuthClient } from "../src/google/oauth.ts";
 import { AUTH_BASE_PATH, CLIENT_ADDRESS_HEADER, PASSWORD_MIN, authPath, authRouteServed, createAuth, type AuthConfig } from "../src/hosted/auth.ts";
 import { formatBalance, formatCharge, formatUsd, type HostedConfig } from "../src/hosted/config.ts";
 import { MeteredClient } from "../src/hosted/metered.ts";
@@ -60,6 +61,7 @@ export type HostedOptions = {
   authFile?: string;
   workspacesDir?: string;
   googleFetch?: FetchLike;
+  demoGoogleFile?: string;
   metaUrl?: string;
   now?: () => number;
   // The workspace cache's size (workspaces.ts, MAX_OPEN).
@@ -75,6 +77,7 @@ export const SIGNUP_CLOSED_TEXT = "New accounts are not open on this site yet. J
 export const AUTH_BODY_TEXT = "That request was too large, or did not say its size. Nothing was saved.";
 export const ACCOUNT_BUSY_TEXT = "The accounts database is busy just now. Try again in a moment. Nothing was changed.";
 export const SITE_BUSY_TEXT = "This site is busy just now. Try again in a minute. Nothing was saved.";
+export const DEMO_CONNECTED_TEXT = "The demo Gmail and Calendar are connected for every judge. You can close this page.";
 export const DELETE_ACCOUNT_BUSY_TEXT = "The assistant is still working on something for this account. Wait for it to finish, then delete the account again. Nothing was deleted.";
 
 // What the usage page calls each route's model calls.
@@ -183,6 +186,9 @@ export async function createHostedApp(o: HostedOptions) {
   const signupLimit = new AddressLimiter({ limit: 10, windowMs: 60 * 60_000, now });
   const judgeLimit = new AddressLimiter({ limit: 10, windowMs: 15 * 60_000, now });
   const serverKey = config.serverKeyOn ? o.serverMetaKey : null;
+  // 0021: the shared demo Gmail and Calendar, with APP_DEMO_GOOGLE=on and
+  // the Google client set.
+  const demo = config.demoGoogle && o.googleClient ? new DemoGoogle({ client: o.googleClient, file: o.demoGoogleFile ?? demoGooglePath(), now, ...(o.googleFetch ? { fetch: o.googleFetch } : {}) }) : null;
 
   // A refusal before a turn starts, so a person with no credit has
   // nothing saved (agent.ts, admit).
@@ -213,6 +219,7 @@ export async function createHostedApp(o: HostedOptions) {
         googleClient: o.googleClient,
         ...(o.googleFetch ? { googleFetch: o.googleFetch } : {}),
         serverMetaKey: null,
+        ...(demo ? { demoGoogle: { demo, accountId, ownConnect: store.account(accountId)?.kind !== "judge" } } : {}),
         hosted: {
           metered: (secrets) =>
             new MeteredClient({ store, accountId, workspace: accountId, config, serverKey, model: () => metaModel(secrets.read()), ...(o.metaUrl ? { metaUrl: o.metaUrl } : {}) }),
@@ -232,6 +239,12 @@ export async function createHostedApp(o: HostedOptions) {
     try {
       const g = claim.ws.googleConnection.status();
       if (g.connected || g.needsReconnect) await claim.ws.googleConnection.disconnect(g.version).catch(() => {});
+      // 0021, D6: the account's events leave the shared demo calendar. What
+      // Google does not take now, the sweep removes. Counts only.
+      if (demo) {
+        const n = await demo.forget(id).catch(() => null);
+        log(n === null ? "Delete account: the demo calendar could not be reached, so the sweep removes its events later." : `Delete account: removed ${n} event(s) from the demo calendar.`);
+      }
       claim.remove();
     } finally {
       claim.release();
@@ -279,6 +292,26 @@ export async function createHostedApp(o: HostedOptions) {
     }
   }, 60_000);
   timer.unref();
+
+  // 0021, D6: at start and every hour, the shared demo calendar loses the
+  // app events of closed accounts and expired judge codes, those older
+  // than 7 days, and those a Delete left behind. Counts only.
+  const sweepDemo = async (): Promise<{ removed: number; failed: number } | null> => {
+    if (!demo || !demo.status().connected) return null;
+    try {
+      const live = new Set(store.demoLiveAccounts().map(ownerTag));
+      const r = await demo.sweep((owner) => live.has(owner));
+      if (r.removed > 0 || r.failed > 0) log(`Demo calendar sweep: removed ${r.removed} event(s)${r.failed > 0 ? `, ${r.failed} could not be removed` : ""}.`);
+      return r;
+    } catch (err) {
+      if (!(err instanceof GoogleError) && !(err instanceof AccountsFileError) && !(err instanceof AccountsBusyError)) throw err;
+      log(`Demo calendar sweep: could not run (${err instanceof GoogleError ? err.code : "accounts busy"}). It runs again in an hour.`);
+      return null;
+    }
+  };
+  const demoTimer = demo ? setInterval(() => void sweepDemo().catch(() => {}), SWEEP_MS) : null;
+  demoTimer?.unref();
+  if (demo) void sweepDemo().catch(() => {});
 
   // `dashboard` lets the sign-in page say that sign-in events also go to
   // Better Auth's dashboard (B7).
@@ -542,6 +575,24 @@ export async function createHostedApp(o: HostedOptions) {
     return false;
   }
 
+  // A plain page for the person who opened the demo-connect link. Codes
+  // only in the log, never the account or a token.
+  async function demoCallback(url: URL, res: ServerResponse): Promise<void> {
+    let status = 200;
+    let text = DEMO_CONNECTED_TEXT;
+    try {
+      await demo!.finishConnect({ state: url.searchParams.get("state"), code: url.searchParams.get("code"), error: url.searchParams.get("error") });
+      log("Demo Gmail and Calendar connected.");
+    } catch (err) {
+      const code = err instanceof OAuthError || err instanceof GoogleError ? err.code : "server_error";
+      log(`Demo Google connect failed: ${code}.`);
+      status = 400;
+      text = `The demo Gmail and Calendar did not connect (${code}). Run pnpm admin google demo-connect again for a new link.`;
+    }
+    res.writeHead(status, { ...API_SECURITY_HEADERS, "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
+    res.end(text);
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     // Refuse requests addressed to any other host name.
     if (!hostAllowed(allowed, req.headers.host)) return send(res, 403, { error: "forbidden_host" });
@@ -555,6 +606,10 @@ export async function createHostedApp(o: HostedOptions) {
       if (isBetterAuthPath(url.pathname)) return await authRoute(req, res, url.pathname);
       if (url.pathname === GOOGLE_CALLBACK_PATH) {
         if (req.method !== "GET") return send(res, 405, { error: "method_not_allowed" });
+        // 0021, D2: the shared demo connection's connect, which the admin
+        // command started. Its state alone finishes it, with no session.
+        // Any other state goes on as an account's own connect.
+        if (demo?.ownsState(url.searchParams.get("state"))) return await demoCallback(url, res);
         // The Gmail and Calendar connection, in the signed-in account's own
         // workspace. The flow it finishes lives there, so a callback in
         // another account's session finds no flow and is refused.
@@ -612,11 +667,29 @@ export async function createHostedApp(o: HostedOptions) {
       lines.push(`Accounts sign in with an email and password, a passkey or a judge code, through Better Auth at ${o.auth.origin}${AUTH_BASE_PATH}.`);
       lines.push(auth.dashboardOn ? "The Better Auth dashboard plugin is on: sign-in events go to Better Auth's dashboard (docs/hosted.md)." : "The Better Auth dashboard plugin is off. Set BETTER_AUTH_API_KEY to turn it on.");
       if (o.googleClient) lines.push(`Gmail and Calendar redirect URIs, for test accounts: ${googleRedirectUris(port, extraHosts).join(" ")}`);
+      // 0021, D7: the shared connection's state and when its consent ends.
+      // Never its address.
+      if (config.demoGoogle && !demo) lines.push("APP_DEMO_GOOGLE is on, but GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not set, so the demo Gmail and Calendar are off.");
+      if (demo) {
+        const d = demo.status();
+        const ends = d.expiresAt ? ` Google ends its consent on ${d.expiresAt.slice(0, 16).replace("T", " ")} UTC: run pnpm admin google demo-connect again before then.` : "";
+        lines.push(
+          d.connected
+            ? `Demo Gmail and Calendar (APP_DEMO_GOOGLE): connected.${ends}`
+            : d.needsReconnect
+              ? "Demo Gmail and Calendar (APP_DEMO_GOOGLE): need reconnecting. Run pnpm admin google demo-connect."
+              : "Demo Gmail and Calendar (APP_DEMO_GOOGLE): not connected yet. Run pnpm admin google demo-connect.",
+        );
+      }
       return lines;
     },
+    demo,
+    sweepDemo,
     close(): void {
       clearInterval(timer);
+      if (demoTimer) clearInterval(demoTimer);
       workspaces.closeAll();
+      demo?.close();
       store.close();
       auth.close();
     },

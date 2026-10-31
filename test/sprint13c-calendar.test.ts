@@ -147,7 +147,7 @@ describe("sprint 13C, H2: Read the calendar again reports when it read", () => {
     const { fake, app, events } = await connected();
     fake.addForeignEvent("primary", { summary: "Work call", start: { dateTime: "2026-11-12T10:00:00-07:00" }, end: { dateTime: "2026-11-12T11:00:00-07:00" } });
     const routes = createGoogleRoutes({
-      connection: app.google.connection,
+      connection: app.google.connection as GoogleConnection,
       generation: () => app.kase.generation(),
       port: 5192,
       extraHosts: [],

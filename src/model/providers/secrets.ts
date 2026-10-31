@@ -159,8 +159,10 @@ CREATE TABLE IF NOT EXISTS rows (
   data TEXT NOT NULL
 ) STRICT;`;
 
-// The names of the rows other parts of the app keep here.
-export const SECRET_ROWS = ["google"] as const;
+// The names of the rows other parts of the app keep here. The shared demo
+// connection's file (0021, src/google/demo.ts) also keeps its waiting
+// connect flow and its calendar cleanups.
+export const SECRET_ROWS = ["google", "google_demo_flow", "google_demo_cleanup"] as const;
 export type SecretRow = (typeof SECRET_ROWS)[number];
 
 const isBusy = (err: unknown) => {

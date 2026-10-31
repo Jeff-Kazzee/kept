@@ -73,7 +73,10 @@ const EmptyBody = z.object({}).strict();
 // every model step runs.
 // `turnRunning`: whether a chat turn is running, which Delete case waits
 // for (0017, fix round 1, R1).
-export type ApiOptions = { settings?: ProviderSource; ready?: () => boolean; turnRunning?: () => boolean };
+// `onCaseDeleted`: after Delete case, such as removing the case's events
+// from the hosted site's shared demo calendar (0021, D6). Its failure does
+// not undo the delete.
+export type ApiOptions = { settings?: ProviderSource; ready?: () => boolean; turnRunning?: () => boolean; onCaseDeleted?: () => Promise<void> };
 
 // J12: the routes that call the model. With no provider ready each answers
 // 422 provider_not_ready with the fixed sentence, and writes nothing.
@@ -155,7 +158,7 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       const raw = GmailMessageId.parse(decodeURIComponent(m[1]!));
       if (!access.google) throw new GoogleError("google_not_configured");
       const account = access.google.connection.gmailAccount();
-      if (account === null) throw new GoogleError("google_not_connected");
+      if (account === null) throw new GoogleError(access.google.connection.missingError?.() ?? "google_not_connected");
       const google = access.google;
       const inCase = () => service.messages().some((x) => x.id === `gmail-${raw}`);
       // The same account, and the offer still there: at the start, and again
@@ -209,12 +212,13 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
     }],
     // Delete case. App only, with its own typed confirmation. No MCP tool
     // reaches it.
-    ["POST", /^\/api\/case\/delete$/, (_m, body) => {
+    ["POST", /^\/api\/case\/delete$/, async (_m, body) => {
       const { expectedVersion, confirmation } = DeleteCaseBody.parse(body);
       const done = kase.deleteCase(expectedVersion, confirmation, { turnRunning: options.turnRunning });
       // Fix round 2, F4: the stored calendar reads named the erased case's
       // appointments, so they go with it.
       access.google?.events?.clear();
+      await options.onCaseDeleted?.().catch(() => {});
       return done;
     }],
     ["POST", /^\/api\/records\/([^/]+)\/archive$/, (m, body) =>

@@ -23,7 +23,7 @@
 // header. The single-use `state` and an HttpOnly cookie set by the connect
 // route bind it to the browser that started the flow.
 import { z } from "zod";
-import { CalendarId, DEFAULT_CALENDAR_ID, type GoogleConnection } from "../src/google/connection.ts";
+import { CalendarId, DEFAULT_CALENDAR_ID, type GoogleConnection, type GoogleLink } from "../src/google/connection.ts";
 import { GoogleError } from "../src/google/http.ts";
 import type { GoogleCalendarEvents } from "../src/google/events.ts";
 import { FLOW_TTL_MS, OAuthError } from "../src/google/oauth.ts";
@@ -113,20 +113,35 @@ export type GoogleRoutesOptions = {
   // Called after a disconnect, and after a connect as another Google
   // account, to drop the Gmail offers (0018, fix round 2, F4).
   onGmailAccountChange?: (reason: "disconnected" | "account_changed") => void;
+  // The connection the tools use, when it is not `connection` alone: on
+  // the hosted site with APP_DEMO_GOOGLE, the shared demo connection for an
+  // account without its own (0021, D3). Connect and disconnect still act on
+  // `connection`.
+  link?: GoogleLink;
+  // While the account uses the shared demo connection: whether it is
+  // connected, for Connections' one line (D7). Never its address.
+  demo?: () => { connected: boolean; ownConnect: boolean } | null;
+  // A sentence refusing Connect for this account, or null (D7: judges).
+  connectRefused?: () => string | null;
 };
 
 export function createGoogleRoutes(options: GoogleRoutesOptions) {
   const { connection, port, extraHosts } = options;
+  const link = options.link ?? connection;
 
   // Reads the window of the case's clash checks again. Nothing to do
   // without the events or the calendar permission.
   const refreshEvents = async (): Promise<number> => {
-    if (!options.events || !options.caseDates || !connection.status().calendar) return 0;
+    if (!options.events || !options.caseDates || !link.status().calendar) return 0;
     const { dates, today } = options.caseDates();
     await options.events.refresh(dates, today);
     return options.events.status().events;
   };
-  const readStatus = () => (options.events && connection.status().calendar ? { calendarRead: options.events.status(), calendarOwn: options.events.ownSeen() } : {});
+  const readStatus = () => (options.events && link.status().calendar ? { calendarRead: options.events.status(), calendarOwn: options.events.ownSeen() } : {});
+  const demoStatus = () => {
+    const demo = options.demo?.() ?? null;
+    return demo ? { demo } : {};
+  };
 
   const fail = (err: unknown): GoogleRouteResponse => {
     if (err instanceof GoogleError) {
@@ -141,11 +156,13 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
   };
 
   const routes: Record<string, { method: string; run: (req: GoogleRouteRequest) => Promise<GoogleRouteResponse> | GoogleRouteResponse }> = {
-    "/api/google": { method: "GET", run: () => ({ status: 200, body: { ...connection.status(), ...readStatus() } }) },
+    "/api/google": { method: "GET", run: () => ({ status: 200, body: { ...connection.status(), ...readStatus(), ...demoStatus() } }) },
     "/api/google/connect": {
       method: "POST",
       run: (req) => {
         const body = ConnectBody.parse(req.body);
+        const refused = options.connectRefused?.() ?? null;
+        if (refused !== null) return { status: 403, body: { error: "connect_not_offered", message: refused } };
         const redirectUri = redirectUriFor(req.host, req.secure, port, extraHosts);
         if (redirectUri === null) {
           return {
@@ -224,13 +241,13 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
       const clear = [flowCookie(port, "", true, 0), flowCookie(port, "", false, 0)];
       const cookie = (secure: boolean) => cookieOf(cookieHeader, flowCookieName(port, secure));
       try {
-        const before = connection.accountKey();
+        const before = link.accountKey();
         // Fix round 2, F4: the Gmail offers go only when the account
         // itself changes, not the calendar or a reconnect of the same one.
-        const accountBefore = connection.storedAccount();
+        const accountBefore = link.storedAccount();
         await connection.finishConnect({ state: q.get("state"), code: q.get("code"), error: q.get("error"), cookie });
-        if (connection.accountKey() !== before) options.onConnectionChange?.("account_changed");
-        if (connection.storedAccount() !== accountBefore) options.onGmailAccountChange?.("account_changed");
+        if (link.accountKey() !== before) options.onConnectionChange?.("account_changed");
+        if (link.storedAccount() !== accountBefore) options.onGmailAccountChange?.("account_changed");
         // The clash checks read the new calendar. A failure here leaves them
         // as they were, and the connect still stands.
         await refreshEvents().catch(() => {});

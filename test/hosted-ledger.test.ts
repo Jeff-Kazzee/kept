@@ -108,7 +108,7 @@ describe("prices and config", () => {
   });
 
   it("reads the config with its defaults, and refuses a bad value", () => {
-    expect(config()).toEqual({ mode: "hosted", markupHundredths: 300, dailyCapMicros: 20_000_000, judgeTotalCapMicros: 100_000_000, serverKeyOn: true, trustedProxy: "none", missing: [] });
+    expect(config()).toEqual({ mode: "hosted", markupHundredths: 300, dailyCapMicros: 20_000_000, judgeTotalCapMicros: 100_000_000, serverKeyOn: true, trustedProxy: "none", demoGoogle: false, missing: [] });
     expect(readHostedConfig({})).toMatchObject({ mode: "local" });
     expect(config({ APP_MARKUP: "2.5", APP_DAILY_COST_CAP_USD: "7.25", APP_SERVER_KEY: "off" })).toMatchObject({ markupHundredths: 250, dailyCapMicros: 7_250_000, serverKeyOn: false });
     expect(() => readHostedConfig({ APP_MODE: "cloud" })).toThrow(ConfigError);

@@ -101,7 +101,7 @@ export function SettingsPage({
   caseDeleted?: boolean;
   onCaseDeleted?: () => void;
 }) {
-  const { hosted, signedOut } = useAgent();
+  const { hosted, signedOut, google } = useAgent();
   return (
     <div className="stack settings">
       <section className="card stack-sm" aria-labelledby="set-zone">
@@ -114,12 +114,15 @@ export function SettingsPage({
       <section className="card stack-sm" aria-labelledby="set-about">
         <h2 id="set-about">About this app</h2>
         <p className="small">
-          Administrative facts only: times, places, confirmations and what the office asked you to bring or do. It reads your email only when you connect Google, and then only to
-          search for appointment messages. Sending a reply is simulated. All data here is synthetic.
+          Administrative facts only: times, places, confirmations and what the office asked you to bring or do.{" "}
+          {google?.demo
+            ? "It reads only the demo Gmail inbox, a made-up person's shared by judges, and only to search for appointment messages."
+            : "It reads your email only when you connect Google, and then only to search for appointment messages."}{" "}
+          Sending a reply is simulated. All data here is synthetic.
         </p>
         <p className="small muted">Appointments are built by code from the accepted facts. Model text never changes an appointment. A clash check assumes a length for each appointment, because messages do not state an end time. The info button beside Appointments shows it.</p>
       </section>
-      <DeleteCasePanel version={version} erasePending={erasePending} run={run} deleted={caseDeleted} onDeleted={onCaseDeleted} />
+      <DeleteCasePanel version={version} erasePending={erasePending} run={run} deleted={caseDeleted} onDeleted={onCaseDeleted} sharedCalendar={Boolean(google?.demo)} />
       {hosted && <DeleteAccountPanel run={run} onDeleted={signedOut} />}
     </div>
   );
@@ -430,6 +433,19 @@ export function GoogleSetting({ run }: { run: Run }) {
       <p className="small muted">Google is not set up on this server yet, so it cannot be connected here.</p>
     );
   }
+  // 0021: the hosted site's shared demo Gmail and Calendar, for an account
+  // with no Google of its own. One quiet line, no address, and no buttons
+  // for judges (D7, D8).
+  const shared = g.demo ? (
+    <div className="stack-xs" data-testid="demo-google">
+      <p className="small muted">
+        <Icon name="google" size="sm" /> {DEMO_GOOGLE_LINE}: {g.demo.connected ? "connected" : "needs reconnecting"}.
+      </p>
+      <p className="small muted">{DEMO_GOOGLE_PRIVACY}</p>
+      {g.demo.connected && g.calendar && <CalendarReadLine read={g.calendarRead ?? null} />}
+    </div>
+  ) : null;
+  if (g.demo && !g.demo.ownConnect) return shared;
   // Opens Google's sign-in page. Google comes back to /?connected=google
   // or /?google_error=<code>.
   const connect = (grants: GoogleGrants) => async () => {
@@ -489,6 +505,7 @@ export function GoogleSetting({ run }: { run: Run }) {
   if (!g.connected) {
     return (
       <div className="stack-sm">
+        {shared}
         <p className="small muted">Connect Google so the assistant can find appointment emails in Gmail and keep your appointments on Google Calendar. Google receives what the assistant adds to your calendar.</p>
         <fieldset className="stack-xs">
           <legend className="small">What the assistant may use</legend>
@@ -543,7 +560,13 @@ export function calendarReadSentence(read: CalendarRead, today = wallNow().slice
   return `Read at ${clockTime(read.readAt)}, ${events} ${days}`.trim() + ".";
 }
 
+// 0021, D7 and D8: what Connections says about the shared demo Gmail and
+// Calendar.
+export const DEMO_GOOGLE_LINE = "Demo Gmail and Calendar: a made-up account shared by judges";
+export const DEMO_GOOGLE_PRIVACY = "The inbox and calendar belong to a made-up person and are shared with other judges, so add nothing private there.";
+
 const CALENDAR_ERRORS: Record<string, string> = {
+  google_demo_reconnect: "The demo Gmail and Calendar need reconnecting by the site's owner.",
   google_reconnect_needed: "The Google connection expired. Connect it again.",
   google_scope_missing: "The connection does not include Google Calendar. Connect again with it turned on.",
   google_not_connected: "Google is not connected.",
@@ -591,6 +614,8 @@ function CalendarReadButton({ run, onRead }: { run: Run; onRead: (read: Calendar
 
 // What the page says once Delete case finished (0017, E5).
 export const CASE_DELETED_TEXT = "The case was deleted. Its messages, facts, replies, chat and activity are erased. Events it added to Google Calendar stay there.";
+// 0021, D6: the shared demo calendar loses the case's events.
+export const CASE_DELETED_SHARED_TEXT = "The case was deleted. Its messages, facts, replies, chat and activity are erased, and so are the events it added to the demo calendar.";
 
 // Fix round 1, R7: the sentence stays on the page while the new, empty case
 // is the one shown, so until the next thing done in the case. A Delete case
@@ -607,12 +632,14 @@ export function DeleteCasePanel({
   run,
   deleted = false,
   onDeleted,
+  sharedCalendar = false,
 }: {
   version: number;
   erasePending?: boolean;
   run: Run;
   deleted?: boolean;
   onDeleted?: () => void;
+  sharedCalendar?: boolean;
 }) {
   const [typed, setTyped] = useState("");
   return (
@@ -624,7 +651,7 @@ export function DeleteCasePanel({
         {deleted && (
           <p className="notice">
             <Icon name="check" />
-            <span>{CASE_DELETED_TEXT}</span>
+            <span>{sharedCalendar ? CASE_DELETED_SHARED_TEXT : CASE_DELETED_TEXT}</span>
           </p>
         )}
       </div>

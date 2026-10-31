@@ -19,6 +19,9 @@
 //                            Tailscale serve and Funnel set it (0020, B11).
 //                            none, the default, trusts no forwarding header
 //                            (finding 4).
+//   APP_DEMO_GOOGLE          on shares one made-up person's Gmail and Google
+//                            Calendar with every account that has no Google
+//                            connection of its own (0021). Default off.
 //
 // J19: while either cap is unset the server key is off, and `missing`
 // names what to set. Money is kept in micro-dollars (millionths of a
@@ -35,6 +38,8 @@ export type HostedConfig = {
   // False when APP_SERVER_KEY is off, or a cap is unset (J19).
   serverKeyOn: boolean;
   trustedProxy: TrustedProxy;
+  // APP_DEMO_GOOGLE=on (0021). Always false in local mode (D10).
+  demoGoogle: boolean;
   // The required settings that are not set.
   missing: string[];
 };
@@ -69,7 +74,7 @@ function usd(env: NodeJS.ProcessEnv, name: string): number | null {
   return v;
 }
 
-const LOCAL: Omit<HostedConfig, "mode"> = { markupHundredths: 300, dailyCapMicros: null, judgeTotalCapMicros: null, serverKeyOn: false, trustedProxy: "none", missing: [] };
+const LOCAL: Omit<HostedConfig, "mode"> = { markupHundredths: 300, dailyCapMicros: null, judgeTotalCapMicros: null, serverKeyOn: false, trustedProxy: "none", demoGoogle: false, missing: [] };
 
 export function readHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedConfig {
   const modeRaw = (env.APP_MODE ?? "").trim().toLowerCase();
@@ -87,6 +92,8 @@ export function readHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedCo
   if (keyRaw !== "" && keyRaw !== "on" && keyRaw !== "off") throw new ConfigError(`APP_SERVER_KEY must be on or off. It is "${env.APP_SERVER_KEY}".`);
   const proxyRaw = (env.APP_TRUSTED_PROXY ?? "").trim().toLowerCase();
   if (proxyRaw !== "" && proxyRaw !== "none" && proxyRaw !== "cloudflare" && proxyRaw !== "tailscale") throw new ConfigError(`APP_TRUSTED_PROXY must be tailscale, cloudflare or none. It is "${env.APP_TRUSTED_PROXY}".`);
+  const demoRaw = (env.APP_DEMO_GOOGLE ?? "").trim().toLowerCase();
+  if (demoRaw !== "" && demoRaw !== "on" && demoRaw !== "off") throw new ConfigError(`APP_DEMO_GOOGLE must be on or off. It is "${env.APP_DEMO_GOOGLE}".`);
   const dailyCapMicros = usd(env, "APP_DAILY_COST_CAP_USD");
   const judgeTotalCapMicros = usd(env, "APP_JUDGE_TOTAL_CAP_USD");
   const missing = [...(dailyCapMicros === null ? ["APP_DAILY_COST_CAP_USD"] : []), ...(judgeTotalCapMicros === null ? ["APP_JUDGE_TOTAL_CAP_USD"] : [])];
@@ -97,6 +104,7 @@ export function readHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedCo
     judgeTotalCapMicros,
     serverKeyOn: keyRaw !== "off" && missing.length === 0,
     trustedProxy: proxyRaw === "cloudflare" || proxyRaw === "tailscale" ? proxyRaw : "none",
+    demoGoogle: demoRaw === "on",
     missing,
   };
 }

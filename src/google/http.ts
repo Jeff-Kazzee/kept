@@ -21,6 +21,9 @@ export const GOOGLE_ERROR_CODES = [
   "google_stale",
   "google_duplicate",
   "google_read_limit",
+  "google_demo_reconnect",
+  "google_demo_limit",
+  "google_demo_rate_limited",
 ] as const;
 export type GoogleErrorCode = (typeof GOOGLE_ERROR_CODES)[number];
 
@@ -38,6 +41,11 @@ export const GOOGLE_ERROR_TEXT: Record<GoogleErrorCode, string> = {
   google_stale: "The Google connection changed since the page read it. Reload and try again.",
   google_duplicate: "Google Calendar has more than one event the app made for this appointment. Remove the extra one in Google Calendar, then try again.",
   google_read_limit: "The app already read Google Calendar as many times as one answer allows, so this date was not checked. Ask about it again.",
+  // The shared demo connection of the hosted site (0021, D7).
+  google_demo_reconnect:
+    "The demo Gmail and Calendar need reconnecting by the site's owner, so the assistant cannot use them just now. Everything else still works: paste a message, or load a calendar file.",
+  google_demo_limit: "Each account can keep at most 5 events in the shared demo calendar, so this one was not added. Undo or remove one first. Nothing was added.",
+  google_demo_rate_limited: "This account made many changes to the shared demo calendar in a short time. Wait a few minutes and try again. Nothing changed.",
 };
 
 // A fixed sentence for one case of a code, chosen by code.

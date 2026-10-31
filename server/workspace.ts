@@ -17,7 +17,8 @@ import { CaseService } from "../src/case/service.ts";
 import { localDate } from "../src/domain/zone.ts";
 import { calendarCaseMark } from "../src/google/case-mark.ts";
 import { GoogleCalendar } from "../src/google/calendar.ts";
-import { GoogleConnection } from "../src/google/connection.ts";
+import { GoogleConnection, type GoogleLink } from "../src/google/connection.ts";
+import { DEMO_GOOGLE_INSTRUCTION, type DemoGoogle } from "../src/google/demo.ts";
 import { GoogleCalendarEvents } from "../src/google/events.ts";
 import { Gmail } from "../src/google/gmail.ts";
 import type { FetchLike } from "../src/google/http.ts";
@@ -67,11 +68,19 @@ export type WorkspaceOptions = {
   // key. Hosted mode passes `hosted` instead.
   serverMetaKey: string | null;
   hosted?: HostedProvider;
+  // Hosted mode with APP_DEMO_GOOGLE (0021): the shared demo connection,
+  // this account's id, and whether the account may connect its own Google
+  // (not a judge, D7).
+  demoGoogle?: { demo: DemoGoogle; accountId: string; ownConnect: boolean };
   logRejected?: boolean;
   log?: (line: string) => void;
 };
 
 export type Workspace = ReturnType<typeof createWorkspace>;
+
+// A judge's Connect, while the site shares the demo Gmail and Calendar
+// (0021, D7).
+export const DEMO_CONNECT_REFUSED = "Judges use the demo Gmail and Calendar, a made-up account shared by judges. Connecting your own Google is not offered here. Nothing changed.";
 
 export function createWorkspace(o: WorkspaceOptions) {
   const log = o.log ?? ((line: string) => console.error(line));
@@ -125,22 +134,54 @@ export function createWorkspace(o: WorkspaceOptions) {
   // works in the case's time zone, and the events it last read join the
   // case's clash checks.
   const googleConnection = new GoogleConnection({ client: o.googleClient, store: secrets, ...(o.googleFetch ? { fetch: o.googleFetch } : {}) });
-  const googleCalendar = new GoogleCalendar(googleConnection, { timeZone: () => kase.timeZone(), caseMark: (o) => calendarCaseMark(store, o) });
+  // 0021, D3: on the hosted site with APP_DEMO_GOOGLE, an account without
+  // its own connection uses the shared demo one, with its own mark and
+  // limits in the shared calendar (D5, D6).
+  const demo = o.demoGoogle ?? null;
+  const googleLink = demo ? demo.demo.linkFor(googleConnection) : null;
+  const link: GoogleLink = googleLink ?? googleConnection;
+  const sharedCalendar = demo ? demo.demo.sharedCalendar(demo.accountId) : null;
+  const googleCalendar = new GoogleCalendar(link, {
+    timeZone: () => kase.timeZone(),
+    caseMark: (o) => calendarCaseMark(store, o),
+    ...(googleLink ? { shared: () => (googleLink.usingShared() ? sharedCalendar : null) } : {}),
+  });
   const googleEvents = new GoogleCalendarEvents(googleCalendar);
-  const google: GoogleServices = { connection: googleConnection, gmail: new Gmail(googleConnection), calendar: googleCalendar, events: googleEvents };
+  const google: GoogleServices = { connection: link, gmail: new Gmail(link), calendar: googleCalendar, events: googleEvents };
   const intake = new IntakeService(store, client);
   const kase = new CaseService(store, intake, client, { externalCalendar: () => googleEvents.snapshot(), externalVersion: () => googleEvents.version() });
   const reply = new ReplyService(store, kase, client);
   const records = new RecordsService(store, intake, kase);
   // Delete case waits for a running chat turn (0017, R1).
   let agent: CaseAgent | null = null;
-  const api = createApi(intake, kase, { settings: auth.source, ready, turnRunning: () => agent?.busy ?? false }, reply, { store, records, google });
+  const api = createApi(
+    intake,
+    kase,
+    {
+      settings: auth.source,
+      ready,
+      turnRunning: () => agent?.busy ?? false,
+      // D6: Delete case removes this account's events from the shared
+      // calendar. Counts only in the log.
+      ...(demo
+        ? {
+            onCaseDeleted: async () => {
+              const n = await demo.demo.forget(demo.accountId);
+              log(n === null ? "Delete case: the demo calendar could not be reached, so the sweep removes its events later." : `Delete case: removed ${n} event(s) from the demo calendar.`);
+            },
+          }
+        : {}),
+    },
+    reply,
+    { store, records, google },
+  );
   // The case agent (0007).
   const chat = createChat(
     (agent = new CaseAgent(store, { intake, kase, reply, records, google }, client, {
       messageIdFor: defaultMessageId,
       ready,
       ...(o.hosted ? { admit: o.hosted.admit } : {}),
+      ...(googleLink ? { extraInstructions: () => (googleLink.usingShared() ? DEMO_GOOGLE_INSTRUCTION : null) } : {}),
       ...(o.logRejected
         ? {
             onRejected: ({ turnId, rejected }: { turnId: string; rejected: Array<{ text: string; problems: string[] }> }) => {
@@ -166,12 +207,24 @@ export function createWorkspace(o: WorkspaceOptions) {
     onConnectionChange: (reason) => googleActions.closeGoogleIntents(reason),
     // 0018: no email offered under the old account can be added.
     onGmailAccountChange: (reason) => dropGmailOffers(store, reason),
+    ...(googleLink
+      ? {
+          link: googleLink,
+          demo: () => {
+            const view = googleLink.demoView();
+            return view ? { ...view, ownConnect: demo!.ownConnect } : null;
+          },
+          connectRefused: () => (demo!.ownConnect ? null : DEMO_CONNECT_REFUSED),
+        }
+      : {}),
   });
 
   return {
     store,
     secrets,
     client,
+    // The case's services, with the Google connection the tools use.
+    services: { intake, kase, reply, records, google },
     auth,
     kase,
     api,
@@ -182,7 +235,7 @@ export function createWorkspace(o: WorkspaceOptions) {
     // A connection from an earlier run: read its calendar for the clash
     // checks. Codes only on failure.
     refreshCalendar(): void {
-      if (!o.googleClient || !googleConnection.status().calendar) return;
+      if (!o.googleClient || !link.status().calendar) return;
       const { dates, today } = caseDates();
       googleEvents.refresh(dates, today).catch((err) =>
         log(`Google Calendar read failed: ${err instanceof Error && "code" in err ? String((err as { code: unknown }).code) : "error"}.`),

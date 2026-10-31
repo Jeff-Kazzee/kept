@@ -124,6 +124,7 @@ export async function startHosted(
     accountsFile: path.join(dir, "hosted", "accounts.sqlite"),
     authFile: path.join(dir, "hosted", "auth.sqlite"),
     workspacesDir: path.join(dir, "accounts"),
+    demoGoogleFile: path.join(dir, "hosted", "demo-google.sqlite"),
     ...(google ? { googleFetch: google.fetch } : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.maxWorkspaces ? { maxWorkspaces: options.maxWorkspaces } : {}),

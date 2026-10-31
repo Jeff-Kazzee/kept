@@ -7,9 +7,9 @@
 // refresh that Google refuses with invalid_grant marks the connection as
 // needing a reconnect. Nothing here logs, and no token leaves this module
 // except in the Authorization header of a call to Google.
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
-import { GoogleError, callGoogle, type FetchLike, type GoogleResponse } from "./http.ts";
+import { GoogleError, callGoogle, type FetchLike, type GoogleErrorCode, type GoogleResponse } from "./http.ts";
 import {
   OAuthError,
   PendingFlows,
@@ -22,6 +22,7 @@ import {
   refreshAccess,
   revokeToken,
   type Features,
+  type Flow,
   type OAuthClient,
 } from "./oauth.ts";
 
@@ -92,6 +93,22 @@ export type GoogleStatus = {
 
 export type Feature = keyof Features;
 
+// What Gmail, the calendar, the tools and the routes read of a connection:
+// a workspace's own GoogleConnection, or the router that sends an account
+// without one to the shared demo connection (0021, src/google/demo.ts).
+export interface GoogleLink {
+  readonly configured: boolean;
+  status(): GoogleStatus;
+  call(feature: Feature, url: string, init?: RequestInit): Promise<GoogleResponse>;
+  gmailAccount(): string | null;
+  storedAccount(): string | null;
+  accountKey(): string | null;
+  calendar(): { calendarId: string; sub: string; key: string };
+  // The code to refuse with when there is no usable connection, when it is
+  // not google_not_connected.
+  missingError?(): GoogleErrorCode;
+}
+
 const REFRESH_EARLY_MS = 60_000;
 
 // The row store: SecretsStore (src/model/providers/secrets.ts) in the app.
@@ -126,7 +143,7 @@ export type ConnectionOptions = {
   now?: () => number;
 };
 
-export class GoogleConnection {
+export class GoogleConnection implements GoogleLink {
   readonly #client: OAuthClient | null;
   readonly #store: GoogleRowStore;
   readonly #fetch: FetchLike;
@@ -220,13 +237,33 @@ export class GoogleConnection {
     return { authorizeUrl: authorizeUrl(client, flow, state, challenge), cookie };
   }
 
+  // A connect whose state the caller keeps, such as the shared demo
+  // connection's, which a command starts and the server's callback finishes
+  // (0021, D2). The flow holds the PKCE verifier and the nonce: keep it as
+  // privately as a token. Its version is the connection's now.
+  newFlow(input: { features: Features; calendarId: string; redirectUri: string }): { flow: Flow; state: string; authorizeUrl: string } {
+    const client = this.#requireClient();
+    const { verifier, challenge } = pkcePair();
+    const flow: Flow = { verifier, nonce: newNonce(), redirectUri: input.redirectUri, features: input.features, calendarId: input.calendarId, version: this.#read().version };
+    const state = randomBytes(32).toString("base64url");
+    return { flow, state, authorizeUrl: authorizeUrl(client, flow, state, challenge) };
+  }
+
   // The callback. Checks the state and the browser cookie, exchanges the
   // code, checks the ID token and stores the connection. Throws an
   // OAuthError with a fixed code.
   async finishConnect(input: { state: string | null; code: string | null; error: string | null; cookie: string | null | ((secure: boolean) => string | null) }): Promise<void> {
-    const client = this.#requireClient();
+    this.#requireClient();
     const flow = this.#flows.take(input.state, input.cookie);
     if (!flow) throw new OAuthError("invalid_state");
+    return this.completeFlow(flow, input);
+  }
+
+  // The rest of a callback, for a flow already taken by its state.
+  // `expectEmail`, when set, refuses (and revokes) a grant of any other
+  // account.
+  async completeFlow(flow: Flow, input: { code: string | null; error: string | null; expectEmail?: string | null }): Promise<void> {
+    const client = this.#requireClient();
     // A flow started before a connect or a disconnect cannot finish after
     // it (review round 1, finding 2).
     if (flow.version !== this.#read().version) throw new OAuthError("stale_flow");
@@ -253,6 +290,7 @@ export class GoogleConnection {
       if (err instanceof OAuthError) return drop(err.code);
       throw err;
     }
+    if (input.expectEmail && account.email.toLowerCase() !== input.expectEmail.toLowerCase()) return drop("wrong_account");
     const granted = grantedFeatures(answer.scope);
     if (!granted.gmail && !granted.calendar) return drop("no_permission_granted");
     if (!answer.refresh_token) return drop("no_refresh_token");
@@ -435,6 +473,12 @@ export class GoogleConnection {
       }
     }
     return res;
+  }
+
+  // When the stored connection was made, or null. A test user's consent
+  // lasts 7 days from it (docs/google.md).
+  connectedAt(): string | null {
+    return this.#state().stored.connection?.connectedAt ?? null;
   }
 
   // The account of a usable Gmail connection, or null (0018, fix round 1,

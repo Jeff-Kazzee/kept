@@ -436,9 +436,9 @@ describe("sprint 13E fix round 1, R1: Add it imports only what code offered", ()
     await offerSecond(app);
     // The same id in another mailbox, after the person connects as someone else.
     fake.account = { sub: "2000002", email: "other.demo@example.com" };
-    const flow = google.connection.startConnect({ expectedVersion: google.connection.status().version, features: { gmail: true, calendar: true }, calendarId: "primary", redirectUri: "http://127.0.0.1:5192/auth/google/callback" });
+    const flow = (google.connection as GoogleConnection).startConnect({ expectedVersion: google.connection.status().version, features: { gmail: true, calendar: true }, calendarId: "primary", redirectUri: "http://127.0.0.1:5192/auth/google/callback" });
     const back = fake.consent(flow.authorizeUrl);
-    await google.connection.finishConnect({ state: back.searchParams.get("state"), code: back.searchParams.get("code"), error: null, cookie: flow.cookie });
+    await (google.connection as GoogleConnection).finishConnect({ state: back.searchParams.get("state"), code: back.searchParams.get("code"), error: null, cookie: flow.cookie });
     expect(google.connection.gmailAccount()).toBe("2000002");
     const res = await api({ method: "POST", path: `/api/gmail/${SECOND.id}/add`, body: {}, generation: app.kase.generation() });
     expect(res).toMatchObject({ status: 409, body: { error: "gmail_not_offered" } });
@@ -580,15 +580,15 @@ describe("sprint 13E fix round 2, F1: Add it checks the offer again right before
   it("refuses and writes nothing when another account connects while the email is read", async () => {
     await raced(async (google, fake) => {
       fake.account = { sub: "2000002", email: "other.demo@example.com" };
-      const flow = google.connection.startConnect({ expectedVersion: google.connection.status().version, features: { gmail: true, calendar: true }, calendarId: "primary", redirectUri: "http://127.0.0.1:5192/auth/google/callback" });
+      const flow = (google.connection as GoogleConnection).startConnect({ expectedVersion: google.connection.status().version, features: { gmail: true, calendar: true }, calendarId: "primary", redirectUri: "http://127.0.0.1:5192/auth/google/callback" });
       const back = fake.consent(flow.authorizeUrl);
-      await google.connection.finishConnect({ state: back.searchParams.get("state"), code: back.searchParams.get("code"), error: null, cookie: flow.cookie });
+      await (google.connection as GoogleConnection).finishConnect({ state: back.searchParams.get("state"), code: back.searchParams.get("code"), error: null, cookie: flow.cookie });
     });
   });
 
   it("refuses and writes nothing when Google is disconnected while the email is read", async () => {
     await raced(async (google) => {
-      await google.connection.disconnect(google.connection.status().version);
+      await (google.connection as GoogleConnection).disconnect(google.connection.status().version);
     });
   });
 });

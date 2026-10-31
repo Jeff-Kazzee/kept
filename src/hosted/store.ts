@@ -720,6 +720,22 @@ export class AccountsStore {
     return c.account_id === null ? "unused" : "redeemed";
   }
 
+  // The accounts whose events may stay in the shared demo calendar (0021,
+  // D6): not deleted, and not a judge sign-in whose code expired or was
+  // revoked.
+  demoLiveAccounts(): string[] {
+    return this.#read((db) => {
+      const now = this.#now();
+      const rows = db
+        .prepare(
+          `SELECT a.id FROM accounts a WHERE a.deleted_at IS NULL AND NOT (a.kind = 'judge' AND EXISTS (
+             SELECT 1 FROM judge_codes c WHERE c.account_id = a.id AND (c.revoked_at IS NOT NULL OR c.expires_at <= ?)))`,
+        )
+        .all(now) as Row[];
+      return rows.map((r) => String(r.id));
+    });
+  }
+
   // Every code, never the code itself.
   listJudgeCodes(): JudgeCodeRow[] {
     return this.#read((db) => {
