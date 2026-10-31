@@ -89,6 +89,7 @@ export const AGENT_INSTRUCTIONS = [
   "When the person pastes a message from the office, call import_message with the whole pasted message, copied as whole lines from their current message, then accept the claims the message states with accept_claim. Never import part of a line or other text. Suggest channel and from only from what the person's message says.",
   "When the person asks you to check Gmail and update their schedule, call gmail_import once with every message gmail_search found that matches their request and is not already_imported, unless they named one email.",
   "Name a sender only by the office field the tools give, or as the office when it is null. Refer to an email by its sender and its sent_label or received_label, never by quoting its words.",
+  "When a time clashes with a calendar event, name the event by its summary and give its start as the tools label it.",
   "After you import messages, name every date and time their claims state, or say that the facts card lists them, and say which appointments the claims you accepted changed.",
   "You may accept or reject claims, answer the open question from what the person told you, archive, add notes, set tags, set the time zone the person names, start or discard a reply draft and undo an action. Code checks every one, and may refuse it with a reason: tell the person the reason.",
   "You cannot approve or send a reply, edit a reply's text, or delete the case. Only the person does those, in the app. A slot is confirmed or canceled only by the office's message or the person's own report, never by you.",
@@ -504,7 +505,7 @@ export class CaseAgent {
           if (found.length > 0) report.rejected.push({ text, problems: found });
           return found;
         };
-        finalText = cleanText(outputText(output)).trim();
+        finalText = answerText(output);
         let problems = check(finalText);
         for (let retry = 0; problems.length > 0 && retry < this.#limits.answerRetries; retry++) {
           // E2: the retry sends the same input as the call that answered,
@@ -513,7 +514,7 @@ export class CaseAgent {
           // as they were, so every function call in the input keeps its
           // tool. A tool call in the retry's output is not run.
           output = await call([...items, retryMessage(problems)], "retry");
-          finalText = cleanText(outputText(output)).trim();
+          finalText = answerText(output);
           problems = check(finalText);
         }
         if (problems.includes("clinical_content")) {
@@ -611,11 +612,24 @@ export class CaseAgent {
 export const replacedAnswerLine = (turnId: string, r: { text: string; problems: string[] }) =>
   `Replaced answer (turn ${turnId}) [${r.problems.join(", ")}]: ${JSON.stringify(r.text)}`;
 
+// The notes historyItem adds to earlier answers, which the model sometimes
+// copies into its own answer, as in the live sprint 20 runs: "(Actions
+// taken, by activity id: a10. get_activity shows them.)". Code wrote them,
+// so they are never part of an answer (0022).
+const HISTORY_NOTE = /[ \t]*\n?[ \t]*\((?:Cards shown|Actions? taken)\b[^()\n]*\)/g;
+
+// The final text of a model reply: hidden control and direction characters
+// dropped, and any copied history note removed.
+export function answerText(output: OutputItem[]): string {
+  return cleanText(outputText(output)).replace(HISTORY_NOTE, "").trim();
+}
+
 // The code-written message the answer retry adds: problem codes, and for
 // each code one fixed hint (SP12.1).
 const RETRY_HINTS: Partial<Record<string, string>> = {
   ungrounded: "Write each time together with its date, as the tools label it, such as Monday 11/16 1:00 PM.",
-  state_mismatch: "Name each appointment's state only with the state word the tools give it: offered, requested, confirmed, canceled or declined.",
+  state_mismatch:
+    "Name each appointment's state only with the state word the tools give it: offered, requested, confirmed, canceled or declined, and its Google Calendar event as tentative or confirmed.",
 };
 
 export function retryMessage(problems: string[]): InputItem {

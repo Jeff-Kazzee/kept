@@ -1,5 +1,5 @@
 {
-  "key": "bdd162f8ea369c04",
+  "key": "996bb222204b575b",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",

@@ -1,5 +1,5 @@
 {
-  "key": "ef13971440ff4803",
+  "key": "db3aa8e324b1ec96",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,18 +9,18 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_44",
+        "id": "rs_52",
         "summary": []
       },
       {
         "type": "message",
-        "id": "msg_43",
+        "id": "msg_51",
         "role": "assistant",
         "status": "completed",
         "content": [
           {
             "type": "output_text",
-            "text": "Thursday 11/12 10:30 AM is confirmed.",
+            "text": "Friday 11/13 9:15 AM overlaps the Team meeting that starts 9:00 AM.",
             "annotations": []
           }
         ]

@@ -1,5 +1,5 @@
 {
-  "key": "f25d45bfc541cfc7",
+  "key": "4cc4e564c28bff4a",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,13 +9,13 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_40",
+        "id": "rs_56",
         "summary": []
       },
       {
         "type": "function_call",
-        "id": "fc_39",
-        "call_id": "call_39",
+        "id": "fc_55",
+        "call_id": "call_55",
         "name": "get_schedule",
         "arguments": "{}",
         "status": "completed"

@@ -191,7 +191,7 @@ async function calendarWrite(ctx: ToolContext, name: "calendar_sync_slot" | "cal
     // 0018, H6: an event the person removed is left out on purpose. The
     // answer may name the appointment it left out, as after a sync.
     if (err instanceof GoogleError && err.variant === "removed") {
-      return { ...failure(err.code, err.message), declined: true, slots: slot ? [slot] : [], facts: slot ? [{ date: slot.date, time: slot.time, state: slot.state }] : [] };
+      return { ...failure(err.code, err.message), declined: true, slots: slot ? [slot] : [], facts: slot ? [{ date: slot.date, time: slot.time, state: slot.state, event: null }] : [] };
     }
     if (err instanceof GoogleError) return failure(err.code, err.message);
     if (err instanceof GoogleBusyError) return failure("google_busy", err.message);
@@ -201,6 +201,10 @@ async function calendarWrite(ctx: ToolContext, name: "calendar_sync_slot" | "cal
   return result(
     {
       slot_key: slotKey,
+      // Sprint 20 (0022): the appointment's label and state beside the
+      // event's, so the answer can name both as the tools give them.
+      slot_label: keyLabel(slotKey),
+      slot_state: slot?.state ?? null,
       action: outcome.action,
       event_status: outcome.status,
       undoable: outcome.undo !== null,
@@ -211,9 +215,15 @@ async function calendarWrite(ctx: ToolContext, name: "calendar_sync_slot" | "cal
       code: outcome.action === "none" || outcome.action === "unchanged" ? outcome.action : "ok",
       cards: [{ kind: "notice", text: summary, ...(entry ? { activityId: entry.id } : {}) }],
       slots: slot ? [slot] : [],
-      facts: slot ? [{ date: slot.date, time: slot.time, state: slot.state }] : [],
+      facts: slot ? [{ date: slot.date, time: slot.time, state: slot.state, event: eventLeft(outcome) }] : [],
     },
   );
+}
+
+// The status of the app's event for the slot after a sync, or null when
+// there is none (sprint 20, 0022).
+function eventLeft(o: SyncOutcome): "tentative" | "confirmed" | null {
+  return o.action === "created" || o.action === "updated" || o.action === "unchanged" ? (o.status ?? null) : null;
 }
 
 const WindowArg = z

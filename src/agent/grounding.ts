@@ -7,9 +7,9 @@
 // - every date, weekday and time must match the facts as a unit. A time
 //   with no date must belong to a date in the same sentence, or to the
 //   facts' single date. Date-like text code cannot read fails.
-// - every state word (confirmed, booked, requested, canceled, declined,
-//   moved, rescheduled) must agree with the state of the slots its clause
-//   or sentence names, negation included. With no slot named, a positive
+// - every state word (confirmed, booked, requested, tentative, canceled,
+//   declined, moved, rescheduled) must agree with the state of the slots its
+//   clause or sentence names, negation included. With no slot named, a positive
 //   state needs a slot in that state among the facts. Questions assert
 //   nothing and are not checked for states.
 // - a statement that a claim or reply was accepted, rejected, approved,
@@ -27,8 +27,10 @@ import type { SlotView } from "../slots/types.ts";
 import { canonicalDates, loneDays } from "./dates.ts";
 import type { FactChip } from "./types.ts";
 
-// A point in time from a tool result. A slot carries its state.
-export type Fact = { date: string; time: string | null; state?: SlotState };
+// A point in time from a tool result. A slot carries its state. After a
+// Google Calendar write of this turn it also carries `event`: the status of
+// the app's event for it, or null when the write left none (sprint 20, 0022).
+export type Fact = { date: string; time: string | null; state?: SlotState; event?: "tentative" | "confirmed" | null };
 
 // Statuses a tool result showed. Code-written, never model text.
 export type Status = "claim:accepted" | "claim:rejected" | "reply:sent";
@@ -115,13 +117,20 @@ export function grounded(text: string, facts: Fact[], today: string | null = nul
 // names the new slot, which fits when it is held and another slot was
 // canceled. "Offered", "available" and "open" are checked only against a
 // slot their own clause names, because "the question is open" names none.
-const STATE_WORDS: Array<{ re: RegExp; states: SlotState[]; moved?: boolean; namedOnly?: boolean }> = [
+// Sprint 20 (0022): the app's Google Calendar event is tentative while its
+// slot is requested or a change is proposed, and confirmed when the slot is
+// (calendar_sync_slot), so "tentative" is a state word of those slots. "On
+// the calendar" is also true of a slot whose event a calendar write of this
+// turn left in place (`event`).
+const STATE_WORDS: Array<{ re: RegExp; states: SlotState[]; moved?: boolean; namedOnly?: boolean; event?: boolean }> = [
   {
-    re: /\b(?:confirmed|booked|scheduled|all set|locked in|good to go|set for|you're on|you are on|on the (?:books|calendar|schedule))\b/g,
+    re: /\b(?:confirmed|booked|scheduled|all set|locked in|good to go|set for|you're on|you are on|on the (?:books|schedule))\b/g,
     states: ["confirmed", "change_proposed"],
   },
+  { re: /\bon the calendar\b/g, states: ["confirmed", "change_proposed"], event: true },
   { re: /\b(?:offered|available|open)\b/g, states: ["offered"], namedOnly: true },
   { re: /\b(?:requested|awaiting confirmation|waiting (?:for|on) (?:the office|confirmation))\b/g, states: ["requested"] },
+  { re: /\btentative(?:ly)?\b/g, states: ["requested", "change_proposed"] },
   { re: /\bpending\b/g, states: ["requested", "change_proposed"] },
   { re: /\b(?:canceled|cancelled|called off|no longer happening)\b/g, states: ["canceled"] },
   { re: /\b(?:declined|turned down)\b/g, states: ["declined"] },
@@ -131,7 +140,7 @@ const STATE_WORDS: Array<{ re: RegExp; states: SlotState[]; moved?: boolean; nam
 // Status words code cannot map to a slot state. Said of a named slot, they
 // fail closed.
 const UNMAPPED_STATUS =
-  /\b(?:finali[sz]ed|secured|reserved|sorted|settled|fixed|nailed down|firmed up|guaranteed|approved|accepted|held|on hold|tentative|penciled in|pencilled in)\b/;
+  /\b(?:finali[sz]ed|secured|reserved|sorted|settled|fixed|nailed down|firmed up|guaranteed|approved|accepted|held|on hold|penciled in|pencilled in)\b/;
 
 const NEGATIONS = /\b(?:not|never|no|none|nothing|neither|nor|yet to|no longer|cannot)\b|n't\b/g;
 const negations = (text: string) => (text.match(NEGATIONS) ?? []).length;
@@ -186,8 +195,14 @@ function slotsNamed(mentions: Mention[], facts: Fact[]): Fact[] {
 export function statesAgree(text: string, grounds: Grounds): boolean {
   const canonical = canonicalDates(text, grounds.today).text;
   const slots = grounds.facts.filter((f) => f.state !== undefined);
+  // Each slot's app event as the turn's last calendar write left it.
+  const events = new Map<string, Fact["event"]>();
+  for (const f of grounds.facts) if (f.event !== undefined) events.set(`${f.date}T${f.time}`, f.event);
+  const hasEvent = (f: Fact) => (events.get(`${f.date}T${f.time}`) ?? null) !== null;
   const fitsWord = (w: (typeof STATE_WORDS)[number]) => (f: Fact) =>
-    w.states.includes(f.state!) || (w.moved === true && (f.state === "confirmed" || f.state === "requested") && slots.some((x) => x.state === "canceled"));
+    w.states.includes(f.state!) ||
+    (w.event === true && hasEvent(f)) ||
+    (w.moved === true && (f.state === "confirmed" || f.state === "requested") && slots.some((x) => x.state === "canceled"));
   let previous: Fact[] = [];
   for (const s of sentences(canonical)) {
     const sentenceSlots = slotsNamed(parseMentions(s), grounds.facts);
@@ -297,6 +312,15 @@ const VERB_RES = VERBS.map((v) => ({
   kinds: v.kinds,
 }));
 
+// Sprint 20 (0022): the live model often drops the subject, as in "Added
+// Monday 11/16 1:00 PM to your calendar as tentative." or "Put Monday 11/16
+// 1:00 PM back on your calendar." A sentence that opens with the past form of
+// a verb some action makes true is the assistant's own report. Verbs no tool
+// does keep to the subject form, because "Confirmed: Thursday 11/12 10:30
+// AM." states a slot's state.
+const OPENING = String.raw`(?:^|[.!?]\s+|\n\s*(?:[-*•]\s*)?)`;
+const OPENING_RES = VERBS.filter((v) => v.kinds.length > 0).map((v) => ({ re: new RegExp(`${OPENING}(?:${v.past})\\b`), kinds: v.kinds }));
+
 // A verb joined by "and" to the assistant's own verb in the same sentence,
 // as in "I saved your message and confirmed Monday" or "... and have
 // confirmed Monday" (the live meaning-flips run, Muse round 2, item 4).
@@ -342,6 +366,7 @@ export function claimsAction(text: string, done: ReadonlySet<string> = new Set()
   const checked = (verb: string | undefined, end: number) => verb === "confirmed" && CHECKED.test(t.slice(end));
   const direct = VERB_RES.some(({ re, kinds }) => [...t.matchAll(re)].some((m) => !checked(m[1], m.index! + m[0].length) && untrue(kinds)));
   if (direct) return true;
+  if (OPENING_RES.some(({ re, kinds }) => re.test(t) && untrue(kinds))) return true;
   return JOINED_RES.some(({ re, kinds }) =>
     [...t.matchAll(re)].some((m) => !otherSubjectGoverns(m[1]!, m[2] ?? "") && !checked(m[3], m.index! + m[0].length) && untrue(kinds)),
   );
