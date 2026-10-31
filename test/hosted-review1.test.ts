@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runAdmin } from "../scripts/admin.ts";
+import { JUDGE_SHARED_TRY_LIMIT } from "../server/hosted.ts";
 import { readHostedConfig } from "../src/hosted/config.ts";
 import { MeteredClient } from "../src/hosted/metered.ts";
 import { clientAddress } from "../src/hosted/rate-limit.ts";
@@ -199,9 +200,11 @@ describe("finding 4: forwarding headers count only behind a trusted proxy", () =
     h = await startHosted({ env: { APP_TRUSTED_PROXY: "" } });
     const b = h.browser();
     const statuses: number[] = [];
-    for (let i = 0; i < 11; i++) statuses.push((await b.call("POST", "/api/session/judge", { code: `judge_${"C".repeat(43)}` }, { "CF-Connecting-IP": `192.0.2.${i}`, "X-Forwarded-For": `198.51.100.${i}` })).status);
-    expect(statuses[10]).toBe(429);
-  });
+    // 0023, fix round 2: every request is the loopback socket, so all of
+    // them share the one ceiling for addresses that are not counted.
+    for (let i = 0; i <= JUDGE_SHARED_TRY_LIMIT.limit; i++) statuses.push((await b.call("POST", "/api/session/judge", { code: `judge_${"C".repeat(43)}` }, { "CF-Connecting-IP": `192.0.2.${i % 250}`, "X-Forwarded-For": `198.51.100.${i % 250}` })).status);
+    expect(statuses.at(-1)).toBe(429);
+  }, 30_000);
 
   it("with cloudflare, only CF-Connecting-IP, and only from a loopback socket", () => {
     const headers = { "cf-connecting-ip": "203.0.113.9", "x-forwarded-for": "198.51.100.1" };

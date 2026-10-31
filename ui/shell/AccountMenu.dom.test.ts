@@ -56,7 +56,7 @@ describe("the account menu, opened", () => {
   it("0023: a shared pass's account is told its workspace stays on this browser", async () => {
     const m = await menu("hosted", { ...session, account: { kind: "judge", email: null, name: null, pool: true } });
     await m.open();
-    expect(m.list.textContent).toContain("This workspace stays on this browser. Signing in with the shared judge pass again here opens it, and another browser starts a fresh one.");
+    expect(m.list.textContent).toContain("This workspace stays on this browser while you are signed in. Signing out ends it: a new sign-in with the shared judge pass starts a fresh one.");
     await m.ui.unmount();
   });
 

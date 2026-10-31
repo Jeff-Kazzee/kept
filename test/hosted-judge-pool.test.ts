@@ -12,7 +12,8 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runAdmin } from "../scripts/admin.ts";
-import { addressBucket, clientAddress, FORWARDED_UNKNOWN, isLoopback, parseIp } from "../src/hosted/rate-limit.ts";
+import { addressBucket, clientAddress, countedAddress, FORWARDED_UNKNOWN, isLoopback, parseIp } from "../src/hosted/rate-limit.ts";
+import { JUDGE_SHARED_TRY_LIMIT, JUDGE_TRY_LIMIT } from "../server/hosted.ts";
 import { AccountsStore, HOUR_MS, JUDGE_CODE, JudgeCodeError, POOL_ACCOUNTS_PER_HOUR, POOL_EMPTY_TEXT, accountsPath, sha256 } from "../src/hosted/store.ts";
 import { fixtureMessage } from "./helpers.ts";
 import { startHosted, type Browser, type Hosted } from "./hosted-helpers.ts";
@@ -228,16 +229,41 @@ describe("fix round 1", () => {
     expect(addressBucket("2001:db8:1:2:3:4:5:6")).toBe(addressBucket("2001:db8:1:2:ffff::1"));
     expect(addressBucket("2001:db8:1:2::")).not.toBe(addressBucket("2001:db8:1:3::"));
 
-    // On the site behind cloudflare: loopback and junk claims share one
-    // counted address, so they get two accounts an hour between them.
-    h = await startHosted();
-    const pool = h.judgePool("Judges", 10, 1);
-    const tries: number[] = [];
-    for (const claim of ["127.0.0.1", "junk", "::1"]) tries.push((await h.browser().call("POST", "/api/session/judge", { code: pool.code }, { "CF-Connecting-IP": claim })).status);
-    expect(tries).toEqual([200, 200, 429]);
-    // A real address is its own.
-    expect((await h.browser().call("POST", "/api/session/judge", { code: pool.code }, { "CF-Connecting-IP": "203.0.113.20" })).status).toBe(200);
+    // Fix round 2: only one plain client IP is counted per address.
+    expect(countedAddress("203.0.113.9")).toBe("203.0.113.9");
+    for (const a of [FORWARDED_UNKNOWN, "127.0.0.1", "::1", "unknown", ""]) expect(countedAddress(a)).toBeNull();
   });
+
+  it("fix round 2: the shared unknown address is not counted per address, for accounts or for code tries", async () => {
+    h = await startHosted();
+    const pool = h.judgePool("Judges", 20, 1);
+    // Loopback and junk claims all become the shared address. They are
+    // bound by the pass's 6 an hour, not by 2 an address.
+    const tries: number[] = [];
+    for (const claim of ["127.0.0.1", "junk", "::1", "a, b", "x", "0.0.0.0", "y"]) tries.push((await h.browser().call("POST", "/api/session/judge", { code: pool.code }, { "CF-Connecting-IP": claim })).status);
+    expect(tries).toEqual([...Array(POOL_ACCOUNTS_PER_HOUR).fill(200), 429]);
+    // Code tries with no counted address share the wider ceiling, so more
+    // than 10 wrong tries lock no one out.
+    const second = h.judgePool("Second", 5, 1);
+    const wrong: number[] = [];
+    for (let i = 0; i < JUDGE_TRY_LIMIT.limit + 5; i++) wrong.push((await h.browser().call("POST", "/api/session/judge", { code: `judge_${"W".repeat(43)}` }, { "CF-Connecting-IP": "junk" })).status);
+    expect(wrong.every((st) => st === 404)).toBe(true);
+    expect((await h.browser().call("POST", "/api/session/judge", { code: second.code }, { "CF-Connecting-IP": "junk" })).status).toBe(200);
+    // A real address is its own, with its own limits.
+    expect((await h.browser().call("POST", "/api/session/judge", { code: second.code }, { "CF-Connecting-IP": "203.0.113.20" })).status).toBe(200);
+    expect((await h.browser().call("POST", "/api/session/judge", { code: second.code }, { "CF-Connecting-IP": "203.0.113.20" })).status).toBe(200);
+    expect((await h.browser().call("POST", "/api/session/judge", { code: second.code }, { "CF-Connecting-IP": "203.0.113.20" })).body.error).toBe("judge_pool_throttled");
+  });
+
+  it("fix round 2: the shared ceiling for code tries holds", async () => {
+    h = await startHosted();
+    const statuses: number[] = [];
+    for (let i = 0; i < JUDGE_SHARED_TRY_LIMIT.limit + 1; i++) statuses.push((await h.raw("POST", "/api/session/judge", { "Content-Type": "application/json", Origin: `http://127.0.0.1:${h.port}`, "X-Appointments-App": "1" }, { code: "x" })).status);
+    expect(statuses.slice(0, JUDGE_SHARED_TRY_LIMIT.limit).every((st) => st === 404)).toBe(true);
+    expect(statuses.at(-1)).toBe(429);
+    // A counted address still has its own tries.
+    expect((await h.browser().call("POST", "/api/session/judge", { code: "x" }, { "CF-Connecting-IP": "203.0.113.70" })).status).toBe(404);
+  }, 30_000);
 
   it("finding 1: with no proxy set, forwarding headers are ignored and loopback counts only against the pass", async () => {
     h = await startHosted({ env: { APP_TRUSTED_PROXY: "none" } });
@@ -259,19 +285,45 @@ describe("fix round 1", () => {
     // Each got its own session.
     expect(a1.cookies.get(`appt_session_${h.port}`)).not.toBe(a2.cookies.get(`appt_session_${h.port}`));
     expect(h.app.store.listJudgePools()[0]).toMatchObject({ accounts: 1, grantedMicros: USD });
-    // After signing out, the same key opens the same account.
+    // Only the key's hash, bound to the pass, is stored.
+    const keyOf = (accountId: string) => {
+      const db = new DatabaseSync(path.join(h!.dir, "hosted", "accounts.sqlite"), { readOnly: true, timeout: 5_000 });
+      const r = db.prepare("SELECT signin_key FROM judge_codes WHERE account_id = ?").get(accountId) as { signin_key: string | null };
+      db.close();
+      return r.signin_key;
+    };
+    const first = idOf(a2);
+    expect(keyOf(first)).toBe(sha256(`judge-pool-signin:${pool.id}:${KEY}`));
+    expect(keyOf(first)).not.toContain(KEY);
+    // Fix round 2: signing out ends the key. The same key then makes a new
+    // account, and the old one stays signed in only where it still is.
     await a1.call("POST", "/api/session/signout", {});
+    expect(keyOf(first)).toBeNull();
+    expect((await a2.call("GET", "/api/session")).body.signedIn).toBe(true);
     const back = h.browser();
     await back.call("POST", "/api/session/judge", { code: pool.code, key: KEY });
-    expect(idOf(back)).toBe(idOf(a2));
+    expect(idOf(back)).not.toBe(first);
+    // A sign-in to another account in that browser ends the key too: here
+    // a per-judge code, then a retry with the key and no cookie.
+    const rebound = idOf(back);
+    expect(keyOf(rebound)).toBe(sha256(`judge-pool-signin:${pool.id}:${KEY}`));
+    await back.call("POST", "/api/session/judge", { code: h.judgeCode("Bo", 1).code, key: KEY });
+    expect(keyOf(rebound)).toBeNull();
+    // Signing in with the pass again from its own session keeps the key.
+    const keeper = h.browser();
+    await keeper.call("POST", "/api/session/judge", { code: pool.code, key: "q".repeat(43) });
+    await keeper.call("POST", "/api/session/judge", { code: pool.code, key: "q".repeat(43) });
+    expect(keyOf(idOf(keeper))).toBe(sha256(`judge-pool-signin:${pool.id}:${"q".repeat(43)}`));
     // Another key, or none, is another browser.
     const other = h.browser();
     await other.call("POST", "/api/session/judge", { code: pool.code, key: "o".repeat(43) });
     const none = h.browser();
     await none.call("POST", "/api/session/judge", { code: pool.code });
     expect(new Set([idOf(a2), idOf(other), idOf(none)]).size).toBe(3);
+    expect(keyOf(idOf(none))).toBeNull();
     // The key is bound to its pass: on another pass it makes a new account.
     const second = h.judgePool("Others", 3, 1);
+    await a2.call("POST", "/api/session/judge", { code: pool.code, key: KEY });
     const elsewhere = h.browser();
     await elsewhere.call("POST", "/api/session/judge", { code: second.code, key: KEY });
     expect(idOf(elsewhere)).not.toBe(idOf(a2));
@@ -298,6 +350,25 @@ describe("fix round 1", () => {
     expect(h.app.store.listJudgePools()[0]!.accounts).toBe(2);
   });
 
+  it("fix round 2: a key whose account was revoked is refused and keeps its binding", () => {
+    const file = path.join(tempDir("pool-key-revoked-"), "accounts.sqlite");
+    const store = new AccountsStore(file);
+    const pool = store.createJudgePool({ label: "J", poolMicros: 5 * USD, shareMicros: USD, expiresAt: Date.now() + 86_400_000, totalCapMicros: 100 * USD });
+    const id = store.judgeSignIn(pool.code, { key: KEY }).account.id;
+    store.close();
+    // Not reachable through the admin (finding 4), so set by hand.
+    const db = new DatabaseSync(file);
+    db.prepare("UPDATE judge_codes SET revoked_at = ? WHERE account_id = ?").run(Date.now(), id);
+    db.close();
+    const again = new AccountsStore(file);
+    expect(() => again.judgeSignIn(pool.code, { key: KEY })).toThrow(expect.objectContaining({ code: "revoked" }));
+    expect(again.listJudgePools()[0]!.accounts).toBe(1);
+    again.close();
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect((check.prepare("SELECT signin_key FROM judge_codes WHERE account_id = ?").get(id) as { signin_key: string }).signin_key).toBe(sha256(`judge-pool-signin:${pool.id}:${KEY}`));
+    check.close();
+  });
+
   it("finding 3: a judge account takes no new hold once its pass or code expired or was revoked", () => {
     let now = Date.parse("2026-11-01T12:00:00Z");
     const store = new AccountsStore(path.join(tempDir("pool-hold-"), "accounts.sqlite"), { now: () => now });
@@ -305,9 +376,19 @@ describe("fix round 1", () => {
     const pooled = store.judgeSignIn(pool.code).account.id;
     const code = store.createJudgeCode({ label: "C", capMicros: USD, expiresAt: now + 3 * 86_400_000, totalCapMicros: 100 * USD });
     const coded = store.redeemJudgeCode(code.code).id;
-    expect(store.hold(ctx(pooled), 1000, 10, 20 * USD).ok).toBe(true);
+    // A hold taken before the pass expires still settles after it.
+    const before = store.hold(ctx(pooled), 300_000, 10, 20 * USD);
+    expect(before.ok).toBe(true);
     now += 86_400_000;
     expect(store.hold(ctx(pooled), 1000, 10, 20 * USD)).toEqual({ ok: false, reason: "credits" });
+    expect(store.settle((before as { holdId: number }).holdId, { usage: { input: 10, cachedInput: 0, output: 5, reasoning: 0 }, amountMicros: 120_000, costMicros: 40_000 })).toEqual({ charged: 120_000 });
+    expect(store.ledger(pooled).map((r) => [r.kind, r.amount])).toEqual([
+      ["grant", USD],
+      ["hold", 300_000],
+      ["charge", 120_000],
+      ["release", 180_000],
+    ]);
+    expect(store.balance(pooled)).toBe(USD - 120_000);
     expect(store.hold(ctx(coded), 1000, 10, 20 * USD).ok).toBe(true);
     store.revokeJudgeCode(code.id);
     expect(store.hold(ctx(coded), 1000, 10, 20 * USD)).toEqual({ ok: false, reason: "credits" });
@@ -344,6 +425,8 @@ describe("fix round 1", () => {
     now += 50 * 60_000;
     one.judgeSignIn(p1.code, { address: "203.0.113.40" });
     one.close();
+    // Neither loopback nor the shared unknown address is counted.
+    for (let i = 0; i < 3; i++) one.judgeSignIn(p1.code, { address: i % 2 ? "127.0.0.1" : FORWARDED_UNKNOWN });
     // Another process, another pass: the same address is full.
     const two = new AccountsStore(file, { now: () => now });
     expect(() => two.judgeSignIn(p2.code, { address: "203.0.113.40" })).toThrow(expect.objectContaining({ code: "pool_throttled" }));

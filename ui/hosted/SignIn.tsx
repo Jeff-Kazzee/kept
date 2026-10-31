@@ -10,7 +10,7 @@ import { Mark } from "../components/Art.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { errorSentence } from "../format.ts";
 import { AuthError, accountAuth } from "./accountAuth.ts";
-import { hostedApi, judgeSigninKey, type SessionInfo } from "./session.ts";
+import { forgetJudgeSigninKey, hostedApi, judgeSigninKey, noteJudgeSignIn, type SessionInfo } from "./session.ts";
 
 export const judgePath = (pathname: string) => /^\/judge\/?$/.test(pathname);
 
@@ -64,6 +64,8 @@ export function SignIn({
 
   // `problem` is shown in the app once it opens.
   const finish = async (problem: string | null = null) => {
+    // An email or passkey sign-in ended any judge session here.
+    forgetJudgeSigninKey();
     if (judgePath(window.location.pathname)) window.history.replaceState(null, "", "/");
     onSignedIn(await hostedApi.session(), problem);
   };
@@ -124,6 +126,7 @@ export function SignIn({
     setError(null);
     try {
       const s = await hostedApi.judgeSignIn(c, judgeSigninKey());
+      noteJudgeSignIn(s);
       if (judgePath(window.location.pathname)) window.history.replaceState(null, "", "/");
       onSignedIn(s);
     } catch (err) {
@@ -249,7 +252,7 @@ export function SignIn({
                 The code you were given starts with judge_. It signs you in to an account of your own, with usage credit for the Meta models.
               </p>
               <p className="small muted">
-                If the code was shared with several judges, your workspace stays on this browser. Signing in with it again somewhere else starts a fresh one.
+                If the code was shared with several judges, your workspace stays on this browser while you are signed in. Signing out, or signing in on another browser, starts a fresh one.
               </p>
               <button type="submit" className="btn btn-primary btn-block" disabled={code.trim() === "" || busy !== null} aria-busy={busy === "code" || undefined}>
                 Continue

@@ -18,7 +18,7 @@ import { ApiError } from "../api.ts";
 import { ConnectionsPage, SettingsPage, UsagePage } from "../pages/Settings.tsx";
 import { SignIn, judgePath } from "./SignIn.tsx";
 import { authErrorText } from "./accountAuth.ts";
-import { SIGNIN_KEY_STORAGE, accountLabel, hostedSignInError, judgeSigninKey, type SignedInSession } from "./session.ts";
+import { SIGNIN_KEY_STORAGE, SIGNIN_OWNER_STORAGE, accountLabel, forgetJudgeSigninKey, hostedSignInError, judgeSigninKey, noteJudgeSignIn, type SignedInSession } from "./session.ts";
 
 const run = async () => {};
 const html = (node: ReactNode, agent: Partial<AgentState> = {}) =>
@@ -86,7 +86,7 @@ describe("the hosted site", () => {
     // 0023: the code form's words hold for a per-judge code and a shared
     // pass, and tell a pass's user where the workspace lives.
     expect(page).toContain("It signs you in to an account of your own");
-    expect(page).toContain("If the code was shared with several judges, your workspace stays on this browser. Signing in with it again somewhere else starts a fresh one.");
+    expect(page).toContain("If the code was shared with several judges, your workspace stays on this browser while you are signed in. Signing out, or signing in on another browser, starts a fresh one.");
     // With public sign-up on, the waitlist line never shows.
     expect(html(createElement(SignIn, { passwordMin: 10, publicSignup: true, waitlistUrl: "https://kept.here.now/", notice: null, onSignedIn: () => {} }))).not.toContain("Not a judge?");
   });
@@ -178,5 +178,33 @@ describe("the judge sign-in key (0023, fix round 1)", () => {
     const page = judgeSigninKey();
     expect(page).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(judgeSigninKey()).toBe(page);
+  });
+
+  it("fix round 2: lasts only while this browser holds the pass account it opened first", () => {
+    const kept = new Map<string, string>();
+    vi.stubGlobal("window", { localStorage: { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) } });
+    forgetJudgeSigninKey();
+    const signedIn = (owner: string, pool: boolean): SignedInSession => ({ ...session, account: { kind: "judge", email: null, name: null, owner, pool } });
+    const key = judgeSigninKey();
+    noteJudgeSignIn(signedIn("owner-a", true));
+    expect(kept.get(SIGNIN_OWNER_STORAGE)).toBe("owner-a");
+    // A retry that opens the same account keeps the key.
+    noteJudgeSignIn(signedIn("owner-a", true));
+    expect(judgeSigninKey()).toBe(key);
+    // Another account forgets it, and the next sign-in has a new key.
+    noteJudgeSignIn(signedIn("owner-b", true));
+    expect(kept.has(SIGNIN_KEY_STORAGE)).toBe(false);
+    expect(kept.has(SIGNIN_OWNER_STORAGE)).toBe(false);
+    const next = judgeSigninKey();
+    expect(next).not.toBe(key);
+    // A per-judge code's account forgets it.
+    noteJudgeSignIn(signedIn("owner-c", false));
+    expect(kept.has(SIGNIN_KEY_STORAGE)).toBe(false);
+    // Sign-out forgets it.
+    const third = judgeSigninKey();
+    noteJudgeSignIn(signedIn("owner-d", true));
+    forgetJudgeSigninKey();
+    expect(kept.size).toBe(0);
+    expect(judgeSigninKey()).not.toBe(third);
   });
 });

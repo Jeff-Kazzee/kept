@@ -37,7 +37,7 @@ import { Avatar } from "./shell/AccountMenu.tsx";
 import { Sidebar, type SideLayout } from "./shell/Sidebar.tsx";
 import { Toasts, type Toast } from "./shell/Toasts.tsx";
 import { VIEW_TITLES, openersFor, person, shellModes, readFolded, saveFolded, setupLink, viewIn, type ToastLink, type View } from "./shell/shell.ts";
-import { hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
+import { forgetJudgeSigninKey, hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
 
 
 // The scripted chat is a development tool. It makes real case writes, so
@@ -719,6 +719,8 @@ function Shell({
     }
   };
   const signOut = async () => {
+    // 0023, fix round 2: a sign-out ends the shared pass's sign-in key.
+    forgetJudgeSigninKey();
     try {
       await hostedApi.signOut();
       onSignedOut(null);

@@ -79,6 +79,16 @@ const LOOPBACK = /^(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|::ffff:127\.\d{1,3}\.\d
 
 export const isLoopback = (address: string) => LOOPBACK.test(address);
 
+// 0023, fix round 2: the address a per-address limit counts, or null. Only
+// one plain client IP, from the trusted proxy or a socket that is not this
+// server's: never loopback, never FORWARDED_UNKNOWN. Those are many
+// visitors at once behind a proxy whose header shape is not known, so
+// they share wider limits instead (server/hosted.ts).
+export function countedAddress(address: string): string | null {
+  const ip = parseIp(address);
+  return ip === null || ip === FORWARDED_UNKNOWN || isLoopback(ip) ? null : ip;
+}
+
 export function clientAddress(headers: Record<string, string | string[] | undefined>, socketAddress: string | undefined, trusted: "none" | "cloudflare" | "tailscale"): string {
   const socket = socketAddress ?? "unknown";
   if (trusted === "none" || !LOOPBACK.test(socket)) return socket;

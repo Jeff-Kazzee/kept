@@ -34,7 +34,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { TokenUsage } from "../model/request.ts";
 import { appDbPath } from "../paths.ts";
 import { checkPrivateFile } from "./db-file.ts";
-import { addressBucket } from "./rate-limit.ts";
+import { addressBucket, countedAddress } from "./rate-limit.ts";
 
 export const ACCOUNTS_FILE_NAME = "accounts.sqlite";
 
@@ -523,9 +523,22 @@ export class AccountsStore {
     });
   }
 
-  endSession(token: string | null): void {
+  // Ends a session. With `forgetKey`, a shared pass's account also loses
+  // its browser's sign-in key (0023, fix round 2), so that key opens it no
+  // more: a sign-out, or a sign-in to another account, ends what the key
+  // was for.
+  // `keepKeyOf`: an account that keeps its key, the one a sign-in is
+  // opening again.
+  endSession(token: string | null, options: { forgetKey?: boolean; keepKeyOf?: string | null } = {}): void {
     if (!token || !SESSION_TOKEN.test(token)) return;
-    this.#tx((db) => db.prepare("DELETE FROM sessions WHERE hash = ?").run(sha256(token)));
+    this.#tx((db) => {
+      const hash = sha256(token);
+      if (options.forgetKey) {
+        const r = db.prepare("SELECT account_id FROM sessions WHERE hash = ?").get(hash) as Row | undefined;
+        if (r && String(r.account_id) !== options.keepKeyOf) db.prepare("UPDATE judge_codes SET signin_key = NULL WHERE account_id = ? AND pool_id IS NOT NULL AND signin_key IS NOT NULL").run(String(r.account_id));
+      }
+      db.prepare("DELETE FROM sessions WHERE hash = ?").run(hash);
+    });
   }
 
   // Removes expired sessions, and the address of each pass sign-in once
@@ -1085,7 +1098,10 @@ export class AccountsStore {
     const key = options.key && SIGNIN_KEY.test(options.key) ? sha256(`judge-pool-signin:${poolId}:${options.key}`) : null;
     if (key !== null) {
       const m = db.prepare("SELECT id, account_id, revoked_at FROM judge_codes WHERE signin_key = ? AND pool_id = ?").get(key, poolId) as Row | undefined;
-      const own = m && m.revoked_at === null ? this.#account(db, String(m.account_id)) : null;
+      // Fix round 2: a revoked account stays revoked, and keeps its key, so
+      // the key makes no new one in its place.
+      if (m && m.revoked_at !== null) throw new JudgeCodeError("revoked", "That judge pass was turned off. Email the address on the judges' page for your own code.");
+      const own = m ? this.#account(db, String(m.account_id)) : null;
       if (own && !own.deleted) return { account: own, pooled: false };
       // That account was closed: the key goes to the new one.
       if (m) db.prepare("UPDATE judge_codes SET signin_key = NULL WHERE id = ?").run(String(m.id));
@@ -1097,7 +1113,12 @@ export class AccountsStore {
     // Fix round 1, finding 5: the per-address count is a sliding hour
     // here too, across passes, restarts and processes. Only a hash of the
     // address's bucket is kept, and the sweep clears it after the hour.
-    const address = options.address ? sha256(`judge-pool-address:${addressBucket(options.address)}`) : null;
+    // Fix round 2: only one plain client IP is counted, never loopback or
+    // the shared unknown address. The hash is an unsalted counter key, not
+    // a secret: an IPv4 address or a /64 can be found from it by trying
+    // them all.
+    const counted = options.address ? countedAddress(options.address) : null;
+    const address = counted !== null ? sha256(`judge-pool-address:${addressBucket(counted)}`) : null;
     if (address !== null) {
       const fromAddress = num((db.prepare("SELECT COUNT(*) AS n FROM judge_codes WHERE signin_address = ? AND redeemed_at > ?").get(address, now - HOUR_MS) as Row).n);
       if (fromAddress >= POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR) throw new JudgeCodeError("pool_throttled", POOL_THROTTLED_TEXT);

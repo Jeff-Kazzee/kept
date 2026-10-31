@@ -8,7 +8,7 @@ import { useAgent } from "../agent/AgentContext.tsx";
 import { ActionButton, type Run } from "../components/ActionButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { errorSentence } from "../format.ts";
-import { hostedApi, usageTime, type UsageView } from "./session.ts";
+import { forgetJudgeSigninKey, hostedApi, usageTime, type UsageView } from "./session.ts";
 
 export function HostedProviderSetting() {
   const { settings } = useAgent();
@@ -191,6 +191,7 @@ export function DeleteAccountPanel({ run, onDeleted }: { run: Run; onDeleted: ()
           disabled={typed !== DELETE_CONFIRMATION}
           action={async () => {
             await hostedApi.deleteAccount(typed);
+            forgetJudgeSigninKey();
             setTyped("");
             onDeleted();
           }}

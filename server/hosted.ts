@@ -39,7 +39,7 @@ import { AUTH_BASE_PATH, CLIENT_ADDRESS_HEADER, PASSWORD_MIN, authPath, authRout
 import { formatBalance, formatCharge, formatUsd, type HostedConfig } from "../src/hosted/config.ts";
 import { MeteredClient } from "../src/hosted/metered.ts";
 import { PRICES, turnCostMicros } from "../src/hosted/prices.ts";
-import { AddressLimiter, clientAddress, isLoopback } from "../src/hosted/rate-limit.ts";
+import { AddressLimiter, clientAddress, countedAddress } from "../src/hosted/rate-limit.ts";
 import { AccountsBusyError, AccountsFileError, AccountsStore, JudgeCodeError, SESSION_TTL_MS, SIGNIN_KEY, accountsPath, workspacesRoot, type Account, type ChargeRow } from "../src/hosted/store.ts";
 import { META_MODELS, metaModel } from "../src/model/providers/models.ts";
 import { UsageRefusedError, withUsageScope } from "../src/model/usage.ts";
@@ -85,6 +85,15 @@ export const SITE_BUSY_TEXT = "This site is busy just now. Try again in a minute
 // How often a held live read asks again whether its session still holds.
 export const LIVE_SESSION_MS = 8 * LIVE_CHECK_MS;
 export const DEMO_FAIL_LIMIT = { limit: 5, windowMs: 15 * 60_000 };
+// Judge code tries: 10 per counted address in 15 minutes, and 300 in 15
+// minutes shared by every request with no counted address (0023, fix
+// round 2): loopback behind a proxy that sends no header, and the shared
+// FORWARDED_UNKNOWN. A code is 256 random bits, so the limit is against
+// floods, not guessing. A try is one hash and one indexed read, and one
+// shared limit low enough to be filled by one sender would lock every
+// judge out.
+export const JUDGE_TRY_LIMIT = { limit: 10, windowMs: 15 * 60_000 };
+export const JUDGE_SHARED_TRY_LIMIT = { limit: 300, windowMs: 15 * 60_000 };
 export const DEMO_CONNECTED_TEXT = "The demo Gmail and Calendar are connected for every judge. You can close this page.";
 export const DELETE_ACCOUNT_BUSY_TEXT = "The assistant is still working on something for this account. Wait for it to finish, then delete the account again. Nothing was deleted.";
 
@@ -197,7 +206,12 @@ export async function createHostedApp(o: HostedOptions) {
   // is a password or a passkey. Sign-ups are fewer.
   const signinLimit = new AddressLimiter({ limit: 20, windowMs: 10 * 60_000, now });
   const signupLimit = new AddressLimiter({ limit: 10, windowMs: 60 * 60_000, now });
-  const judgeLimit = new AddressLimiter({ limit: 10, windowMs: 15 * 60_000, now });
+  const judgeLimit = new AddressLimiter({ ...JUDGE_TRY_LIMIT, now });
+  const judgeSharedLimit = new AddressLimiter({ ...JUDGE_SHARED_TRY_LIMIT, now });
+  const judgeTry = (address: string) => {
+    const counted = countedAddress(address);
+    return counted === null ? judgeSharedLimit.take("shared") : judgeLimit.take(counted);
+  };
   // 0021, round 2, finding 1: failed demo connects per address.
   const demoFailLimit = new AddressLimiter({ ...DEMO_FAIL_LIMIT, now });
   const serverKey = config.serverKeyOn ? o.serverMetaKey : null;
@@ -402,22 +416,24 @@ export async function createHostedApp(o: HostedOptions) {
   // Review round 1, finding 6: sign-in and sign-out never trust the
   // request's claim of HTTPS to pick a cookie. They end the judge session
   // of either cookie form the browser sent, and clear both forms, and end
-  // the Better Auth session too.
-  const endJudge = (req: IncomingMessage) => {
+  // the Better Auth session too. 0023, fix round 2: a shared pass's
+  // account whose session ends this way loses its browser's sign-in key,
+  // unless `keepKeyOf` is that account, opened again by a sign-in.
+  const endJudge = (req: IncomingMessage, keepKeyOf: string | null = null) => {
     for (const secureForm of [true, false]) {
       const t = cookieOf(req.headers.cookie, sessionCookieName(port, secureForm));
-      if (t) store.endSession(t);
+      if (t) store.endSession(t, { forgetKey: true, keepKeyOf });
     }
   };
   const clearJudge = () => [sessionCookie(port, true, "", 0), sessionCookie(port, false, "", 0)];
-  const endAll = async (req: IncomingMessage, res: ServerResponse) => {
-    endJudge(req);
+  const endAll = async (req: IncomingMessage, res: ServerResponse, keepKeyOf: string | null = null) => {
+    endJudge(req, keepKeyOf);
     const cleared = req.headers.cookie?.includes(auth.sessionCookieName) ? await auth.signOut(headersOf(req)) : [];
     for (const c of [...clearJudge(), ...cleared]) res.appendHeader("Set-Cookie", c);
   };
 
   const startJudgeSession = async (req: IncomingMessage, res: ServerResponse, secure: boolean, account: Account) => {
-    await endAll(req, res);
+    await endAll(req, res, account.id);
     const { token } = store.createSession(account.id);
     res.appendHeader("Set-Cookie", sessionCookie(port, secure, token, Math.floor(SESSION_TTL_MS / 1000)));
   };
@@ -501,18 +517,19 @@ export async function createHostedApp(o: HostedOptions) {
         if (!only("POST")) return true;
         const b = parsed(JudgeSignInBody, body);
         if (!b) return true;
-        const limit = judgeLimit.take(address);
+        const limit = judgeTry(address);
         if (!limit.ok) return send(res, 429, { error: "rate_limited", message: RATE_LIMITED_TEXT, retryAfterSeconds: limit.retryAfterSeconds }), true;
         try {
           // 0023: a shared pass gives this browser's own account from it
           // back, by its session or its sign-in key, and makes a new one
-          // otherwise, counted per address unless the address is this
-          // server's own: a socket with no forwarding header (rate-limit.ts).
+          // otherwise, counted per address only for one plain client IP
+          // (countedAddress). The pass's own hourly limit and its pool hold
+          // for every sign-in.
           const current = (await sessionOf(req, null))?.account;
           const { account } = store.judgeSignIn(b.code.trim(), {
             current: current?.kind === "judge" ? current.id : null,
             key: b.key ?? null,
-            address: isLoopback(address) ? null : address,
+            address: countedAddress(address),
           });
           await startJudgeSession(req, res, secure, account);
           send(res, 200, accountView(account, now() + SESSION_TTL_MS));
@@ -542,7 +559,7 @@ export async function createHostedApp(o: HostedOptions) {
         if (!who) return send(res, 401, { error: "signed_out", message: SIGNED_OUT_TEXT }), true;
         const b = parsed(JudgeBody, body);
         if (!b) return true;
-        const limit = judgeLimit.take(address);
+        const limit = judgeTry(address);
         if (!limit.ok) return send(res, 429, { error: "rate_limited", message: RATE_LIMITED_TEXT, retryAfterSeconds: limit.retryAfterSeconds }), true;
         try {
           store.redeemJudgeCode(b.code.trim(), who.account.id);

@@ -74,11 +74,15 @@ export const hostedApi = {
 // sign-in screen again.
 export const signedOut = (e: unknown) => e instanceof ApiError && e.status === 401 && e.body.error === "signed_out";
 
-// 0023, fix round 1: the key this browser sends with a judge code, made
-// once and kept, so a retried or doubled sign-in with a shared pass opens
-// the account the first one made. 32 random bytes in base64url. Without
-// storage, one key for this page.
+// 0023, fix round 1: the key this browser sends with a judge code, so a
+// retried or doubled sign-in with a shared pass opens the account the first
+// one made. 32 random bytes in base64url. Without storage, one key for this
+// page. Fix round 2: the key lasts only while this browser holds that
+// account's session. Sign-out, Delete account, an email or passkey sign-in,
+// and a judge sign-in that ends in another account forget it, and the next
+// sign-in makes a new one. The server forgets it at the same steps.
 export const SIGNIN_KEY_STORAGE = "kept.judge-signin-key";
+export const SIGNIN_OWNER_STORAGE = "kept.judge-signin-owner";
 const SIGNIN_KEY_SHAPE = /^[A-Za-z0-9_-]{43}$/;
 let pageKey: string | null = null;
 export function judgeSigninKey(): string {
@@ -98,6 +102,34 @@ export function judgeSigninKey(): string {
     // Kept for this page only.
   }
   return pageKey;
+}
+
+export function forgetJudgeSigninKey(): void {
+  pageKey = null;
+  try {
+    window.localStorage.removeItem(SIGNIN_KEY_STORAGE);
+    window.localStorage.removeItem(SIGNIN_OWNER_STORAGE);
+  } catch {
+    // Nothing kept.
+  }
+}
+
+// After a judge code sign-in: the key stays only for the shared pass's
+// account it opened first. Any other account forgets it.
+export function noteJudgeSignIn(s: SessionInfo): void {
+  const owner = s.mode === "hosted" && s.signedIn && s.account.pool ? (s.account.owner ?? null) : null;
+  let kept: string | null = null;
+  try {
+    kept = window.localStorage.getItem(SIGNIN_OWNER_STORAGE);
+  } catch {
+    // No storage: the page's key only.
+  }
+  if (owner === null || (kept !== null && kept !== owner)) return forgetJudgeSigninKey();
+  try {
+    window.localStorage.setItem(SIGNIN_OWNER_STORAGE, owner);
+  } catch {
+    // Kept for this page only.
+  }
 }
 
 // Who the account menu names.
