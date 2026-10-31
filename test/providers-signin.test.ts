@@ -36,7 +36,7 @@ describe("0010 Sign in with ChatGPT", () => {
     expect(url.origin + url.pathname).toBe(AUTHORIZE_URL);
     const p = url.searchParams;
     expect(p.get("client_id")).toBe(DYNAMIC_CLIENT_ID);
-    expect(p.get("agent_name_hint")).toBe("Appointment change assistant");
+    expect(p.get("agent_name_hint")).toBe("Kept");
     expect(p.get("response_type")).toBe("code");
     expect(p.get("redirect_uri")).toBe(`http://127.0.0.1:${PORT}/auth/callback`);
     expect(p.get("scope")).toBe("openid profile email offline_access resource.invoke chatgpt.tokens.use.direct");

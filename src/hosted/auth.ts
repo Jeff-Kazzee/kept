@@ -50,7 +50,7 @@ export const AUTH_SESSION_DAYS = 30;
 // rules, and removes any copy a client sent. Better Auth's rate limits
 // read it and nothing else (0020, B2 and B11).
 export const CLIENT_ADDRESS_HEADER = "x-appt-client-address";
-export const APP_NAME = "Appointment assistant";
+export const APP_NAME = "Kept";
 
 // data/hosted/auth.sqlite, beside the accounts database.
 export function authPath(env: NodeJS.ProcessEnv = process.env): string {

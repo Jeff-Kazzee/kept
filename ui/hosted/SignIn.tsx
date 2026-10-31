@@ -160,7 +160,7 @@ export function SignIn({
         <span className="welcome-mark" aria-hidden="true">
           <Mark size={24} />
         </span>
-        <h1 className="signin-title">Appointment assistant</h1>
+        <h1 className="signin-title">Kept</h1>
         <p className="muted">Keep track of changes to your appointments. Paste a message from the office, and the assistant reads it, checks it and keeps your schedule.</p>
         {error && (
           <p className="warn-box" role="alert">

@@ -52,7 +52,7 @@ export function Sidebar({
         <span className="brand-mark" aria-hidden="true">
           <Mark size={20} />
         </span>
-        <span className="side-name side-label">Appointment assistant</span>
+        <span className="side-name side-label">Kept</span>
         {layout === "drawer" && (
           <button ref={closeRef} type="button" className="btn btn-ghost btn-icon side-close" aria-label="Close the menu" onClick={onClose}>
             <Icon name="close" />

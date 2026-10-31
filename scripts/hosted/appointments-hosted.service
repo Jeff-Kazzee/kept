@@ -5,7 +5,7 @@
 #   systemctl --user enable --now appointments-hosted.service
 # See docs/hosted.md, "Going live".
 [Unit]
-Description=Appointment assistant, hosted mode on 127.0.0.1:5300
+Description=Kept, hosted mode on 127.0.0.1:5300
 After=network-online.target
 Wants=network-online.target
 

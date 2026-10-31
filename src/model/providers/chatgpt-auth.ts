@@ -41,7 +41,7 @@ export const SCOPES = "openid profile email offline_access resource.invoke chatg
 export const PLAN_USAGE_SCOPE = "chatgpt.tokens.use.direct";
 export const DYNAMIC_CLIENT_ID = "dynamic_agent_client";
 // The app's name, the same on every installation.
-export const AGENT_NAME = "Appointment change assistant";
+export const AGENT_NAME = "Kept";
 // The loopback callback path. The guide's example path, which must stay the
 // same from the first registration on: only the port may change.
 export const CALLBACK_PATH = "/auth/callback";

@@ -148,7 +148,7 @@ if (config.mode === "hosted") {
   server.on("request", hosted.handle);
   closeApp = hosted.close;
   started = () => {
-    console.log(`Appointment change assistant, hosted mode, on http://${HOST}:${PORT}`);
+    console.log(`Kept, hosted mode, on http://${HOST}:${PORT}`);
     for (const line of hosted.startLines()) console.log(line);
   };
 } else {
@@ -191,7 +191,7 @@ if (config.mode === "hosted") {
     await serveApi(ws, { method: req.method ?? "GET", path: url.pathname, body: input.body, generation: input.generation, host: req.headers.host, secure: secureRequest(req) }, res);
   });
   started = () => {
-    console.log(`Appointment change assistant on http://${HOST}:${PORT} (model: ${ws.client.ready() ? ws.client.label : "none ready, add one in Connections"})`);
+    console.log(`Kept on http://${HOST}:${PORT} (model: ${ws.client.ready() ? ws.client.label : "none ready, add one in Connections"})`);
     console.log("The model provider is chosen in the app's settings. ChatGPT sign-in finishes only in a browser on this computer, or through an SSH tunnel to this port.");
     if (extraHosts.length > 0) console.log(`Also answers to: ${extraHosts.join(", ")}`);
     if (googleClient) {

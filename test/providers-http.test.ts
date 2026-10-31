@@ -49,7 +49,7 @@ async function startServer() {
     child.stdout!.on("data", (d: Buffer) => {
       output += d.toString();
       // The pairing line, while pairing exists, follows the first line.
-      if (/Appointment change assistant on/.test(output)) setTimeout(resolve, 300);
+      if (/Kept on http/.test(output)) setTimeout(resolve, 300);
     });
     child.on("exit", (c) => reject(new Error(`server exited ${c}: ${output}`)));
     setTimeout(() => reject(new Error("server did not start")), 15_000);

@@ -1,6 +1,6 @@
-# Appointment change assistant
+# Kept
 
-A tool that helps a person keep track of appointment changes from messages
+Kept helps a person keep track of appointment changes from messages
 they paste in. It handles administrative facts only: times, places,
 confirmations, and what the office asked the person to bring or do. All data
 in this repo is synthetic.
