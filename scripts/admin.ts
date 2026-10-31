@@ -5,13 +5,21 @@
 //   pnpm admin judges create --label <name> --cap-usd <n> --expires <YYYY-MM-DD>
 //       Prints the new code once. Only its hash is stored. The code works
 //       through the end of the expiry day, UTC.
+//   pnpm admin judges create-pool --label <name> --pool-usd <n> --per-judge-usd <n> --expires <YYYY-MM-DD>
+//       A shared judge pass (0023): one code for many judges, printed once.
+//       Each browser that signs in with it gets a new judge account of its
+//       own with the per-judge share, until the pool is used up. The whole
+//       pool counts against the total cap from now on.
 //   pnpm admin judges list
-//       Label, cap, spent, status and expiry of every code. Never a code.
+//       Label, cap, spent, status and expiry of every code, and each pass's
+//       pool, share, accounts, granted and left. Never a code.
 //   pnpm admin judges revoke --id <id>
 //       The code stops working, its judge account is signed out, and its
-//       unspent credit is removed.
+//       unspent credit is removed. A pass's id stops the pass, and each
+//       account it made is revoked the same way.
 //   pnpm admin judges grant --id <id> --usd <n>
-//       Raises a code's cap. A redeemed code's account gets the credit.
+//       Raises a code's cap. A redeemed code's account gets the credit. A
+//       pass's id raises its pool.
 //   pnpm admin users create --email <email> [--name <name>]
 //       Makes an email account while public sign-up is off (0020, K7): a
 //       Better Auth user with a random password, printed once. The person
@@ -61,10 +69,11 @@ import { GOOGLE_CALLBACK_PATH } from "../server/google.ts";
 import { AuthFileError, authPath } from "../src/hosted/auth.ts";
 import { checkPrivateFile } from "../src/hosted/db-file.ts";
 import { ConfigError, formatUsd, parseUsd, readHostedConfig } from "../src/hosted/config.ts";
-import { AccountsStore, JUDGE_CODE_ID, JudgeCodeError, accountsPath } from "../src/hosted/store.ts";
+import { AccountsStore, JUDGE_CODE_ID, JUDGE_POOL_ID, JudgeCodeError, POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR, POOL_ACCOUNTS_PER_HOUR, accountsPath } from "../src/hosted/store.ts";
 
 const USAGE = `Usage:
   pnpm admin judges create --label <name> --cap-usd <n> --expires <YYYY-MM-DD>
+  pnpm admin judges create-pool --label <name> --pool-usd <n> --per-judge-usd <n> --expires <YYYY-MM-DD>
   pnpm admin judges list
   pnpm admin judges revoke --id <id>
   pnpm admin judges grant --id <id> --usd <n>
@@ -96,7 +105,7 @@ export function runAdmin(argv: string[], env: NodeJS.ProcessEnv = process.env, n
   if (group !== "judges" || !command) return fail(USAGE);
   let parsed;
   try {
-    parsed = parseArgs({ args: rest, options: { label: { type: "string" }, "cap-usd": { type: "string" }, expires: { type: "string" }, id: { type: "string" }, usd: { type: "string" } }, strict: true });
+    parsed = parseArgs({ args: rest, options: { label: { type: "string" }, "cap-usd": { type: "string" }, "pool-usd": { type: "string" }, "per-judge-usd": { type: "string" }, expires: { type: "string" }, id: { type: "string" }, usd: { type: "string" } }, strict: true });
   } catch (e) {
     return fail(`${e instanceof Error ? e.message : String(e)}\n${USAGE}`);
   }
@@ -111,7 +120,7 @@ export function runAdmin(argv: string[], env: NodeJS.ProcessEnv = process.env, n
   const v = parsed.values;
   // J19: no total cap has a default, so nothing is granted without one.
   const totalCap = config.judgeTotalCapMicros;
-  if ((command === "create" || command === "grant") && totalCap === null) {
+  if ((command === "create" || command === "create-pool" || command === "grant") && totalCap === null) {
     return fail(`APP_JUDGE_TOTAL_CAP_USD is not set, so no judge credit can be granted. Set it to the most all judge codes together may grant, in dollars.`);
   }
   const store = new AccountsStore(accountsPath(env), { now });
@@ -127,27 +136,56 @@ export function runAdmin(argv: string[], env: NodeJS.ProcessEnv = process.env, n
         out.push(code);
         return { code: 0, out, err };
       }
+      case "create-pool": {
+        const pool = v["pool-usd"] ? parseUsd(v["pool-usd"]) : null;
+        const share = v["per-judge-usd"] ? parseUsd(v["per-judge-usd"]) : null;
+        const expiresAt = v.expires ? expiryOf(v.expires) : null;
+        if (!v.label || pool === null || pool <= 0 || share === null || share <= 0 || expiresAt === null) return fail(`create-pool needs --label, --pool-usd and --per-judge-usd above 0, and --expires as YYYY-MM-DD.\n${USAGE}`);
+        const { id, code } = store.createJudgePool({ label: v.label, poolMicros: pool, shareMicros: share, expiresAt, totalCapMicros: totalCap! });
+        out.push(`Made shared judge pass ${id} for "${v.label.trim()}", pool ${formatUsd(pool)}, ${formatUsd(share)} per judge (${Math.floor(pool / share)} accounts), works through ${day(expiresAt)} UTC.`);
+        out.push(`Each sign-in from a new browser makes its own judge account, at most ${POOL_ACCOUNTS_PER_HOUR} an hour, and ${POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR} an hour from one address.`);
+        out.push("The code, shown this once. It is not stored and cannot be shown again:");
+        out.push(code);
+        return { code: 0, out, err };
+      }
       case "list": {
         const codes = store.listJudgeCodes();
+        const pools = store.listJudgePools();
         const { committedMicros } = store.judgeTotals();
-        if (codes.length === 0) out.push("No judge codes yet.");
+        if (codes.length === 0 && pools.length === 0) out.push("No judge codes yet.");
         for (const c of codes) {
           out.push([c.id, JSON.stringify(c.label), `cap ${formatUsd(c.capMicros)}`, `spent ${formatUsd(c.spentMicros)}`, c.status, `through ${day(c.expiresAt)}`, c.accountKind === "user" ? "on an email account" : c.accountKind === "google" ? "on a Google account" : ""].filter(Boolean).join("  "));
+        }
+        for (const p of pools) {
+          out.push(
+            [
+              p.id,
+              JSON.stringify(p.label),
+              `shared pass, pool ${formatUsd(p.poolMicros)}`,
+              `${formatUsd(p.shareMicros)} per judge`,
+              `${p.accounts} account(s)`,
+              `granted ${formatUsd(p.grantedMicros)}`,
+              `left ${formatUsd(p.leftMicros)}`,
+              `spent ${formatUsd(p.spentMicros)}`,
+              p.status.replace("_", " "),
+              `through ${day(p.expiresAt)}`,
+            ].join("  "),
+          );
         }
         out.push(totalCap === null ? `Committed ${formatUsd(committedMicros)}. APP_JUDGE_TOTAL_CAP_USD is not set.` : `Committed ${formatUsd(committedMicros)} of the ${formatUsd(totalCap)} total cap.`);
         return { code: 0, out, err };
       }
       case "revoke": {
-        if (!v.id || !JUDGE_CODE_ID.test(v.id)) return fail(`revoke needs --id, as list shows it.\n${USAGE}`);
+        if (!v.id || !(JUDGE_CODE_ID.test(v.id) || JUDGE_POOL_ID.test(v.id))) return fail(`revoke needs --id, as list shows it.\n${USAGE}`);
         store.revokeJudgeCode(v.id);
-        out.push(`Revoked judge code ${v.id}.`);
+        out.push(JUDGE_POOL_ID.test(v.id) ? `Revoked shared judge pass ${v.id} and every account it made.` : `Revoked judge code ${v.id}.`);
         return { code: 0, out, err };
       }
       case "grant": {
         const amount = v.usd ? parseUsd(v.usd) : null;
-        if (!v.id || !JUDGE_CODE_ID.test(v.id) || amount === null || amount <= 0) return fail(`grant needs --id and --usd above 0.\n${USAGE}`);
+        if (!v.id || !(JUDGE_CODE_ID.test(v.id) || JUDGE_POOL_ID.test(v.id)) || amount === null || amount <= 0) return fail(`grant needs --id and --usd above 0.\n${USAGE}`);
         store.grantJudgeCode(v.id, amount, totalCap!);
-        out.push(`Granted ${formatUsd(amount)} more on judge code ${v.id}.`);
+        out.push(JUDGE_POOL_ID.test(v.id) ? `Added ${formatUsd(amount)} to the pool of shared judge pass ${v.id}.` : `Granted ${formatUsd(amount)} more on judge code ${v.id}.`);
         return { code: 0, out, err };
       }
       default:

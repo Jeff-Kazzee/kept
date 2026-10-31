@@ -13,7 +13,9 @@ import { ApiError } from "../api.ts";
 // "google" is an account from before 0020. It can no longer sign in.
 // `owner`: an opaque key of the app account, the same for every session of
 // it, for the page's per-account caches (sprint 19 round 2). Not a secret.
-export type HostedAccount = { kind: "user" | "judge" | "google"; email: string | null; name: string | null; owner?: string };
+// `pool`: a judge account made by a shared judge pass (0023). Its
+// workspace is reached only through this browser's session.
+export type HostedAccount = { kind: "user" | "judge" | "google"; email: string | null; name: string | null; owner?: string; pool?: boolean };
 
 export type SessionInfo =
   | { mode: "local" }

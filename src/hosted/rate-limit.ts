@@ -53,6 +53,8 @@ export class AddressLimiter {
 // Otherwise, and for every other header, the socket's own address.
 const LOOPBACK = /^(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3})$/;
 
+export const isLoopback = (address: string) => LOOPBACK.test(address);
+
 const PLAIN_ADDRESS = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:]{2,39})$/;
 
 export function clientAddress(headers: Record<string, string | string[] | undefined>, socketAddress: string | undefined, trusted: "none" | "cloudflare" | "tailscale"): string {

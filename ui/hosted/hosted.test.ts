@@ -83,6 +83,10 @@ describe("the hosted site", () => {
     for (const waitlistUrl of [null, "javascript:alert(1)", "http://kept.example/"]) {
       expect(html(createElement(SignIn, { passwordMin: 10, publicSignup: false, waitlistUrl, notice: null, onSignedIn: () => {} }))).not.toContain("Not a judge?");
     }
+    // 0023: the code form's words hold for a per-judge code and a shared
+    // pass, and tell a pass's user where the workspace lives.
+    expect(page).toContain("It signs you in to an account of your own");
+    expect(page).toContain("If the code was shared with several judges, your workspace stays on this browser. Signing in with it again somewhere else starts a fresh one.");
     // With public sign-up on, the waitlist line never shows.
     expect(html(createElement(SignIn, { passwordMin: 10, publicSignup: true, waitlistUrl: "https://kept.here.now/", notice: null, onSignedIn: () => {} }))).not.toContain("Not a judge?");
   });
@@ -134,6 +138,10 @@ describe("the hosted site", () => {
     expect(turnErrorText({ code: "credits_exhausted", message: USAGE_TEXT.credits_exhausted.text })).toBe(USAGE_TEXT.credits_exhausted.text);
     expect(errorSentence(new ApiError(402, { error: "credits_exhausted", message: USAGE_TEXT.credits_exhausted.text }))).toBe(USAGE_TEXT.credits_exhausted.text);
     expect(errorSentence(new ApiError(409, { error: "judge_used", message: "That judge code was already used. Each code works once." }))).toBe("That judge code was already used. Each code works once.");
+    // 0023: a shared pass's refusals read as the server wrote them.
+    const empty = "The shared judge pass is used up. Email the address on the judges' page for your own code.";
+    expect(errorSentence(new ApiError(409, { error: "judge_pool_empty", message: empty }))).toBe(empty);
+    expect(errorSentence(new ApiError(429, { error: "judge_pool_throttled", message: "Many new accounts were made." }))).toBe("Many new accounts were made.");
   });
 
   it("the UI text has no em dashes and no semicolons in prose", () => {

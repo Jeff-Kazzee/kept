@@ -246,7 +246,10 @@ export function SignIn({
             <form className="stack-sm" onSubmit={(e) => void submitCode(e)} aria-label="Sign in with a judge code">
               {codeField(false)}
               <p id={`${uid}-code-hint`} className="small muted">
-                The code you were given starts with judge_. It signs you in to your own account, with usage credit for the Meta models.
+                The code you were given starts with judge_. It signs you in to an account of your own, with usage credit for the Meta models.
+              </p>
+              <p className="small muted">
+                If the code was shared with several judges, your workspace stays on this browser. Signing in with it again somewhere else starts a fresh one.
               </p>
               <button type="submit" className="btn btn-primary btn-block" disabled={code.trim() === "" || busy !== null} aria-busy={busy === "code" || undefined}>
                 Continue

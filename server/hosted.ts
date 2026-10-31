@@ -13,7 +13,9 @@
 //
 //   GET  /api/session              who is signed in, and the balance
 //   POST /api/session/judge        { code } signs in with a judge code.
-//                                  Rate-limited per address.
+//                                  Rate-limited per address. A shared
+//                                  judge pass makes a new account for each
+//                                  browser, a few an hour (0023).
 //   POST /api/session/signout      { } ends the session, of either kind
 //   GET  /api/usage                balance, recent charges, plans, prices
 //   POST /api/account/judge-code   { code } adds a judge code's credit to
@@ -36,8 +38,8 @@ import { AUTH_BASE_PATH, CLIENT_ADDRESS_HEADER, PASSWORD_MIN, authPath, authRout
 import { formatBalance, formatCharge, formatUsd, type HostedConfig } from "../src/hosted/config.ts";
 import { MeteredClient } from "../src/hosted/metered.ts";
 import { PRICES, turnCostMicros } from "../src/hosted/prices.ts";
-import { AddressLimiter, clientAddress } from "../src/hosted/rate-limit.ts";
-import { AccountsBusyError, AccountsFileError, AccountsStore, JudgeCodeError, SESSION_TTL_MS, accountsPath, workspacesRoot, type Account, type ChargeRow } from "../src/hosted/store.ts";
+import { AddressLimiter, clientAddress, isLoopback } from "../src/hosted/rate-limit.ts";
+import { AccountsBusyError, AccountsFileError, AccountsStore, HOUR_MS, JudgeCodeError, POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR, SESSION_TTL_MS, accountsPath, workspacesRoot, type Account, type ChargeRow } from "../src/hosted/store.ts";
 import { META_MODELS, metaModel } from "../src/model/providers/models.ts";
 import { UsageRefusedError, withUsageScope } from "../src/model/usage.ts";
 import { CALLBACK_PATH } from "./auth.ts";
@@ -193,6 +195,11 @@ export async function createHostedApp(o: HostedOptions) {
   const signinLimit = new AddressLimiter({ limit: 20, windowMs: 10 * 60_000, now });
   const signupLimit = new AddressLimiter({ limit: 10, windowMs: 60 * 60_000, now });
   const judgeLimit = new AddressLimiter({ limit: 10, windowMs: 15 * 60_000, now });
+  // 0023: new accounts from a shared judge pass, per client address. Only
+  // an address the trusted proxy or the socket gives, never loopback, so a
+  // proxy that sends no header does not make every visitor one address.
+  // The pass's own hourly limit holds in the store either way.
+  const poolLimit = new AddressLimiter({ limit: POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR, windowMs: HOUR_MS, now });
   // 0021, round 2, finding 1: failed demo connects per address.
   const demoFailLimit = new AddressLimiter({ ...DEMO_FAIL_LIMIT, now });
   const serverKey = config.serverKeyOn ? o.serverMetaKey : null;
@@ -336,7 +343,9 @@ export async function createHostedApp(o: HostedOptions) {
       signedIn: true,
       // `owner` keys the page's per-account caches (0019's first read and
       // reply ticks): a hash, so the id itself never reaches the page.
-      account: { kind: account.kind, email: account.email, name: account.name, owner: ownerKey(account.id) },
+      // `pool`: made by a shared judge pass, so its workspace stays with
+      // this browser's session (0023).
+      account: { kind: account.kind, email: account.email, name: account.name, owner: ownerKey(account.id), ...(account.kind === "judge" && store.isPoolAccount(account.id) ? { pool: true } : {}) },
       balanceMicros: balance,
       balance: formatBalance(balance),
       expiresAt,
@@ -415,7 +424,7 @@ export async function createHostedApp(o: HostedOptions) {
     res.appendHeader("Set-Cookie", sessionCookie(port, secure, token, Math.floor(SESSION_TTL_MS / 1000)));
   };
 
-  const judgeFailure = (err: JudgeCodeError) => ({ status: err.code === "not_found" ? 404 : 409, body: { error: `judge_${err.code}`, message: err.message } });
+  const judgeFailure = (err: JudgeCodeError) => ({ status: err.code === "not_found" ? 404 : err.code === "pool_throttled" ? 429 : 409, body: { error: `judge_${err.code}`, message: err.message } });
 
   // Better Auth's routes. The app adds what Better Auth leaves to the
   // server: the API security headers, a bounded body with a stated size,
@@ -497,7 +506,15 @@ export async function createHostedApp(o: HostedOptions) {
         const limit = judgeLimit.take(address);
         if (!limit.ok) return send(res, 429, { error: "rate_limited", message: RATE_LIMITED_TEXT, retryAfterSeconds: limit.retryAfterSeconds }), true;
         try {
-          const account = store.redeemJudgeCode(b.code.trim());
+          // 0023: a shared pass gives this browser's own account from it
+          // back, and makes a new one otherwise.
+          const current = (await sessionOf(req, null))?.account;
+          const poolAddress = isLoopback(address) ? null : address;
+          const { account, pooled } = store.judgeSignIn(b.code.trim(), {
+            current: current?.kind === "judge" ? current.id : null,
+            addressFull: poolAddress !== null && !poolLimit.check(poolAddress).ok,
+          });
+          if (pooled && poolAddress !== null) poolLimit.take(poolAddress);
           await startJudgeSession(req, res, secure, account);
           send(res, 200, accountView(account, now() + SESSION_TTL_MS));
         } catch (err) {

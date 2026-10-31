@@ -229,6 +229,9 @@ export async function startHosted(
   // A judge code made through the store, as the admin command does.
   const judgeCode = (label = "Judge", capUsd = 5, days = 30) =>
     app.store.createJudgeCode({ label, capMicros: capUsd * 1_000_000, expiresAt: (options.now ?? Date.now)() + days * 86_400_000, totalCapMicros: config.judgeTotalCapMicros ?? 0 });
+  // A shared judge pass (0023).
+  const judgePool = (label = "Judges", poolUsd = 3, shareUsd = 1, days = 30) =>
+    app.store.createJudgePool({ label, poolMicros: poolUsd * 1_000_000, shareMicros: shareUsd * 1_000_000, expiresAt: (options.now ?? Date.now)() + days * 86_400_000, totalCapMicros: config.judgeTotalCapMicros ?? 0 });
 
   return {
     dir,
@@ -243,6 +246,7 @@ export async function startHosted(
     signIn,
     accountOf,
     judgeCode,
+    judgePool,
     raw,
     close: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));

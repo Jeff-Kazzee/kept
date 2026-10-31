@@ -1,6 +1,6 @@
 // The hosted mode's central database (0014, design items 3 to 5):
-// accounts, judge sessions, the usage credits ledger and the judge codes,
-// in data/hosted/accounts.sqlite. Sign-up, passwords, passkeys and the
+// accounts, judge sessions, the usage credits ledger, the judge codes and
+// the shared judge passes (pools, 0023), in data/hosted/accounts.sqlite. Sign-up, passwords, passkeys and the
 // sessions of those accounts are Better Auth's, in its own file beside
 // this one (auth.ts, 0020). An account here points at its Better Auth user
 // by that user's id, and nothing else of Better Auth's is kept here. Each account's case, settings and Google
@@ -17,7 +17,8 @@
 // a value from the file.
 //
 // Money is in micro-dollars, as integers. The ledger's rows:
-//   grant    credit from a judge code or a purchase, with its source
+//   grant    credit from a judge code, a shared pass or a purchase, with
+//            its source
 //   hold     reserved before a model call, open until the call settles
 //   charge   the call's cost at the person's price, from its usage
 //   release  the unused part of a hold, a record only
@@ -52,6 +53,19 @@ export const JUDGE_CODE_ID = /^j[0-9a-f]{12}$/;
 // The secret scan knows this shape (scripts/scan-secrets.ts).
 export const JUDGE_CODE = /^judge_[A-Za-z0-9_-]{43}$/;
 export const SESSION_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+// A shared judge pass (a pool, 0023). Its code has the judge code's shape,
+// so the sign-in screen takes either.
+export const JUDGE_POOL_ID = /^p[0-9a-f]{12}$/;
+
+// 0023: the most accounts one pass makes in any hour, and from one client
+// address in an hour (the server counts those, rate-limit.ts).
+export const POOL_ACCOUNTS_PER_HOUR = 6;
+export const POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR = 2;
+export const HOUR_MS = 60 * 60_000;
+
+export const POOL_EMPTY_TEXT = "The shared judge pass is used up. Email the address on the judges' page for your own code.";
+export const POOL_THROTTLED_TEXT = "Many new accounts were made with the shared judge pass in the last hour. Try again in a while, or email the address on the judges' page for your own code.";
+export const POOL_ATTACH_TEXT = "That code is a shared judge pass. It signs in to an account of its own, so it cannot be added to this one. Nothing was added.";
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
 // A hold whose call never settled, because the process stopped, is
@@ -100,6 +114,23 @@ export type JudgeCodeRow = {
   accountKind: AccountKind | null;
 };
 
+// A shared judge pass (0023). `grantedMicros` is what its accounts were
+// given, `leftMicros` what the pool still holds.
+export type JudgePoolStatus = "open" | "used_up" | "revoked" | "expired";
+export type JudgePoolRow = {
+  id: string;
+  label: string;
+  poolMicros: number;
+  shareMicros: number;
+  accounts: number;
+  grantedMicros: number;
+  leftMicros: number;
+  spentMicros: number;
+  status: JudgePoolStatus;
+  expiresAt: number;
+  createdAt: number;
+};
+
 export class AccountsFileError extends Error {
   override name = "AccountsFileError";
 }
@@ -115,7 +146,7 @@ export class AccountsBusyError extends Error {
 // the admin command.
 export class JudgeCodeError extends Error {
   override name = "JudgeCodeError";
-  readonly code: "not_found" | "revoked" | "expired" | "used" | "total_cap" | "attached" | "account_deleted" | "judge_account" | "has_code";
+  readonly code: "not_found" | "revoked" | "expired" | "used" | "total_cap" | "attached" | "account_deleted" | "judge_account" | "has_code" | "pool_empty" | "pool_throttled" | "pool_attach" | "pool_member";
   constructor(code: JudgeCodeError["code"], message: string) {
     super(message);
     this.code = code;
@@ -178,7 +209,18 @@ CREATE TABLE IF NOT EXISTS judge_codes (
   account_id TEXT UNIQUE REFERENCES accounts (id),
   redeemed_at INTEGER,
   revoke_due INTEGER NOT NULL DEFAULT 0,
-  revoke_hold_max INTEGER NOT NULL DEFAULT 0
+  revoke_hold_max INTEGER NOT NULL DEFAULT 0,
+  pool_id TEXT REFERENCES judge_pools (id)
+) STRICT;
+CREATE TABLE IF NOT EXISTS judge_pools (
+  id TEXT PRIMARY KEY,
+  hash TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL,
+  cap INTEGER NOT NULL CHECK (cap > 0),
+  share INTEGER NOT NULL CHECK (share > 0 AND share <= cap),
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  revoked_at INTEGER
 ) STRICT;`;
 
 // A Better Auth user id: its own ids are 32 letters and digits.
@@ -268,6 +310,11 @@ export class AccountsStore {
       const cols = (db.prepare("PRAGMA table_info(judge_codes)").all() as Row[]).map((c) => String(c.name));
       if (!cols.includes("revoke_due")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_due INTEGER NOT NULL DEFAULT 0");
       if (!cols.includes("revoke_hold_max")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_hold_max INTEGER NOT NULL DEFAULT 0");
+      // 0023: a database made before the shared judge pass gains the
+      // column that ties a pass's accounts to it. Every row is kept, with
+      // no pass.
+      if (!cols.includes("pool_id")) db.exec("ALTER TABLE judge_codes ADD COLUMN pool_id TEXT REFERENCES judge_pools (id)");
+      db.exec("CREATE INDEX IF NOT EXISTS judge_codes_pool ON judge_codes (pool_id, redeemed_at) WHERE pool_id IS NOT NULL");
       // Sprint 18 round 2: a closed account keeps a hash of its Better Auth
       // user, so a session read while Delete account runs finds the closed
       // account instead of making a new one.
@@ -694,11 +741,15 @@ export class AccountsStore {
   // ---- Judge codes ----
 
   // What a code may still cost: its cap while it stands, what it spent
-  // once revoked.
+  // once revoked. A shared pass counts its whole pool the same way, and
+  // its accounts' rows count only through it (0023).
   #judgeCommitted(db: DatabaseSync): number {
     let total = 0;
-    for (const c of db.prepare("SELECT id, cap, revoked_at, account_id FROM judge_codes").all() as Row[]) {
+    for (const c of db.prepare("SELECT id, cap, revoked_at, account_id FROM judge_codes WHERE pool_id IS NULL").all() as Row[]) {
       total += c.revoked_at === null ? num(c.cap) : this.#spent(db, c);
+    }
+    for (const p of db.prepare("SELECT id, cap, revoked_at FROM judge_pools").all() as Row[]) {
+      total += p.revoked_at === null ? num(p.cap) : this.#poolMembers(db, String(p.id)).reduce((sum, m) => sum + this.#spent(db, m), 0);
     }
     return total;
   }
@@ -710,19 +761,42 @@ export class AccountsStore {
     return Math.min(num(c.cap), num(r.spent));
   }
 
+  #checkLabel(raw: string): string {
+    const label = raw.trim();
+    if (label === "" || label.length > 80 || /[\u0000-\u001f\u007f]/.test(label)) throw new Error("The label is 1 to 80 characters, with no control characters.");
+    return label;
+  }
+
   // A new code. Returns the code once. Only its hash is kept. Refused when
   // the caps of every standing code, and what revoked codes spent, would
   // pass `totalCapMicros`.
   createJudgeCode(input: { label: string; capMicros: number; expiresAt: number; totalCapMicros: number }): { id: string; code: string } {
     if (!Number.isSafeInteger(input.capMicros) || input.capMicros <= 0) throw new Error("The cap is an amount above zero.");
-    const label = input.label.trim();
-    if (label === "" || label.length > 80 || /[\u0000-\u001f\u007f]/.test(label)) throw new Error("The label is 1 to 80 characters, with no control characters.");
+    const label = this.#checkLabel(input.label);
     if (input.expiresAt <= this.#now()) throw new Error("The expiry date is in the past.");
     const code = newJudgeCode();
     const id = randomId("j", 6);
     this.#tx((db) => {
       if (this.#judgeCommitted(db) + input.capMicros > input.totalCapMicros) throw new JudgeCodeError("total_cap", "That cap would pass the total cap for judge codes. Nothing was made.");
       db.prepare("INSERT INTO judge_codes (id, hash, label, cap, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, sha256(code), label, input.capMicros, input.expiresAt, this.#now());
+    });
+    return { id, code };
+  }
+
+  // A new shared judge pass (0023). Returns the code once, in the judge
+  // code's shape. Only its hash is kept. The whole pool counts against
+  // `totalCapMicros` from now on, as a code's cap does.
+  createJudgePool(input: { label: string; poolMicros: number; shareMicros: number; expiresAt: number; totalCapMicros: number }): { id: string; code: string } {
+    if (!Number.isSafeInteger(input.poolMicros) || input.poolMicros <= 0) throw new Error("The pool is an amount above zero.");
+    if (!Number.isSafeInteger(input.shareMicros) || input.shareMicros <= 0) throw new Error("The share per judge is an amount above zero.");
+    if (input.shareMicros > input.poolMicros) throw new Error("The share per judge is more than the pool.");
+    const label = this.#checkLabel(input.label);
+    if (input.expiresAt <= this.#now()) throw new Error("The expiry date is in the past.");
+    const code = newJudgeCode();
+    const id = randomId("p", 6);
+    this.#tx((db) => {
+      if (this.#judgeCommitted(db) + input.poolMicros > input.totalCapMicros) throw new JudgeCodeError("total_cap", "That pool would pass the total cap for judge codes. Nothing was made.");
+      db.prepare("INSERT INTO judge_pools (id, hash, label, cap, share, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, sha256(code), label, input.poolMicros, input.shareMicros, input.expiresAt, this.#now());
     });
     return { id, code };
   }
@@ -749,11 +823,12 @@ export class AccountsStore {
     });
   }
 
-  // Every code, never the code itself.
+  // Every code, never the code itself. A shared pass's accounts are listed
+  // with their pass (listJudgePools), not here.
   listJudgeCodes(): JudgeCodeRow[] {
     return this.#read((db) => {
       const now = this.#now();
-      return (db.prepare("SELECT * FROM judge_codes ORDER BY created_at, id").all() as Row[]).map((c) => {
+      return (db.prepare("SELECT * FROM judge_codes WHERE pool_id IS NULL ORDER BY created_at, id").all() as Row[]).map((c) => {
         const account = c.account_id === null ? null : this.#account(db, String(c.account_id));
         return {
           id: String(c.id),
@@ -769,50 +844,115 @@ export class AccountsStore {
     });
   }
 
+  // The rows of the accounts a pass made, one per account.
+  #poolMembers(db: DatabaseSync, poolId: string): Row[] {
+    return db.prepare("SELECT * FROM judge_codes WHERE pool_id = ? ORDER BY redeemed_at, id").all(poolId) as Row[];
+  }
+
+  // What a pass has given its accounts so far.
+  #poolGranted(db: DatabaseSync, poolId: string): number {
+    return num((db.prepare("SELECT COALESCE(SUM(cap), 0) AS granted FROM judge_codes WHERE pool_id = ?").get(poolId) as Row).granted);
+  }
+
+  // Every shared pass, never its code.
+  listJudgePools(): JudgePoolRow[] {
+    return this.#read((db) => {
+      const now = this.#now();
+      return (db.prepare("SELECT * FROM judge_pools ORDER BY created_at, id").all() as Row[]).map((p) => {
+        const members = this.#poolMembers(db, String(p.id));
+        const granted = members.reduce((sum, m) => sum + num(m.cap), 0);
+        const left = Math.max(0, num(p.cap) - granted);
+        const status: JudgePoolStatus = p.revoked_at !== null ? "revoked" : num(p.expires_at) <= now ? "expired" : left < num(p.share) ? "used_up" : "open";
+        return {
+          id: String(p.id),
+          label: String(p.label),
+          poolMicros: num(p.cap),
+          shareMicros: num(p.share),
+          accounts: members.length,
+          grantedMicros: granted,
+          leftMicros: left,
+          spentMicros: members.reduce((sum, m) => sum + this.#spent(db, m), 0),
+          status,
+          expiresAt: num(p.expires_at),
+          createdAt: num(p.created_at),
+        };
+      });
+    });
+  }
+
+  // Whether an account was made by a shared pass, so the page can say its
+  // workspace stays in this browser.
+  isPoolAccount(accountId: string): boolean {
+    if (!ACCOUNT_ID.test(accountId)) return false;
+    return this.#read((db) => db.prepare("SELECT 1 FROM judge_codes WHERE account_id = ? AND pool_id IS NOT NULL").get(accountId) !== undefined);
+  }
+
   judgeTotals(): { committedMicros: number } {
     return this.#read((db) => ({ committedMicros: this.#judgeCommitted(db) }));
   }
 
   // Revoked: the code no longer signs in or redeems, its judge account's
-  // sessions end, and its unspent part leaves the account's balance.
+  // sessions end, and its unspent part leaves the account's balance. A
+  // shared pass's id revokes the pass: it makes no more accounts, and each
+  // account it made is revoked by the same rules (0023).
   revokeJudgeCode(id: string): void {
     this.#tx((db) => {
+      if (JUDGE_POOL_ID.test(id)) {
+        const p = db.prepare("SELECT id, revoked_at FROM judge_pools WHERE id = ?").get(id) as Row | undefined;
+        if (!p) throw new JudgeCodeError("not_found", "No judge pass has that id.");
+        if (p.revoked_at === null) db.prepare("UPDATE judge_pools SET revoked_at = ? WHERE id = ?").run(this.#now(), id);
+        for (const m of this.#poolMembers(db, id)) if (m.revoked_at === null) this.#revokeRow(db, m);
+        return;
+      }
       const c = db.prepare("SELECT * FROM judge_codes WHERE id = ?").get(id) as Row | undefined;
       if (!c) throw new JudgeCodeError("not_found", "No judge code has that id.");
       if (c.revoked_at !== null) return;
-      db.prepare("UPDATE judge_codes SET revoked_at = ? WHERE id = ?").run(this.#now(), id);
-      if (c.account_id === null) return;
-      const accountId = String(c.account_id);
-      const account = this.#account(db, accountId);
-      if (account?.kind === "judge") db.prepare("DELETE FROM sessions WHERE account_id = ?").run(accountId);
-      // The unspent part leaves the balance. With no hold open it goes at
-      // once. With holds open, those holds may still spend it, so all of
-      // it is owed: no new hold may draw on it, what the open holds charge
-      // counts against it first, and the rest goes once they close (review
-      // round 1, finding 2, and the final review, finding 1).
-      const unspent = num(c.cap) - this.#spent(db, c);
-      const lastHold = db.prepare("SELECT MAX(id) AS id FROM ledger WHERE account_id = ? AND kind = 'hold' AND open = 1").get(accountId) as Row;
-      if (lastHold.id === null) {
-        const take = Math.min(unspent, Math.max(0, this.#balance(db, accountId)));
-        if (take > 0) this.#insert(db, { account_id: accountId, kind: "adjust", amount: -take, source: `judge_revoked:${id}` });
-      } else if (unspent > 0) {
-        db.prepare("UPDATE judge_codes SET revoke_due = ?, revoke_hold_max = ? WHERE id = ?").run(unspent, num(lastHold.id), id);
-      }
+      this.#revokeRow(db, c);
     });
   }
 
+  #revokeRow(db: DatabaseSync, c: Row): void {
+    const id = String(c.id);
+    db.prepare("UPDATE judge_codes SET revoked_at = ? WHERE id = ?").run(this.#now(), id);
+    if (c.account_id === null) return;
+    const accountId = String(c.account_id);
+    const account = this.#account(db, accountId);
+    if (account?.kind === "judge") db.prepare("DELETE FROM sessions WHERE account_id = ?").run(accountId);
+    // The unspent part leaves the balance. With no hold open it goes at
+    // once. With holds open, those holds may still spend it, so all of
+    // it is owed: no new hold may draw on it, what the open holds charge
+    // counts against it first, and the rest goes once they close (review
+    // round 1, finding 2, and the final review, finding 1).
+    const unspent = num(c.cap) - this.#spent(db, c);
+    const lastHold = db.prepare("SELECT MAX(id) AS id FROM ledger WHERE account_id = ? AND kind = 'hold' AND open = 1").get(accountId) as Row;
+    if (lastHold.id === null) {
+      const take = Math.min(unspent, Math.max(0, this.#balance(db, accountId)));
+      if (take > 0) this.#insert(db, { account_id: accountId, kind: "adjust", amount: -take, source: `judge_revoked:${id}` });
+    } else if (unspent > 0) {
+      db.prepare("UPDATE judge_codes SET revoke_due = ?, revoke_hold_max = ? WHERE id = ?").run(unspent, num(lastHold.id), id);
+    }
+  }
+
   // More credit on a code, within the total cap. A redeemed code's account
-  // gets it at once.
+  // gets it at once. A shared pass's id raises its pool: the accounts it
+  // made keep their share, and later ones draw on the larger pool (0023).
   grantJudgeCode(id: string, amountMicros: number, totalCapMicros: number): void {
     if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new Error("The amount is above zero.");
     this.#tx((db) => {
-      const c = db.prepare("SELECT * FROM judge_codes WHERE id = ?").get(id) as Row | undefined;
-      if (!c) throw new JudgeCodeError("not_found", "No judge code has that id.");
-      if (c.revoked_at !== null) throw new JudgeCodeError("revoked", "That code was revoked. Nothing was granted.");
+      const pool = JUDGE_POOL_ID.test(id);
+      const c = db.prepare(pool ? "SELECT * FROM judge_pools WHERE id = ?" : "SELECT * FROM judge_codes WHERE id = ?").get(id) as Row | undefined;
+      const what = pool ? "pass" : "code";
+      if (!c) throw new JudgeCodeError("not_found", `No judge ${what} has that id.`);
+      if (!pool && c.pool_id !== null) throw new JudgeCodeError("pool_member", `That account came from the shared judge pass ${String(c.pool_id)}. Grant on the pass instead. Nothing was granted.`);
+      if (c.revoked_at !== null) throw new JudgeCodeError("revoked", `That ${what} was revoked. Nothing was granted.`);
       // Fix round 1, item 3: an expired code takes no more credit, as it
       // redeems no more.
-      if (num(c.expires_at) <= this.#now()) throw new JudgeCodeError("expired", "That code has expired. Nothing was granted.");
+      if (num(c.expires_at) <= this.#now()) throw new JudgeCodeError("expired", `That ${what} has expired. Nothing was granted.`);
       if (this.#judgeCommitted(db) + amountMicros > totalCapMicros) throw new JudgeCodeError("total_cap", "That grant would pass the total cap for judge codes. Nothing was granted.");
+      if (pool) {
+        db.prepare("UPDATE judge_pools SET cap = cap + ? WHERE id = ?").run(amountMicros, id);
+        return;
+      }
       db.prepare("UPDATE judge_codes SET cap = cap + ? WHERE id = ?").run(amountMicros, id);
       if (c.account_id !== null) this.#insert(db, { account_id: String(c.account_id), kind: "grant", amount: amountMicros, source: `judge:${id}` });
     });
@@ -822,40 +962,97 @@ export class AccountsStore {
   // once. Without it, the code is its own sign-in: the first use
   // makes a judge account and grants the cap, and a later use opens the
   // same account again. Returns the account. Each code grants its cap
-  // once.
-  redeemJudgeCode(code: string, attachTo: string | null = null): Account {
+  // once. A shared pass signs in as judgeSignIn says.
+  redeemJudgeCode(code: string, attachTo: string | null = null, options: PoolSignInOptions = {}): Account {
+    return this.#tx((db) => this.#redeem(db, code, attachTo, options)).account;
+  }
+
+  // A sign-in with a code, and whether a shared pass made a new account
+  // for it, so the server counts that against the client's address.
+  judgeSignIn(code: string, options: PoolSignInOptions = {}): { account: Account; pooled: boolean } {
+    return this.#tx((db) => this.#redeem(db, code, null, options));
+  }
+
+  #redeem(db: DatabaseSync, code: string, attachTo: string | null, options: PoolSignInOptions): { account: Account; pooled: boolean } {
     const hash = sha256(code);
-    return this.#tx((db) => {
-      const c = JUDGE_CODE.test(code) ? (db.prepare("SELECT * FROM judge_codes WHERE hash = ?").get(hash) as Row | undefined) : undefined;
-      if (!c || !timingSafeEqual(Buffer.from(String(c.hash)), Buffer.from(hash))) throw new JudgeCodeError("not_found", "That judge code is not one this site issued. Check it and try again.");
-      const now = this.#now();
-      if (c.revoked_at !== null) throw new JudgeCodeError("revoked", "That judge code was turned off. Ask the person who gave it to you for a new one.");
-      if (num(c.expires_at) <= now) throw new JudgeCodeError("expired", "That judge code has expired. Ask the person who gave it to you for a new one.");
-      const id = String(c.id);
-      if (c.account_id !== null) {
-        const owner = this.#account(db, String(c.account_id));
-        if (attachTo !== null) {
-          if (owner?.id === attachTo) return owner;
-          throw new JudgeCodeError("used", "That judge code was already used. Each code works once.");
-        }
-        if (!owner || owner.deleted) throw new JudgeCodeError("account_deleted", "The account made with that judge code was deleted. Ask for a new code.");
-        if (owner.kind !== "judge") throw new JudgeCodeError("attached", "That judge code was added to an account with an email address. Sign in with that email instead.");
-        return owner;
-      }
-      let accountId: string;
+    const shaped = JUDGE_CODE.test(code);
+    const c = shaped ? (db.prepare("SELECT * FROM judge_codes WHERE hash = ? AND pool_id IS NULL").get(hash) as Row | undefined) : undefined;
+    if (!c) {
+      const p = shaped ? (db.prepare("SELECT * FROM judge_pools WHERE hash = ?").get(hash) as Row | undefined) : undefined;
+      if (p && timingSafeEqual(Buffer.from(String(p.hash)), Buffer.from(hash))) return this.#poolSignIn(db, p, attachTo, options);
+    }
+    if (!c || !timingSafeEqual(Buffer.from(String(c.hash)), Buffer.from(hash))) throw new JudgeCodeError("not_found", "That judge code is not one this site issued. Check it and try again.");
+    const now = this.#now();
+    if (c.revoked_at !== null) throw new JudgeCodeError("revoked", "That judge code was turned off. Ask the person who gave it to you for a new one.");
+    if (num(c.expires_at) <= now) throw new JudgeCodeError("expired", "That judge code has expired. Ask the person who gave it to you for a new one.");
+    const id = String(c.id);
+    if (c.account_id !== null) {
+      const owner = this.#account(db, String(c.account_id));
       if (attachTo !== null) {
-        const target = this.#account(db, attachTo);
-        if (!target || target.deleted) throw new Error("no such account");
-        if (target.kind === "judge") throw new JudgeCodeError("judge_account", "This account was made with a judge code, so it cannot take another one.");
-        if (db.prepare("SELECT 1 FROM judge_codes WHERE account_id = ?").get(attachTo)) throw new JudgeCodeError("has_code", "This account already has a judge code. Each account takes one.");
-        accountId = attachTo;
-      } else {
-        accountId = randomId("a", 16);
-        db.prepare("INSERT INTO accounts (id, kind, created_at) VALUES (?, 'judge', ?)").run(accountId, now);
+        if (owner?.id === attachTo) return { account: owner, pooled: false };
+        throw new JudgeCodeError("used", "That judge code was already used. Each code works once.");
       }
-      db.prepare("UPDATE judge_codes SET account_id = ?, redeemed_at = ? WHERE id = ?").run(accountId, now, id);
-      this.#insert(db, { account_id: accountId, kind: "grant", amount: num(c.cap), source: `judge:${id}` });
-      return this.#account(db, accountId)!;
-    });
+      if (!owner || owner.deleted) throw new JudgeCodeError("account_deleted", "The account made with that judge code was deleted. Ask for a new code.");
+      if (owner.kind !== "judge") throw new JudgeCodeError("attached", "That judge code was added to an account with an email address. Sign in with that email instead.");
+      return { account: owner, pooled: false };
+    }
+    let accountId: string;
+    if (attachTo !== null) {
+      const target = this.#account(db, attachTo);
+      if (!target || target.deleted) throw new Error("no such account");
+      if (target.kind === "judge") throw new JudgeCodeError("judge_account", "This account was made with a judge code, so it cannot take another one.");
+      if (db.prepare("SELECT 1 FROM judge_codes WHERE account_id = ?").get(attachTo)) throw new JudgeCodeError("has_code", "This account already has a judge code. Each account takes one.");
+      accountId = attachTo;
+    } else {
+      accountId = randomId("a", 16);
+      db.prepare("INSERT INTO accounts (id, kind, created_at) VALUES (?, 'judge', ?)").run(accountId, now);
+    }
+    db.prepare("UPDATE judge_codes SET account_id = ?, redeemed_at = ? WHERE id = ?").run(accountId, now, id);
+    this.#insert(db, { account_id: accountId, kind: "grant", amount: num(c.cap), source: `judge:${id}` });
+    return { account: this.#account(db, accountId)!, pooled: false };
+  }
+
+  // A sign-in with a shared pass (0023), inside the redeem's transaction,
+  // so a check and the grant that depends on it are one step: no two
+  // sign-ins can both take the last share. The browser's own account from
+  // this pass comes back. Otherwise each sign-in makes a new judge account,
+  // given one share from the pool as a row of its own in judge_codes, so
+  // the session, revoke and hold rules of a code hold for it unchanged.
+  #poolSignIn(db: DatabaseSync, p: Row, attachTo: string | null, options: PoolSignInOptions): { account: Account; pooled: boolean } {
+    const now = this.#now();
+    const poolId = String(p.id);
+    if (p.revoked_at !== null) throw new JudgeCodeError("revoked", "That judge pass was turned off. Email the address on the judges' page for your own code.");
+    if (num(p.expires_at) <= now) throw new JudgeCodeError("expired", "That judge pass has expired. Email the address on the judges' page for your own code.");
+    if (attachTo !== null) throw new JudgeCodeError("pool_attach", POOL_ATTACH_TEXT);
+    if (options.current) {
+      const m = db.prepare("SELECT revoked_at FROM judge_codes WHERE account_id = ? AND pool_id = ?").get(options.current, poolId) as Row | undefined;
+      const own = m && m.revoked_at === null ? this.#account(db, options.current) : null;
+      if (own && !own.deleted) return { account: own, pooled: false };
+    }
+    const share = num(p.share);
+    if (num(p.cap) - this.#poolGranted(db, poolId) < share) throw new JudgeCodeError("pool_empty", POOL_EMPTY_TEXT);
+    const recent = num((db.prepare("SELECT COUNT(*) AS n FROM judge_codes WHERE pool_id = ? AND redeemed_at > ?").get(poolId, now - HOUR_MS) as Row).n);
+    if (recent >= POOL_ACCOUNTS_PER_HOUR || options.addressFull === true) throw new JudgeCodeError("pool_throttled", POOL_THROTTLED_TEXT);
+    const accountId = randomId("a", 16);
+    db.prepare("INSERT INTO accounts (id, kind, created_at) VALUES (?, 'judge', ?)").run(accountId, now);
+    // The row's hash is of random bytes, so no code ever matches it.
+    db.prepare("INSERT INTO judge_codes (id, hash, label, cap, expires_at, created_at, account_id, redeemed_at, pool_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+      randomId("j", 6),
+      sha256(`judge-pool-account:${randomBytes(32).toString("hex")}`),
+      String(p.label),
+      share,
+      num(p.expires_at),
+      now,
+      accountId,
+      now,
+      poolId,
+    );
+    this.#insert(db, { account_id: accountId, kind: "grant", amount: share, source: `judge-pool:${poolId}` });
+    return { account: this.#account(db, accountId)!, pooled: true };
   }
 }
+
+// `current`: the account of the browser's own judge session, if any. A
+// shared pass gives it back rather than make another. `addressFull`: the
+// client's address already made its hour's accounts (0023).
+export type PoolSignInOptions = { current?: string | null; addressFull?: boolean };

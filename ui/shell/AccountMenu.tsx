@@ -85,6 +85,11 @@ export function AccountMenu({
             <p className="menu-note small">
               Balance <strong>{session.balance}</strong>
             </p>
+            {session.account.pool && (
+              <p className="menu-note small muted">
+                This workspace stays on this browser. Signing out ends it: a new sign-in with the shared judge pass starts a fresh one.
+              </p>
+            )}
           </>
         )}
         {onAddPasskey && (
