@@ -244,6 +244,8 @@ describe("K7: APP_PUBLIC_SIGNUP", () => {
     expect(made.code).toBe(0);
     const password = made.out.at(-1)!;
     expect(password).toMatch(/^[A-Za-z0-9_-]{20}$/);
+    // Sprint 18 round 2: printed exactly once, in out and err together.
+    expect([...made.out, ...made.err].join("\n").split(password).length - 1).toBe(1);
     expect((await runAdminAsync(["users", "create", "--email", "existing@example.com"], env)).code).toBe(1);
     expect((await h.signIn(b, "existing@example.com", password)).status).toBe(200);
     expect((await b.call("GET", "/api/session")).body.account).toMatchObject({ kind: "user", email: "existing@example.com", name: "Ex Isting" });

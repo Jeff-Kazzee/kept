@@ -63,6 +63,9 @@ export class FakeGoogle {
   // Every list of events in a window says Google has another page, as when
   // a busy calendar has more events than the app reads (0017, F3).
   listHasMore = false;
+  // Event lists answer this many items a page, with a nextPageToken, as
+  // Google does (0021, round 2, finding 4). Null answers all at once.
+  pageSize: number | null = null;
   // A rotation revokes the refresh token it replaced, as Google may.
   rotationRevokesOld = false;
   // GET answers leave out the event's etag.
@@ -213,6 +216,11 @@ export class FakeGoogle {
       };
       if (min) items = items.filter((e) => startOf(e) >= Date.parse(min) - 86_400_000);
       if (max) items = items.filter((e) => startOf(e) < Date.parse(max));
+      if (this.pageSize !== null) {
+        const from = Number(url.searchParams.get("pageToken") ?? 0);
+        const next = from + this.pageSize;
+        return json(200, { kind: "calendar#events", items: items.slice(from, next), ...(next < items.length ? { nextPageToken: String(next) } : {}) });
+      }
       return json(200, { kind: "calendar#events", timeZone: "America/Denver", items, ...(this.listHasMore && min ? { nextPageToken: "more" } : {}) });
     }
     if (!eventId && method === "POST") {

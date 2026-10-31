@@ -33,6 +33,9 @@ describe("sprint 18 fix round 1, item 8: the Place field quotes the place", () =
     expect(placeWords("elm street office", "at the Elm   Street office")).toBe("the Elm Street office");
     expect(placeWords("Suite 2", "Come to Suite 2 on Monday")).toBe("Suite 2");
     expect(placeWords("Suite 2", "Come to Suite 20 on Monday")).toBeNull();
+    // Sprint 18 round 2: a later occurrence on word boundaries counts.
+    expect(placeWords("Suite 2", "Suite 20 is closed, come to Suite 2")).toBe("Suite 2");
+    expect(placeWords("Elm Street office", "the Elm Street offices are shut, so the Elm Street office it is")).toBe("the Elm Street office");
     expect(placeWords("Elm Street office", "Tuesday, November 10 at 2:00 PM")).toBeNull();
     expect(placeWords("Elm Street office", null)).toBeNull();
     expect(NO_PLACE_QUOTE_SOURCE).toBe("From the message that named this place");

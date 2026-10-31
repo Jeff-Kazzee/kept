@@ -537,6 +537,13 @@ function CalendarReadButton({ run, onRead }: { run: Run; onRead: (read: Calendar
 
 // Delete case. The only permanent deletion, with its own typed
 // confirmation. No agent can reach it. `onDeleted` runs once it finished.
+// What the page says once Delete case finished. On the shared demo
+// calendar, whether its events went or wait for the site's sweep.
+export function deletedSentence(sharedCalendar: boolean, demoCalendar: "removed" | "pending" | null): string {
+  if (demoCalendar === "pending") return CASE_DELETED_PENDING_TEXT;
+  return sharedCalendar || demoCalendar === "removed" ? CASE_DELETED_SHARED_TEXT : CASE_DELETED_TEXT;
+}
+
 export function DeleteCasePanel({
   version,
   erasePending = false,
@@ -553,6 +560,9 @@ export function DeleteCasePanel({
   sharedCalendar?: boolean;
 }) {
   const [typed, setTyped] = useState("");
+  // 0021, round 2, finding 5: whether the demo calendar's events went, as
+  // the server answered.
+  const [demoCalendar, setDemoCalendar] = useState<"removed" | "pending" | null>(null);
   return (
     <section className="card danger-zone">
       <h2>
@@ -562,7 +572,7 @@ export function DeleteCasePanel({
         {deleted && (
           <p className="notice">
             <Icon name="check" />
-            <span>{sharedCalendar ? CASE_DELETED_SHARED_TEXT : CASE_DELETED_TEXT}</span>
+            <span>{deletedSentence(sharedCalendar, demoCalendar)}</span>
           </p>
         )}
       </div>
@@ -585,7 +595,8 @@ export function DeleteCasePanel({
           variant="danger"
           disabled={typed !== DELETE_CONFIRMATION}
           action={async () => {
-            await api.deleteCase(version, typed);
+            const done = await api.deleteCase(version, typed);
+            setDemoCalendar(done.demoCalendar ?? null);
             setTyped("");
             onDeleted?.();
           }}

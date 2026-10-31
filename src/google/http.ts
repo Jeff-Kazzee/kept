@@ -45,7 +45,7 @@ export const GOOGLE_ERROR_TEXT: Record<GoogleErrorCode, string> = {
   google_demo_reconnect:
     "The demo Gmail and Calendar need reconnecting by the site's owner, so the assistant cannot use them just now. Everything else still works: paste a message, or load a calendar file.",
   google_demo_limit: "Each account can keep at most 5 events in the shared demo calendar, so this one was not added. Undo or remove one first. Nothing was added.",
-  google_demo_rate_limited: "This account made many changes to the shared demo calendar in a short time. Wait a few minutes and try again. Nothing changed.",
+  google_demo_rate_limited: "The shared demo Gmail and Calendar had many requests in a short time. Wait a few minutes and try again. Nothing changed.",
 };
 
 // A fixed sentence for one case of a code, chosen by code.

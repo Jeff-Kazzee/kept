@@ -103,13 +103,18 @@ export function placeWords(place: string, text: string | null | undefined): stri
   const p = normalizeWhitespace(place);
   const t = normalizeWhitespace(text);
   if (p === "") return null;
-  const at = t.toLowerCase().indexOf(p.toLowerCase());
-  if (at === -1) return null;
-  const before = t.slice(0, at);
-  const after = t[at + p.length] ?? "";
-  if ((before && /[\p{L}\p{N}]$/u.test(before)) || /[\p{L}\p{N}]/u.test(after)) return null;
-  const lead = PLACE_LEAD.exec(before)?.[1] ?? "";
-  return `${lead}${t.slice(at, at + p.length)}`.slice(0, 200);
+  // Sprint 18 round 2: every occurrence, the first that starts and ends on
+  // word boundaries, as quoteAppearsIn reads a quote.
+  const lower = t.toLowerCase();
+  const want = p.toLowerCase();
+  for (let at = lower.indexOf(want); at !== -1; at = lower.indexOf(want, at + 1)) {
+    const before = t.slice(0, at);
+    const after = t[at + p.length] ?? "";
+    if ((before && /[\p{L}\p{N}]$/u.test(before)) || /[\p{L}\p{N}]/u.test(after)) continue;
+    const lead = PLACE_LEAD.exec(before)?.[1] ?? "";
+    return `${lead}${t.slice(at, at + p.length)}`.slice(0, 200);
+  }
+  return null;
 }
 
 function placeSource(e: EvidenceView, place: string, ctx: ReplyContext): FieldSource {

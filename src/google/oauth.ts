@@ -103,6 +103,12 @@ export class PendingFlows {
     return flow;
   }
 
+  // Whether `state` names a waiting flow. Reads only.
+  has(state: string | null): boolean {
+    this.#sweep();
+    return !!state && state.length <= 200 && this.#flows.has(sha256(state).toString("hex"));
+  }
+
   clear() {
     this.#flows.clear();
   }

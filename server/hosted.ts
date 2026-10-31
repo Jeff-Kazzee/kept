@@ -81,6 +81,7 @@ export const ACCOUNT_BUSY_TEXT = "The accounts database is busy just now. Try ag
 export const SITE_BUSY_TEXT = "This site is busy just now. Try again in a minute. Nothing was saved.";
 // How often a held live read asks again whether its session still holds.
 export const LIVE_SESSION_MS = 8 * LIVE_CHECK_MS;
+export const DEMO_FAIL_LIMIT = { limit: 5, windowMs: 15 * 60_000 };
 export const DEMO_CONNECTED_TEXT = "The demo Gmail and Calendar are connected for every judge. You can close this page.";
 export const DELETE_ACCOUNT_BUSY_TEXT = "The assistant is still working on something for this account. Wait for it to finish, then delete the account again. Nothing was deleted.";
 
@@ -192,6 +193,8 @@ export async function createHostedApp(o: HostedOptions) {
   const signinLimit = new AddressLimiter({ limit: 20, windowMs: 10 * 60_000, now });
   const signupLimit = new AddressLimiter({ limit: 10, windowMs: 60 * 60_000, now });
   const judgeLimit = new AddressLimiter({ limit: 10, windowMs: 15 * 60_000, now });
+  // 0021, round 2, finding 1: failed demo connects per address.
+  const demoFailLimit = new AddressLimiter({ ...DEMO_FAIL_LIMIT, now });
   const serverKey = config.serverKeyOn ? o.serverMetaKey : null;
   // 0021: the shared demo Gmail and Calendar, with APP_DEMO_GOOGLE=on and
   // the Google client set.
@@ -249,8 +252,8 @@ export async function createHostedApp(o: HostedOptions) {
       // 0021, D6: the account's events leave the shared demo calendar. What
       // Google does not take now, the sweep removes. Counts only.
       if (demo) {
-        const n = await demo.forget(id).catch(() => null);
-        log(n === null ? "Delete account: the demo calendar could not be reached, so the sweep removes its events later." : `Delete account: removed ${n} event(s) from the demo calendar.`);
+        const r = await demo.forget(id).catch(() => ({ removed: 0, pending: true }));
+        log(`Delete account: removed ${r.removed} event(s) from the demo calendar${r.pending ? ", and the sweep removes the rest later" : ""}.`);
       }
       claim.remove();
     } finally {
@@ -303,12 +306,13 @@ export async function createHostedApp(o: HostedOptions) {
   // 0021, D6: at start and every hour, the shared demo calendar loses the
   // app events of closed accounts and expired judge codes, those older
   // than 7 days, and those a Delete left behind. Counts only.
-  const sweepDemo = async (): Promise<{ removed: number; failed: number } | null> => {
+  const sweepDemo = async (): Promise<{ removed: number; failed: number; complete: boolean } | null> => {
     if (!demo || !demo.status().connected) return null;
     try {
       const live = new Set(store.demoLiveAccounts().map(ownerTag));
       const r = await demo.sweep((owner) => live.has(owner));
-      if (r.removed > 0 || r.failed > 0) log(`Demo calendar sweep: removed ${r.removed} event(s)${r.failed > 0 ? `, ${r.failed} could not be removed` : ""}.`);
+      if (r.removed > 0 || r.failed > 0 || !r.complete)
+        log(`Demo calendar sweep: removed ${r.removed} event(s)${r.failed > 0 ? `, ${r.failed} could not be removed` : ""}${r.complete ? "" : ", and stopped before the last page, so it goes on next hour"}.`);
       return r;
     } catch (err) {
       if (!(err instanceof GoogleError) && !(err instanceof AccountsFileError) && !(err instanceof AccountsBusyError)) throw err;
@@ -377,6 +381,8 @@ export async function createHostedApp(o: HostedOptions) {
     if (ba) {
       if (res) for (const c of ba.setCookie) res.appendHeader("Set-Cookie", c);
       const account = store.userAccount({ userId: ba.user.id, email: ba.user.email, name: ba.user.name });
+      // Sprint 18 round 2: an account Delete account closed is no session.
+      if (account.deleted) return null;
       return { account, expiresAt: ba.expiresAt, authUser: ba.user.id };
     }
     for (const secureForm of [true, false]) {
@@ -602,15 +608,28 @@ export async function createHostedApp(o: HostedOptions) {
 
   // A plain page for the person who opened the demo-connect link. Codes
   // only in the log, never the account or a token.
-  async function demoCallback(url: URL, res: ServerResponse): Promise<void> {
+  async function demoCallback(url: URL, res: ServerResponse, address: string): Promise<void> {
     let status = 200;
     let text = DEMO_CONNECTED_TEXT;
+    const plain = () => {
+      res.writeHead(status, { ...API_SECURITY_HEADERS, "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
+      res.end(text);
+    };
+    // An address with too many failed demo connects is refused before the
+    // link is used, so it stays good for the demo account's owner.
+    if (!demoFailLimit.check(address).ok) {
+      status = 429;
+      text = RATE_LIMITED_TEXT;
+      log("Demo Google connect refused: too many failed tries from one address.");
+      return plain();
+    }
     try {
       await demo!.finishConnect({ state: url.searchParams.get("state"), code: url.searchParams.get("code"), error: url.searchParams.get("error") });
       log("Demo Gmail and Calendar connected.");
     } catch (err) {
       const code = err instanceof OAuthError || err instanceof GoogleError ? err.code : "server_error";
       log(`Demo Google connect failed: ${code}.`);
+      demoFailLimit.take(address);
       status = 400;
       text = `The demo Gmail and Calendar did not connect (${code}). Run pnpm admin google demo-connect again for a new link.`;
     }
@@ -634,7 +653,7 @@ export async function createHostedApp(o: HostedOptions) {
         // 0021, D2: the shared demo connection's connect, which the admin
         // command started. Its state alone finishes it, with no session.
         // Any other state goes on as an account's own connect.
-        if (demo?.ownsState(url.searchParams.get("state"))) return await demoCallback(url, res);
+        if (demo?.ownsState(url.searchParams.get("state"))) return await demoCallback(url, res, clientAddress(req.headers, req.socket.remoteAddress, config.trustedProxy));
         // The Gmail and Calendar connection, in the signed-in account's own
         // workspace. The flow it finishes lives there, so a callback in
         // another account's session finds no flow and is refused.

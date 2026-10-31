@@ -50,10 +50,21 @@ export const CONSENT_MS = 7 * 86_400_000;
 // account in a window.
 export const MAX_LIVE_EVENTS = 5;
 export const WRITE_LIMIT = { limit: 20, windowMs: 10 * 60_000 };
+// Round 2, finding 2 (proposed): every Google call the accounts make
+// through the shared connection, together, in a window, and the calendar
+// refresh route, together, in a minute. The sweep and the cleanups are not
+// counted: they keep the calendar small.
+export const GLOBAL_CALL_LIMIT = { limit: 400, windowMs: 5 * 60_000 };
+export const REFRESH_LIMIT = { limit: 30, windowMs: 60_000 };
+// A calendar window read through the shared connection is kept this long
+// for every account, and dropped at any calendar write.
+export const LIST_CACHE_MS = 60_000;
+const LIST_CACHE_MAX = 50;
 export const MAX_EVENT_AGE_MS = 7 * 86_400_000;
 export const SWEEP_MS = 60 * 60_000;
-// The most app events one sweep reads: pages of 250.
-const SWEEP_PAGES = 8;
+// Round 2, finding 4: the sweep pages to the end. Past this many pages of
+// 250 it stops, says it is incomplete, and keeps its cleanups.
+export const SWEEP_MAX_PAGES = 100;
 const MAX_CLEANUPS = 500;
 
 // What the agent is told while an account uses the shared connection (D8).
@@ -76,7 +87,11 @@ const FlowShape = z
     version: z.number().int().nonnegative(),
   })
   .strict();
-const Pending = z.object({ stateHash: z.string().regex(/^[0-9a-f]{64}$/), expiresAt: z.number().int(), expectEmail: z.string().max(320).nullable(), flow: FlowShape }).strict();
+// Round 2, finding 1: the demo account's email is required, and its Google
+// id once it was connected.
+const Pending = z
+  .object({ stateHash: z.string().regex(/^[0-9a-f]{64}$/), expiresAt: z.number().int(), expectEmail: z.string().min(3).max(320), expectSub: z.string().max(255).nullable(), flow: FlowShape })
+  .strict();
 const FlowRow = z.object({ pending: Pending.nullable() }).strict();
 type Pending = z.infer<typeof Pending>;
 
@@ -95,7 +110,15 @@ export type DemoStatus = {
   expiresAt: string | null;
   // A demo-connect link is waiting until then.
   pendingUntil: string | null;
+  // What the stored grant allows (round 2, finding 6).
+  gmail: boolean;
+  calendar: boolean;
 };
+
+// Thrown by startConnect without the demo account's email.
+export class DemoConnectError extends Error {
+  override name = "DemoConnectError";
+}
 
 const AppEvent = z.object({
   id: z.string().min(1).max(1024),
@@ -106,6 +129,13 @@ const AppEvent = z.object({
 });
 type AppEvent = { id: string; etag: string | undefined; owner: string | null; created: number };
 
+// A list of a calendar's events in a time window, which every account on
+// the shared connection reads the same way.
+const isWindowList = (url: string) => {
+  const u = new URL(url);
+  return u.pathname.endsWith("/events") && u.searchParams.has("timeMin");
+};
+
 // The shared connection's errors that mean it must be connected again.
 const RECONNECT: ReadonlySet<GoogleErrorCode> = new Set(["google_reconnect_needed", "google_not_connected", "google_scope_missing"]);
 const demoError = (err: unknown): unknown => (err instanceof GoogleError && RECONNECT.has(err.code) ? new GoogleError("google_demo_reconnect", err.status) : err);
@@ -115,12 +145,77 @@ export class DemoGoogle {
   readonly #store: SecretsStore;
   readonly #now: () => number;
   readonly #writes: AddressLimiter;
+  readonly #calls: AddressLimiter;
+  readonly #refreshes: AddressLimiter;
+  // Calendar window reads, by URL, shared by every account (finding 2).
+  readonly #lists = new Map<string, { at: number; read: Promise<GoogleResponse> }>();
+  // One add at a time per account mark (finding 3).
+  readonly #locks = new Map<string, Promise<unknown>>();
 
   constructor(options: { client: OAuthClient | null; file: string; fetch?: FetchLike; now?: () => number }) {
     this.#now = options.now ?? Date.now;
     this.#store = new SecretsStore(options.file, { now: this.#now });
     this.connection = new GoogleConnection({ client: options.client, store: this.#store, ...(options.fetch ? { fetch: options.fetch } : {}), now: this.#now });
     this.#writes = new AddressLimiter({ ...WRITE_LIMIT, now: this.#now });
+    this.#calls = new AddressLimiter({ ...GLOBAL_CALL_LIMIT, now: this.#now });
+    this.#refreshes = new AddressLimiter({ ...REFRESH_LIMIT, now: this.#now });
+  }
+
+  // ---- Round 2, findings 2 and 3: the shared budget, cache and locks ----
+
+  // One Google call of an account through the shared connection. False
+  // past the shared budget.
+  takeCall(): boolean {
+    return this.#calls.take("all").ok;
+  }
+
+  // One POST /api/google/calendar/refresh of an account on the shared
+  // connection. False past its limit.
+  takeRefresh(): boolean {
+    return this.#refreshes.take("all").ok;
+  }
+
+  // A calendar window read, from the shared cache when one is younger than
+  // LIST_CACHE_MS. Only a 200 is kept.
+  async cachedList(url: string, read: () => Promise<GoogleResponse>): Promise<GoogleResponse> {
+    const now = this.#now();
+    const kept = this.#lists.get(url);
+    if (kept && now - kept.at < LIST_CACHE_MS) return kept.read;
+    const entry = { at: now, read: read() };
+    this.#lists.set(url, entry);
+    while (this.#lists.size > LIST_CACHE_MAX) this.#lists.delete(this.#lists.keys().next().value!);
+    entry.read.then(
+      (r) => {
+        if (r.status !== 200 && this.#lists.get(url) === entry) this.#lists.delete(url);
+      },
+      () => {
+        if (this.#lists.get(url) === entry) this.#lists.delete(url);
+      },
+    );
+    return entry.read;
+  }
+
+  // A calendar write: no account reads a window from before it.
+  dropLists(): void {
+    this.#lists.clear();
+  }
+
+  // Runs `fn` alone for the account mark `owner`: a write that adds an
+  // event counts the live ones and adds its own with no other add of the
+  // same account in between.
+  async lock<T>(owner: string, fn: () => Promise<T>): Promise<T> {
+    const before = this.#locks.get(owner) ?? Promise.resolve();
+    let release!: () => void;
+    const mine = new Promise<void>((r) => (release = r));
+    const chain = before.then(() => mine);
+    this.#locks.set(owner, chain);
+    await before.catch(() => {});
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.#locks.get(owner) === chain) this.#locks.delete(owner);
+    }
   }
 
   get configured(): boolean {
@@ -146,10 +241,15 @@ export class DemoGoogle {
 
   // Starts a connect and keeps its flow. Returns the link to open, signed
   // in as the demo account, and when it stops working.
-  startConnect(input: { redirectUri: string; expectEmail?: string | null }): { authorizeUrl: string; expiresAt: number } {
+  // Round 2, finding 1: the demo account's email is required. Once a demo
+  // account is stored, only that same Google account can renew it, until
+  // demo-disconnect.
+  startConnect(input: { redirectUri: string; expectEmail: string }): { authorizeUrl: string; expiresAt: number } {
+    const expectEmail = (input.expectEmail ?? "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(expectEmail)) throw new DemoConnectError("The demo account's email address is required.");
     const { flow, state, authorizeUrl } = this.connection.newFlow({ features: { gmail: true, calendar: true }, calendarId: DEFAULT_CALENDAR_ID, redirectUri: input.redirectUri });
     const expiresAt = this.#now() + FLOW_TTL_MS;
-    const pending: Pending = { stateHash: sha256(state).toString("hex"), expiresAt, expectEmail: input.expectEmail?.trim().toLowerCase() || null, flow };
+    const pending: Pending = { stateHash: sha256(state).toString("hex"), expiresAt, expectEmail, expectSub: this.connection.storedAccount(), flow };
     this.#store.updateRow("google_demo_flow", () => JSON.stringify({ pending }));
     return { authorizeUrl, expiresAt };
   }
@@ -185,7 +285,11 @@ export class DemoGoogle {
     // the connection as it is now, renewal included. The write itself
     // still checks that nothing changed while Google answered.
     const flow = { ...p.flow, version: this.connection.status().version };
-    await this.connection.completeFlow(flow, { code: input.code, error: input.error, expectEmail: p.expectEmail });
+    // Finding 1: the stored demo account, if any, is the only one that can
+    // take its place, and nothing revokes its grant on a mismatch. Finding
+    // 6: both Gmail and Calendar.
+    const expectSub = this.connection.storedAccount() ?? p.expectSub;
+    await this.connection.completeFlow(flow, { code: input.code, error: input.error, expectEmail: p.expectEmail, expectSub, requireBoth: true });
   }
 
   status(): DemoStatus {
@@ -200,6 +304,8 @@ export class DemoGoogle {
       connectedAt: at,
       expiresAt: at ? new Date(Date.parse(at) + CONSENT_MS).toISOString() : null,
       pendingUntil: pending ? new Date(pending.expiresAt).toISOString() : null,
+      gmail: s.gmail,
+      calendar: s.calendar,
     };
   }
 
@@ -220,7 +326,8 @@ export class DemoGoogle {
   }
 
   sharedCalendar(accountId: string): SharedCalendar {
-    return { owner: ownerTag(accountId), maxLive: MAX_LIVE_EVENTS, takeWrite: () => this.#writes.take(accountId).ok };
+    const owner = ownerTag(accountId);
+    return { owner, maxLive: MAX_LIVE_EVENTS, takeWrite: () => this.#writes.take(accountId).ok, lock: (fn) => this.lock(owner, fn) };
   }
 
   // ---- D6: cleanup ----
@@ -247,16 +354,17 @@ export class DemoGoogle {
     });
   }
 
-  // The app events in the shared calendar, every one or one account's, at
-  // most SWEEP_PAGES pages. Throws a GoogleError when Google cannot be read.
-  async #appEvents(owner: string | null): Promise<AppEvent[]> {
+  // The app events in the shared calendar, every one or one account's,
+  // page after page to the end, or to SWEEP_MAX_PAGES (finding 4), when
+  // `complete` is false. Throws a GoogleError when Google cannot be read.
+  async #appEvents(owner: string | null): Promise<{ events: AppEvent[]; complete: boolean }> {
     const { calendarId } = this.connection.calendar();
     const url = new URL(`${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events`);
     url.searchParams.append("privateExtendedProperty", `${APP_PROPERTY}=1`);
     if (owner !== null) url.searchParams.append("privateExtendedProperty", `${OWNER_PROPERTY}=${owner}`);
     url.searchParams.set("maxResults", "250");
     const out: AppEvent[] = [];
-    for (let page = 0; page < SWEEP_PAGES; page++) {
+    for (let page = 0; page < SWEEP_MAX_PAGES; page++) {
       const res = await this.connection.call("calendar", url.toString());
       if (res.status !== 200) throw new GoogleError(res.status === 429 || res.status >= 500 ? "google_unavailable" : "google_refused", res.status);
       const parsed = z.object({ items: z.array(z.unknown()).optional(), nextPageToken: z.string().max(2000).optional() }).safeParse(res.body);
@@ -269,10 +377,10 @@ export class DemoGoogle {
         const created = Date.parse(e.data.created ?? "");
         out.push({ id: e.data.id, etag: e.data.etag, owner: props[OWNER_PROPERTY] ?? null, created: Number.isFinite(created) ? created : NaN });
       }
-      if (!parsed.data.nextPageToken) break;
+      if (!parsed.data.nextPageToken) return { events: out, complete: true };
       url.searchParams.set("pageToken", parsed.data.nextPageToken);
     }
-    return out;
+    return { events: out, complete: false };
   }
 
   // Removes one event under its ETag. False when it could not be removed,
@@ -293,37 +401,41 @@ export class DemoGoogle {
   }
 
   // Delete case and Delete account (D6): the account's events in the shared
-  // calendar go now. What cannot go now is kept as a cleanup, which the
-  // sweep finishes: every event of the account made until now. Returns how
-  // many went, or null when Google could not be reached.
-  async forget(accountId: string): Promise<number | null> {
+  // calendar, made until now, go now (finding 5: not one made after). What
+  // cannot go now is kept as a cleanup, which the sweep finishes.
+  // `pending` is true when some of them are left for the sweep.
+  async forget(accountId: string): Promise<{ removed: number; pending: boolean }> {
     const owner = ownerTag(accountId);
     const before = this.#now();
     this.#changeCleanups((list) => [...list, { owner, before }]);
+    this.dropLists();
     try {
-      const events = await this.#appEvents(owner);
+      const { events, complete } = await this.#appEvents(owner);
       let removed = 0;
       let failed = 0;
       for (const e of events) {
-        if (e.owner !== owner) continue;
+        if (e.owner !== owner || e.created > before) continue;
         if (await this.#remove(e)) removed++;
         else failed++;
       }
-      if (failed === 0) this.#changeCleanups((list) => list.filter((c) => !(c.owner === owner && c.before === before)));
-      return removed;
+      const done = failed === 0 && complete;
+      if (done) this.#changeCleanups((list) => list.filter((c) => !(c.owner === owner && c.before === before)));
+      return { removed, pending: !done };
     } catch (err) {
-      if (err instanceof GoogleError) return null;
+      if (err instanceof GoogleError) return { removed: 0, pending: true };
       throw err;
+    } finally {
+      this.dropLists();
     }
   }
 
   // The sweep (D6): removes the app events of accounts `live` does not
   // name, those older than MAX_EVENT_AGE_MS, and those a cleanup names.
   // Never an event without an account's mark. Counts only.
-  async sweep(live: (owner: string) => boolean): Promise<{ removed: number; failed: number }> {
+  async sweep(live: (owner: string) => boolean): Promise<{ removed: number; failed: number; complete: boolean }> {
     const now = this.#now();
     const cleanups = this.#cleanups();
-    const events = await this.#appEvents(null);
+    const { events, complete } = await this.#appEvents(null);
     let removed = 0;
     let failed = 0;
     for (const e of events) {
@@ -335,11 +447,13 @@ export class DemoGoogle {
       if (await this.#remove(e)) removed++;
       else failed++;
     }
-    if (failed === 0 && cleanups.length > 0) {
+    if (removed > 0) this.dropLists();
+    // Finding 4: cleanups go only after a sweep that saw every event.
+    if (failed === 0 && complete && cleanups.length > 0) {
       const done = new Set(cleanups.map((c) => `${c.owner}|${c.before}`));
       this.#changeCleanups((list) => list.filter((c) => !done.has(`${c.owner}|${c.before}`)));
     }
-    return { removed, failed };
+    return { removed, failed, complete };
   }
 }
 
@@ -392,12 +506,28 @@ export class AccountGoogle implements GoogleLink {
     return this.usingShared() ? "google_demo_reconnect" : "google_not_connected";
   }
 
+  // Through the shared connection (round 2, finding 2): every call counts
+  // against the shared budget, a calendar window read comes from the
+  // shared cache, and a calendar write drops that cache.
   async call(feature: Feature, url: string, init: RequestInit = {}): Promise<GoogleResponse> {
     if (!this.usingShared()) return this.#own.call(feature, url, init);
+    const demo = this.#demo;
+    const send = async () => {
+      if (!demo.takeCall()) throw new GoogleError("google_demo_rate_limited");
+      try {
+        return await demo.connection.call(feature, url, init);
+      } catch (err) {
+        throw demoError(err);
+      }
+    };
+    const method = (init.method ?? "GET").toUpperCase();
+    if (feature !== "calendar") return send();
+    if (method === "GET") return isWindowList(url) ? demo.cachedList(url, send) : send();
+    demo.dropLists();
     try {
-      return await this.#demo.connection.call(feature, url, init);
-    } catch (err) {
-      throw demoError(err);
+      return await send();
+    } finally {
+      demo.dropLists();
     }
   }
 

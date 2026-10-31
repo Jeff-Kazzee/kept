@@ -227,7 +227,7 @@ export const api = {
   discardDraft: (id: string, expectedVersion: number) =>
     request<CaseView>("POST", `/api/reply/drafts/${encodeURIComponent(id)}/discard`, { expectedVersion }),
   deleteCase: (expectedVersion: number, confirmation: string) =>
-    request<{ erased: number }>("POST", "/api/case/delete", { expectedVersion, confirmation }),
+    request<{ erased: number; demoCalendar?: "removed" | "pending" }>("POST", "/api/case/delete", { expectedVersion, confirmation }),
   liveVersion: () => request<LiveVersion>("GET", "/api/case/version"),
   archive: (id: string, expectedVersion: number) => request<RecordView>("POST", `/api/records/${encodeURIComponent(id)}/archive`, { expectedVersion }),
   undo: (id: string, version: number, expectedVersion: number) =>

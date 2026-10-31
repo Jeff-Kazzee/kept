@@ -268,6 +268,12 @@ export class AccountsStore {
       const cols = (db.prepare("PRAGMA table_info(judge_codes)").all() as Row[]).map((c) => String(c.name));
       if (!cols.includes("revoke_due")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_due INTEGER NOT NULL DEFAULT 0");
       if (!cols.includes("revoke_hold_max")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_hold_max INTEGER NOT NULL DEFAULT 0");
+      // Sprint 18 round 2: a closed account keeps a hash of its Better Auth
+      // user, so a session read while Delete account runs finds the closed
+      // account instead of making a new one.
+      const accountCols = (db.prepare("PRAGMA table_info(accounts)").all() as Row[]).map((c) => String(c.name));
+      if (!accountCols.includes("closed_user")) db.exec("ALTER TABLE accounts ADD COLUMN closed_user TEXT");
+      db.exec("CREATE INDEX IF NOT EXISTS accounts_closed_user ON accounts (closed_user)");
     } catch (err) {
       db.close();
       if (err instanceof AccountsFileError) throw err;
@@ -363,6 +369,11 @@ export class AccountsStore {
         db.prepare("UPDATE accounts SET email = ?, name = ? WHERE id = ?").run(email, name, String(again.id));
         return this.#account(db, String(again.id))!;
       }
+      // Sprint 18 round 2: a user whose account was closed gets that closed
+      // account back, never a new one. Its Better Auth user is being
+      // deleted, and the caller refuses a closed account.
+      const closed = db.prepare("SELECT id FROM accounts WHERE closed_user = ?").get(sha256(`closed-user:${identity.userId}`)) as Row | undefined;
+      if (closed) return this.#account(db, String(closed.id))!;
       const id = randomId("a", 16);
       db.prepare("INSERT INTO accounts (id, kind, auth_user, email, name, created_at) VALUES (?, 'user', ?, ?, ?, ?)").run(id, identity.userId, email, name, this.#now());
       return this.#account(db, id)!;
@@ -384,7 +395,9 @@ export class AccountsStore {
   deleteAccount(id: string): void {
     this.#tx((db) => {
       db.prepare("DELETE FROM sessions WHERE account_id = ?").run(id);
-      db.prepare("UPDATE accounts SET email = NULL, name = NULL, google_sub = NULL, auth_user = NULL, deleted_at = ? WHERE id = ? AND deleted_at IS NULL").run(this.#now(), id);
+      const row = db.prepare("SELECT auth_user FROM accounts WHERE id = ? AND deleted_at IS NULL").get(id) as Row | undefined;
+      const closedUser = row?.auth_user ? sha256(`closed-user:${String(row.auth_user)}`) : null;
+      db.prepare("UPDATE accounts SET email = NULL, name = NULL, google_sub = NULL, auth_user = NULL, closed_user = ?, deleted_at = ? WHERE id = ? AND deleted_at IS NULL").run(closedUser, this.#now(), id);
     });
   }
 

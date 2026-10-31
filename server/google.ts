@@ -123,6 +123,9 @@ export type GoogleRoutesOptions = {
   demo?: () => { connected: boolean; ownConnect: boolean } | null;
   // A sentence refusing Connect for this account, or null (D7: judges).
   connectRefused?: () => string | null;
+  // False when a calendar refresh is past its limit: on the shared demo
+  // connection, all accounts' refreshes together (0021, round 2, finding 2).
+  takeRefresh?: () => boolean;
 };
 
 export function createGoogleRoutes(options: GoogleRoutesOptions) {
@@ -200,6 +203,10 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
       method: "POST",
       run: async (req) => {
         RefreshBody.parse(req.body ?? {});
+        if (options.takeRefresh && !options.takeRefresh()) {
+          const err = new GoogleError("google_demo_rate_limited");
+          return { status: 429, body: { error: err.code, message: err.message } };
+        }
         const events = await refreshEvents();
         return { status: 200, body: { events, ...(options.events ? { read: options.events.status() } : {}) } };
       },
@@ -238,7 +245,11 @@ export function createGoogleRoutes(options: GoogleRoutesOptions) {
     // for a loopback flow.
     async callback(url: URL, cookieHeader: string | undefined): Promise<{ location: string; setCookie: string[] }> {
       const q = url.searchParams;
-      const clear = [flowCookie(port, "", true, 0), flowCookie(port, "", false, 0)];
+      // Round 2, finding 8: the flow cookie is cleared only when this
+      // callback is a connect of this account's own that was waiting, so a
+      // stray link (such as a used demo link) leaves a connect in progress
+      // alone.
+      const clear = connection.ownsFlow(q.get("state")) ? [flowCookie(port, "", true, 0), flowCookie(port, "", false, 0)] : [];
       const cookie = (secure: boolean) => cookieOf(cookieHeader, flowCookieName(port, secure));
       try {
         const before = link.accountKey();

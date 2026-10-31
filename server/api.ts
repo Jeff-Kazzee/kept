@@ -76,7 +76,9 @@ const EmptyBody = z.object({}).strict();
 // `onCaseDeleted`: after Delete case, such as removing the case's events
 // from the hosted site's shared demo calendar (0021, D6). Its failure does
 // not undo the delete.
-export type ApiOptions = { settings?: ProviderSource; ready?: () => boolean; turnRunning?: () => boolean; onCaseDeleted?: () => Promise<void> };
+// It may add what it did to the answer, such as whether the shared demo
+// calendar's events went or wait for the sweep (round 2, finding 5).
+export type ApiOptions = { settings?: ProviderSource; ready?: () => boolean; turnRunning?: () => boolean; onCaseDeleted?: () => Promise<Record<string, unknown> | void> };
 
 // J12: the routes that call the model. With no provider ready each answers
 // 422 provider_not_ready with the fixed sentence, and writes nothing.
@@ -218,8 +220,8 @@ export function createApi(service: IntakeService, kase: CaseService, options: Ap
       // Fix round 2, F4: the stored calendar reads named the erased case's
       // appointments, so they go with it.
       access.google?.events?.clear();
-      await options.onCaseDeleted?.().catch(() => {});
-      return done;
+      const extra = await options.onCaseDeleted?.().catch(() => ({ demoCalendar: "pending" }));
+      return { ...done, ...(extra ?? {}) };
     }],
     ["POST", /^\/api\/records\/([^/]+)\/archive$/, (m, body) =>
       actions.archive(YOU, decodeURIComponent(m[1]!), ReviewBody.parse(body).expectedVersion),

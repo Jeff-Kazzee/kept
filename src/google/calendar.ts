@@ -321,7 +321,10 @@ const patchBody = (f: EventFields, slotKey: string, sub: string, mark: string | 
 // The shared demo calendar's rules for one account (0021, D5 and D6).
 // `owner` is the account's mark. `takeWrite` counts one create or update
 // against the account's rate limit, false past it.
-export type SharedCalendar = { owner: string; maxLive: number; takeWrite: () => boolean };
+// `lock` runs a write that adds an event alone for the account, so its
+// count of live events and its add have no other add in between (round 2,
+// finding 3).
+export type SharedCalendar = { owner: string; maxLive: number; takeWrite: () => boolean; lock: <T>(fn: () => Promise<T>) => Promise<T> };
 
 export class GoogleCalendar {
   readonly #conn: GoogleLink;
@@ -580,9 +583,18 @@ export class GoogleCalendar {
   // Writes a planned change at Google and returns what happened, with its
   // undo record.
   async execute(write: PlannedWrite): Promise<SyncOutcome> {
+    const { calendarId } = this.#conn.calendar();
+    const shared = this.#shared();
+    // Round 2, finding 3: an add in the shared calendar counts the live
+    // events and adds its own under the account's lock.
+    if (shared && write.plan.action === "created" && write.plan.want) return shared.lock(() => this.#execute(write, calendarId));
+    return this.#execute(write, calendarId);
+  }
+
+  async #execute(write: PlannedWrite, calendarIdRead: string): Promise<SyncOutcome> {
     const { calendarId, sub, key } = this.#conn.calendar();
     const { plan } = write;
-    if (plan.account !== key || plan.calendarId !== calendarId) throw new GoogleError("google_stale");
+    if (plan.account !== key || plan.calendarId !== calendarId || calendarId !== calendarIdRead) throw new GoogleError("google_stale");
     if (plan.eventId === "") throw new GoogleError("google_invalid_response");
     const mark = markOf(plan);
     const owner = this.#owner();
@@ -686,15 +698,21 @@ export class GoogleCalendar {
       // The slot got a new event since the delete, so putting the old one
       // back would make two.
       if ((await this.#locate(calendarId, sub, u.slotKey, mark, owner)).live) throw new GoogleError("google_changed");
-      // Putting an event back adds one to the shared demo calendar (D6).
-      await this.#checkShared(calendarId, true);
-      if (current) {
-        const restored = await this.#patch(calendarId, sub, u.slotKey, mark, owner, current, current.etag, u.before);
-        return { action: "created", eventId: restored.id };
-      }
-      const { event, existed } = await this.#insert(calendarId, sub, u.slotKey, mark, owner, u.before, true);
-      if (existed) throw new GoogleError("google_changed");
-      return { action: "created", eventId: event.id };
+      const before = u.before;
+      const restore = async (): Promise<{ action: SyncAction; eventId: string | null }> => {
+        // Putting an event back adds one to the shared demo calendar (D6),
+        // counted under the account's lock (round 2, finding 3).
+        await this.#checkShared(calendarId, true);
+        if (current) {
+          const restored = await this.#patch(calendarId, sub, u.slotKey, mark, owner, current, current.etag, before);
+          return { action: "created", eventId: restored.id };
+        }
+        const { event, existed } = await this.#insert(calendarId, sub, u.slotKey, mark, owner, before, true);
+        if (existed) throw new GoogleError("google_changed");
+        return { action: "created", eventId: event.id };
+      };
+      const shared = this.#shared();
+      return shared ? shared.lock(restore) : restore();
     }
     if (!live) {
       // Already gone at Google. Nothing to reverse for a create.

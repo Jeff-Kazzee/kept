@@ -167,8 +167,9 @@ export function createWorkspace(o: WorkspaceOptions) {
       ...(demo
         ? {
             onCaseDeleted: async () => {
-              const n = await demo.demo.forget(demo.accountId);
-              log(n === null ? "Delete case: the demo calendar could not be reached, so the sweep removes its events later." : `Delete case: removed ${n} event(s) from the demo calendar.`);
+              const r = await demo.demo.forget(demo.accountId);
+              log(`Delete case: removed ${r.removed} event(s) from the demo calendar${r.pending ? ", and the sweep removes the rest later" : ""}.`);
+              return { demoCalendar: r.pending ? ("pending" as const) : ("removed" as const) };
             },
           }
         : {}),
@@ -216,6 +217,7 @@ export function createWorkspace(o: WorkspaceOptions) {
             return view ? { ...view, ownConnect: demo!.ownConnect } : null;
           },
           connectRefused: () => (demo!.ownConnect ? null : DEMO_CONNECT_REFUSED),
+          takeRefresh: () => !googleLink.usingShared() || demo!.demo.takeRefresh(),
         }
       : {}),
   });

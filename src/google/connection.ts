@@ -174,6 +174,12 @@ export class GoogleConnection implements GoogleLink {
     return this.#flows.size > 0;
   }
 
+  // Whether `state` names a connect this process started and is still
+  // waiting for (round 2, finding 8).
+  ownsFlow(state: string | null): boolean {
+    return this.#flows.has(state);
+  }
+
   // The stored state. A damaged row reads as no connection at its own
   // version, with `damaged` set.
   #state(): State {
@@ -259,10 +265,16 @@ export class GoogleConnection implements GoogleLink {
     return this.completeFlow(flow, input);
   }
 
-  // The rest of a callback, for a flow already taken by its state.
-  // `expectEmail`, when set, refuses (and revokes) a grant of any other
-  // account.
-  async completeFlow(flow: Flow, input: { code: string | null; error: string | null; expectEmail?: string | null }): Promise<void> {
+  // The rest of a callback, for a flow already taken by its state. For the
+  // shared demo connection (0021, round 2, findings 1 and 6):
+  // `expectEmail` and `expectSub`, when set, refuse a grant of any other
+  // Google account, and `requireBoth` refuses one without both Gmail and
+  // Calendar. A refused grant is revoked only when it is not the stored
+  // account's, since revoking it would end the stored grant too.
+  async completeFlow(
+    flow: Flow,
+    input: { code: string | null; error: string | null; expectEmail?: string | null; expectSub?: string | null; requireBoth?: boolean },
+  ): Promise<void> {
     const client = this.#requireClient();
     // A flow started before a connect or a disconnect cannot finish after
     // it (review round 1, finding 2).
@@ -278,8 +290,10 @@ export class GoogleConnection implements GoogleLink {
     }
     // A failed check below revokes the new grant, so no token is left at
     // Google that the app does not hold.
+    const storedSub = this.storedAccount();
+    let keep = false;
     const drop = async (code: string): Promise<never> => {
-      await revokeToken(this.#fetch, answer.refresh_token ?? answer.access_token);
+      if (!keep) await revokeToken(this.#fetch, answer.refresh_token ?? answer.access_token);
       throw new OAuthError(code);
     };
     if (!answer.id_token) return drop("no_id_token");
@@ -290,9 +304,12 @@ export class GoogleConnection implements GoogleLink {
       if (err instanceof OAuthError) return drop(err.code);
       throw err;
     }
+    keep = storedSub !== null && storedSub === account.sub;
     if (input.expectEmail && account.email.toLowerCase() !== input.expectEmail.toLowerCase()) return drop("wrong_account");
+    if (input.expectSub && account.sub !== input.expectSub) return drop("wrong_account");
     const granted = grantedFeatures(answer.scope);
     if (!granted.gmail && !granted.calendar) return drop("no_permission_granted");
+    if (input.requireBoth && !(granted.gmail && granted.calendar)) return drop("no_permission_granted");
     if (!answer.refresh_token) return drop("no_refresh_token");
 
     const refreshToken = answer.refresh_token;
@@ -461,6 +478,9 @@ export class GoogleConnection implements GoogleLink {
   // once and tries again. A second 401 marks the connection as needing a
   // reconnect.
   async call(feature: Feature, url: string, init: RequestInit = {}): Promise<GoogleResponse> {
+    // Gmail is read only: nothing but a read is ever sent (0021, round 2,
+    // finding 9).
+    if (feature === "gmail" && (init.method ?? "GET").toUpperCase() !== "GET") throw new GoogleError("google_refused");
     const c = this.#connection(feature);
     const send = async (token: string) =>
       callGoogle(this.#fetch, url, { ...init, headers: { Accept: "application/json", ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` } });

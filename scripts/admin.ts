@@ -25,16 +25,19 @@
 //       prints it once, and ends every session of that account. Its
 //       passkeys stay.
 //   pnpm admin backup --to <folder>
-//       Copies the accounts and sign-in databases with SQLite's VACUUM
-//       INTO, safe while the app runs, into a new folder of mode 700, each
-//       file mode 600.
-//   pnpm admin google demo-connect [--email <address>]
+//       Copies the accounts and sign-in databases, and the shared demo
+//       Google connection (a secret: its tokens open the demo Gmail and
+//       Calendar), with SQLite's VACUUM INTO, safe while the app runs, into
+//       a new folder of mode 700, each file mode 600.
+//   pnpm admin google demo-connect --email <address>
 //       The shared demo Gmail and Calendar (0021, D2). Prints a link, good
 //       once for 10 minutes. Open it signed in as the demo Google account
-//       and choose Allow: the site's /auth/google/callback stores the
-//       connection. Needs GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and
-//       BETTER_AUTH_URL, as the instance has them. With --email, any other
-//       Google account is refused. Run it again to renew the 7-day consent.
+//       and choose Allow with both Gmail and Calendar: the site's
+//       /auth/google/callback stores the connection. Needs GOOGLE_CLIENT_ID,
+//       GOOGLE_CLIENT_SECRET and BETTER_AUTH_URL, as the instance has them.
+//       Any other Google account, or a grant without both, is refused, and
+//       once connected only the same account renews it until
+//       demo-disconnect. Run it again to renew the 7-day consent.
 //   pnpm admin google demo-status
 //       Connected or not, the account's email, when it was connected and
 //       when Google ends the consent. Never a token.
@@ -69,7 +72,7 @@ const USAGE = `Usage:
   pnpm admin users list
   pnpm admin users reset-password --email <email>
   pnpm admin backup --to <folder>
-  pnpm admin google demo-connect [--email <address>]
+  pnpm admin google demo-connect --email <address>
   pnpm admin google demo-status
   pnpm admin google demo-disconnect`;
 
@@ -195,6 +198,7 @@ export async function runAdminAsync(argv: string[], env: NodeJS.ProcessEnv = pro
       for (const [file, name] of [
         [accountsPath(env), "accounts.sqlite"],
         [authPath(env), "auth.sqlite"],
+        [demoGooglePath(env), "demo-google.sqlite"],
       ] as const) {
         if (!existsSync(file)) {
           out.push(`No ${name} yet at ${file}. Skipped.`);
@@ -210,6 +214,7 @@ export async function runAdminAsync(argv: string[], env: NodeJS.ProcessEnv = pro
         }
         chmodSync(target, 0o600);
         out.push(`Backed up ${name} to ${target}.`);
+        if (name === "demo-google.sqlite") out.push("It holds the demo Google account's tokens, a secret: keep this backup on this server, mode 600.");
       }
       return { code: 0, out, err: [] };
     }
@@ -321,11 +326,15 @@ async function runGoogle(command: string | undefined, rest: string[], env: NodeJ
       }
       const local = origin.hostname === "localhost" || origin.hostname === "127.0.0.1";
       if (origin.protocol !== "https:" && !(origin.protocol === "http:" && local)) return fail("BETTER_AUTH_URL must be an https address, or http on localhost.");
-      const email = parsed.values.email?.trim().toLowerCase() ?? null;
-      if (email !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("--email must be a full email address.");
+      // Round 2, finding 1: the demo account's address is required, so no
+      // other Google account can take the shared connection.
+      const email = parsed.values.email?.trim().toLowerCase() ?? "";
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(`demo-connect needs --email with the demo Google account's full address.\n${USAGE}`);
       const { authorizeUrl, expiresAt } = demo.startConnect({ redirectUri: `${origin.origin}${GOOGLE_CALLBACK_PATH}`, expectEmail: email });
       if ((env.APP_DEMO_GOOGLE ?? "").trim().toLowerCase() !== "on") out.push("APP_DEMO_GOOGLE is not on here. The site finishes this link only while it runs with APP_DEMO_GOOGLE=on.");
-      out.push(`Open this link in a browser signed in as the demo Google account${email ? ` (${email})` : ""}, and choose Allow. It works once, until ${utc(new Date(expiresAt).toISOString())}:`);
+      const stored = demo.status().email;
+      if (stored && stored.toLowerCase() !== email) return fail(`The demo connection is ${stored}'s. Run pnpm admin google demo-disconnect first to connect another account. Nothing changed.`);
+      out.push(`Open this link in a browser signed in as the demo Google account (${email}), check both Gmail and Calendar, and choose Allow. It works once, until ${utc(new Date(expiresAt).toISOString())}:`);
       out.push(authorizeUrl);
       out.push(`Google returns to ${origin.origin}${GOOGLE_CALLBACK_PATH}, which stores the connection. Then pnpm admin google demo-status shows it.`);
       return { code: 0, out, err: [] };
@@ -336,6 +345,7 @@ async function runGoogle(command: string | undefined, rest: string[], env: NodeJ
       if (d.email === null && !d.needsReconnect) out.push("Demo Gmail and Calendar: not connected. Run pnpm admin google demo-connect.");
       else {
         out.push(`Demo Gmail and Calendar: ${d.needsReconnect ? "needs reconnecting" : "connected"}${d.email ? `, as ${d.email}` : ""}.`);
+        out.push(`Granted: Gmail ${d.gmail ? "yes" : "no"}, Calendar ${d.calendar ? "yes" : "no"}.`);
         if (d.connectedAt) out.push(`Connected ${utc(d.connectedAt)}. Google ends this consent ${utc(d.expiresAt!)} (7 days, testing mode): run demo-connect again before then.`);
         if (d.expiresAt && Date.parse(d.expiresAt) <= now()) out.push("That time has passed, so the connection has most likely stopped working. Run demo-connect again.");
       }

@@ -16,6 +16,15 @@ export class AddressLimiter {
     this.#now = options.now ?? Date.now;
   }
 
+  // Whether `address` may try now, without counting a try.
+  check(address: string): AddressDecision {
+    const now = this.#now();
+    const window = Math.floor(now / this.#windowMs) * this.#windowMs;
+    const entry = this.#counts.get(address);
+    if (entry && entry.window === window && entry.count >= this.#limit) return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil((window + this.#windowMs - now) / 1000)) };
+    return { ok: true };
+  }
+
   take(address: string): AddressDecision {
     const now = this.#now();
     const window = Math.floor(now / this.#windowMs) * this.#windowMs;

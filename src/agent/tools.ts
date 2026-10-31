@@ -599,6 +599,14 @@ async function freshCalendar(ctx: ToolContext, dates: string[]): Promise<Map<str
   const unread = new Map<string, GoogleError>();
   const events = ctx.google?.events;
   if (!events || !ctx.google!.connection.status().calendar) return unread;
+  // 0021, round 2, finding 7: a connection the tools are offered but that
+  // cannot be read now, such as the shared demo one needing a reconnect,
+  // leaves every date unread, never free.
+  if (ctx.google!.calendar.accountKey() === null) {
+    const code = ctx.google!.connection.missingError?.() ?? "google_not_connected";
+    for (const d of new Set(dates)) unread.set(d, new GoogleError(code));
+    return unread;
+  }
   const slotDates = ctx.kase.view().slots.map((s) => s.date);
   const turn = ctx.calendarTurn ?? new CalendarTurn();
   try {

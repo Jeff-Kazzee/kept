@@ -51,7 +51,7 @@ async function demoSetup(options: { connect?: boolean } = {}) {
   const dir = tmp("sprint19-");
   const fake = new FakeGoogle();
   const demo = new DemoGoogle({ client: FAKE_CLIENT, file: path.join(dir, "hosted", "demo-google.sqlite"), fetch: fake.fetch, now: () => fake.now });
-  const connect = async (expectEmail: string | null = null) => {
+  const connect = async (expectEmail = "dana.demo@example.com") => {
     const { authorizeUrl } = demo.startConnect({ redirectUri: REDIRECT, expectEmail });
     const back = fake.consent(authorizeUrl);
     await demo.finishConnect({ state: back.searchParams.get("state"), code: back.searchParams.get("code"), error: null });
@@ -104,7 +104,7 @@ describe("sprint 19, D2: connecting the shared demo connection", () => {
   it("the state works once, within 10 minutes, and a wrong state is not the demo's", async () => {
     const s = await demoSetup({ connect: false });
     try {
-      const { authorizeUrl } = s.demo.startConnect({ redirectUri: REDIRECT });
+      const { authorizeUrl } = s.demo.startConnect({ redirectUri: REDIRECT, expectEmail: "dana.demo@example.com" });
       const u = new URL(authorizeUrl);
       // PKCE, offline access and the existing scopes.
       expect(u.searchParams.get("code_challenge_method")).toBe("S256");
@@ -125,7 +125,7 @@ describe("sprint 19, D2: connecting the shared demo connection", () => {
       await expect(s.demo.finishConnect({ state, code: back.searchParams.get("code"), error: null })).rejects.toMatchObject({ code: "invalid_state" });
 
       // Expiry: a link older than 10 minutes is refused.
-      const late = s.demo.startConnect({ redirectUri: REDIRECT });
+      const late = s.demo.startConnect({ redirectUri: REDIRECT, expectEmail: "dana.demo@example.com" });
       const lateBack = s.fake.consent(late.authorizeUrl);
       s.fake.now += 10 * 60_000 + 1;
       expect(s.demo.ownsState(lateBack.searchParams.get("state"))).toBe(false);
@@ -290,7 +290,7 @@ describe("sprint 19, D5 and D6: the shared calendar", () => {
       expect(live().filter((e) => props(e)?.[OWNER_PROPERTY]).map((e) => props(e)[OWNER_PROPERTY])).toEqual([ownerTag(ACCOUNT_B), ownerTag(ACCOUNT_B)]);
       expect(local.status).toBe("confirmed");
       // Delete account's step (hosted.ts removeAccount).
-      expect(await s.demo.forget(ACCOUNT_B)).toBe(2);
+      expect(await s.demo.forget(ACCOUNT_B)).toEqual({ removed: 2, pending: false });
       expect(live().filter((e) => props(e)?.[OWNER_PROPERTY])).toEqual([]);
       expect(local.status).toBe("confirmed");
     } finally {
@@ -334,20 +334,20 @@ describe("sprint 19, D5 and D6: the shared calendar", () => {
       const local = s.fake.addForeignEvent("primary", { summary: "Local", start: { dateTime: "2026-11-12T13:00:00-07:00" }, created: "2026-01-01T00:00:00Z", extendedProperties: { private: { [APP_PROPERTY]: "1", apptSlotKey: "x", apptAccount: DEMO_SUB } } });
       const owners = () => primary(s.fake).filter((e) => e.status !== "cancelled" && props(e)?.[OWNER_PROPERTY]).map((e) => props(e)[OWNER_PROPERTY]);
       // B is closed: its event goes.
-      expect(await s.demo.sweep((o) => o === ownerTag(ACCOUNT_A))).toEqual({ removed: 1, failed: 0 });
+      expect(await s.demo.sweep((o) => o === ownerTag(ACCOUNT_A))).toEqual({ removed: 1, failed: 0, complete: true });
       expect(owners()).toEqual([ownerTag(ACCOUNT_A)]);
       // A Delete while Google could not be reached leaves a cleanup.
       s.fake.unreachable = true;
-      expect(await s.demo.forget(ACCOUNT_A)).toBeNull();
+      expect(await s.demo.forget(ACCOUNT_A)).toEqual({ removed: 0, pending: true });
       s.fake.unreachable = false;
       s.fake.now += 1000;
       await write(a, "2026-11-13");
-      expect(await s.demo.sweep(() => true)).toEqual({ removed: 1, failed: 0 });
+      expect(await s.demo.sweep(() => true)).toEqual({ removed: 1, failed: 0, complete: true });
       // The event made after the Delete stays.
       expect(primary(s.fake).filter((e) => e.status !== "cancelled" && props(e)?.[OWNER_PROPERTY]).map((e) => props(e).apptSlotKey)).toEqual(["2026-11-13T10:30"]);
       // Older than 7 days goes, even for a live account.
       s.fake.now += MAX_EVENT_AGE_MS + 1;
-      expect(await s.demo.sweep(() => true)).toEqual({ removed: 1, failed: 0 });
+      expect(await s.demo.sweep(() => true)).toEqual({ removed: 1, failed: 0, complete: true });
       expect(owners()).toEqual([]);
       expect(local.status).toBe("confirmed");
     } finally {
@@ -434,7 +434,7 @@ describe("sprint 19: the hosted site", () => {
     const ownBack = fake.consent(own.body.authorizeUrl);
 
     // The admin starts the demo connect. A browser with no session finishes it.
-    const { authorizeUrl } = h.app.demo!.startConnect({ redirectUri: `http://localhost:${h.port}/auth/google/callback` });
+    const { authorizeUrl } = h.app.demo!.startConnect({ redirectUri: `http://localhost:${h.port}/auth/google/callback`, expectEmail: "dana.demo@example.com" });
     fake.account = { sub: "1000001", email: "dana.demo@example.com" };
     const demoBack = fake.consent(authorizeUrl);
     const anon = h.browser();
@@ -520,7 +520,8 @@ describe("sprint 19: the admin commands", () => {
     demo.close();
     const status = await admin("demo-status");
     expect(status.out[0]).toBe("Demo Gmail and Calendar: connected, as dana.demo@example.com.");
-    expect(status.out[1]).toBe("Connected 2026-11-06 17:00 UTC. Google ends this consent 2026-11-13 17:00 UTC (7 days, testing mode): run demo-connect again before then.");
+    expect(status.out[1]).toBe("Granted: Gmail yes, Calendar yes.");
+    expect(status.out[2]).toBe("Connected 2026-11-06 17:00 UTC. Google ends this consent 2026-11-13 17:00 UTC (7 days, testing mode): run demo-connect again before then.");
     expect(status.out.join("\n")).not.toMatch(/fake-refresh|fake-access/);
 
     expect((await admin("demo-disconnect")).out).toEqual(["Revoked the demo connection at Google and deleted it here."]);
