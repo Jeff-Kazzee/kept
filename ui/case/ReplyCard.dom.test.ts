@@ -88,16 +88,16 @@ describe("sprint 13C fix round 1: one readback for both cards", () => {
 
   it("N6: a change of session or account clears the ticks in both cards", async () => {
     const { act } = await import("react");
-    scopeReadback(sessionOwner({ mode: "hosted", signedIn: true, account: { kind: "user", email: "a.demo@example.com", name: null }, balanceMicros: 0, balance: "$0", expiresAt: 0, passwordMin: 10 }));
+    scopeReadback(sessionOwner({ mode: "hosted", signedIn: true, account: { kind: "user", email: "a.demo@example.com", name: null, owner: "owner-a" }, balanceMicros: 0, balance: "$0", expiresAt: 0, passwordMin: 10 }));
     const ui = await mount(both(12));
     await ui.click(ui.find('.in-chat input[name="read-date"]'));
     expect(ui.find('.in-panel input[name="read-date"]').checked).toBe(true);
     // The same account again changes nothing.
-    await act(async () => scopeReadback(sessionOwner({ mode: "hosted", signedIn: true, account: { kind: "user", email: "a.demo@example.com", name: null }, balanceMicros: 5, balance: "$0", expiresAt: 1, passwordMin: 10 })));
+    await act(async () => scopeReadback(sessionOwner({ mode: "hosted", signedIn: true, account: { kind: "user", email: "a.demo@example.com", name: null, owner: "owner-a" }, balanceMicros: 5, balance: "$0", expiresAt: 1, passwordMin: 10 })));
     expect(ui.find('.in-panel input[name="read-date"]').checked).toBe(true);
     // Another account in the same tab: the same draft id, version and
     // generation start with no ticks.
-    await act(async () => scopeReadback(sessionOwner({ mode: "hosted", signedIn: true, account: { kind: "user", email: "b.demo@example.com", name: null }, balanceMicros: 0, balance: "$0", expiresAt: 0, passwordMin: 10 })));
+    await act(async () => scopeReadback(sessionOwner({ mode: "hosted", signedIn: true, account: { kind: "user", email: "b.demo@example.com", name: null, owner: "owner-b" }, balanceMicros: 0, balance: "$0", expiresAt: 0, passwordMin: 10 })));
     expect(ui.find('.in-chat input[name="read-date"]').checked).toBe(false);
     expect(ui.find('.in-panel input[name="read-date"]').checked).toBe(false);
     await ui.unmount();

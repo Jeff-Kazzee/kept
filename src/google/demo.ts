@@ -56,6 +56,10 @@ export const WRITE_LIMIT = { limit: 20, windowMs: 10 * 60_000 };
 // counted: they keep the calendar small.
 export const GLOBAL_CALL_LIMIT = { limit: 400, windowMs: 5 * 60_000 };
 export const REFRESH_LIMIT = { limit: 30, windowMs: 60_000 };
+// Final review, fairness (proposed): one account's share of each, checked
+// first, so no single account can spend the shared budget for everyone.
+export const ACCOUNT_CALL_LIMIT = { limit: 80, windowMs: 5 * 60_000 };
+export const ACCOUNT_REFRESH_LIMIT = { limit: 6, windowMs: 60_000 };
 // A calendar window read through the shared connection is kept this long
 // for every account, and dropped at any calendar write.
 export const LIST_CACHE_MS = 60_000;
@@ -147,6 +151,8 @@ export class DemoGoogle {
   readonly #writes: AddressLimiter;
   readonly #calls: AddressLimiter;
   readonly #refreshes: AddressLimiter;
+  readonly #accountCalls: AddressLimiter;
+  readonly #accountRefreshes: AddressLimiter;
   // Calendar window reads, by URL, shared by every account (finding 2).
   readonly #lists = new Map<string, { at: number; read: Promise<GoogleResponse> }>();
   // One add at a time per account mark (finding 3).
@@ -159,19 +165,23 @@ export class DemoGoogle {
     this.#writes = new AddressLimiter({ ...WRITE_LIMIT, now: this.#now });
     this.#calls = new AddressLimiter({ ...GLOBAL_CALL_LIMIT, now: this.#now });
     this.#refreshes = new AddressLimiter({ ...REFRESH_LIMIT, now: this.#now });
+    this.#accountCalls = new AddressLimiter({ ...ACCOUNT_CALL_LIMIT, now: this.#now });
+    this.#accountRefreshes = new AddressLimiter({ ...ACCOUNT_REFRESH_LIMIT, now: this.#now });
   }
 
   // ---- Round 2, findings 2 and 3: the shared budget, cache and locks ----
 
   // One Google call of an account through the shared connection. False
   // past the shared budget.
-  takeCall(): boolean {
+  takeCall(accountId?: string): boolean {
+    if (accountId !== undefined && !this.#accountCalls.take(accountId).ok) return false;
     return this.#calls.take("all").ok;
   }
 
   // One POST /api/google/calendar/refresh of an account on the shared
   // connection. False past its limit.
-  takeRefresh(): boolean {
+  takeRefresh(accountId?: string): boolean {
+    if (accountId !== undefined && !this.#accountRefreshes.take(accountId).ok) return false;
     return this.#refreshes.take("all").ok;
   }
 
@@ -321,8 +331,8 @@ export class DemoGoogle {
 
   // ---- D3: an account's view ----
 
-  linkFor(own: GoogleConnection): AccountGoogle {
-    return new AccountGoogle(own, this);
+  linkFor(own: GoogleConnection, accountId?: string): AccountGoogle {
+    return new AccountGoogle(own, this, accountId);
   }
 
   sharedCalendar(accountId: string): SharedCalendar {
@@ -462,10 +472,12 @@ export class DemoGoogle {
 export class AccountGoogle implements GoogleLink {
   readonly #own: GoogleConnection;
   readonly #demo: DemoGoogle;
+  readonly #accountId: string | undefined;
 
-  constructor(own: GoogleConnection, demo: DemoGoogle) {
+  constructor(own: GoogleConnection, demo: DemoGoogle, accountId?: string) {
     this.#own = own;
     this.#demo = demo;
+    this.#accountId = accountId;
   }
 
   usingShared(): boolean {
@@ -513,7 +525,7 @@ export class AccountGoogle implements GoogleLink {
     if (!this.usingShared()) return this.#own.call(feature, url, init);
     const demo = this.#demo;
     const send = async () => {
-      if (!demo.takeCall()) throw new GoogleError("google_demo_rate_limited");
+      if (!demo.takeCall(this.#accountId)) throw new GoogleError("google_demo_rate_limited");
       try {
         return await demo.connection.call(feature, url, init);
       } catch (err) {

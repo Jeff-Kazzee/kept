@@ -14,7 +14,7 @@ import { createWorkspace } from "../server/workspace.ts";
 import { CaseActions, YOU } from "../src/actions/service.ts";
 import { DELETE_CONFIRMATION } from "../src/case/constants.ts";
 import { APP_PROPERTY, OWNER_PROPERTY } from "../src/google/calendar.ts";
-import { DemoGoogle, GLOBAL_CALL_LIMIT, MAX_LIVE_EVENTS, REFRESH_LIMIT, SWEEP_MAX_PAGES, WRITE_LIMIT, ownerTag } from "../src/google/demo.ts";
+import { ACCOUNT_CALL_LIMIT, ACCOUNT_REFRESH_LIMIT, DemoGoogle, GLOBAL_CALL_LIMIT, MAX_LIVE_EVENTS, REFRESH_LIMIT, SWEEP_MAX_PAGES, WRITE_LIMIT, ownerTag } from "../src/google/demo.ts";
 import { GMAIL_API } from "../src/google/gmail.ts";
 import { GOOGLE_ERROR_TEXT } from "../src/google/http.ts";
 import { googleToolByName, undoGoogleActivity } from "../src/google/tools.ts";
@@ -247,10 +247,16 @@ describe("0021 round 2, finding 2: one budget and one calendar cache for the sha
       // B never sees A's event.
       expect(seen.filter((e) => e.slotKey !== null)).toEqual([]);
       const refresh = (ws: Ws) => ws.googleRoutes.api({ method: "POST", path: "/api/google/calendar/refresh", body: {}, generation: ws.kase.generation(), host: "127.0.0.1:5311", secure: false });
+      // Each account has its own share (final review), so enough accounts
+      // to fill the shared limit, then one more account, which the shared
+      // limit refuses.
+      const per = ACCOUNT_REFRESH_LIMIT.limit;
+      const needed = Math.ceil(REFRESH_LIMIT.limit / per);
+      const many = [a, b, ...Array.from({ length: needed - 1 }, (_, i) => s.workspace(`a${String(i + 3).repeat(32).slice(0, 32)}`))];
       const answers: number[] = [];
-      for (let i = 0; i < REFRESH_LIMIT.limit + 1; i++) answers.push((await refresh(i % 2 ? a : b)).status);
-      expect(answers.slice(0, REFRESH_LIMIT.limit).every((x) => x === 200)).toBe(true);
-      const last = await refresh(a);
+      for (let i = 0; i < REFRESH_LIMIT.limit; i++) answers.push((await refresh(many[i % needed]!)).status);
+      expect(answers.every((x) => x === 200)).toBe(true);
+      const last = await refresh(many[needed]!);
       expect(last).toMatchObject({ status: 429, body: { error: "google_demo_rate_limited", message: GOOGLE_ERROR_TEXT.google_demo_rate_limited } });
     } finally {
       s.close();
@@ -575,5 +581,29 @@ describe("sprint 18 round 2", () => {
     expect((await b.call("POST", "/api/account/delete", { confirmation: DELETE_CONFIRMATION })).status).toBe(200);
     const turn = await b.call("POST", "/api/chat", { text: "Hi", expectedVersion: 0 }, { "X-Case-Generation": String(s.generation) });
     expect(turn.status).toBe(401);
+  });
+});
+
+describe("final review: one account cannot spend the shared budget for everyone", () => {
+  it("an account past its own share is refused while another account still gets through", async () => {
+    const s = await demoSetup();
+    try {
+      s.fake.messages.set("19d101", gmailMessage("19d101", { from: "Front <front@clinic.example>", subject: "Appointment", internalDate: String(Date.parse("2026-11-04T16:00:00Z")), plain: "Your appointment is confirmed." }));
+      const a = s.workspace(ACCOUNT_A);
+      const b = s.workspace(ACCOUNT_B);
+      let taken = 0;
+      while (s.demo.takeCall(ACCOUNT_A)) taken++;
+      expect(taken).toBe(ACCOUNT_CALL_LIMIT.limit);
+      expect(ACCOUNT_CALL_LIMIT.limit).toBeLessThan(GLOBAL_CALL_LIMIT.limit);
+      const refusedA = await run(a, "gmail_search", { days: null, senders: null });
+      expect(refusedA).toMatchObject({ ok: false, code: "google_demo_rate_limited" });
+      expect((await run(b, "gmail_search", { days: null, senders: null })).ok).toBe(true);
+      let refreshes = 0;
+      while (s.demo.takeRefresh(ACCOUNT_A)) refreshes++;
+      expect(refreshes).toBe(ACCOUNT_REFRESH_LIMIT.limit);
+      expect(s.demo.takeRefresh(ACCOUNT_B)).toBe(true);
+    } finally {
+      s.close();
+    }
   });
 });

@@ -264,3 +264,23 @@ Also: the case screen's connection line says "Demo Gmail and Calendar"
 or "Demo Gmail needs reconnecting" for an account on the shared
 connection, and Connections shows the demo line as a quiet row with a
 Connected or Needs reconnecting pill (Steel). Neither shows the address.
+
+## Final review (Muse Wonder, 2026-10-31) and the coordinator's fixes
+
+The final review of `e965957..4adb3d9` found the round 1 findings closed
+and judged the branch ready for a judges-only launch with
+`BETTER_AUTH_API_KEY` unset and `APP_PUBLIC_SIGNUP` off. The coordinator
+fixed what it raised:
+
+- Medium, fairness. One account could spend the whole shared budget.
+  Each account now has its own share, checked before the shared one:
+  `ACCOUNT_CALL_LIMIT` (80 Google calls in 5 minutes) and
+  `ACCOUNT_REFRESH_LIMIT` (6 calendar refreshes a minute). (proposed)
+- Low. `demo-connect` checks the stored demo account before it writes a
+  new pending link, so refusing another account never destroys a waiting
+  renewal link.
+- Low. A hosted session view without an `owner` is treated as signed out
+  in the page, never as a shared judge identity.
+- Open, low: the held live read can show version counters for up to 2 s
+  after a session ends, and two tests could assert more (`ui/boot.test.ts`
+  through `sessionOwner`, the concurrent Undo test's results).

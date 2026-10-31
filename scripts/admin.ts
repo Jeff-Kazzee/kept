@@ -330,10 +330,12 @@ async function runGoogle(command: string | undefined, rest: string[], env: NodeJ
       // other Google account can take the shared connection.
       const email = parsed.values.email?.trim().toLowerCase() ?? "";
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(`demo-connect needs --email with the demo Google account's full address.\n${USAGE}`);
-      const { authorizeUrl, expiresAt } = demo.startConnect({ redirectUri: `${origin.origin}${GOOGLE_CALLBACK_PATH}`, expectEmail: email });
-      if ((env.APP_DEMO_GOOGLE ?? "").trim().toLowerCase() !== "on") out.push("APP_DEMO_GOOGLE is not on here. The site finishes this link only while it runs with APP_DEMO_GOOGLE=on.");
+      // Final review: refuse another account before a new link replaces a
+      // waiting one.
       const stored = demo.status().email;
       if (stored && stored.toLowerCase() !== email) return fail(`The demo connection is ${stored}'s. Run pnpm admin google demo-disconnect first to connect another account. Nothing changed.`);
+      const { authorizeUrl, expiresAt } = demo.startConnect({ redirectUri: `${origin.origin}${GOOGLE_CALLBACK_PATH}`, expectEmail: email });
+      if ((env.APP_DEMO_GOOGLE ?? "").trim().toLowerCase() !== "on") out.push("APP_DEMO_GOOGLE is not on here. The site finishes this link only while it runs with APP_DEMO_GOOGLE=on.");
       out.push(`Open this link in a browser signed in as the demo Google account (${email}), check both Gmail and Calendar, and choose Allow. It works once, until ${utc(new Date(expiresAt).toISOString())}:`);
       out.push(authorizeUrl);
       out.push(`Google returns to ${origin.origin}${GOOGLE_CALLBACK_PATH}, which stores the connection. Then pnpm admin google demo-status shows it.`);

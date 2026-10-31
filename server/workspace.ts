@@ -139,7 +139,7 @@ export function createWorkspace(o: WorkspaceOptions) {
   // its own connection uses the shared demo one, with its own mark and
   // limits in the shared calendar (D5, D6).
   const demo = o.demoGoogle ?? null;
-  const googleLink = demo ? demo.demo.linkFor(googleConnection) : null;
+  const googleLink = demo ? demo.demo.linkFor(googleConnection, demo.accountId) : null;
   const link: GoogleLink = googleLink ?? googleConnection;
   const sharedCalendar = demo ? demo.demo.sharedCalendar(demo.accountId) : null;
   const googleCalendar = new GoogleCalendar(link, {
@@ -217,7 +217,7 @@ export function createWorkspace(o: WorkspaceOptions) {
             return view ? { ...view, ownConnect: demo!.ownConnect } : null;
           },
           connectRefused: () => (demo!.ownConnect ? null : DEMO_CONNECT_REFUSED),
-          takeRefresh: () => !googleLink.usingShared() || demo!.demo.takeRefresh(),
+          takeRefresh: () => !googleLink.usingShared() || demo!.demo.takeRefresh(demo!.accountId),
         }
       : {}),
   });

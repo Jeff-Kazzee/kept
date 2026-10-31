@@ -128,9 +128,10 @@ export function Root({ initial }: { initial?: Initial } = {}) {
 // in memory only.
 // Sprint 19 round 2: a hosted account is named by the server's opaque
 // `owner`, one per app account, so two judges (who have no email) never
-// share a first read or reply ticks.
+// share a first read or reply ticks. Final review: a hosted session with no
+// owner is treated as signed out, never as a shared judge identity.
 export const sessionOwner = (s: SessionInfo | null) =>
-  !s ? "none" : s.mode === "local" ? "local" : s.signedIn ? `hosted:${s.account.owner ?? `${s.account.kind}:${s.account.email ?? s.account.name ?? ""}`}` : "signed-out";
+  !s ? "none" : s.mode === "local" ? "local" : s.signedIn && s.account.owner ? `hosted:${s.account.owner}` : "signed-out";
 
 function RootView({
   session,
