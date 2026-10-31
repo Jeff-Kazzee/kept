@@ -14,7 +14,7 @@ import { defineConfig } from "vite";
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 // The modules that load on demand keep their own chunks (0019, P18).
-const LAZY = /\/(shell\/(PageView|Pages)|pages\/Settings|hosted\/(SignIn|Usage)|chat\/(ImportSheet|mockStream)|case\/(caseCards|ClaimsCard|ConflictCards|ReplyCard|OwnReportCard|Source)|schedule\/(SchedulePanel|Agenda|CaseTabs)|components\/(InfoTip|CopyButton|Untrusted|StateBadge)|domain\/(scope|ics))\.tsx?$/;
+const LAZY = /\/(shell\/(PageView|Pages)|pages\/Settings|hosted\/(SignIn|Usage|accountAuth)|chat\/(ImportSheet|mockStream)|case\/(caseCards|ClaimsCard|ConflictCards|ReplyCard|OwnReportCard|Source)|schedule\/(SchedulePanel|Agenda|CaseTabs)|components\/(InfoTip|CopyButton|Untrusted|StateBadge)|domain\/(scope|ics))\.tsx?$/;
 
 export default defineConfig(({ mode }) => ({
   root: here("./ui"),

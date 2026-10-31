@@ -37,7 +37,7 @@ import { Avatar } from "./shell/AccountMenu.tsx";
 import { Sidebar, type SideLayout } from "./shell/Sidebar.tsx";
 import { Toasts, type Toast } from "./shell/Toasts.tsx";
 import { VIEW_TITLES, openersFor, person, shellModes, readFolded, saveFolded, setupLink, viewIn, type ToastLink, type View } from "./shell/shell.ts";
-import { AuthError, accountAuth, hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
+import { hostedApi, hostedSignInError, signedOut, type SessionInfo, type SignedInSession } from "./hosted/session.ts";
 
 
 // The scripted chat is a development tool. It makes real case writes, so
@@ -700,12 +700,21 @@ function Shell({
     signedOut: () => onSignedOut(null),
   };
   // 0020, B9: a passkey from the account menu.
+  // The WebAuthn code loads only now (sprint 19 round 2, the first-load
+  // budget).
   const addPasskey = async () => {
+    let auth: typeof import("./hosted/accountAuth.ts");
     try {
-      await accountAuth.addPasskey();
+      auth = await import("./hosted/accountAuth.ts");
+    } catch (e) {
+      toast("error", errorSentence(e));
+      return;
+    }
+    try {
+      await auth.accountAuth.addPasskey();
       toast("info", "Added a passkey. Next time, choose Use a passkey to sign in.");
     } catch (e) {
-      toast("error", e instanceof AuthError ? e.message : errorSentence(e));
+      toast("error", e instanceof auth.AuthError ? e.message : errorSentence(e));
     }
   };
   const signOut = async () => {

@@ -9,7 +9,8 @@ import { useId, useRef, useState, type FormEvent } from "react";
 import { Mark } from "../components/Art.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { errorSentence } from "../format.ts";
-import { AuthError, accountAuth, hostedApi, type SessionInfo } from "./session.ts";
+import { AuthError, accountAuth } from "./accountAuth.ts";
+import { hostedApi, type SessionInfo } from "./session.ts";
 
 export const judgePath = (pathname: string) => /^\/judge\/?$/.test(pathname);
 
@@ -256,19 +257,21 @@ export function SignIn({
                 Use an email and password instead
               </button>
             ) : (
-              <p className="small muted">
-                <button type="button" className="link-btn" onClick={() => switchTo("signin")} disabled={busy !== null}>
-                  Sign in to an existing account
-                </button>
-              </p>
-            )}
-            {!publicSignup && safeWaitlist(waitlistUrl) && (
-              <p className="small muted">
-                Not a judge? Kept is coming soon.{" "}
-                <a href={safeWaitlist(waitlistUrl)!} rel="noopener noreferrer">
-                  Join the waitlist.
-                </a>
-              </p>
+              <div className="signin-more">
+                <p className="small">
+                  <button type="button" className="link-btn" onClick={() => switchTo("signin")} disabled={busy !== null}>
+                    Sign in to an existing account
+                  </button>
+                </p>
+                {safeWaitlist(waitlistUrl) && (
+                  <p className="small muted">
+                    Not a judge? Kept is coming soon.{" "}
+                    <a href={safeWaitlist(waitlistUrl)!} rel="noopener noreferrer">
+                      Join the waitlist.
+                    </a>
+                  </p>
+                )}
+              </div>
             )}
           </>
         )}

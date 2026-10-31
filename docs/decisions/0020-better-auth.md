@@ -405,3 +405,32 @@ refusals, no secret, password, token or email in a log or an answer, an
 old accounts database migrated, and the admin reset and backup. Every
 other hosted test (credits, ledger, isolation across accounts, judges,
 the review rounds) now runs with Better Auth accounts.
+
+## Round 2 lows, closed in sprint 19 (2026-10-31)
+
+- **A request could make a new account during Delete account.** Closing an
+  account now keeps a hash of its Better Auth user (`closed_user`, a column
+  the accounts database gains at open), and `userAccount` gives a session
+  of that user the closed account, never a new one. The session then reads
+  as signed out. A new Better Auth user with the same email is a new
+  account.
+- **`placeWords` gave up at the first occurrence.** It reads every
+  occurrence and takes the first that starts and ends on word boundaries:
+  "Suite 20 is closed, come to Suite 2" quotes "Suite 2".
+- **Tests**: a user deleted through a signed `/api/auth/dash/delete-user`
+  request closes the app account and its session reaches nothing, and the
+  admin-made password appears exactly once in the command's output. The
+  dashboard's `delete-many-users` route deletes through Better Auth's
+  adapter without its hooks, so it would leave the app accounts open. The
+  plugin is off (K6).
+- **The merge with sprint 17**: the session view carries `account.owner`,
+  and a signed-in view carries `waitlistUrl`, so the sign-in screen after
+  a sign-out shows the waitlist line again. The Better Auth page code is
+  its own chunk (0019, "Merged into sprint 19").
+
+Hosted browser check on port 5310: the judge code form first, the
+waitlist line, Make an account not offered, sign-up refused on the server
+(403), a judge code signs in, sign-out shows the judge form again, an
+account made with `pnpm admin users create` signs in, Add a passkey saves
+one (a CDP virtual authenticator) and Use a passkey signs the same account
+in. 13 of 13 steps pass.

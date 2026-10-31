@@ -695,6 +695,9 @@ own Google (D1 to D10 in `docs/decisions/0021-demo-inbox.md`).
 - [x] D7, D8 The reconnect sentence, the start log's date, Connections'
   line, no buttons for judges, and the agent's instruction.
 - [x] D9, D10 Counts only in logs. Local mode unchanged.
+- [x] Round 2: merged `dev` (sprint 17, Steel), closed the sprint 19
+  round 1 review (findings 1 to 9) and sprint 18's round 2 lows, and the
+  hosted screens in Steel (0019, 0020, 0021).
 - [ ] Connect the demo account live (coordinator: `demo-connect`, Jeff
   opens the link), and renew every 7 days.
 - [ ] Live checks with two judge codes (coordinator).

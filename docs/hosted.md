@@ -205,6 +205,9 @@ for the judge (`docs/decisions/0021-demo-inbox.md`).
   another account's or the local demo's.
 - At most 5 live app events per account, 20 calendar creates or updates
   per account in 10 minutes, and the usual 8 Google reads per chat turn.
+  All accounts together: 400 Google calls in 5 minutes through the shared
+  connection, and 30 calendar refreshes a minute. A calendar window read
+  is shared by every account for a minute.
 - Delete case and Delete account remove the account's events. Every hour,
   and at start, a sweep removes the events of deleted accounts and of
   expired or revoked judge codes, and every app event older than 7 days.
@@ -228,6 +231,10 @@ pnpm admin google demo-connect --email <the demo account's address>
 pnpm admin google demo-status
 pnpm admin google demo-disconnect
 ```
+
+`--email` is required. Once a demo account is connected, only that same
+Google account can renew it: to change accounts, run `demo-disconnect`
+first. The link must be allowed with both Gmail and Calendar checked.
 
 - `demo-connect` prints a link, good once for 10 minutes. Open it in a
   browser signed in as the demo Google account and choose Allow (Google
@@ -297,7 +304,9 @@ removed. The same email may sign up again, as a new, empty account.
 pnpm admin backup --to ~/appointments-backups/2026-10-31
 ```
 
-copies `accounts.sqlite` and `auth.sqlite` with SQLite's `VACUUM INTO`,
+copies `accounts.sqlite`, `auth.sqlite` and `demo-google.sqlite` (the
+shared demo Google connection: a secret, its tokens open the demo Gmail
+and Calendar) with SQLite's `VACUUM INTO`,
 safe while the app runs, into a new folder of mode 700, each file mode
 600. Run it with the instance's `APP_DB` (the start script's data folder
 plus `/app.sqlite`). It refuses a folder that already exists. Keep the

@@ -17,7 +17,8 @@ import { errorSentence } from "../format.ts";
 import { ApiError } from "../api.ts";
 import { ConnectionsPage, SettingsPage, UsagePage } from "../pages/Settings.tsx";
 import { SignIn, judgePath } from "./SignIn.tsx";
-import { accountLabel, authErrorText, hostedSignInError, type SignedInSession } from "./session.ts";
+import { authErrorText } from "./accountAuth.ts";
+import { accountLabel, hostedSignInError, type SignedInSession } from "./session.ts";
 
 const run = async () => {};
 const html = (node: ReactNode, agent: Partial<AgentState> = {}) =>

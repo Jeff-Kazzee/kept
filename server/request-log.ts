@@ -113,7 +113,9 @@ export function requestLogger(options: RequestLogOptions): (req: IncomingMessage
       const ms = Math.round(now() - start);
       const status = headStatus ?? (res.headersSent ? res.statusCode : null);
       const type = headType || String(res.getHeader("content-type") ?? "");
-      if (POLLS.has(`${method} ${path}`) && status !== null && status < 400) return;
+      // Sprint 19 round 2: a held live read (0019) that the page leaves,
+      // as at a reload or a sign-out, is no failure either.
+      if (POLLS.has(`${method} ${path}`) && (status === null || status < 400)) return;
       if (status === null) {
         options.write(`request ${method} ${path} closed before an answer, ${ms} ms`);
       } else if (type.startsWith("text/event-stream")) {

@@ -502,7 +502,15 @@ describe("the merge with sprint 17: the held live read and the first read, per h
     const log = requestLogger({ write: (l) => lines.push(l) });
     const fakeRes = { statusCode: 200, headersSent: true, writableFinished: true, writeHead: () => fakeRes, getHeader: () => "application/json", once: (_: string, fn: () => void) => fn() };
     log({ method: "GET", url: `${LIVE_PATH}?since=1.2.3`, headers: {} } as never, fakeRes as never);
+    // A held read the page left before its answer.
+    const left = { statusCode: 200, headersSent: false, writableFinished: false, writeHead: () => left, getHeader: () => undefined, once: (_: string, fn: () => void) => fn() };
+    log({ method: "GET", url: `${LIVE_PATH}?since=1.2.3`, headers: {} } as never, left as never);
     expect(lines).toEqual([]);
+    // A failed one is still logged.
+    const failed = { ...fakeRes, statusCode: 401 };
+    log({ method: "GET", url: LIVE_PATH, headers: {} } as never, failed as never);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(new RegExp(`^request GET ${LIVE_PATH} 401 \\d+ ms$`));
   }, 20_000);
 });
 

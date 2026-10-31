@@ -360,10 +360,14 @@ export function GoogleSetting({ run }: { run: Run }) {
   // with no Google of its own. One quiet line, no address, and no buttons
   // for judges (D7, D8).
   const shared = g.demo ? (
-    <div className="stack-xs" data-testid="demo-google">
-      <p className="small muted">
-        <Icon name="google" size="sm" /> {DEMO_GOOGLE_LINE}: {g.demo.connected ? "connected" : "needs reconnecting"}.
-      </p>
+    <div className="provider demo-google" data-testid="demo-google">
+      <div className="provider-head">
+        <span className="provider-title">
+          <Icon name="google" size="sm" /> {DEMO_GOOGLE_LINE}
+        </span>
+        <span className="sr-only">: </span>
+        <span className={g.demo.connected ? "pill pill-accepted" : "pill pill-pending"}>{g.demo.connected ? "Connected" : "Needs reconnecting"}</span>
+      </div>
       <p className="small muted">{DEMO_GOOGLE_PRIVACY}</p>
       {g.demo.connected && g.calendar && <CalendarReadLine read={g.calendarRead ?? null} />}
     </div>

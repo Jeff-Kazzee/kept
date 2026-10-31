@@ -641,3 +641,47 @@ build, port 5200). On the server-rendered production build: hydration
 logged nothing at 1440 and 390 px, a phone got the phone layout, an
 archive written by another client showed 180 ms later, and the preloads
 were each fetched once with no separate state or chat read.
+
+## Merged into sprint 19 (2026-10-31)
+
+`dev` at `9c1f962` was merged into `sprint/19-demo-inbox` (sprints 18 and
+19 on the old `dev`), with no rebase. What the merge changed here:
+
+- **Hosted mode still renders in the browser** (P30). Only local mode
+  renders the case screen on the server.
+- **The held live read in hosted mode** reads the session through Better
+  Auth or a judge code. Each check looks at the account's workspace with
+  `Workspaces.peek`, so a held read keeps nothing open. Better Auth's
+  session lookup is async, so the session is read again every 2 seconds
+  (`LIVE_SESSION_MS`), and a held read ends with 401 once its session is
+  gone. A held read the page leaves before its answer, as at a reload or a
+  sign-out, is no longer written to the request log, like a successful
+  poll. A failed one still is.
+- **`/api/boot` in hosted mode** answers per account, with the hosted
+  settings view (`hosted.chatgptAvailable` and the cost per turn) that
+  `GET /api/settings` gives there.
+- **The boot cache and reply ticks key on the account**, through an opaque
+  `account.owner` in the session view: a hash of the app account's id.
+  Before it, two judges (no email, no name) had the same owner. A sign-out
+  then a sign-in as another account in one page reads again
+  (`test/sprint19-round2.test.ts`).
+- **The first load stays under its budget.** Sprint 18's WebAuthn library
+  had joined the first-load chunk (101.9 KB of 100). Better Auth's page
+  code moved to `ui/hosted/accountAuth.ts`, an on-demand chunk loaded with
+  the sign-in screen or by Add a passkey: 98.5 KB.
+- **The hosted screens in Steel**: the sign-in screen (judge code first,
+  then a hairline over "Sign in to an existing account" and the waitlist
+  line), Usage (a hairline over each part), the account menu's Add a
+  passkey (Steel's menu row already), and the Connections demo line (a
+  quiet row with a Connected or Needs reconnecting pill). The case's
+  connection line names the demo Gmail and Calendar for an account on the
+  shared connection. Screenshots: `/tmp/sprint19-shots/`.
+- **Browser check on the hosted instance** (port 5310, the check build,
+  model calls answered from the test recordings by a check-only harness,
+  signed in with a judge code): every step of the round 1 check passes,
+  less Agent access, which is local mode only.
+
+Seen and left as it is: when the welcome screen's connection line shows,
+as it does in hosted mode and in local mode without the scripted chat,
+the thread opens scrolled to its end, so the top of the welcome mark sits
+under the top bar at 1440 by 900.

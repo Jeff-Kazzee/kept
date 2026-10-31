@@ -54,7 +54,7 @@ server share `app-secrets.sqlite`.)
 
 ## D2. Connect, status and disconnect from the admin command
 
-- `pnpm admin google demo-connect [--email <address>]` prints Google's
+- `pnpm admin google demo-connect --email <address>` (required since round 2) prints Google's
   authorize URL for the existing scopes (`openid email gmail.readonly
   calendar.events`), with PKCE S256, `access_type=offline` and
   `prompt=consent`. The redirect URI is `BETTER_AUTH_URL` plus
@@ -201,3 +201,66 @@ never deletes the case. Every action is logged and undoable. Email text is
 untrusted and labeled. No key, token, code, session or secret anywhere
 visible. Synthetic people only. The server key serves only entitled
 accounts. Gmail read-only, Calendar events only.
+
+## Round 2 (2026-10-31): the round 1 review, closed
+
+The Muse review of round 1 (findings 1 to 9) and the merge with sprint 17
+(0019, "Merged into sprint 19"). Choices marked (proposed) wait for Jeff.
+
+1. **Critical: whoever held the link could connect any Google account.**
+   `demo-connect` now requires `--email`. The callback refuses a Google
+   account whose email differs, and, once a demo account is stored, any
+   other Google id (`wrong_account`), until `demo-disconnect`. A refusal
+   never revokes the stored account's grant: a refused grant is revoked
+   only when it is not the stored account's. The command refuses another
+   address while one is connected. An address with 5 failed demo connects
+   in 15 minutes gets 429 before the link is used (`DEMO_FAIL_LIMIT`,
+   proposed).
+2. **High: no limit across accounts.** One budget in `DemoGoogle` for every
+   account's Google calls through the shared connection, reads, writes
+   and Gmail fetches together: 400 calls in 5 minutes (proposed). Past it,
+   `google_demo_rate_limited`: "The shared demo Gmail and Calendar had many
+   requests in a short time. Wait a few minutes and try again. Nothing
+   changed." `POST /api/google/calendar/refresh` for shared accounts has
+   its own limit, 30 a minute for all of them (proposed). A calendar
+   window read through the shared connection is kept for a minute for
+   every account, and dropped at any calendar write. Each account still
+   sees only its own app events in it (D5). The sweep and the cleanups
+   are not counted.
+3. **High: the cap could be passed concurrently.** An add in the shared
+   calendar (a sync that creates an event, an Undo that puts one back)
+   counts the live events and adds its own under a per-account lock, in
+   this process. Seven concurrent syncs of different slots add exactly 5.
+4. **Medium: the sweep stopped at 2,000 events and dropped its cleanups.**
+   It pages to the end. Past 100 pages (25,000 events) it stops, says it is
+   incomplete in the log, and keeps its cleanups for the next hour.
+5. **Medium: `forget` could remove an event made after the delete.** It
+   leaves events created after its own time, as the sweep does. Delete
+   case's answer says `demoCalendar: "removed"` or `"pending"`, and the page
+   says the events went, or that the site removes them within the hour.
+6. **Medium: a demo grant without Gmail or Calendar connected.** The demo
+   flow requires both, and refuses the grant (`no_permission_granted`),
+   revoking it unless it is the stored account's. `demo-status` prints
+   what was granted.
+7. **Medium: clash checks read a disconnected shared calendar as free.**
+   While the shared connection cannot be read, every date of a clash check
+   is unread with `google_demo_reconnect`, and `check_calendar` and
+   `get_schedule` say Google Calendar could not be read.
+8. **Low: a stray callback cleared an account's own flow cookie, and the
+   backup missed the demo file.** The flow cookie is cleared only when
+   the callback finishes a connect of the account's own that was waiting.
+   `pnpm admin backup` copies `demo-google.sqlite` and says it is a secret.
+9. **Medium: tests that did not test the real path.** New tests in
+   `test/sprint19-round2.test.ts`: concurrent syncs and Undo restores
+   through `calendar_sync_slot` and `undoEntry`, the rate limit through
+   `calendar_sync_slot` and an Undo that puts an event back, the shared
+   budget through `gmail_search` and `calendar_list`, a signed-in judge
+   finishing the link as another Google account, failed tries per
+   address, a paging fake for the sweep (`FakeGoogle.pageSize`), forget's
+   time, and Gmail calls other than reads refused before any network call
+   (in `GoogleConnection.call`, for every connection).
+
+Also: the case screen's connection line says "Demo Gmail and Calendar"
+or "Demo Gmail needs reconnecting" for an account on the shared
+connection, and Connections shows the demo line as a quiet row with a
+Connected or Needs reconnecting pill (Steel). Neither shows the address.

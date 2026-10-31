@@ -489,10 +489,15 @@ export function ConnectionStatus() {
   const model = settingsAvailable ? modelLabel(settings) : null;
   const ready = settingsAvailable && model !== null && !providerNeedsSetup(settings);
   const gmail = google?.connected && google.gmail;
+  // 0021: on the hosted site, an account with no Google of its own uses
+  // the shared demo Gmail and Calendar. Never its address.
+  const demo = google?.demo ?? null;
+  const on = demo ? demo.connected : gmail;
+  const words = demo ? (demo.connected ? "Demo Gmail and Calendar" : "Demo Gmail needs reconnecting") : gmail ? `Gmail connected${google?.email ? ` as ${google.email}` : ""}` : "Google not connected";
   return (
     <p className="connection-status small">
-      <span className={`status-dot${gmail ? " is-on" : ""}`} aria-hidden="true" />
-      <span>{gmail ? `Gmail connected${google?.email ? ` as ${google.email}` : ""}` : "Google not connected"}</span>
+      <span className={`status-dot${on ? " is-on" : ""}`} aria-hidden="true" />
+      <span>{words}</span>
       <span className={`status-dot${ready ? " is-on" : ""}`} aria-hidden="true" />
       <span>{ready ? model : "No model set up"}</span>
       <button type="button" className="link-btn" onClick={openConnections}>

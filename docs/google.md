@@ -231,7 +231,8 @@ and Calendar"). It uses the redirect URI already registered for the
 public site, `https://the-little-ai-co.tail374dd0.ts.net:10000/auth/google/callback`,
 so the OAuth client needs no change.
 
-- Connect it with `pnpm admin google demo-connect` on the server, and open
+- Connect it with `pnpm admin google demo-connect --email <the demo address>`
+  on the server (only that account, with both Gmail and Calendar), and open
   the link it prints signed in as the demo account. No app session is
   needed. `pnpm admin google demo-status` shows when the consent ends.
 - **Renew it every 7 days**, before that date, with the same command: the

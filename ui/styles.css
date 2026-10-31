@@ -1392,12 +1392,25 @@ figure.source { margin: 0; }
 .signin-or { display: flex; align-items: center; gap: var(--s-2); font-size: var(--text-sm); color: var(--text-2); }
 .signin-or::before, .signin-or::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
 .signin-foot { margin-top: var(--s-1); }
+/* Sprint 19 round 2: past the judge form, the way in for existing
+   accounts and the waitlist, set apart by a hairline. */
+.signin-more { display: grid; gap: var(--s-1); padding-top: var(--s-2); border-top: 1px solid var(--hairline); }
+.signin-more a { font-weight: 560; }
 
 
 .provider.is-off { color: var(--text-2); background: transparent; border-style: dashed; }
+/* 0021: the shared demo Gmail and Calendar, one quiet row in Connections. */
+.demo-google { padding: var(--s-2); background: var(--surface-2); }
+.demo-google .provider-title { font-weight: 560; font-size: var(--text-sm); }
+.demo-google .provider-title .icon { color: var(--text-2); }
+.demo-google .provider-head { flex-wrap: wrap; justify-content: flex-start; }
+.demo-google .provider-title { flex: 1 1 16rem; flex-wrap: nowrap; align-items: flex-start; }
+.demo-google .provider-title .icon { flex: none; margin-top: 3px; }
 .provider.is-off .provider-title { font-weight: 560; }
 
 .usage-balance { display: grid; gap: var(--s-px); }
+/* Sprint 19 round 2: each part of Usage starts on its own hairline. */
+#set-usage h3.field-label { margin-top: var(--s-1); padding-top: var(--s-2); border-top: 1px solid var(--hairline); }
 .usage-balance strong { font-size: var(--text-2xl); font-weight: 640; letter-spacing: var(--tracking-display); font-variant-numeric: tabular-nums; }
 .usage-table-wrap { overflow-x: auto; margin: 0 calc(-1 * var(--s-1)); }
 .usage-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
