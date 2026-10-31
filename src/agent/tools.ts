@@ -13,6 +13,7 @@
 import { z } from "zod";
 import { sanitize, untrustedQuote, untrustedText } from "../../mcp/sanitize.ts";
 import { CaseActions, PersonOnlyError, UndoBlockedError, type By } from "../actions/service.ts";
+import { ACTIVITY_STREAM, projectActivity } from "../activity/events.ts";
 import type { ActivityEntry } from "../activity/types.ts";
 import { AgentAnswerRefused, type CaseService } from "../case/service.ts";
 import type { CaseView, ConflictView } from "../case/types.ts";
@@ -621,6 +622,18 @@ async function freshCalendar(ctx: ToolContext, dates: string[]): Promise<Map<str
     if (!ctx.calendarTurn) events.release(turn);
   }
   return unread;
+}
+
+// Sprint 20, fix round 1 (0022): the app's event an undo of a Google
+// Calendar entry leaves, as an event fact for the answer check: none after
+// undoing an add, and the event as it was before an update or a removal.
+// Null for an entry that is not a calendar write.
+function undoneEvent(store: EventStore, entryId: string): Fact | null {
+  const spec = projectActivity(store.readStream(ACTIVITY_STREAM)).records.find((r) => r.id === entryId)?.undo;
+  if (spec?.kind !== "google_calendar") return null;
+  const u = spec.undo;
+  const [date, time] = u.slotKey.split("T") as [string, string | undefined];
+  return { date, time: time ?? null, event: u.action === "created" ? null : (u.before?.status ?? null) };
 }
 
 export const CALENDAR_UNREADABLE = "Google Calendar could not be read right now, so the app cannot say whether that time is free.";
@@ -1257,11 +1270,12 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
     run: (ctx, input) =>
       guarded(async () => {
         // undoEntry also reverses a Google Calendar entry at Google (0012).
+        const event = undoneEvent(ctx.store, input.activity_id);
         const { value } = await acting(ctx, (b) => ctx.actions.undoEntry(b, input.activity_id, input.expected_version));
         const view = ctx.kase.view();
         return result(
           { undone: input.activity_id, activity: activityOut(value, ctx.actions) },
-          { slots: view.slots, facts: view.slots.map(slotFact), statuses: caseStatuses(ctx) },
+          { slots: view.slots, facts: [...view.slots.map(slotFact), ...(event ? [event] : [])], statuses: caseStatuses(ctx) },
         );
       }),
   }),

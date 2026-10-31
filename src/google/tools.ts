@@ -597,12 +597,17 @@ export const GOOGLE_TOOLS: ToolSpec<unknown>[] = [
         throw err;
       }
       const facts: Fact[] = [];
+      const slots = ctx.kase.view().slots;
       const items = events.map((e) => {
         const start = caseWallClock(e.start, tz);
         // An all-day event's end date is exclusive at Google. The label
         // names its last day.
         const end = e.end ? (e.allDay && e.end.time === null ? { date: addDays(e.end.date, -1), time: null } : caseWallClock(e.end, tz)) : null;
-        facts.push(start, ...(end ? [end] : []));
+        // Fix round 1 (0022): the app's own event is a fact of its slot, with
+        // the slot's state and the event's status, for the answer check.
+        const slot = e.slotKey !== null ? slots.find((s) => s.key === e.slotKey) : undefined;
+        const own = e.slotKey !== null ? { ...(slot ? { state: slot.state } : {}), event: e.status === "tentative" ? ("tentative" as const) : ("confirmed" as const) } : {};
+        facts.push({ ...start, ...own }, ...(end ? [end] : []));
         return {
           summary: untrustedText(e.summary),
           starts: slotLabel(start.date, start.time),

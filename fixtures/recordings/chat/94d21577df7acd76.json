@@ -1,5 +1,5 @@
 {
-  "key": "c21917f71c38ebd5",
+  "key": "94d21577df7acd76",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,15 +9,15 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_60",
+        "id": "rs_28",
         "summary": []
       },
       {
         "type": "function_call",
-        "id": "fc_59",
-        "call_id": "call_59",
-        "name": "start_reply",
-        "arguments": "{\"template\":\"accept_offer\",\"slot_key\":\"2026-11-16T13:00\",\"expected_version\":0}",
+        "id": "fc_27",
+        "call_id": "call_27",
+        "name": "import_message",
+        "arguments": "{\"text\":\"Lantern Hill Clinic: Dana, we need to move your Thursday 11/12 10:30 AM visit. Can you do Friday 11/13 at 9:15 AM or Monday 11/16 at 1:00 PM instead? Reply FRI or MON.\",\"channel\":\"sms\",\"from\":\"Lantern Hill Clinic\",\"received_at\":\"2026-11-04T11:40:00-07:00\"}",
         "status": "completed"
       }
     ],

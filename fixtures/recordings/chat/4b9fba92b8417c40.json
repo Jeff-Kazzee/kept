@@ -1,5 +1,5 @@
 {
-  "key": "1832f6395c38f23d",
+  "key": "4b9fba92b8417c40",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,16 +9,21 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_8",
+        "id": "rs_36",
         "summary": []
       },
       {
-        "type": "function_call",
-        "id": "fc_7",
-        "call_id": "call_7",
-        "name": "accept_claim",
-        "arguments": "{\"claims\":[{\"evidence_id\":\"m1-e1\",\"expected_version\":1},{\"evidence_id\":\"m1-e2\",\"expected_version\":1}]}",
-        "status": "completed"
+        "type": "message",
+        "id": "msg_35",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "I accepted 3 claims. You can undo each one in the activity log.",
+            "annotations": []
+          }
+        ]
       }
     ],
     "usage": {

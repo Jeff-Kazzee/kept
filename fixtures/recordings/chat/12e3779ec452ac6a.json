@@ -1,5 +1,5 @@
 {
-  "key": "efa069a0fa4e5ae3",
+  "key": "12e3779ec452ac6a",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,16 +9,21 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_28",
+        "id": "rs_52",
         "summary": []
       },
       {
-        "type": "function_call",
-        "id": "fc_27",
-        "call_id": "call_27",
-        "name": "import_message",
-        "arguments": "{\"text\":\"Lantern Hill Clinic: Dana, we need to move your Thursday 11/12 10:30 AM visit. Can you do Friday 11/13 at 9:15 AM or Monday 11/16 at 1:00 PM instead? Reply FRI or MON.\",\"channel\":\"sms\",\"from\":\"Lantern Hill Clinic\",\"received_at\":\"2026-11-04T11:40:00-07:00\"}",
-        "status": "completed"
+        "type": "message",
+        "id": "msg_51",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Friday 11/13 9:15 AM overlaps the Team meeting that starts 9:00 AM.",
+            "annotations": []
+          }
+        ]
       }
     ],
     "usage": {

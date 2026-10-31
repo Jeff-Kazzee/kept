@@ -1,5 +1,5 @@
 {
-  "key": "c6d84faf6003a546",
+  "key": "d4bb13b6952c93b6",
   "source": "hand-written",
   "note": "Test double for the demo story, written by a stand-in model, not a model. Tests only. The app never reads it.",
   "model": "muse-spark-1.3",
@@ -9,15 +9,15 @@
     "output": [
       {
         "type": "reasoning",
-        "id": "rs_20",
+        "id": "rs_32",
         "summary": []
       },
       {
         "type": "function_call",
-        "id": "fc_19",
-        "call_id": "call_19",
+        "id": "fc_31",
+        "call_id": "call_31",
         "name": "accept_claim",
-        "arguments": "{\"claims\":[{\"evidence_id\":\"m2-e1\",\"expected_version\":1},{\"evidence_id\":\"m2-e2\",\"expected_version\":1},{\"evidence_id\":\"m2-e3\",\"expected_version\":1}]}",
+        "arguments": "{\"claims\":[{\"evidence_id\":\"m3-e1\",\"expected_version\":1},{\"evidence_id\":\"m3-e2\",\"expected_version\":1},{\"evidence_id\":\"m3-e3\",\"expected_version\":1}]}",
         "status": "completed"
       }
     ],
