@@ -7,6 +7,7 @@ import type { EvidenceView, MessageView } from "../intake/events.ts";
 import { dateLabel, timeLabel } from "../slots/labels.ts";
 import type { SlotView } from "../slots/types.ts";
 import { localDateTime } from "../domain/zone.ts";
+import { normalizeWhitespace } from "../domain/quote.ts";
 import { FIELD_LABELS, TEMPLATES, TEMPLATE_IDS, renderReply, type FieldDisplays, type FieldName, type TemplateId } from "./templates.ts";
 import { messageLabel, officeOf } from "./office.ts";
 import type { FieldSource, FieldView, ReplyOption, WithheldOption } from "./types.ts";
@@ -88,6 +89,38 @@ function evidenceSource(e: EvidenceView): FieldSource {
   return { kind: "evidence", evidenceId: e.id, text: c.quote ? `Quote: “${c.quote}”` : NO_QUOTE_SOURCE };
 }
 
+// Sprint 18 fix round 1, item 8: the Place field's source quotes the
+// place's own words, never the claim's quote, which names the time. The
+// words are found in the claim's quote first, then in its message, with
+// a leading "our", "the", "my" or "your" kept, as in "our Elm Street
+// office". A place its message does not name word for word gets no quote.
+export const NO_PLACE_QUOTE_SOURCE = "From the message that named this place";
+
+const PLACE_LEAD = /(?:^|\s)((?:our|the|my|your)\s)$/i;
+
+export function placeWords(place: string, text: string | null | undefined): string | null {
+  if (!text) return null;
+  const p = normalizeWhitespace(place);
+  const t = normalizeWhitespace(text);
+  if (p === "") return null;
+  const at = t.toLowerCase().indexOf(p.toLowerCase());
+  if (at === -1) return null;
+  const before = t.slice(0, at);
+  const after = t[at + p.length] ?? "";
+  if ((before && /[\p{L}\p{N}]$/u.test(before)) || /[\p{L}\p{N}]/u.test(after)) return null;
+  const lead = PLACE_LEAD.exec(before)?.[1] ?? "";
+  return `${lead}${t.slice(at, at + p.length)}`.slice(0, 200);
+}
+
+function placeSource(e: EvidenceView, place: string, ctx: ReplyContext): FieldSource {
+  const c = e.claim;
+  // An agent's report keeps its own words and label.
+  if (c.source_type === "reported_by_user_via_agent") return evidenceSource(e);
+  const message = e.messageId ? ctx.messages.find((m) => m.id === e.messageId) : undefined;
+  const words = placeWords(place, c.quote) ?? placeWords(place, message?.message.text);
+  return { kind: "evidence", evidenceId: e.id, text: words ? `Quote: “${words}”` : NO_PLACE_QUOTE_SOURCE };
+}
+
 // A value that only agents' words support, such as a place an agent
 // reported, is labeled as untrusted. A value an office message or the user
 // also states is not.
@@ -107,7 +140,7 @@ export function slotFields(template: TemplateId, slot: SlotView, ctx: ReplyConte
   const office = officeName(slot, ctx);
   const placeSources: FieldSource[] = ctx.evidence
     .filter((e) => e.status === "accepted" && slot.location !== null && e.claim.slot.date === slot.date && e.claim.slot.location === slot.location)
-    .map(evidenceSource);
+    .map((e) => placeSource(e, slot.location!, ctx));
   const alternatives = template === "keep_original" ? proposedAlternatives(slot, ctx.slots) : [];
   const all: Record<FieldName, FieldView> = {
     // 0016, R6: the office's name comes from its messages, so the readback
