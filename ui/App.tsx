@@ -64,7 +64,8 @@ const PageView = pages.part((m) => m.default, "PageView", <PageLoading />);
 // On a phone or a tablet the panel is a closed sheet, so its chunk waits
 // for the sheet or the idle prefetch.
 if (typeof matchMedia === "function" && matchMedia(LAPTOP).matches) void loadPanel().catch(() => {});
-void loadCaseCards().catch(() => {});
+// A server-rendered page starts what its screen uses in main.tsx instead.
+if (typeof document === "undefined" || document.getElementById("boot") === null) void loadCaseCards().catch(() => {});
 const signIn = onDemand(() => import("./hosted/SignIn.tsx"));
 const SignIn = signIn.part((m) => m.SignIn, "SignIn", <main className="loading" aria-busy="true" />);
 
