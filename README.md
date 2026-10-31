@@ -1,9 +1,77 @@
 # Kept
 
-Kept helps a person keep track of appointment changes from messages
-they paste in. It handles administrative facts only: times, places,
-confirmations, and what the office asked the person to bring or do. All data
-in this repo is synthetic.
+The clinic confirmed Thursday. Then it emailed to move you. Then it texted two
+new options. Kept is an agent that reads those messages, works out which time
+is actually booked, checks new times against your calendar, and drafts the
+reply for you to read back and approve. It never sends anything on its own,
+and every step it takes has Undo.
+
+Built for the Meta Global AI Developer Hackathon (fall 2026), indie track.
+
+## For judges
+
+- **Try it live:** https://the-little-ai-co.tail374dd0.ts.net:10000/ . Choose
+  "I have a judge code" and enter a code from the submission notes. No Google
+  account is needed. The model runs on our Meta key, up to your code's limit.
+- **Judges' page and video:** https://mystic-marvel-866w.here.now/judges/
+- **Things to try:** "Try the demo" loads four made-up messages from Lantern
+  Hill Clinic. Or ask "Check my Gmail for messages from Lantern Hill Clinic
+  and update my schedule": your agent reads a shared made-up inbox and
+  calendar live. Then ask whether the new times clash with your calendar,
+  pick one, have it draft the reply, read back each field, and approve
+  (sending is simulated). Undo anything from the Activity tab.
+- **Good to know:** the inbox and calendar belong to a made-up person and are
+  shared by all judges, so add nothing private. Nothing is ever sent. It
+  handles scheduling only, not medical questions.
+
+### How it uses Meta's models
+
+- **Muse Spark 1.3** is the agent: a tool-calling loop that imports messages,
+  accepts or rejects the facts it finds, answers the office's open question,
+  checks clashes against the live calendar and starts the reply draft.
+  Muse Wonder 1.0 can be picked in the app.
+- **Code checks every step.** A quote must appear word for word in the
+  message, appointment states follow fixed rules, every date and time in an
+  answer must come from the turn's tool results, and the reply's fields come
+  from the case, not the model. See "What the model does and what code
+  checks" below.
+- **An MCP server** gives the same tools and rules to agents you already use
+  (Claude Code, OpenCode, Grok Build). An outside agent can't approve a reply,
+  delete the case or set an appointment's state.
+- **Muse Code on Muse Wonder** reviewed every change before it merged. Its
+  findings and the fixes are recorded in `docs/decisions/`.
+
+### Run it yourself
+
+Node 24 and pnpm 10. Then:
+
+```sh
+pnpm install
+pnpm build
+pnpm start   # http://127.0.0.1:5180, local mode, one case
+```
+
+Add a Meta Model API key in Connections (or `MODEL_API_KEY` in `.env.local`,
+see `.env.schema`). Gmail and Google Calendar are optional and need your own
+Google OAuth client (`docs/google.md`). The hosted, multi-account mode is in
+`docs/hosted.md`. `pnpm test` runs the full offline suite with no network and
+no key.
+
+### Where to look
+
+- `src/agent/`: the agent loop, its tools and the answer checks
+- `src/domain/`, `src/case/`: evidence, quotes and the slot state rules
+- `src/reply/`: reply templates and the read-back
+- `src/google/`: Gmail and Calendar, the shared demo account for judges
+- `mcp/`: the MCP server
+- `ui/`: the React app (server-rendered first screen, the "Steel" look)
+- `docs/decisions/`: every design decision and review round, 0001 to 0021
+
+All people, clinics and messages in this repo are made up.
+
+## How it was built
+
+The sections below follow the build from the first deliverable (D1) on.
 
 ## D1: evidence intake
 
