@@ -189,16 +189,19 @@ export function ChatView(props: ChatViewProps) {
     placed.current = el.scrollTop;
     setOpening(false);
   }, [chat.messages.length]);
-  // When the older messages join the first render's window, the view stays
-  // where it was, in the same commit, so nothing in view moves.
+  // When older messages join the first render's window, at each step, the
+  // view stays where it was, in the same commit, so nothing in view moves.
+  const steps = useRef(shown);
   useLayoutEffect(() => {
     const el = threadRef.current;
+    const grew = shown !== steps.current;
+    steps.current = shown;
     // A server-rendered page keeps where it opened: the browser anchors the
     // view while the older messages go in above it.
-    if (windowed || firstWindow === undefined || !el || !opened.current || !pinned.current || keepOpening.current) return;
+    if (!grew || firstWindow === undefined || !el || !opened.current || !pinned.current || keepOpening.current) return;
     el.scrollTop = followTop(el, false);
     placed.current = el.scrollTop;
-  }, [windowed, firstWindow]);
+  }, [shown, firstWindow]);
   useEffect(() => {
     const el = threadRef.current;
     if (!el) return;
