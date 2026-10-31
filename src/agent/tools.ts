@@ -663,7 +663,9 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
       const settings = timezoneSettings(ctx.store);
       // Fix round 1, R3: when Google could not be read, the stored clashes
       // may be out of date. They are left out, with their facts.
-      const clashFacts = view.slots.flatMap((s) => (unreadOn(s.date) ? [] : (s.clashes ?? []).map((c) => caseLocal(c.start, zone))));
+      // Fix round 2 (0022): each event's start carries its title, for the
+      // answer check.
+      const clashFacts = view.slots.flatMap((s) => (unreadOn(s.date) ? [] : (s.clashes ?? []).map((c) => ({ ...caseLocal(c.start, zone), title: c.summary }))));
       return result(
         {
           today: { date: today, label: slotLabel(today, null).replace(", no time", "") },
@@ -892,7 +894,7 @@ const TOOL_SPECS: ToolSpec<unknown>[] = [
       const events = view.calendar.events;
       const that = events.filter((e) => caseLocal(e.start, zone).date === input.date);
       const clashes = input.time === null ? [] : findClashes(input.date, input.time, events, zone);
-      const eventFacts = [...that, ...clashes].flatMap((e) => [caseLocal(e.start, zone), ...(e.end ? [caseLocal(e.end, zone)] : [])]);
+      const eventFacts = [...that, ...clashes].flatMap((e) => [{ ...caseLocal(e.start, zone), title: e.summary }, ...(e.end ? [caseLocal(e.end, zone)] : [])]);
       return result(
         {
           calendar_loaded: true,

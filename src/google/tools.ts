@@ -607,7 +607,7 @@ export const GOOGLE_TOOLS: ToolSpec<unknown>[] = [
         // the slot's state and the event's status, for the answer check.
         const slot = e.slotKey !== null ? slots.find((s) => s.key === e.slotKey) : undefined;
         const own = e.slotKey !== null ? { ...(slot ? { state: slot.state } : {}), event: e.status === "tentative" ? ("tentative" as const) : ("confirmed" as const) } : {};
-        facts.push({ ...start, ...own }, ...(end ? [end] : []));
+        facts.push({ ...start, ...own, title: e.summary }, ...(end ? [end] : []));
         return {
           summary: untrustedText(e.summary),
           starts: slotLabel(start.date, start.time),

@@ -30,7 +30,9 @@ import type { FactChip } from "./types.ts";
 // A point in time from a tool result. A slot carries its state. After a
 // Google Calendar write of this turn it also carries `event`: the status of
 // the app's event for it, or null when the write left none (sprint 20, 0022).
-export type Fact = { date: string; time: string | null; state?: SlotState; event?: "tentative" | "confirmed" | null };
+// A calendar event's start also carries the event's `title`, as the tool
+// gave it (fix round 2).
+export type Fact = { date: string; time: string | null; state?: SlotState; event?: "tentative" | "confirmed" | null; title?: string };
 
 // Statuses a tool result showed. Code-written, never model text.
 export type Status = "claim:accepted" | "claim:rejected" | "reply:sent";
@@ -111,6 +113,62 @@ export function grounded(text: string, facts: Fact[], today: string | null = nul
   return true;
 }
 
+// Fix round 2, finding 3 (0022): calendar event titles. A title is text
+// anyone with access to the calendar writes, so an answer may repeat one
+// only as the tool gave it, for the event at that start: the sentence must
+// name the event's date, and any time it names on that date that is not an
+// appointment's must be the event's start. A title with a sentence break in
+// it, or of more than eight words, is never repeated. In a sentence that
+// says a time clashes, overlaps or conflicts with something, that thing is
+// a date, a time, a plain word such as "an event", or part of a title the
+// tools gave for that date. A title that may not be repeated whole may not
+// be named in part either.
+const MAX_TITLE_WORDS = 8;
+const plain = (t: string) => normalizeForScope(t).replace(/\p{Cc}/gu, " ").toLowerCase().replace(/\s+/g, " ").trim();
+const CLASH_WITH = /\b(?:clash(?:es|ed|ing)?|overlap(?:s|ped|ping)?|conflict(?:s|ed|ing)?)\b(?:\s+with)?\s*/g;
+const OBJECT_END =
+  /\s+(?:at|on|from|which|that|starting|in|between|during|until|to|by|and|but|so|for|when|while)\b|\s+(?=\d|(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b)|[,;:!?]|\.(?:\s|$)|$/;
+const DETERMINER = /^(?:(?:the|your|a|an|my|one|another|this|that|its|their|any|existing|other)\s+)+/;
+const GENERIC =
+  /^(?:$|\d|(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december)\b|(?:events?|meetings?|appointments?|entr(?:y|ies)|items?|something|nothing|anything|it|them|calendar|google calendar)\b)/;
+const TRAILING_NOUN = /\s+(?:meeting|event|appointment|call)s?$/;
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const fitTitle = (t: string) => t.split(" ").length <= MAX_TITLE_WORDS && !/[.!?](?:\s|$)/.test(t);
+
+export function titlesAgree(text: string, facts: Fact[], today: string | null = null): boolean {
+  const titled = facts.filter((f) => f.title !== undefined).map((f) => ({ ...f, t: plain(canonicalDates(f.title!, today).text) }));
+  const canonical = canonicalDates(text, today).text;
+  const slotTimes = new Set(facts.filter((f) => f.state !== undefined).map((f) => `${f.date}T${f.time}`));
+  // The sentence names the event's date, and no other time on it that is
+  // not an appointment's.
+  const bound = (sentence: string, f: { date: string; time: string | null }) => {
+    const onDate = parseMentions(sentence).filter((m) => hasDate(m) && dateMatches(m, f));
+    if (onDate.length === 0) return false;
+    const otherTimes = onDate.flatMap((m) => m.times).filter((t) => !slotTimes.has(`${f.date}T${t}`));
+    return otherTimes.length === 0 || otherTimes.includes(f.time ?? "");
+  };
+  // A title a sentence repeats whole, found in the whole text, so one with
+  // a sentence break in it is found too.
+  const whole = plain(canonical);
+  for (const t of new Set(titled.map((f) => f.t))) {
+    if (t.length < 2 || !new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapeRe(t)}(?:$|[^\\p{L}\\p{N}])`, "u").test(whole)) continue;
+    if (!fitTitle(t)) return false;
+    const where = sentences(canonical).filter((s) => plain(s).includes(t));
+    if (where.length === 0 || !where.every((s) => titled.some((f) => f.t === t && bound(s, f)))) return false;
+  }
+  // What a time clashes with.
+  for (const s of sentences(canonical)) {
+    const p = plain(s);
+    for (const m of p.matchAll(CLASH_WITH)) {
+      const rest = p.slice(m.index! + m[0].length).replace(DETERMINER, "");
+      const object = rest.slice(0, rest.search(OBJECT_END)).replace(TRAILING_NOUN, "").trim();
+      if (GENERIC.test(object)) continue;
+      if (!titled.some((f) => ` ${f.t} `.includes(` ${object} `) && fitTitle(f.t) && bound(s, f))) return false;
+    }
+  }
+  return true;
+}
+
 // State words and the slot states that make them true, in synonym groups
 // (review round 2, finding 4). A moved or rescheduled slot is canceled. A
 // change that is only proposed has not moved anything. "Moved to Monday"
@@ -122,17 +180,23 @@ export function grounded(text: string, facts: Fact[], today: string | null = nul
 // (calendar_sync_slot), so "tentative" is a state word of those slots. In a
 // clause that names the calendar or an event, "tentative" and "confirmed"
 // are said of the app's event instead, and need this turn's `event` fact
-// for that slot with that status (`eventStatus`). "On the calendar" is true
-// of a slot whose last event fact this turn shows an event, and without one
-// of a confirmed slot (`onCalendar`, fix round 1).
+// for that slot with that status (`eventStatus`). Fix round 2: the clause
+// is about the event when its sentence names one, unless the clause names
+// another slot, and "booked" or "scheduled" said of an event means confirmed.
+// "On the calendar", and since fix round 2 "on" or "in" the, your, my or
+// Google Calendar, is true of a slot whose last event fact this turn shows
+// an event (`onCalendar`). Without an event fact, "on the calendar" still
+// means confirmed, and the other forms are not read as a state, because
+// "the standup on your calendar" names no appointment's state.
 type StateWord = { re: RegExp; states: SlotState[]; moved?: boolean; namedOnly?: boolean; eventStatus?: "tentative" | "confirmed"; onCalendar?: boolean };
 const STATE_WORDS: StateWord[] = [
   { re: /\bconfirmed\b/g, states: ["confirmed", "change_proposed"], eventStatus: "confirmed" },
   {
     re: /\b(?:booked|scheduled|all set|locked in|good to go|set for|you're on|you are on|on the (?:books|schedule))\b/g,
     states: ["confirmed", "change_proposed"],
+    eventStatus: "confirmed",
   },
-  { re: /\bon the calendar\b/g, states: ["confirmed", "change_proposed"], onCalendar: true },
+  { re: /\b(?:on|in) (?:the |your |my )?(?:google )?calendar\b/g, states: ["confirmed", "change_proposed"], onCalendar: true },
   { re: /\b(?:offered|available|open)\b/g, states: ["offered"], namedOnly: true },
   { re: /\b(?:requested|awaiting confirmation|waiting (?:for|on) (?:the office|confirmation))\b/g, states: ["requested"] },
   { re: /\btentative(?:ly)?\b/g, states: ["requested", "change_proposed"], eventStatus: "tentative" },
@@ -144,6 +208,9 @@ const STATE_WORDS: StateWord[] = [
 
 // A clause that names the calendar or an event of it.
 const EVENT_NOUN = /\b(?:calendars?|events?)\b/;
+// A removal right before "in Google Calendar" or "on the calendar" says the
+// event is not there: "it was removed in Google Calendar".
+const REMOVAL_BEFORE = /\b(?:removed|deleted|taken off|taken out|cleared)\s+$/;
 
 // Status words code cannot map to a slot state. Said of a named slot, they
 // fail closed.
@@ -193,10 +260,19 @@ const clauses = (s: string) =>
     .filter(Boolean);
 
 // The slots among the facts that the mentions name.
+const names = (m: Mention, f: Fact) => hasDate(m) && dateMatches(m, f) && (m.times.length === 0 || (f.time !== null && m.times.includes(f.time)));
 function slotsNamed(mentions: Mention[], facts: Fact[]): Fact[] {
-  return facts.filter(
-    (f) => f.state !== undefined && mentions.some((m) => hasDate(m) && dateMatches(m, f) && (m.times.length === 0 || (f.time !== null && m.times.includes(f.time)))),
-  );
+  return facts.filter((f) => f.state !== undefined && mentions.some((m) => names(m, f)));
+}
+
+// Fix round 1, finding 4, and round 2, finding 5: the slots a mention
+// without a time, or a weekday without a month and day, names when it names
+// more than one. A state word must fit all of them or none.
+function looseGroups(mentions: Mention[], facts: Fact[]): Array<Set<string>> {
+  return mentions
+    .filter((m) => hasDate(m) && (m.times.length === 0 || m.monthDay === null))
+    .map((m) => new Set(facts.filter((f) => f.state !== undefined && names(m, f)).map((f) => `${f.date}T${f.time}`)))
+    .filter((g) => g.size > 1);
 }
 
 // True when every state and status the text asserts agrees with the facts.
@@ -217,36 +293,54 @@ export function statesAgree(text: string, grounds: Grounds): boolean {
       w.states.includes(f.state!) || (w.moved === true && (f.state === "confirmed" || f.state === "requested") && slots.some((x) => x.state === "canceled"))
     );
   };
-  // Each named slot once, fitting when one of its facts fits. Fix round 1,
-  // finding 4: slots on one date that a date without a time names, and that
-  // fit differently, make the word ambiguous, so it fails.
-  const verdicts = (named: Fact[], fits: (f: Fact) => boolean) => {
-    const byKey = new Map<string, { date: string; fit: boolean }>();
-    for (const f of named) byKey.set(keyOf(f), { date: f.date, fit: (byKey.get(keyOf(f))?.fit ?? false) || fits(f) });
-    const all = [...byKey.values()];
-    const mixed = all.some((a) => all.some((b) => a.date === b.date && a.fit !== b.fit));
-    return { some: all.some((v) => v.fit), every: all.every((v) => v.fit), mixed };
+  // Each named slot once, fitting when one of its facts fits. Slots a loose
+  // mention names together that fit differently make the word ambiguous.
+  const verdicts = (named: Fact[], groups: Array<Set<string>>, fits: (f: Fact) => boolean) => {
+    const fit = new Map<string, boolean>();
+    for (const f of named) fit.set(keyOf(f), (fit.get(keyOf(f)) ?? false) || fits(f));
+    const all = [...fit.values()];
+    const mixed = groups.some((g) => new Set([...g].filter((k) => fit.has(k)).map((k) => fit.get(k))).size > 1);
+    return { some: all.some(Boolean), every: all.every(Boolean), mixed };
   };
   let previous: Fact[] = [];
+  let previousGroups: Array<Set<string>> = [];
   for (const s of sentences(canonical)) {
-    const sentenceSlots = slotsNamed(parseMentions(s), grounds.facts);
+    const sentenceMentions = parseMentions(s);
+    const sentenceSlots = slotsNamed(sentenceMentions, grounds.facts);
+    const sentenceGroups = looseGroups(sentenceMentions, grounds.facts);
     // A question asserts nothing.
     if (s.endsWith("?")) {
-      if (sentenceSlots.length > 0) previous = sentenceSlots;
+      if (sentenceSlots.length > 0) [previous, previousGroups] = [sentenceSlots, sentenceGroups];
       continue;
     }
-    for (const c of clauses(s)) {
-      const clauseSlots = slotsNamed(parseMentions(c), grounds.facts);
+    const parts = clauses(s).map((c) => {
+      const mentions = parseMentions(c);
+      const clauseSlots = slotsNamed(mentions, grounds.facts);
       // The slot of the sentence before carries over only through a
       // pronoun, and never to "the other appointment" (finding 6).
-      const carried = PRONOUN.test(c) && !OTHER.test(c) ? previous : [];
-      const targets = clauseSlots.length > 0 ? clauseSlots : sentenceSlots.length > 0 && !OTHER.test(c) ? sentenceSlots : carried;
+      const carry = PRONOUN.test(c) && !OTHER.test(c);
+      const [targets, groups] =
+        clauseSlots.length > 0
+          ? [clauseSlots, looseGroups(mentions, grounds.facts)]
+          : sentenceSlots.length > 0 && !OTHER.test(c)
+            ? [sentenceSlots, sentenceGroups]
+            : carry
+              ? [previous, previousGroups]
+              : [[], []];
+      return { c, mentions, clauseSlots, targets, groups };
+    });
+    // Fix round 2, finding 1: the event context is the sentence's. A clause
+    // is about the event when it names one, or when its sentence does and
+    // the clause names no slot but the ones the event clauses name.
+    const eventParts = parts.filter((p) => EVENT_NOUN.test(p.c));
+    const eventKeys = new Set(eventParts.flatMap((p) => p.targets.map(keyOf)));
+    for (const { c, mentions, clauseSlots, targets, groups } of parts) {
+      const aboutEvent = EVENT_NOUN.test(c) || (eventParts.length > 0 && clauseSlots.every((f) => eventKeys.has(keyOf(f))));
       // Review round 2, finding 4: a clause, or a sentence with no slot,
       // that names a date no slot among the facts has. A claim fact, such
       // as an agent's unconfirmed report, carries no state, so a positive
       // state word about that date fails, with no fallback to other slots.
-      const datesNoSlot =
-        (parseMentions(c).some(hasDate) && clauseSlots.length === 0) || (sentenceSlots.length === 0 && targets.length === 0 && parseMentions(s).some(hasDate));
+      const datesNoSlot = (mentions.some(hasDate) && clauseSlots.length === 0) || (sentenceSlots.length === 0 && targets.length === 0 && sentenceMentions.some(hasDate));
       for (const w of STATE_WORDS) {
         for (const m of c.matchAll(w.re)) {
           const before = c.slice(0, m.index);
@@ -254,21 +348,24 @@ export function statesAgree(text: string, grounds: Grounds): boolean {
           // "8 pending items" describes claims waiting for review, not a
           // slot (sprint 12, live run L2).
           if (CLAIM_NOUN_AFTER.test(c.slice(m.index! + m[0].length))) continue;
+          // A calendar phrase other than "on the calendar" is read only of a
+          // named slot with an event fact this turn.
+          if (w.onCalendar && m[0] !== "on the calendar" && !targets.some((f) => events.has(keyOf(f)))) continue;
           const n = negations(before);
           // Finding 5: two negations read either way, so they fail closed.
           if (n > 1) return false;
-          const negated = n === 1;
+          const negated = (n === 1) !== (w.onCalendar === true && REMOVAL_BEFORE.test(before));
           if (datesNoSlot && !negated) return false;
           if (w.namedOnly && clauseSlots.length === 0) continue;
           const named = w.namedOnly ? clauseSlots : targets;
           // Said of the calendar or an event: the event's status. A negated
           // word about a slot no event fact covers is read of the slot.
-          const asEvent = w.eventStatus !== undefined && EVENT_NOUN.test(c) && (!negated || named.some((f) => events.has(keyOf(f))));
+          const asEvent = w.eventStatus !== undefined && aboutEvent && (!negated || named.some((f) => events.has(keyOf(f))));
           const fits = fitsWord(w, asEvent);
           if (named.length > 0) {
             // A positive state needs a named slot in it. A negated one needs
             // a named slot outside it.
-            const v = verdicts(named, fits);
+            const v = verdicts(named, w.namedOnly ? looseGroups(mentions, grounds.facts) : groups, fits);
             if (v.mixed || (negated ? v.every : !v.some)) return false;
           } else if (asEvent) {
             if (!negated && !slots.some(fits)) return false;
@@ -299,7 +396,7 @@ export function statesAgree(text: string, grounds: Grounds): boolean {
         if (negations(c.slice(0, at)) === 0 && !w.statuses.some((x) => grounds.statuses.has(x))) return false;
       }
     }
-    if (sentenceSlots.length > 0) previous = sentenceSlots;
+    if (sentenceSlots.length > 0) [previous, previousGroups] = [sentenceSlots, sentenceGroups];
   }
   return true;
 }
@@ -353,35 +450,55 @@ const VERB_RES = VERBS.map((v) => ({
 // been put back" reports an action too, unless the sentence says it was
 // earlier. A sentence that names another actor ("by the office"), asks, or
 // suggests what the person can do reports nothing.
-const LEAD = String.raw`(?:(?:just|now|successfully|also|then)\s+)*`;
+const LEAD = String.raw`(?:(?:just|now|successfully|also|then|already)\s+)*`;
 const ACTING = VERBS.filter((v) => v.kinds.length > 0);
-const OPENING_RE = new RegExp(`^${LEAD}(${ACTING.map((v) => v.past).join("|")})\\b`);
+// Fix round 2, finding 4: "The app" or "the assistant" opening a sentence
+// speaks for the assistant too. Inside a sentence, as in "the event the app
+// added", it names an earlier action.
+const OPENING_RE = new RegExp(`^(?:(?:the app|this app|the assistant)\\s+(?:(?:has|have)\\s+)?)?${LEAD}(${ACTING.map((v) => v.past).join("|")})\\b`);
 const JOINED_VERB_RE = new RegExp(`(?:,\\s*(?:and\\s+)?|\\b(?:and|then)\\s+)${LEAD}(${VERBS.map((v) => v.past).join("|")})\\b`, "g");
-const PASSIVE_RE = new RegExp(`\\b(?:was|were|(?:has|have|had) been|got)\\s+${LEAD}(${ACTING.map((v) => v.past).join("|")})\\b`, "g");
-const OTHER_ACTOR = /\bby (?:the |your |an? )?(?:office|clinic|front desk|desk|doctor|staff|you|yourself|them|someone|another|google|person)\b/;
-const SUGGESTION = /\b(?:if you|when you|you can|you could|you may|please|want me to|would you like|let me know)\b/;
+const PASSIVE_RE = new RegExp(`\\b(?:was|were|is|are|gets?|got|(?:has|have|had) been)\\s+${LEAD}(${ACTING.map((v) => v.past).join("|")})\\b`, "g");
+// "By" and a name or role, not a time ("by Monday", "by then").
+const OTHER_ACTOR =
+  /\bby (?!(?:the )?(?:time|end|then|now|today|tomorrow|tonight|noon|midnight|monday|tuesday|wednesday|thursday|friday|saturday|sunday|activity)\b|\d)(?:dr\.?\s+|the |your |an? )?[a-z]/;
+const SUGGESTION = /\b(?:if you|when you|you can|you could|you may|please|want me to|would you like|let me know|yourself)\b/;
 const IN_GOOGLE = /^\s+in (?:your )?google calendar\b/;
-const EARLIER = /\b(?:earlier|previously|before|already|last time)\b/;
+// Fix round 2, finding 4: "already" and "before" alone do not say when.
+const EARLIER = /\b(?:earlier|previously|last time|in (?:an|the) earlier)\b/;
+// The clause of `s` around `at`, between commas, semicolons or "but".
+function clauseAt(s: string, at: number): string {
+  const start = Math.max(s.lastIndexOf(",", at - 1), s.lastIndexOf(";", at - 1), s.lastIndexOf(" but ", at - 1)) + 1;
+  const ends = [",", ";", " but "].map((x) => s.indexOf(x, at)).filter((i) => i !== -1);
+  return s.slice(start, ends.length > 0 ? Math.min(...ends) : s.length);
+}
 const kindsOf = (verb: string) => VERBS.find((v) => new RegExp(`^(?:${v.past})$`).test(verb))!.kinds;
 
 function subjectlessReport(t: string, untrue: (kinds: string[]) => boolean): boolean {
   for (const raw of t.split(/(?<=[.!?])\s+|\n+/)) {
     const s = raw.trim().replace(/^[-*•]\s*/, "");
-    if (s === "" || s.endsWith("?") || OTHER_ACTOR.test(s) || SUGGESTION.test(s)) continue;
+    if (s === "" || s.endsWith("?")) continue;
+    // Fix round 2, finding 4: another actor or a suggestion excuses only
+    // the clause it is in.
+    const excused = (at: number) => {
+      const c = clauseAt(s, at);
+      return OTHER_ACTOR.test(c) || SUGGESTION.test(c);
+    };
     const verbs: string[] = [];
     const open = OPENING_RE.exec(s);
     if (open) {
-      verbs.push(open[1]!);
+      if (!excused(0)) verbs.push(open[1]!);
       const rest = s.slice(open[0].length);
       for (const m of rest.matchAll(JOINED_VERB_RE)) {
         if (otherSubjectGoverns(open[1]!, rest.slice(0, m.index))) continue;
         if (m[1] === "confirmed" && CHECKED.test(rest.slice(m.index! + m[0].length))) continue;
-        verbs.push(m[1]!);
+        if (!excused(open[0].length + m.index! + m[0].length - 1)) verbs.push(m[1]!);
       }
     }
     // "Removed in Google Calendar" is the person's own removal there, which
     // calendar_sync_slot reports (0018, H6). The app removes "from" it.
-    if (!EARLIER.test(s)) for (const m of s.matchAll(PASSIVE_RE)) if (!(m[1] === "removed" && IN_GOOGLE.test(s.slice(m.index! + m[0].length)))) verbs.push(m[1]!);
+    if (!EARLIER.test(s))
+      for (const m of s.matchAll(PASSIVE_RE))
+        if (!(m[1] === "removed" && IN_GOOGLE.test(s.slice(m.index! + m[0].length))) && !excused(m.index! + m[0].length - 1)) verbs.push(m[1]!);
     if (verbs.some((v) => untrue(kindsOf(v)))) return true;
   }
   return false;
@@ -443,7 +560,7 @@ export function checkAnswer(text: string, grounds: Grounds): TextProblem[] {
   if (normalized.trim() === "") return ["empty"];
   const problems: TextProblem[] = [];
   if (hasClinicalContent(text)) problems.push("clinical_content");
-  if (!grounded(text, grounds.facts, grounds.today) || text.length > MAX_ANSWER_CHARS) problems.push("ungrounded");
+  if (!grounded(text, grounds.facts, grounds.today) || !titlesAgree(text, grounds.facts, grounds.today) || text.length > MAX_ANSWER_CHARS) problems.push("ungrounded");
   if (!statesAgree(text, grounds)) problems.push("state_mismatch");
   if (claimsAction(text, grounds.done)) problems.push("claims_action");
   return problems;

@@ -614,9 +614,22 @@ export const replacedAnswerLine = (turnId: string, r: { text: string; problems: 
 // The notes historyItem adds to earlier answers, which the model sometimes
 // copies into its own answer, as in the live sprint 20 runs: "(Actions
 // taken, by activity id: a10. get_activity shows them.)". Code wrote them,
-// so they are never part of an answer (0022). Fix round 1, finding 6: only
-// the exact shapes historyItem writes, and only at the end of the answer.
-const HISTORY_NOTE = /\s*\((?:Cards shown: [^()\n]*\.|Actions? taken, by activity id: a\d+(?:, a\d+)*\. get_activity shows (?:it|them)\.)\)\s*$/;
+// so they are never part of an answer (0022). Fix rounds 1 and 2, finding
+// 6: only the shapes historyItem and cardWords write, with the singular the
+// model wrote once paired as "Action taken ... a7 ... shows it", and only at
+// the end of the answer.
+const NOTE_ID = String.raw`[A-Za-z0-9._:-]+`;
+const CARD_WORDS = [
+  `claims from message ${NOTE_ID} for review`,
+  `question about conflict ${NOTE_ID}`,
+  `reply draft ${NOTE_ID} for readback`,
+  `explanation of conflict ${NOTE_ID}`,
+  `question whether message ${NOTE_ID} is your own report`,
+  `Gmail message_id ${NOTE_ID} found and not in the case, with an Add it button for the person`,
+].join("|");
+const HISTORY_NOTE = new RegExp(
+  String.raw`\s*\((?:Cards shown: (?:${CARD_WORDS})(?:; (?:${CARD_WORDS}))*\.|Actions taken, by activity id: a\d+(?:, a\d+)*\. get_activity shows them\.|Action taken, by activity id: a\d+\. get_activity shows it\.)\)\s*$`,
+);
 
 // The final text of a model reply: hidden control and direction characters
 // dropped, and any copied history notes at its end removed.
