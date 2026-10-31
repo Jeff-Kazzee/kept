@@ -57,6 +57,7 @@ Rules:
 | 15 | Public hosting (folded into sprint 18: Tailscale Funnel) | Hosted app | Nov 1 | Moved to 18 |
 | 18 | Accounts through Better Auth, and the hosted app live | Hosted app | Oct 30 to 31 | Built, go-live open |
 | 19 | A shared demo Gmail and Calendar for judges | Hosted app | Oct 31 | Built, live connect open |
+| 20 | The calendar-add answer no longer falls back | Chat app | Oct 31 | Built, review open |
 | 16 | Submission build | All | Nov 2 to 4 | Planned |
 
 On 2026-10-28 the plan changed to an agent-first app: sprint 8 is the
@@ -702,6 +703,28 @@ own Google (D1 to D10 in `docs/decisions/0021-demo-inbox.md`).
   opens the link), and renew every 7 days.
 - [ ] Live checks with two judge codes (coordinator).
 - [ ] Confirm or change the choices marked proposed in 0021.
+
+## Sprint 20: the calendar-add answer
+
+Branch `sprint/20-calendar-answer`, from `dev` `52ab27c`. "Put the Monday
+appointment on my Google Calendar." fell back in 3 of 4 recorded takes
+after the event was added (`docs/decisions/0022-calendar-answer.md`).
+
+- [x] Cause: "tentative", the status `calendar_sync_slot` gives, was a
+  status word the state check could not map, so the true answer failed.
+- [x] C1, C2 "Tentative" maps to requested and change proposed. "On the
+  calendar" is true of a slot whose event this turn's write left.
+- [x] C3 `slot_label` and `slot_state` in the sync result, and the retry
+  hint names the event's states.
+- [x] C4 A sentence that opens with an action verb, without "I", must match
+  the turn's activity.
+- [x] C5 Copied history notes are removed from the answer.
+- [x] C6 The clash answer names the event by its summary.
+- [x] Live: the calendar step 10 of 10 answered with no fallback, Undo and
+  put back answered, chat eval sends 0, unsupported states 0, clinical 0.
+- [ ] Review of `dev..sprint/20-calendar-answer` (coordinator).
+- [ ] A recorded take of the demo story on the real Google (coordinator).
+- [ ] Confirm or change the choice marked proposed in 0022.
 
 ## Sprint 16: submission build
 
