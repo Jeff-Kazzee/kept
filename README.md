@@ -13,6 +13,8 @@ Built for the Meta Global AI Developer Hackathon (fall 2026), indie track.
 - **Try it live:** https://the-little-ai-co.tail374dd0.ts.net:10000/ . Choose
   "I have a judge code" and enter a code from the submission notes. No Google
   account is needed. The model runs on our Meta key, up to your code's limit.
+  A code shared by several judges gives each browser its own account, so your
+  workspace stays on the browser you signed in with.
 - **Judges' page and video:** https://mystic-marvel-866w.here.now/judges/
 - **Things to try:** "Try the demo" loads four made-up messages from Lantern
   Hill Clinic. Or ask "Check my Gmail for messages from Lantern Hill Clinic
@@ -227,7 +229,9 @@ The sections below follow the build from the first deliverable (D1) on.
 email and password, a passkey or a judge code, through Better Auth, one
 private workspace each, and Meta usage on the
 server's key, paid from usage credit at 3 times the model's token cost.
-Judges get capped codes from `pnpm admin judges create`. The daily cost
+Judges get capped codes from `pnpm admin judges create`, or one shared
+pass from `pnpm admin judges create-pool` that gives each browser its own
+account and a share of one capped pool (0023). The daily cost
 cap and the judge total cap have no defaults: until both are set, the
 server key stays off. Local mode, the default, is unchanged. How to run it, the caps, the off switch and how
 credits are priced: `docs/hosted.md`. Design:

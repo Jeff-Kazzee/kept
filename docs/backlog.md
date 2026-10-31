@@ -58,6 +58,7 @@ Rules:
 | 18 | Accounts through Better Auth, and the hosted app live | Hosted app | Oct 30 to 31 | Built, go-live open |
 | 19 | A shared demo Gmail and Calendar for judges | Hosted app | Oct 31 | Built, live connect open |
 | 20 | The calendar-add answer no longer falls back | Chat app | Oct 31 | Built, review open |
+| 21 | One shared judge code, a pool | Hosted app | Oct 31 | Built, review open |
 | 16 | Submission build | All | Nov 2 to 4 | Planned |
 
 On 2026-10-28 the plan changed to an agent-first app: sprint 8 is the
@@ -732,6 +733,30 @@ after the event was added (`docs/decisions/0022-calendar-answer.md`).
   put back answered, chat eval sends 0, unsupported states 0, clinical 0.
 - [ ] Review of `dev..sprint/20-calendar-answer` (coordinator).
 - [ ] A recorded take of the demo story on the real Google (coordinator).
+
+## Sprint 21: one shared judge code, a pool
+
+Branch `sprint/21-judge-pool`, from `dev` `058f69a`. One code for a public
+form, where each browser gets its own judge account and a share of one
+capped pool (`docs/decisions/0023-judge-pool.md`).
+
+- [x] P1, P2 `judge_pools`, and each pass account as a `judge_codes` row
+  with `pool_id`, so the session, revoke and hold rules hold unchanged.
+- [x] P3 The whole pool counts against the total cap.
+- [x] P4 Sign-in in one transaction, never past the pool, and the used-up
+  message.
+- [x] P5 6 accounts an hour per pass, 2 an hour per client address
+  (proposed).
+- [x] P6 The same browser keeps its pass account (proposed).
+- [x] P7 Attaching a pass refused.
+- [x] P8 `create-pool`, `list`, `grant` and `revoke` on a pass.
+- [x] P9 The sign-in hint and the account menu note.
+- [x] P10 Migration tested on a file with the old schema and 11 codes.
+- [x] Live on 5330 with temporary data: two jars, two accounts and cases,
+  the pool used up, the refusal.
+- [ ] Review of `dev..sprint/21-judge-pool` (coordinator).
+- [ ] Make the pass on the public instance and put its code in the form
+  (Jeff).
 
 ## Sprint 16: submission build
 

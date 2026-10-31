@@ -180,6 +180,39 @@ pnpm admin judges revoke --id j0123456789ab
 - The total cap counts each standing code's cap and what revoked codes
   already spent. A new code or a grant past it is refused.
 
+### A shared judge pass
+
+When one code must go in a public form, a shared pass (a pool) limits what
+a leak can cost to one fixed amount (decision 0023).
+
+```sh
+pnpm admin judges create-pool --label "Judges" --pool-usd 30 --per-judge-usd 3 --expires 2026-11-30
+pnpm admin judges grant --id p0123456789ab --usd 9
+pnpm admin judges revoke --id p0123456789ab
+```
+
+- `create-pool` prints the code once, in the same `judge_` shape, so the
+  sign-in screen takes it as it takes any code. The whole pool counts
+  against `APP_JUDGE_TOTAL_CAP_USD` from the start.
+- Each browser that signs in with it and has no session from it gets a new
+  judge account, its own workspace and the per-judge share, as a ledger
+  grant with the source `judge-pool:<id>`. The same browser signing in
+  again keeps its account. Once less than one share is left, a sign-in
+  reads "The shared judge pass is used up. Email the address on the
+  judges' page for your own code."
+- At most 6 accounts an hour per pass, and 2 an hour from one client
+  address (the trusted proxy's, never loopback). Over either, the sign-in
+  is refused politely and nothing is made.
+- A pass cannot be added to an email account, and a pass's account takes
+  no code.
+- `list` shows each pass with its pool, share, accounts made, granted,
+  left and spent. `grant` raises the pool. The accounts already made keep
+  their share. `revoke` stops new sign-ins and revokes each account the
+  pass made by the code rules above.
+- A pass's workspace is reached only through its browser's session. The
+  sign-in screen and the account menu say so: signing out, or signing in
+  on another browser, starts a fresh account.
+
 Judges open the site, choose "I have a judge code", or go straight to
 `/judge`. Code tries are limited to 10 per address in 15 minutes. Behind
 Funnel, `APP_TRUSTED_PROXY=tailscale` (the start script sets it), or every
