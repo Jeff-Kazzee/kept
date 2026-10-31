@@ -679,9 +679,16 @@ Branch `sprint/17-polish`. Decisions: `docs/decisions/0019-polish.md`.
   held live read, GET /api/boot, the server-rendered case screen.
 - [ ] Round 2 targets not met: INP under 50 ms (112 ms) and first-load JS
   under 80 KB counting the hydrated chunks (113.1 KB). Follow-up.
-- [ ] The design direction Jeff picks from the explorer, next round.
+- [x] Round 3: the Steel look (0019, P34, proposed), the Muse Wonder
+  round 2 findings closed, a composer that renders nothing on a key press,
+  phone-layout server render and sliced hydration.
+- [ ] Jeff confirms Steel over Fog (P34).
+- [ ] Round 3 targets not met: INP under 50 ms (first key 72 ms, a facts
+  card 120 ms), no task over 100 ms after the first paint (hydration
+  commit 105 to 190 ms), first-load JS under 80 KB (not without replacing
+  React). Follow-up.
 - [ ] Jeff reviews the before and after screenshots.
-- [ ] Confirm or change the choices marked proposed in 0019 (P21 to P33).
+- [ ] Confirm or change the choices marked proposed in 0019 (P21 to P34).
 
 ## Sprint 10: model providers and sign-in
 

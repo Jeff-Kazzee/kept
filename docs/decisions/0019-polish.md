@@ -443,3 +443,201 @@ phone got its phone layout after hydration, and no part was rendered
 anew by the page (no client-made ids). With scripts off the page showed
 the end of the thread. The preload reuse check and the outside-change
 check are under findings 7 and 4.
+
+## Round 3 (2026-10-30 and 31)
+
+Jeff chose a mix of the explorer's Dusk and Signal directions, then asked
+for "a black and grayish blue, kind of a unique palette", no purple. The
+explorer's answer is "Steel" (d3a). The coordinator recommends it over
+"Fog" (d3b), which stays in the explorer's folder as the fallback. This
+round applies Steel, fixes the Muse Wonder round 2 review and works on the
+INP and long-task targets round 2 missed. Behavior is unchanged. The
+sign-in screen stays as it is (Steel's tokens reach it, nothing more):
+sprint 18 replaces it on another branch.
+
+### P34 (proposed): the Steel look
+
+- Grounds: graphite near-black `#0b0c0d` with a cool steel blue that rises
+  with the surfaces (`#131619`, `#1a1f24`, `#242b32`), or a cool off-white
+  `#f3f5f7` with the graphite sidebar. The sidebar is night in both themes.
+  Your words sit on a plate of brushed steel. Tangerine (`#ff6b2c`, light
+  `#ff5a1f`) is the one action color, with night ink on it. The states:
+  confirmed emerald, offered cobalt, requested signal yellow, a move rose
+  pink, canceled stone, clash red, your calendar cyan, declined steel gray.
+- Two signatures, each with one job: the aurora (steel blue to teal to
+  amber) on the mark, the welcome line and the running step, where the AI
+  is alive, and the spectrum (the states in order as one line) under the
+  top bar and across each card that waits for you, where states matter.
+- Type: Bricolage Grotesque names places (display,
+  25,020 bytes), Instrument Sans is for reading (28,112 bytes, the one
+  preloaded file), Martian Mono is for times (9,948 bytes). 63,080 bytes in
+  all, self-hosted Latin subsets with their SIL OFL 1.1 licenses in
+  `ui/fonts/OFL-*.txt` and metric-matched fallback faces, so the swap moves
+  nothing. Inter and its license are gone.
+- The explorer's `tokens.css` is the token block, and its `extra.css` is
+  folded into the rules it styles (no layer of overrides). Its raw values
+  became tokens (`--side-current`, `--mark-inset`, `--bubble-inset`,
+  `--led-glow`, `--clash-tint`, `--clash-ring`), and its radii and spaces
+  use the scales. `light-dark()` sits on each shadow layer's color, never
+  on a whole list, and a test fails on `light-dark(` holding anything but
+  two colors.
+- The token block is declared on `:root, .sidebar`. A browser resolves
+  `light-dark()` inside a token where the token is declared, so the
+  sidebar, dark in both themes, would otherwise get tokens resolved for the
+  light page (its text was invisible in the light theme until this).
+- `ui/theme.ts`, the `theme-color` meta and the manifest use `#0b0c0d` and
+  `#f3f5f7`. The app icon is the aurora tile with the mark in ink.
+- The contrast guarantee is a test: `ui/contrast.node.test.ts` ports the
+  explorer's check with its pair list (`ui/contrast-pairs.json`), 26 pairs
+  checked in each theme they apply to, and fails on any pair below its minimum (4.5 for text, 3
+  for large display type and icons).
+- Changes to earlier choices. P8: the composer's area has no ground of its
+  own and no fade. Steel lets the sky show through. It is still a row of
+  the chat's column below the thread, never over it, and the test now says
+  that. P14: Steel's durations are 120, 200 and 300 ms. The running step
+  shows the aurora as a still gradient and breathes (opacity), instead of
+  the explorer's sweep, which moved `background-position` and would break
+  the transform-and-opacity rule. The welcome's ridge drawing is gone, as
+  in the explorer's shots. Out of round 3's performance work: the composer
+  has no backdrop blur, since nothing scrolls under it and the blur made
+  each key press repaint the page.
+
+### The Muse Wonder review of round 2, closed
+
+1. High, a boot read for the wrong account. The first read lives in
+   `ui/boot.ts`, kept for one session owner ("local" or one hosted
+   account). `scopeBoot` drops it when the owner changes, a sign-out
+   included, and `readBoot` never gives a kept read to another owner. The
+   page's own JSON block is read only for "local". Tests: sign-out then
+   sign-in as another account in one page, and a kept read refused to
+   another owner (`ui/boot.test.ts`).
+2. High, a mixed boot read. `bootOf` compares the calendar counter too,
+   and after five attempts it returns no boot: the route answers 503
+   `boot_unavailable`, the page reads each route on its own, and the
+   server render serves the plain page. Tests: a calendar-only move during
+   the read takes the reads again, and a case that keeps moving gives no
+   boot (`test/live.test.ts`).
+3. Medium, the live cursor. It moves only after a refresh succeeded.
+   `refresh` returns false on failure, and the channel then keeps the old
+   version and backs off. Test in `ui/useLiveRefresh.test.ts`.
+4. Medium, skipped turns. Turns are skipped two frames after the whole
+   thread rendered, so each was laid out once with its real size. A turn
+   with slot chips or an action that can be undone is never skipped, as
+   one with a card the person must act on was not. Tests in
+   `ui/sprint17.node.test.ts`.
+5. Medium, the same refusal again. The shell stamps each refusal with a
+   count that only grows (`blockedAt`), and the receipt group reopens on
+   it, so the same entry refused with the same words reopens the group.
+6. Medium, a stray path. Only `/` is rendered on the server. The rendered
+   page is compressed with the async zlib calls. Measured on this server:
+   `bootOf` about 49 ms, the render about 44 ms for the 8-turn chat and 31
+   ms for 30 turns (both draw the newest six messages).
+7. Low, the boundary. It tells a failed load ("did not load. Check the
+   connection, then try again.") from a part that loaded but threw ("could
+   not be shown."), judged when the error is caught. A load that succeeds
+   clears every load failure of its chunk, so siblings come back together.
+8. Low, refused encodings. The rendered page uses the q-aware
+   `pickEncoding`. A test sends `br;q=0, gzip;q=0` and gets a plain body.
+9. Low, real tests. Hostile text (`</script>`, `<!--`, U+2028, U+2029,
+   quotes in the office's name, a long subject) goes through the real
+   `renderCase` and `bootBlock`. The hosted held read now uses
+   `Workspaces.peek`: a look at an open workspace that does not count as
+   use and opens none, so the idle sweep still closes a workspace only a
+   held tab looks at, and a closed workspace reads as unchanged. Tested
+   with a fake clock over two minutes of looks, then a sweep.
+
+### Performance, round 3
+
+- The composer keeps its text in the field, beside a small store. A key
+  press renders nothing, not even when the text turns empty or non-empty:
+  Send's disabled state follows the text on the element, and the render
+  path reads the same emptiness. A test counts React commits while typing
+  (none).
+- The server renders the phone layout when the browser says it is mobile
+  (`Sec-CH-UA-Mobile: ?1`, a default client hint) and names it in the
+  boot, so hydration matches and a phone's first screen holds no hidden
+  schedule. Hydration runs in a transition and waits only for the chunks
+  the screen shows. The older messages join eight at a time, the view
+  kept in place at each step.
+
+Method as before (390 x 844, Fast 4G, 4x CPU, cache off, the median of 5,
+the production build with the recorded 8-turn chat, the check build for
+30 turns), with two refinements. The mobile device now sends a phone's
+client hints. Typing INP is the key presses only, and the touch tap that
+focuses the field is reported on its own (it used to be a mouse click
+inside the typing number), and a facts card opens with a tap. The "round
+2 method" column repeats round 2's method exactly, for a like-for-like
+comparison. This server ran other jobs during the runs (load average 2 to
+6), and one 8-turn run under load measured LCP 944 ms.
+
+| Measure | Round 2 | Round 3, round 2 method | Round 3 | Target |
+| --- | --- | --- | --- | --- |
+| 8-turn chat: LCP | 848 ms | 776 ms | 684 ms | under 1,000 ms |
+| 8-turn chat: CLS | 0 | 0 | 0 | 0 |
+| 8-turn chat: typing INP | 112 ms | 112 ms | 72 ms | under 50 ms |
+| 8-turn chat: open a facts card INP | 80 ms | 88 ms | 120 ms | under 50 ms |
+| 8-turn chat: tap into the composer | | | 120 ms | |
+| Empty case: LCP | 704 ms | 640 ms | 616 ms | under 800 ms |
+| Empty case: typing INP | 120 ms | 88 ms | 56 ms | under 50 ms |
+| 30 turns: typing INP | 112 ms | 104 ms | 64 ms | under 50 ms |
+| 30 turns: open a facts card INP | 104 ms | 112 ms | 128 ms | under 50 ms |
+| 30 turns: CLS | 0 | 0 | 0 | 0 |
+| Requests before LCP, 8-turn chat | 5 | 7 | 7 | |
+| Entry script, gzipped | 97.9 KB | | 98.1 KB | |
+| CSS, gzipped | 12.0 KB | | 13.0 KB | |
+
+Lighthouse 13.4.1 on the server-rendered production page with the stored
+chat: accessibility, best practices and SEO 100, mobile and desktop, every
+audit passed.
+
+Long tasks after the first paint (4x CPU): the entry script's evaluation,
+about 210 to 280 ms, starts just before the first paint and runs past it.
+After it, one task is left on each screen: about 105 ms on the 8-turn chat
+and 135 to 190 ms on the empty case, React committing the hydration of the
+shell. None while idle after load (15 s observed).
+
+First-screen JavaScript: the entry is 325.7 KB raw and 98.1 KB gzipped.
+React DOM, React and the scheduler are 218.7 KB raw of it, about two
+thirds, roughly 67 KB gzipped. The app's own first-screen code is about
+107 KB raw, roughly 33 KB gzipped (ChatView 26.9 KB raw, App 14.9 KB,
+format 9.0 KB, then receipts, the on-demand helper, the composer, the
+model picker, the API and the icons, 3 KB or less each). The screen
+hydrates with the entry plus the cards (7.0 KB) and their shared chunk
+(3.5 KB), and on a laptop the panel (4.4 KB): about 109 KB on a phone and
+113 KB on a laptop.
+
+Not met, with the reason:
+
+- INP under 50 ms. Every key after the first is under 16 ms. The first
+  key, when the field stops being empty, runs about 5 ms of script and
+  then waits about 50 to 70 ms on the browser's frame, a paint that
+  includes the thread's off-screen content. The cause was not found this
+  round. A tap into the composer (about 105 to 120 ms) and opening a facts
+  card (about 120 ms) are rendering frames too, not script: a bare
+  textarea types at 16 to 24 ms on the same throttle, so the cost is this
+  page's painting.
+- No task over 100 ms after the first paint: the hydration commit (105 to
+  190 ms) is one task React does not slice.
+- First-load JS under 80 KB counting the hydrated chunks. Out of reach
+  without replacing React: with React's 67 KB, 80 KB would leave 13 KB for
+  the app's own first screen, which now takes about 33 KB.
+
+### Screenshots, round 3
+
+`/tmp/sprint17-shots/steel-*.png` (synthetic data, not committed): the
+`after-*` set's views (empty and the demo at 1440, 1280, 820 and 390,
+dark and light; activity, checklist, schedule, reply card, drawer and
+Connections at 390) plus Settings, Connections, Agent access and the
+account menu at 1440 in both themes, the attach menu, a toast, the empty
+Schedule, Checklist and Activity tabs at 390 in both themes, a failed part
+(error boundary), the load error in both themes, and on the hosted site
+the sign-in screen (1440 and 390, both themes) and Usage (1440, both
+themes). Checked against the explorer's board.
+
+### Browser check, round 3
+
+The round 1 check passed again with the new look, all 26 steps (check
+build, port 5200). On the server-rendered production build: hydration
+logged nothing at 1440 and 390 px, a phone got the phone layout, an
+archive written by another client showed 180 ms later, and the preloads
+were each fetched once with no separate state or chat read.
