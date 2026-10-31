@@ -9,7 +9,7 @@
 //   transactions as app-secrets.sqlite).
 // - D2. `pnpm admin google demo-connect` starts a connect: the flow, with
 //   its PKCE verifier and nonce, is kept in that file, and only the hash of
-//   its state. It lasts FLOW_TTL_MS and is used once. The server's
+//   its state. It lasts DEMO_FLOW_TTL_MS and is used once. The server's
 //   /auth/google/callback finishes it by the state alone, with no session:
 //   only whoever holds the printed link can. A newer connect replaces a
 //   waiting one.
@@ -35,7 +35,12 @@ import { appDbPath } from "../paths.ts";
 import { APP_PROPERTY, CALENDAR_API, OWNER_PROPERTY, type SharedCalendar } from "./calendar.ts";
 import { DEFAULT_CALENDAR_ID, GoogleConnection, type Feature, type GoogleLink, type GoogleStatus } from "./connection.ts";
 import { GoogleError, type FetchLike, type GoogleErrorCode, type GoogleResponse } from "./http.ts";
-import { FLOW_TTL_MS, OAuthError, type OAuthClient } from "./oauth.ts";
+import { OAuthError, type OAuthClient } from "./oauth.ts";
+
+// The demo link lasts an hour (Jeff, 2026-10-31: 10 minutes kept expiring
+// before he could open it). It is still single use, PKCE bound, and only the
+// expected demo account can complete it.
+export const DEMO_FLOW_TTL_MS = 60 * 60_000;
 
 export const DEMO_GOOGLE_FILE = "demo-google.sqlite";
 
@@ -258,7 +263,7 @@ export class DemoGoogle {
     const expectEmail = (input.expectEmail ?? "").trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(expectEmail)) throw new DemoConnectError("The demo account's email address is required.");
     const { flow, state, authorizeUrl } = this.connection.newFlow({ features: { gmail: true, calendar: true }, calendarId: DEFAULT_CALENDAR_ID, redirectUri: input.redirectUri });
-    const expiresAt = this.#now() + FLOW_TTL_MS;
+    const expiresAt = this.#now() + DEMO_FLOW_TTL_MS;
     const pending: Pending = { stateHash: sha256(state).toString("hex"), expiresAt, expectEmail, expectSub: this.connection.storedAccount(), flow };
     this.#store.updateRow("google_demo_flow", () => JSON.stringify({ pending }));
     return { authorizeUrl, expiresAt };

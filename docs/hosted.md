@@ -236,7 +236,7 @@ pnpm admin google demo-disconnect
 Google account can renew it: to change accounts, run `demo-disconnect`
 first. The link must be allowed with both Gmail and Calendar checked.
 
-- `demo-connect` prints a link, good once for 10 minutes. Open it in a
+- `demo-connect` prints a link, good once for an hour. Open it in a
   browser signed in as the demo Google account and choose Allow (Google
   says the app is not verified: choose Continue). Google returns to the
   site's `/auth/google/callback`, which stores the connection and shows
@@ -359,7 +359,7 @@ Tailscale configuration.
 7. Connect the demo Gmail and Calendar: run
    `pnpm admin google demo-connect --email <the demo account's address>`
    as in "The demo Gmail and Calendar" above, and send Jeff the link it
-   prints. It works once, for 10 minutes. Jeff opens it signed in as the
+   prints. It works once, for an hour. Jeff opens it signed in as the
    demo Google account and chooses Allow. Then
    `pnpm admin google demo-status` shows it connected with the date the
    consent ends, and a judge's Connections shows the demo line as

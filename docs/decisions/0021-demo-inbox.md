@@ -60,7 +60,7 @@ server share `app-secrets.sqlite`.)
   `prompt=consent`. The redirect URI is `BETTER_AUTH_URL` plus
   `/auth/google/callback`. The flow (verifier, nonce, redirect URI) is
   stored in the demo file with only a SHA-256 of the state, and expires
-  after 10 minutes. A newer demo-connect replaces a waiting one.
+  after an hour (10 minutes until 2026-10-31, when Jeff asked for longer). A newer demo-connect replaces a waiting one.
 - The server's `/auth/google/callback` first asks whether the state is the
   waiting demo flow's. If it is, it takes the flow in one transaction, so
   the state works once, and finishes the connect with no app session: a
@@ -69,7 +69,7 @@ server share `app-secrets.sqlite`.)
   cookie. Nothing else can finish a demo connect: only the holder of the
   printed link has the state. (proposed: no browser cookie binds the demo
   flow, since the command runs on the server and the link is opened in
-  Jeff's browser. The single-use state, its 10 minutes and PKCE are the
+  Jeff's browser. The single-use state, its hour and PKCE are the
   guard.)
 - `--email` refuses any other Google account at the callback, and revokes
   its grant (`wrong_account`). (proposed)

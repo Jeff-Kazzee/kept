@@ -101,7 +101,7 @@ function toolCtx(ws: ReturnType<typeof createWorkspace>) {
 }
 
 describe("sprint 19, D2: connecting the shared demo connection", () => {
-  it("the state works once, within 10 minutes, and a wrong state is not the demo's", async () => {
+  it("the state works once, within an hour, and a wrong state is not the demo's", async () => {
     const s = await demoSetup({ connect: false });
     try {
       const { authorizeUrl } = s.demo.startConnect({ redirectUri: REDIRECT, expectEmail: "dana.demo@example.com" });
@@ -124,10 +124,12 @@ describe("sprint 19, D2: connecting the shared demo connection", () => {
       expect(s.demo.ownsState(state)).toBe(false);
       await expect(s.demo.finishConnect({ state, code: back.searchParams.get("code"), error: null })).rejects.toMatchObject({ code: "invalid_state" });
 
-      // Expiry: a link older than 10 minutes is refused.
+      // Expiry: a link older than an hour is refused.
       const late = s.demo.startConnect({ redirectUri: REDIRECT, expectEmail: "dana.demo@example.com" });
       const lateBack = s.fake.consent(late.authorizeUrl);
-      s.fake.now += 10 * 60_000 + 1;
+      s.fake.now += 59 * 60_000;
+      expect(s.demo.ownsState(lateBack.searchParams.get("state"))).toBe(true);
+      s.fake.now += 60_000 + 1;
       expect(s.demo.ownsState(lateBack.searchParams.get("state"))).toBe(false);
       await expect(s.demo.finishConnect({ state: lateBack.searchParams.get("state"), code: lateBack.searchParams.get("code"), error: null })).rejects.toMatchObject({ code: "invalid_state" });
       // The status says when Google ends the 7-day consent.

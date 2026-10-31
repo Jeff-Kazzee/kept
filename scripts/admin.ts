@@ -31,7 +31,7 @@
 //       a new folder of mode 700, each file mode 600.
 //   pnpm admin google demo-connect --email <address>
 //       The shared demo Gmail and Calendar (0021, D2). Prints a link, good
-//       once for 10 minutes. Open it signed in as the demo Google account
+//       once, for an hour. Open it signed in as the demo Google account
 //       and choose Allow with both Gmail and Calendar: the site's
 //       /auth/google/callback stores the connection. Needs GOOGLE_CLIENT_ID,
 //       GOOGLE_CLIENT_SECRET and BETTER_AUTH_URL, as the instance has them.
