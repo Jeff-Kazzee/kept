@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { readAuthConfig, authLogLine } from "../src/hosted/auth.ts";
 import { ConfigError } from "../src/hosted/config.ts";
-import { clientAddress } from "../src/hosted/rate-limit.ts";
+import { FORWARDED_UNKNOWN, clientAddress } from "../src/hosted/rate-limit.ts";
 import { AccountsStore } from "../src/hosted/store.ts";
 import { runAdminAsync } from "../scripts/admin.ts";
 import { RATE_LIMITED_TEXT, isBetterAuthPath } from "../server/hosted.ts";
@@ -343,8 +343,10 @@ describe("0020, B6 and B11: behind Tailscale Funnel on port 10000", () => {
     expect(clientAddress({ "x-forwarded-for": "203.0.113.9" }, "127.0.0.1", "tailscale")).toBe("203.0.113.9");
     expect(clientAddress({ "x-forwarded-for": "2001:db8::7" }, "::1", "tailscale")).toBe("2001:db8::7");
     expect(clientAddress({ "x-forwarded-for": "203.0.113.9" }, "198.51.100.4", "tailscale")).toBe("198.51.100.4");
-    expect(clientAddress({ "x-forwarded-for": "1.1.1.1, 203.0.113.9" }, "127.0.0.1", "tailscale")).toBe("127.0.0.1");
-    expect(clientAddress({ "x-forwarded-for": "not-an-ip" }, "127.0.0.1", "tailscale")).toBe("127.0.0.1");
+    // 0023, fix round 1: a list or anything not one address is one shared
+    // address, never this server's own.
+    expect(clientAddress({ "x-forwarded-for": "1.1.1.1, 203.0.113.9" }, "127.0.0.1", "tailscale")).toBe(FORWARDED_UNKNOWN);
+    expect(clientAddress({ "x-forwarded-for": "not-an-ip" }, "127.0.0.1", "tailscale")).toBe(FORWARDED_UNKNOWN);
     expect(clientAddress({ "cf-connecting-ip": "203.0.113.9" }, "127.0.0.1", "tailscale")).toBe("127.0.0.1");
     expect(clientAddress({ "x-forwarded-for": "203.0.113.9" }, "127.0.0.1", "none")).toBe("127.0.0.1");
   });

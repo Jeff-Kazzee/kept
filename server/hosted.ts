@@ -12,10 +12,11 @@
 // type and body checks as in local mode (http.ts). Then:
 //
 //   GET  /api/session              who is signed in, and the balance
-//   POST /api/session/judge        { code } signs in with a judge code.
-//                                  Rate-limited per address. A shared
-//                                  judge pass makes a new account for each
-//                                  browser, a few an hour (0023).
+//   POST /api/session/judge        { code, key? } signs in with a judge
+//                                  code. Rate-limited per address. A
+//                                  shared judge pass makes a new account
+//                                  for each browser, by its key, a few an
+//                                  hour (0023).
 //   POST /api/session/signout      { } ends the session, of either kind
 //   GET  /api/usage                balance, recent charges, plans, prices
 //   POST /api/account/judge-code   { code } adds a judge code's credit to
@@ -39,7 +40,7 @@ import { formatBalance, formatCharge, formatUsd, type HostedConfig } from "../sr
 import { MeteredClient } from "../src/hosted/metered.ts";
 import { PRICES, turnCostMicros } from "../src/hosted/prices.ts";
 import { AddressLimiter, clientAddress, isLoopback } from "../src/hosted/rate-limit.ts";
-import { AccountsBusyError, AccountsFileError, AccountsStore, HOUR_MS, JudgeCodeError, POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR, SESSION_TTL_MS, accountsPath, workspacesRoot, type Account, type ChargeRow } from "../src/hosted/store.ts";
+import { AccountsBusyError, AccountsFileError, AccountsStore, JudgeCodeError, SESSION_TTL_MS, SIGNIN_KEY, accountsPath, workspacesRoot, type Account, type ChargeRow } from "../src/hosted/store.ts";
 import { META_MODELS, metaModel } from "../src/model/providers/models.ts";
 import { UsageRefusedError, withUsageScope } from "../src/model/usage.ts";
 import { CALLBACK_PATH } from "./auth.ts";
@@ -114,6 +115,8 @@ export const PLANS = [
 ];
 
 const JudgeBody = z.object({ code: z.string().max(200) }).strict();
+// 0023, fix round 1: a pass sign-in may carry the browser's sign-in key.
+const JudgeSignInBody = z.object({ code: z.string().max(200), key: z.string().regex(SIGNIN_KEY).optional() }).strict();
 const EmptyBody = z.object({}).strict();
 const DeleteBody = z.object({ confirmation: z.string().max(20) }).strict();
 
@@ -195,11 +198,6 @@ export async function createHostedApp(o: HostedOptions) {
   const signinLimit = new AddressLimiter({ limit: 20, windowMs: 10 * 60_000, now });
   const signupLimit = new AddressLimiter({ limit: 10, windowMs: 60 * 60_000, now });
   const judgeLimit = new AddressLimiter({ limit: 10, windowMs: 15 * 60_000, now });
-  // 0023: new accounts from a shared judge pass, per client address. Only
-  // an address the trusted proxy or the socket gives, never loopback, so a
-  // proxy that sends no header does not make every visitor one address.
-  // The pass's own hourly limit holds in the store either way.
-  const poolLimit = new AddressLimiter({ limit: POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR, windowMs: HOUR_MS, now });
   // 0021, round 2, finding 1: failed demo connects per address.
   const demoFailLimit = new AddressLimiter({ ...DEMO_FAIL_LIMIT, now });
   const serverKey = config.serverKeyOn ? o.serverMetaKey : null;
@@ -501,20 +499,21 @@ export async function createHostedApp(o: HostedOptions) {
       }
       case "/api/session/judge": {
         if (!only("POST")) return true;
-        const b = parsed(JudgeBody, body);
+        const b = parsed(JudgeSignInBody, body);
         if (!b) return true;
         const limit = judgeLimit.take(address);
         if (!limit.ok) return send(res, 429, { error: "rate_limited", message: RATE_LIMITED_TEXT, retryAfterSeconds: limit.retryAfterSeconds }), true;
         try {
           // 0023: a shared pass gives this browser's own account from it
-          // back, and makes a new one otherwise.
+          // back, by its session or its sign-in key, and makes a new one
+          // otherwise, counted per address unless the address is this
+          // server's own: a socket with no forwarding header (rate-limit.ts).
           const current = (await sessionOf(req, null))?.account;
-          const poolAddress = isLoopback(address) ? null : address;
-          const { account, pooled } = store.judgeSignIn(b.code.trim(), {
+          const { account } = store.judgeSignIn(b.code.trim(), {
             current: current?.kind === "judge" ? current.id : null,
-            addressFull: poolAddress !== null && !poolLimit.check(poolAddress).ok,
+            key: b.key ?? null,
+            address: isLoopback(address) ? null : address,
           });
-          if (pooled && poolAddress !== null) poolLimit.take(poolAddress);
           await startJudgeSession(req, res, secure, account);
           send(res, 200, accountView(account, now() + SESSION_TTL_MS));
         } catch (err) {

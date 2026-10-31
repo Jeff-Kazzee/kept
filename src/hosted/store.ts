@@ -34,6 +34,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { TokenUsage } from "../model/request.ts";
 import { appDbPath } from "../paths.ts";
 import { checkPrivateFile } from "./db-file.ts";
+import { addressBucket } from "./rate-limit.ts";
 
 export const ACCOUNTS_FILE_NAME = "accounts.sqlite";
 
@@ -57,11 +58,15 @@ export const SESSION_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 // so the sign-in screen takes either.
 export const JUDGE_POOL_ID = /^p[0-9a-f]{12}$/;
 
-// 0023: the most accounts one pass makes in any hour, and from one client
-// address in an hour (the server counts those, rate-limit.ts).
+// 0023: the most accounts one pass makes in any hour, and the most all
+// passes make for one client address in any hour, both counted here.
 export const POOL_ACCOUNTS_PER_HOUR = 6;
 export const POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR = 2;
 export const HOUR_MS = 60 * 60_000;
+// 0023, fix round 1: the key a browser sends with a pass sign-in, made
+// once and kept in its storage, so a retry or a second click gets the
+// account the first one made. 32 random bytes in base64url.
+export const SIGNIN_KEY = /^[A-Za-z0-9_-]{43}$/;
 
 export const POOL_EMPTY_TEXT = "The shared judge pass is used up. Email the address on the judges' page for your own code.";
 export const POOL_THROTTLED_TEXT = "Many new accounts were made with the shared judge pass in the last hour. Try again in a while, or email the address on the judges' page for your own code.";
@@ -210,7 +215,9 @@ CREATE TABLE IF NOT EXISTS judge_codes (
   redeemed_at INTEGER,
   revoke_due INTEGER NOT NULL DEFAULT 0,
   revoke_hold_max INTEGER NOT NULL DEFAULT 0,
-  pool_id TEXT REFERENCES judge_pools (id)
+  pool_id TEXT REFERENCES judge_pools (id),
+  signin_key TEXT,
+  signin_address TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS judge_pools (
   id TEXT PRIMARY KEY,
@@ -231,12 +238,19 @@ export const AUTH_USER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 // accounts table is made again, in one transaction, with every row kept
 // (SQLite's own steps for a table change, with foreign keys off).
 function migrateAccounts(db: DatabaseSync): void {
-  const sql = String((db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'").get() as Row | undefined)?.sql ?? "");
-  if (sql.includes("'user'")) return;
+  const accountsSql = () => (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'").get() as Row | undefined)?.sql;
+  const sql = accountsSql();
+  if (sql === undefined || String(sql).includes("'user'")) return;
   db.exec("PRAGMA foreign_keys = OFF");
   try {
     db.exec("BEGIN IMMEDIATE");
     try {
+      // 0023, fix round 1: read again inside the transaction, so a second
+      // process that opened at the same time finds it done.
+      if (String(accountsSql() ?? "'user'").includes("'user'")) {
+        db.exec("COMMIT");
+        return;
+      }
       db.exec(`CREATE TABLE accounts_0020 (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN ('google', 'judge', 'user')),
@@ -303,24 +317,47 @@ export class AccountsStore {
     }
     try {
       this.#checkPath(false);
-      db.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}; PRAGMA foreign_keys = ON;`);
-      db.exec(SCHEMA);
+      db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}; PRAGMA foreign_keys = ON;`);
+      // The switch to WAL takes the whole file, so it runs only on a file
+      // not in WAL yet: every file this app made already is.
+      if (String((db.prepare("PRAGMA journal_mode").get() as Row).journal_mode).toLowerCase() !== "wal") db.exec("PRAGMA journal_mode = WAL");
+      // A database made before 0020 has its accounts table made again
+      // first, in its own transaction, as that needs foreign keys off.
       migrateAccounts(db);
-      // A database made before review round 1 gains the revoke column.
-      const cols = (db.prepare("PRAGMA table_info(judge_codes)").all() as Row[]).map((c) => String(c.name));
-      if (!cols.includes("revoke_due")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_due INTEGER NOT NULL DEFAULT 0");
-      if (!cols.includes("revoke_hold_max")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_hold_max INTEGER NOT NULL DEFAULT 0");
-      // 0023: a database made before the shared judge pass gains the
-      // column that ties a pass's accounts to it. Every row is kept, with
-      // no pass.
-      if (!cols.includes("pool_id")) db.exec("ALTER TABLE judge_codes ADD COLUMN pool_id TEXT REFERENCES judge_pools (id)");
-      db.exec("CREATE INDEX IF NOT EXISTS judge_codes_pool ON judge_codes (pool_id, redeemed_at) WHERE pool_id IS NOT NULL");
-      // Sprint 18 round 2: a closed account keeps a hash of its Better Auth
-      // user, so a session read while Delete account runs finds the closed
-      // account instead of making a new one.
-      const accountCols = (db.prepare("PRAGMA table_info(accounts)").all() as Row[]).map((c) => String(c.name));
-      if (!accountCols.includes("closed_user")) db.exec("ALTER TABLE accounts ADD COLUMN closed_user TEXT");
-      db.exec("CREATE INDEX IF NOT EXISTS accounts_closed_user ON accounts (closed_user)");
+      // 0023, fix round 1: the tables and every added column in one
+      // transaction, each column checked inside it, so two processes that
+      // open a file made before this sprint at once never add one twice.
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.exec(SCHEMA);
+        const cols = (db.prepare("PRAGMA table_info(judge_codes)").all() as Row[]).map((c) => String(c.name));
+        // A database made before review round 1 gains the revoke column.
+        if (!cols.includes("revoke_due")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_due INTEGER NOT NULL DEFAULT 0");
+        if (!cols.includes("revoke_hold_max")) db.exec("ALTER TABLE judge_codes ADD COLUMN revoke_hold_max INTEGER NOT NULL DEFAULT 0");
+        // 0023: a database made before the shared judge pass gains the
+        // columns that tie a pass's accounts to it, its sign-in key and its
+        // address. Every row is kept, with no pass.
+        if (!cols.includes("pool_id")) db.exec("ALTER TABLE judge_codes ADD COLUMN pool_id TEXT REFERENCES judge_pools (id)");
+        if (!cols.includes("signin_key")) db.exec("ALTER TABLE judge_codes ADD COLUMN signin_key TEXT");
+        if (!cols.includes("signin_address")) db.exec("ALTER TABLE judge_codes ADD COLUMN signin_address TEXT");
+        db.exec("CREATE INDEX IF NOT EXISTS judge_codes_pool ON judge_codes (pool_id, redeemed_at) WHERE pool_id IS NOT NULL");
+        db.exec("CREATE UNIQUE INDEX IF NOT EXISTS judge_codes_signin_key ON judge_codes (signin_key) WHERE signin_key IS NOT NULL");
+        db.exec("CREATE INDEX IF NOT EXISTS judge_codes_signin_address ON judge_codes (signin_address, redeemed_at) WHERE signin_address IS NOT NULL");
+        // Sprint 18 round 2: a closed account keeps a hash of its Better Auth
+        // user, so a session read while Delete account runs finds the closed
+        // account instead of making a new one.
+        const accountCols = (db.prepare("PRAGMA table_info(accounts)").all() as Row[]).map((c) => String(c.name));
+        if (!accountCols.includes("closed_user")) db.exec("ALTER TABLE accounts ADD COLUMN closed_user TEXT");
+        db.exec("CREATE INDEX IF NOT EXISTS accounts_closed_user ON accounts (closed_user)");
+        db.exec("COMMIT");
+      } catch (err) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // Already rolled back.
+        }
+        throw err;
+      }
     } catch (err) {
       db.close();
       if (err instanceof AccountsFileError) throw err;
@@ -491,9 +528,13 @@ export class AccountsStore {
     this.#tx((db) => db.prepare("DELETE FROM sessions WHERE hash = ?").run(sha256(token)));
   }
 
-  // Removes expired sessions. Called now and then.
+  // Removes expired sessions, and the address of each pass sign-in once
+  // its hour is over (0023). Called now and then.
   sweepSessions(): number {
-    return this.#tx((db) => Number(db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(this.#now()).changes));
+    return this.#tx((db) => {
+      db.prepare("UPDATE judge_codes SET signin_address = NULL WHERE signin_address IS NOT NULL AND redeemed_at <= ?").run(this.#now() - HOUR_MS);
+      return Number(db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(this.#now()).changes);
+    });
   }
 
   // ---- Ledger ----
@@ -579,6 +620,12 @@ export class AccountsStore {
     return this.#tx((db): HoldResult => {
       const account = this.#account(db, ctx.accountId);
       if (!account || account.deleted) return { ok: false, reason: "credits" };
+      // 0023, fix round 1: a judge account whose code or pass was revoked
+      // or ran out takes no new hold, even in a turn that began before.
+      if (account.kind === "judge") {
+        const code = db.prepare("SELECT expires_at, revoked_at FROM judge_codes WHERE account_id = ?").get(account.id) as Row | undefined;
+        if (!code || code.revoked_at !== null || num(code.expires_at) <= this.#now()) return { ok: false, reason: "credits" };
+      }
       if (this.#dayCost(db, this.#now()) + costMicros > dailyCapMicros) return { ok: false, reason: "daily_cap" };
       // A revoked code's credit still inside open holds is not there to
       // spend (review round 1, finding 2).
@@ -906,6 +953,9 @@ export class AccountsStore {
       }
       const c = db.prepare("SELECT * FROM judge_codes WHERE id = ?").get(id) as Row | undefined;
       if (!c) throw new JudgeCodeError("not_found", "No judge code has that id.");
+      // Fix round 1, finding 4: the pass would make the browser a new
+      // account at once, so one of its accounts is not revoked alone.
+      if (c.pool_id !== null) throw new JudgeCodeError("pool_member", `That account came from the shared judge pass ${String(c.pool_id)}. Revoke the pass instead. Nothing was revoked.`);
       if (c.revoked_at !== null) return;
       this.#revokeRow(db, c);
     });
@@ -1029,14 +1079,33 @@ export class AccountsStore {
       const own = m && m.revoked_at === null ? this.#account(db, options.current) : null;
       if (own && !own.deleted) return { account: own, pooled: false };
     }
+    // Fix round 1, finding 2: the browser's key finds the account its
+    // earlier sign-in made, in this pass only. Its hash is bound to the
+    // pass, so it reaches no other pass's account and no code's.
+    const key = options.key && SIGNIN_KEY.test(options.key) ? sha256(`judge-pool-signin:${poolId}:${options.key}`) : null;
+    if (key !== null) {
+      const m = db.prepare("SELECT id, account_id, revoked_at FROM judge_codes WHERE signin_key = ? AND pool_id = ?").get(key, poolId) as Row | undefined;
+      const own = m && m.revoked_at === null ? this.#account(db, String(m.account_id)) : null;
+      if (own && !own.deleted) return { account: own, pooled: false };
+      // That account was closed: the key goes to the new one.
+      if (m) db.prepare("UPDATE judge_codes SET signin_key = NULL WHERE id = ?").run(String(m.id));
+    }
     const share = num(p.share);
     if (num(p.cap) - this.#poolGranted(db, poolId) < share) throw new JudgeCodeError("pool_empty", POOL_EMPTY_TEXT);
     const recent = num((db.prepare("SELECT COUNT(*) AS n FROM judge_codes WHERE pool_id = ? AND redeemed_at > ?").get(poolId, now - HOUR_MS) as Row).n);
-    if (recent >= POOL_ACCOUNTS_PER_HOUR || options.addressFull === true) throw new JudgeCodeError("pool_throttled", POOL_THROTTLED_TEXT);
+    if (recent >= POOL_ACCOUNTS_PER_HOUR) throw new JudgeCodeError("pool_throttled", POOL_THROTTLED_TEXT);
+    // Fix round 1, finding 5: the per-address count is a sliding hour
+    // here too, across passes, restarts and processes. Only a hash of the
+    // address's bucket is kept, and the sweep clears it after the hour.
+    const address = options.address ? sha256(`judge-pool-address:${addressBucket(options.address)}`) : null;
+    if (address !== null) {
+      const fromAddress = num((db.prepare("SELECT COUNT(*) AS n FROM judge_codes WHERE signin_address = ? AND redeemed_at > ?").get(address, now - HOUR_MS) as Row).n);
+      if (fromAddress >= POOL_ACCOUNTS_PER_ADDRESS_PER_HOUR) throw new JudgeCodeError("pool_throttled", POOL_THROTTLED_TEXT);
+    }
     const accountId = randomId("a", 16);
     db.prepare("INSERT INTO accounts (id, kind, created_at) VALUES (?, 'judge', ?)").run(accountId, now);
     // The row's hash is of random bytes, so no code ever matches it.
-    db.prepare("INSERT INTO judge_codes (id, hash, label, cap, expires_at, created_at, account_id, redeemed_at, pool_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+    db.prepare("INSERT INTO judge_codes (id, hash, label, cap, expires_at, created_at, account_id, redeemed_at, pool_id, signin_key, signin_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
       randomId("j", 6),
       sha256(`judge-pool-account:${randomBytes(32).toString("hex")}`),
       String(p.label),
@@ -1046,13 +1115,16 @@ export class AccountsStore {
       accountId,
       now,
       poolId,
+      key,
+      address,
     );
     this.#insert(db, { account_id: accountId, kind: "grant", amount: share, source: `judge-pool:${poolId}` });
     return { account: this.#account(db, accountId)!, pooled: true };
   }
 }
 
-// `current`: the account of the browser's own judge session, if any. A
-// shared pass gives it back rather than make another. `addressFull`: the
-// client's address already made its hour's accounts (0023).
-export type PoolSignInOptions = { current?: string | null; addressFull?: boolean };
+// `current`: the account of the browser's own judge session, if any, and
+// `key`: the browser's sign-in key. A shared pass gives the account either
+// one finds back rather than make another. `address`: the client's
+// address, counted per hour, or null when it is this server's own (0023).
+export type PoolSignInOptions = { current?: string | null; key?: string | null; address?: string | null };

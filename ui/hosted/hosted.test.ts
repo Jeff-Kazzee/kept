@@ -6,7 +6,7 @@
 // ui/shell/AccountMenu.dom.test.ts.
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PARTIAL_TEXT } from "../../src/agent/types.ts";
 import { USAGE_TEXT, usageStopText } from "../../src/model/usage-text.ts";
 import { AgentContext, DEFAULT_AGENT, type AgentState } from "../agent/AgentContext.tsx";
@@ -18,7 +18,7 @@ import { ApiError } from "../api.ts";
 import { ConnectionsPage, SettingsPage, UsagePage } from "../pages/Settings.tsx";
 import { SignIn, judgePath } from "./SignIn.tsx";
 import { authErrorText } from "./accountAuth.ts";
-import { accountLabel, hostedSignInError, type SignedInSession } from "./session.ts";
+import { SIGNIN_KEY_STORAGE, accountLabel, hostedSignInError, judgeSigninKey, type SignedInSession } from "./session.ts";
 
 const run = async () => {};
 const html = (node: ReactNode, agent: Partial<AgentState> = {}) =>
@@ -148,5 +148,35 @@ describe("the hosted site", () => {
     for (const text of [...Object.values(USAGE_TEXT).flatMap((v) => [v.text, v.reason])]) {
       expect(text).not.toMatch(/—|;/);
     }
+  });
+});
+
+describe("the judge sign-in key (0023, fix round 1)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is made once, kept in this browser's storage, and replaced when what is kept has another shape", () => {
+    const kept = new Map<string, string>();
+    const storage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v) };
+    vi.stubGlobal("window", { localStorage: storage });
+    const key = judgeSigninKey();
+    expect(key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(kept.get(SIGNIN_KEY_STORAGE)).toBe(key);
+    expect(judgeSigninKey()).toBe(key);
+    kept.set(SIGNIN_KEY_STORAGE, "not a key");
+    expect(judgeSigninKey()).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    // With no storage at all, the page keeps one key of its own.
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: () => {
+          throw new Error("blocked");
+        },
+        setItem: () => {
+          throw new Error("blocked");
+        },
+      },
+    });
+    const page = judgeSigninKey();
+    expect(page).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(judgeSigninKey()).toBe(page);
   });
 });

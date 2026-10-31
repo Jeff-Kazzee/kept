@@ -63,7 +63,7 @@ export const hostedApi = {
       throw e;
     }
   },
-  judgeSignIn: (code: string) => call<SessionInfo>("POST", "/api/session/judge", { code }),
+  judgeSignIn: (code: string, key?: string) => call<SessionInfo>("POST", "/api/session/judge", key ? { code, key } : { code }),
   signOut: () => call<SessionInfo>("POST", "/api/session/signout", {}),
   usage: () => call<UsageView>("GET", "/api/usage"),
   addJudgeCode: (code: string) => call<UsageView>("POST", "/api/account/judge-code", { code }),
@@ -73,6 +73,32 @@ export const hostedApi = {
 // The request was refused because the session ended. The page shows the
 // sign-in screen again.
 export const signedOut = (e: unknown) => e instanceof ApiError && e.status === 401 && e.body.error === "signed_out";
+
+// 0023, fix round 1: the key this browser sends with a judge code, made
+// once and kept, so a retried or doubled sign-in with a shared pass opens
+// the account the first one made. 32 random bytes in base64url. Without
+// storage, one key for this page.
+export const SIGNIN_KEY_STORAGE = "kept.judge-signin-key";
+const SIGNIN_KEY_SHAPE = /^[A-Za-z0-9_-]{43}$/;
+let pageKey: string | null = null;
+export function judgeSigninKey(): string {
+  try {
+    const kept = window.localStorage.getItem(SIGNIN_KEY_STORAGE);
+    if (kept && SIGNIN_KEY_SHAPE.test(kept)) return kept;
+  } catch {
+    // No storage: the page's own key below.
+  }
+  if (pageKey === null) {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    pageKey = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  try {
+    window.localStorage.setItem(SIGNIN_KEY_STORAGE, pageKey);
+  } catch {
+    // Kept for this page only.
+  }
+  return pageKey;
+}
 
 // Who the account menu names.
 export function accountLabel(a: HostedAccount): string {

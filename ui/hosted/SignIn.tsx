@@ -10,7 +10,7 @@ import { Mark } from "../components/Art.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { errorSentence } from "../format.ts";
 import { AuthError, accountAuth } from "./accountAuth.ts";
-import { hostedApi, type SessionInfo } from "./session.ts";
+import { hostedApi, judgeSigninKey, type SessionInfo } from "./session.ts";
 
 export const judgePath = (pathname: string) => /^\/judge\/?$/.test(pathname);
 
@@ -123,7 +123,7 @@ export function SignIn({
     setBusy("code");
     setError(null);
     try {
-      const s = await hostedApi.judgeSignIn(c);
+      const s = await hostedApi.judgeSignIn(c, judgeSigninKey());
       if (judgePath(window.location.pathname)) window.history.replaceState(null, "", "/");
       onSignedIn(s);
     } catch (err) {

@@ -87,7 +87,7 @@ export function AccountMenu({
             </p>
             {session.account.pool && (
               <p className="menu-note small muted">
-                This workspace stays on this browser. Signing out ends it: a new sign-in with the shared judge pass starts a fresh one.
+                This workspace stays on this browser. Signing in with the shared judge pass again here opens it, and another browser starts a fresh one.
               </p>
             )}
           </>
