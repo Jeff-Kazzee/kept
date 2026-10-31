@@ -1405,7 +1405,7 @@ figure.source { margin: 0; }
 .demo-google .provider-title .icon { color: var(--text-2); }
 .demo-google .provider-head { flex-wrap: wrap; justify-content: flex-start; }
 .demo-google .provider-title { flex: 1 1 16rem; flex-wrap: nowrap; align-items: flex-start; }
-.demo-google .provider-title .icon { flex: none; margin-top: 3px; }
+.demo-google .provider-title .icon { flex: none; margin-top: var(--s-px); }
 .provider.is-off .provider-title { font-weight: 560; }
 
 .usage-balance { display: grid; gap: var(--s-px); }
