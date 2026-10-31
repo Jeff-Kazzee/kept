@@ -1,7 +1,8 @@
 # 0020: Accounts through Better Auth, and a hosted app that works end to end
 
 Status: K1 to K5 are Jeff's (2026-10-30, through the server coordinator's
-sprint 18 handoff and its correction the same day). Choices marked
+sprint 18 handoff and its correction the same day). K6 to K9 are Jeff's
+(2026-10-31, during fix round 1). Choices marked
 (proposed) are the writer's and wait for Jeff. This replaces 0014's J16
 (sign-in with Google) and the Cloudflare part of J17. Every other rule of
 0014 stands.
@@ -38,6 +39,24 @@ now signs in through Better Auth.
 - **K5.** Going live, the `tailscale funnel` command and installing the
   unit, is the coordinator's step after Jeff's approval. The writer
   changes no Tailscale configuration.
+- **K6.** The Better Auth dashboard plugin stays off for the hackathon.
+  `BETTER_AUTH_API_KEY` stays unset at go-live, and the docs say it is off
+  by default. It comes back only "if deemed worthy" later (B7).
+- **K7.** At launch, judges get in with their judge codes only. One
+  setting, `APP_PUBLIC_SIGNUP`, off by default. While it is off, email
+  sign-up is refused on the server, the sign-in screen leads with "I have
+  a judge code", "Make an account" is not shown, and email and password
+  sign-in and passkeys stay for accounts that already exist, made with
+  `pnpm admin users create`, through a small "Sign in to an existing
+  account" link. With it on, everything works as before (B9a).
+- **K8.** The product's name is Kept. Final. Nothing is renamed in this
+  sprint. The coordinator renames after sprints 17 and 18 merge.
+- **K9.** The public goes to a marketing page with a waitlist, and the
+  app stays judges only. While `APP_PUBLIC_SIGNUP` is off, the sign-in
+  screen shows "Not a judge? Kept is coming soon. Join the waitlist."
+  under the judge code form, linked to `APP_WAITLIST_URL`, a new optional
+  setting the coordinator fills in with the here.now page. Unset, the
+  line is hidden (B9a).
 
 ## B1. Better Auth on node:sqlite
 
@@ -76,12 +95,21 @@ now signs in through Better Auth.
   password (20 characters), prints it once, and ends every session of that
   account. Its passkeys keep working. `pnpm admin users list` shows each
   account's email, when it was made and how many passkeys it has.
-- Better Auth's routes the site does not offer answer 404
-  (`DISABLED_PATHS`): social sign-in, account linking, email change,
-  password change and reset, email verification, session lists and
-  revokes, user update and delete (the app's Delete account does that),
-  and passkey rename. (proposed: password change waits for a sprint that
-  adds its page.)
+- Better Auth's routes are an allowlist (fix round 1, item 4,
+  `authRouteServed`): email sign-in and sign-up, the session read, and the
+  passkey routes, plus `dash/*` only while the dashboard plugin is on.
+  Every other path under `/api/auth` answers 404 before Better Auth sees
+  it, so a route a later version or plugin adds is never served by
+  accident. Behind it, Better Auth's own `DISABLED_PATHS` also refuses
+  social sign-in, account linking, email change, password change and
+  reset, email verification, session lists and revokes, user update and
+  delete (the app's Delete account does that), passkey rename, and its
+  own sign-out (item 1: the page signs out through the app, which ends a
+  judge session too). Better Auth matches that list as literal paths, so
+  the two entries with a parameter, `/callback/:id` and
+  `/reset-password/:token`, are refused by a small plugin
+  (`disabledPatterns`). Found by the fix round's test of every entry.
+  (proposed: password change waits for a sprint that adds its page.)
 - Rate limits, both on:
   - Better Auth's own, on, with its defaults: 3 sign-in or sign-up tries
     per address in 10 seconds, 100 requests per address a minute on
@@ -160,7 +188,17 @@ The mapping (proposed):
   workspace is busy just then, the account is closed and the workspace's
   files stay until removed by hand, with a log line that names no one.
 - Sign-out ends both kinds of session and clears both cookies. A judge
-  code sign-in ends a Better Auth session the browser had.
+  code sign-in ends a Better Auth session the browser had. An email or
+  passkey sign-in, or a sign-up, that succeeds ends the browser's judge
+  session and clears its cookie (fix round 1, item 1), so a shared
+  browser never falls back to a judge's account.
+- Fix round 1, item 2: every request checks again, as it enters its
+  workspace and before any workspace is built, that its account still
+  exists and is not deleted. A request that read its session just before
+  Delete account finished is answered as signed out, and never makes a
+  fresh workspace for the deleted account.
+- Fix round 1, item 3: an expired judge code takes no more credit from
+  `pnpm admin judges grant`, as it redeems no more.
 
 ## B6. Sessions and the origin check
 
@@ -219,8 +257,12 @@ The mapping (proposed):
   sign-in database (`/dash/execute-adapter`). It cannot reach
   `accounts.sqlite`: credits, the ledger and judge codes stay out of its
   reach (B1). Without a valid token those routes answer 401 (tested).
-  Turning it on is trusting Better Auth's cloud with the sign-in
-  database. That is Jeff's call when he sets the key.
+  Turning it on is trusting Better Auth's cloud as root over
+  `auth.sqlite`: whoever holds a token it signs for this key can read and
+  change every user, password hash, passkey and session, and sign in as
+  anyone. K6: it stays off for the hackathon. Fix round 1 tests a forged,
+  a wrong-key and an expired token, and a token past the replay grace
+  period, refused, with no network.
 - The privacy line on the sign-in screen says, when the plugin is on,
   that sign-in events, with the email and network address, also go to
   Better Auth.
@@ -241,8 +283,12 @@ In `.env.schema` (varlock) and `src/hosted/auth.ts`:
 - `BETTER_AUTH_URL`, the public origin, required in hosted mode: https,
   no path, its port when it has one. `http://localhost:<port>` is allowed
   for local checks. `127.0.0.1` is refused: a passkey needs a host name.
-- `BETTER_AUTH_API_KEY`, sensitive, optional. `BETTER_AUTH_API_URL`,
-  `BETTER_AUTH_KV_URL`, optional, https.
+- `BETTER_AUTH_API_KEY`, sensitive, optional, unset at go-live (K6).
+  `BETTER_AUTH_API_URL`, `BETTER_AUTH_KV_URL`, optional, https.
+- `APP_PUBLIC_SIGNUP`, `on` or `off`, default `off` (K7). Any other value
+  stops the app.
+- `APP_WAITLIST_URL`, optional, https only (K9). Any other value stops the
+  app.
 
 None of them is logged or returned. The secret scan looks for each one
 assigned with a value, and for `auth.sqlite` and any copy of it.
@@ -255,6 +301,25 @@ code may be added at sign-up. Every refusal reads as the page's own plain
 sentence, never Better Auth's text. A password or a code is cleared from
 the page as soon as it is sent. Built with the existing classes only, for
 sprint 17's restyle.
+
+## B9a. Judges only at launch (K7, K9)
+
+- `APP_PUBLIC_SIGNUP` off: the app answers `POST /api/auth/sign-up/email`
+  with 403 `signup_closed` and the sentence "New accounts are not open on
+  this site yet. Judges, choose I have a judge code.", and Better Auth's
+  own sign-up route is disabled too, so no request makes a user. The
+  sign-in screen opens on the judge code form, with "Sign in to an
+  existing account" as a small link to email and password and "Use a
+  passkey", and no "Make an account".
+- `pnpm admin users create --email <email> [--name <name>]` makes an
+  account with a random password, printed once, for someone who should
+  sign in by email while sign-up is off.
+- `APP_WAITLIST_URL` set and sign-up off: "Not a judge? Kept is coming
+  soon. Join the waitlist." under the judge code form, linking there. The
+  page shows the link only for an https address. The session view sends
+  no link while sign-up is on.
+- Both states are tested through HTTP (`test/sprint18-fix1.test.ts`), and
+  the screen in both (`ui/hosted/hosted.test.ts`).
 
 ## B10. A hosted instance beside the local demo
 
@@ -302,9 +367,15 @@ identity headers. So:
 
 ## Known limits
 
-- No password reset by email, and no email verification: anyone may sign
-  up with any email address. Credit comes only from judge codes, so an
-  unverified account has no credit to spend.
+- No password reset by email, and no email verification. While
+  `APP_PUBLIC_SIGNUP` is on, anyone may sign up with any email address,
+  so an email can be taken by someone else (squatting) and a sign-up can
+  learn that an email is in use (enumeration). Accepted for now (fix
+  round 1, item 6): public sign-up grants no credit, so it cannot spend
+  money, it is off at launch (K7), and a refused sign-up says only "That
+  email cannot be used here." (`EMAIL_UNAVAILABLE`), never that an account
+  has it. Email sign-in answers the same sentence for a wrong password and
+  an unknown email.
 - Better Auth keeps session tokens in `auth.sqlite` as they are, not
   hashed, unlike the app's judge sessions. The file is mode 600 and in
   the backups' private folder.
@@ -313,6 +384,11 @@ identity headers. So:
   wherever the person's passkey manager syncs it.
 
 ## Tests
+
+Fix round 1: `test/sprint18-fix1.test.ts` (items 1 to 6, K7, K9) and
+`test/sprint18-place-quote.test.ts` (item 8: the reply card's Place field
+quotes the place's own words, "our Elm Street office", not the time's
+quote, in `src/reply/draft.ts`). Item 7 and K6 are the docs.
 
 `test/hosted-better-auth.test.ts`: sign-up, sign-out, sign-in, a wrong
 password, short passwords and repeated emails, disabled routes, the body

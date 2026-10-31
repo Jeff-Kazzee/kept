@@ -657,6 +657,15 @@ for accounts, and the site live at
 - [x] B11 `APP_TRUSTED_PROXY=tailscale`, and the public host with its port.
 - [x] B12 `pnpm admin backup` (VACUUM INTO) and the request log in hosted
   mode.
+- [x] Fix round 1 (Muse Wonder and the coordinator's live run): no judge
+  session revives after an email sign-in, the Delete account race, no
+  grant on an expired code, Better Auth's routes as an allowlist, every
+  disabled route and bad dashboard token tested, a generic sign-up
+  refusal, the dashboard's trust written down, and the reply card's Place
+  quote.
+- [x] K6 to K9 (Jeff, 2026-10-31): the dashboard off, judges only at
+  launch with `APP_PUBLIC_SIGNUP` off and `pnpm admin users create`, the
+  name Kept (renamed later by the coordinator), and the waitlist link.
 - [ ] Go live (coordinator, after Jeff's approval): the env file, the unit
   and the Funnel command in `docs/hosted.md`, "Going live".
 - [ ] Live model checks on this branch (coordinator).

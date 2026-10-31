@@ -40,7 +40,9 @@ BETTER_AUTH_SECRET=... BETTER_AUTH_URL=http://localhost:5300 MODEL_API_KEY=... \
 | `APP_MODE` | `local` | `hosted` turns on accounts, sessions, credits and judge codes. The start script sets it. |
 | `BETTER_AUTH_SECRET` | none, required | Signs the session cookies. At least 32 random bytes, such as `openssl rand -base64 32`. Never logged or returned. |
 | `BETTER_AUTH_URL` | none, required | The site's public origin, with its port: `https://the-little-ai-co.tail374dd0.ts.net:10000`. The only trusted origin, the passkey origin, and its host name is the passkey relying party. Its host, with the port, is allowed by the host check. `http://localhost:<port>` for a local check. |
-| `BETTER_AUTH_API_KEY` | none | Turns the Better Auth dashboard plugin on. Off without it. See below. |
+| `BETTER_AUTH_API_KEY` | none, keep it unset | Turns the Better Auth dashboard plugin on. Off without it, and off for the hackathon (0020, K6). See below. |
+| `APP_PUBLIC_SIGNUP` | `off` | `on` lets anyone make an account with an email and password. `off`, the launch setting (0020, K7), refuses sign-up on the server: judges come in with their codes, and accounts made with `pnpm admin users create` still sign in. |
+| `APP_WAITLIST_URL` | none | An https address, the waitlist on Kept's marketing page (K9). While sign-up is off, the sign-in screen links it under the judge code form: "Not a judge? Kept is coming soon. Join the waitlist." Unset hides the line. |
 | `BETTER_AUTH_API_URL`, `BETTER_AUTH_KV_URL` | Better Auth's | The dashboard's addresses, only to change them. |
 | `MODEL_API_KEY` | none | The Meta key that usage credits pay for. Without it every assistant step is refused with a plain message. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | The Gmail and Calendar connection for test accounts (0012). Not a sign-in. |
@@ -69,10 +71,23 @@ The data lives in the data folder (`APP_DB`'s folder):
 
 ## Accounts
 
-- **Email and password.** "Make an account" takes an email, an optional
-  name and a password of at least 10 characters, and signs in at once.
-  There is no email verification and no reset email: the site sends no
-  mail. A person who forgot their password asks the coordinator:
+- **Judges only at launch.** With `APP_PUBLIC_SIGNUP` off, the default,
+  the sign-in screen opens on the judge code form, sign-up is refused on
+  the server, and "Make an account" is not shown. A small "Sign in to an
+  existing account" link leads to email and password and passkeys, for
+  accounts the coordinator makes:
+
+  ```sh
+  pnpm admin users create --email person@example.com --name "Pat Example"
+  ```
+
+  It prints the account's password once.
+- **Email and password.** With `APP_PUBLIC_SIGNUP=on`, "Make an account"
+  takes an email, an optional name and a password of at least 10
+  characters, and signs in at once. There is no email verification and no
+  reset email: the site sends no mail. A refused sign-up says only that
+  the email cannot be used. A person who forgot their password asks the
+  coordinator:
 
   ```sh
   pnpm admin users list
@@ -85,6 +100,10 @@ The data lives in the data folder (`APP_DB`'s folder):
   saves one on the device. "Use a passkey" on the sign-in screen signs in
   with it alone.
 - **Judge codes.** As below. A code may also be added in the sign-up form.
+- An email or passkey sign-in ends a judge session the browser had, and
+  signing out ends both. Better Auth serves only its sign-in, sign-up,
+  session and passkey routes here. Every other path under `/api/auth`
+  answers 404.
 - Better Auth allows 3 sign-in or sign-up tries per address in 10
   seconds. The app adds its own limits per address: 20 sign-in tries in 10
   minutes and 10 sign-ups an hour. Better Auth refuses any write to
@@ -95,8 +114,13 @@ The data lives in the data folder (`APP_DB`'s folder):
 
 ## The Better Auth dashboard plugin
 
-Off unless `BETTER_AUTH_API_KEY` is set. The start log says whether it is
-on. When it is on (read from `@better-auth/infra` 0.4.25's source):
+**Off by default, and off for the hackathon (0020, K6): leave
+`BETTER_AUTH_API_KEY` unset at go-live.** It comes back only if Jeff deems
+it worthy later. Turning it on means trusting Better Auth's cloud as root
+over `auth.sqlite`: whoever holds a token it signs for the key can read and
+change every user, password hash, passkey and session, and sign in as
+anyone. That is Jeff's decision alone. The start log says whether it is on.
+When it is on (read from `@better-auth/infra` 0.4.25's source):
 
 - **What it sends** to `https://dash.better-auth.com`: an event for each
   sign-up, sign-in, failed email sign-in, sign-out, session made or
@@ -230,9 +254,10 @@ Tailscale configuration.
 1. Jeff's env file for the instance, mode 600, outside git, holds
    `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL=https://the-little-ai-co.tail374dd0.ts.net:10000`,
    `MODEL_API_KEY`, `APP_DAILY_COST_CAP_USD`, `APP_JUDGE_TOTAL_CAP_USD`,
-   and, if Jeff wants the dashboard, `BETTER_AUTH_API_KEY`. Optionally
-   `APP_HOSTED_DATA` and `NODE_BIN` (Node 24 or later, if `node` is not on
-   the unit's PATH).
+   and `APP_WAITLIST_URL` (the here.now waitlist page). Leave
+   `BETTER_AUTH_API_KEY` unset (K6) and `APP_PUBLIC_SIGNUP` unset or `off`
+   (K7). Optionally `APP_HOSTED_DATA` and `NODE_BIN` (Node 24 or later, if
+   `node` is not on the unit's PATH).
 2. In the checkout the unit names: `pnpm install --frozen-lockfile` and
    `pnpm build`.
 3. Copy `scripts/hosted/appointments-hosted.service` to
@@ -250,6 +275,10 @@ Tailscale configuration.
    `tailscale funnel status` checks it, and
    `tailscale funnel --https=10000 off` stops only this one. Never
    `tailscale funnel reset`: it would also stop the Hermes dashboard on 443.
-6. From outside the tailnet, open the public address, make an account, add
-   a passkey, and redeem a judge code made with `pnpm admin judges create`.
+6. From outside the tailnet, open the public address: the judge code form
+   comes first, with the waitlist line under it. Sign in with a judge code
+   made with `pnpm admin judges create`, and check that sign-up answers
+   403. For an email account, run `pnpm admin users create` with the
+   instance's `APP_DB`, sign in through "Sign in to an existing account",
+   and add a passkey.
 
