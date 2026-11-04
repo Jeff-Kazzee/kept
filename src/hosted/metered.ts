@@ -1,6 +1,9 @@
 // The metered model client for hosted mode (0014, design item 4). Every
 // call on the server's Meta key goes through it, and only through it:
 //
+// 0024: with the operator's fallback on, the server key is DeepSeek's and
+// every step below is the same, at DeepSeek's prices.
+//
 // 1. The guards first, whatever the balances say: the off switch
 //    (APP_SERVER_KEY=off, or no key at all), then a price for the model.
 // 2. The call gets max_output_tokens, so its cost has an upper bound.
@@ -15,6 +18,7 @@
 //    released.
 import { MetaResponsesClient, ModelCallError, assertAllowedModel, type ModelCall, type ModelReply } from "../model/client.ts";
 import { BudgetError } from "../model/meter.ts";
+import { DeepSeekResponsesClient } from "../model/providers/deepseek-client.ts";
 import type { LiveClient } from "../model/providers/factory.ts";
 import type { TokenUsage } from "../model/request.ts";
 import type { ToolCall, ToolReply } from "../model/responses.ts";
@@ -28,11 +32,14 @@ export type MeteredOptions = {
   accountId: string;
   workspace: string;
   config: HostedConfig;
-  // The server's Meta key, or null when it has none.
+  // The server's key for the model, or null when it has none.
   serverKey: string | null;
-  // The Muse model the person chose (models.ts).
+  // The Muse model the person chose (models.ts), or the fallback model.
   model: () => string;
+  // The operator's fallback is on (0024): serverKey is DeepSeek's.
+  fallback?: boolean;
   metaUrl?: string;
+  deepSeekUrl?: string;
   // For tests: the client the calls go to.
   inner?: LiveClient;
 };
@@ -45,13 +52,15 @@ const refusedBeforeRun = (err: unknown) =>
 const turnOf = (key: string) => /^chat-(.+)-\d+$/.exec(key)?.[1] ?? null;
 
 export class MeteredClient implements LiveClient {
-  readonly label = "meta-responses";
+  readonly label: string;
   readonly #o: MeteredOptions;
   #inner: LiveClient | null;
 
   constructor(options: MeteredOptions) {
     this.#o = options;
-    this.#inner = options.serverKey ? (options.inner ?? new MetaResponsesClient({ apiKey: options.serverKey, url: options.metaUrl })) : null;
+    this.label = options.fallback ? "deepseek-responses" : "meta-responses";
+    const live = (key: string): LiveClient => (options.fallback ? new DeepSeekResponsesClient({ apiKey: key, url: options.deepSeekUrl }) : new MetaResponsesClient({ apiKey: key, url: options.metaUrl }));
+    this.#inner = options.serverKey ? (options.inner ?? live(options.serverKey)) : null;
   }
 
   call(request: ModelCall): Promise<ModelReply> {
@@ -66,13 +75,14 @@ export class MeteredClient implements LiveClient {
     const { store, config } = this.#o;
     const inner = this.#inner;
     // J19: no daily cap set means no call.
-    if (!config.serverKeyOn || inner === null || config.dailyCapMicros === null) throw new UsageRefusedError("server_key_off");
+    const fallback = this.#o.fallback ?? false;
+    if (!config.serverKeyOn || inner === null || config.dailyCapMicros === null) throw new UsageRefusedError("server_key_off", fallback);
     const dailyCap = config.dailyCapMicros;
     const model = this.#o.model();
     assertAllowedModel(model);
     const price = priceOf(model);
     // A model with no price is never called on the server key.
-    if (!price) throw new UsageRefusedError("server_key_off");
+    if (!price) throw new UsageRefusedError("server_key_off", fallback);
     const asked = (body as { max_output_tokens?: unknown }).max_output_tokens;
     const max = typeof asked === "number" && Number.isSafeInteger(asked) && asked > 0 ? Math.min(asked, maxOutput) : maxOutput;
     const sent = { ...body, model, max_output_tokens: max };
@@ -92,7 +102,7 @@ export class MeteredClient implements LiveClient {
       hold.costMicros,
       dailyCap,
     );
-    if (!result.ok) throw new UsageRefusedError(result.reason === "credits" ? "credits_exhausted" : "daily_cap");
+    if (!result.ok) throw new UsageRefusedError(result.reason === "credits" ? "credits_exhausted" : "daily_cap", fallback);
     let reply: T;
     try {
       reply = await send(inner, sent);

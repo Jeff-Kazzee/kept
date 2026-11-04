@@ -17,7 +17,9 @@ Gmail and Calendar in `docs/decisions/0021-demo-inbox.md`.
   assistant uses Meta's Muse models on the server's key, paid from the
   person's usage credit. A person's own Meta key is not offered, and Sign
   in with ChatGPT shows as not available here yet, because OpenAI allows
-  it only for apps that run on the person's computer for now.
+  it only for apps that run on the person's computer for now. While the
+  operator's fallback is on, DeepSeek answers in Meta's place, and the site
+  says so (see "The DeepSeek fallback" below).
 
 The MCP server runs in local mode only.
 
@@ -27,8 +29,8 @@ The hosted instance runs from `scripts/hosted/start.sh`, beside the local
 demo: port 5300 on 127.0.0.1, its own data folder, Tailscale as the
 trusted proxy, the request log on, and the production build (`pnpm build`
 first). It will not start without `BETTER_AUTH_SECRET` (32 bytes or more),
-`BETTER_AUTH_URL`, both caps and `MODEL_API_KEY`, and it never prints a
-value. For a check on this computer:
+`BETTER_AUTH_URL`, both caps and `MODEL_API_KEY` (not needed with
+`APP_SERVER_MODEL=deepseek`), and it never prints a value. For a check on this computer:
 
 ```sh
 BETTER_AUTH_SECRET=... BETTER_AUTH_URL=http://localhost:5300 MODEL_API_KEY=... \
@@ -46,6 +48,8 @@ BETTER_AUTH_SECRET=... BETTER_AUTH_URL=http://localhost:5300 MODEL_API_KEY=... \
 | `APP_WAITLIST_URL` | none | An https address, the waitlist on Kept's marketing page (K9). While sign-up is off, the sign-in screen links it under the judge code form: "Not a judge? Kept is coming soon. Join the waitlist." Unset hides the line. |
 | `BETTER_AUTH_API_URL`, `BETTER_AUTH_KV_URL` | Better Auth's | The dashboard's addresses, only to change them. |
 | `MODEL_API_KEY` | none | The Meta key that usage credits pay for. Without it every assistant step is refused with a plain message. |
+| `APP_SERVER_MODEL` | Meta | `deepseek` sends every call on the server key to DeepSeek (0024). Unset or `meta` is Meta. Any other value stops the app. See "The DeepSeek fallback" below. |
+| `DEEPSEEK_API_KEY` | none | The DeepSeek key for that setting. Alone it does nothing. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | The Gmail and Calendar connection for test accounts (0012), and the shared demo connection. Not a sign-in. |
 | `APP_DEMO_GOOGLE` | `off` | `on` shares one made-up person's Gmail and Google Calendar with every account that has no Google connection of its own (0021). Needs the Google client. See "The demo Gmail and Calendar" below. |
 | `APP_ALLOWED_HOSTS` | none | More host names for the host check. The public origin's host is added on its own. |
@@ -299,15 +303,48 @@ account and choose Allow. The same connection is renewed in place, and
 judges notice nothing. If it lapses, judges read that the demo Gmail and
 Calendar need reconnecting until it is renewed.
 
+## The DeepSeek fallback
+
+A stopgap for a problem with the Meta account, such as the 402
+`billing_not_configured` of November 2026 (decision 0024). Meta remains the
+normal model. A failed call never moves by itself: only this setting moves
+calls.
+
+To turn it on, add both lines to the instance's env file and restart:
+
+```
+APP_SERVER_MODEL=deepseek
+DEEPSEEK_API_KEY=<the key>
+```
+
+The start log then says "calls on the server key go to DeepSeek". Every
+screen, the sign-in screen too, shows the notice that DeepSeek is answering
+and why. The model reads `DeepSeek Flash`, and Connections says DeepSeek
+receives what the assistant reads. Credits, holds and both caps work as
+below, at DeepSeek's prices.
+
+To go back to Muse, remove `APP_SERVER_MODEL` and restart. No code changes,
+each person's Muse choice is still there, and the notice is gone. Charges
+made on DeepSeek keep their label on the Usage page.
+
+Without the key, the start log says so and every step is refused with a
+plain message. The app does not go back to Meta by itself.
+
 ## How credits are priced
 
 Every model call on the server key is charged at `APP_MARKUP` times its
-token cost, from the usage Meta reports. Prices are per million tokens:
+token cost, from the usage the model's API reports. Prices are per million
+tokens:
 
 | Model | Input | Cached input | Output |
 | --- | --- | --- | --- |
 | Muse Spark 1.3 | $1.25 | $0.15 | $4.25 |
 | Muse Wonder 1.0 | $4.00 | $0.20 | $20.00 |
+| DeepSeek Flash (fallback only) | $0.30 | $0.006 | $1.20 |
+
+DeepSeek's figures are its peak rates, read from its pricing page on
+2026-11-04. Off-peak is half of them, and the app uses the peak rate at
+every hour, so the ledger never counts less than DeepSeek bills.
 
 Output is billed from `output_tokens`, which counts the reasoning tokens
 inside it. Amounts are kept as whole micro-dollars, and a cost is rounded
@@ -318,10 +355,10 @@ size as an upper bound on its input, plus its `max_output_tokens` (4,096
 for a JSON step, 8,192 for a chat step), at the person's price. If the
 balance cannot cover it, the call is not made, and the person reads that
 their credit has run out and how to get more. After the call the app
-charges what Meta reported and gives back the rest. A charge never exceeds
+charges what the API reported and gives back the rest. A charge never exceeds
 its hold. A call that may have run but reported no usage, such as one that
 timed out, is charged the whole hold, and so is a usage report the hold
-did not bound, such as more output than `max_output_tokens`. A call Meta refused before it ran is not charged. The balance
+did not bound, such as more output than `max_output_tokens`. A call the API refused before it ran is not charged. The balance
 never goes below zero.
 
 The daily cap counts the real model cost of every charge that day and

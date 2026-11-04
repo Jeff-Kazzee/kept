@@ -23,6 +23,16 @@ export const PRICES: readonly ModelPrice[] = [
     output: 20_000_000,
     source: "Jeff's sprint 13 decision, 2026-10-28. The eval has no Wonder price yet.",
   },
+  // 0024: DeepSeek's peak rates. Off-peak is half of these, and the bill
+  // varies by the hour, so the peak rate is used at every hour: the daily
+  // cap and the charge never count less than DeepSeek bills.
+  {
+    model: "deepseek-flash",
+    input: 300_000,
+    cachedInput: 6_000,
+    output: 1_200_000,
+    source: "Peak rates, https://api-docs.deepseek.com/quick_start/pricing, read 2026-11-04.",
+  },
 ];
 
 export function priceOf(model: string): ModelPrice | null {
@@ -59,7 +69,7 @@ export function usageBeyondHold(usage: TokenUsage, bound: { inputTokens: number;
   );
 }
 
-// The model's own cost of a call in micro-dollars: what Jeff pays Meta.
+// The model's own cost of a call in micro-dollars: what Jeff pays for it.
 // Cached input is billed at the cached price, the rest of the input at the
 // input price.
 export function modelCostMicros(price: ModelPrice, usage: TokenUsage): number {

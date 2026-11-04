@@ -59,6 +59,7 @@ Rules:
 | 19 | A shared demo Gmail and Calendar for judges | Hosted app | Oct 31 | Built, live connect open |
 | 20 | The calendar-add answer no longer falls back | Chat app | Oct 31 | Built, review open |
 | 21 | One shared judge code, a pool | Hosted app | Oct 31 | Built, review open |
+| 22 | Labelled DeepSeek fallback | Hosted app | Nov 4 | Built, review open |
 | 16 | Submission build | All | Nov 2 to 4 | Planned |
 
 On 2026-10-28 the plan changed to an agent-first app: sprint 8 is the
@@ -769,6 +770,30 @@ capped pool (`docs/decisions/0023-judge-pool.md`).
 - [ ] Review of `dev..sprint/21-judge-pool` (coordinator).
 - [ ] Make the pass on the public instance and put its code in the form
   (Jeff).
+
+## Sprint 22: labelled DeepSeek fallback
+
+Branch `sprint/22-deepseek-fallback`, from `dev` `5b62742`. A stopgap while
+the Meta key answers 402 `billing_not_configured`. Decision 0024, guide
+`docs/hosted.md`, "The DeepSeek fallback".
+
+- [x] SP22.1 `APP_SERVER_MODEL=deepseek` with `DEEPSEEK_API_KEY`, the
+  `deepseek` provider entry, no automatic failover in either direction.
+- [x] SP22.2 `DeepSeekResponsesClient` on DeepSeek's Responses format, with
+  thinking off and the JSON schema in the instructions.
+- [x] SP22.3 `deepseek-flash` at DeepSeek's peak rates, with source and date.
+  Holds, charges and both caps unchanged.
+- [x] SP22.4 The notice on the app screen and the sign-in screen, truthful
+  labels, and the Connections, Usage and refusal wording.
+- [x] SP22.5 Tests, the guide, the schema, and the secret scan's new name.
+- [x] Fix round 1: attempt records and API answers carry the model that
+  really answered, and a missing key is refused before any write (0024,
+  "Fix round 1").
+- [ ] Review of `dev..sprint/22-deepseek-fallback` (coordinator).
+- [ ] Jeff gets a DeepSeek key and sets the two lines (coordinator and
+  Jeff). The first live chat and extraction test D6 and D7 of 0024.
+- [ ] Confirm or change the choices marked proposed in 0024.
+- [ ] Turn the fallback off once the Meta billing is fixed.
 
 ## Sprint 16: submission build
 

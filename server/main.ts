@@ -17,6 +17,9 @@
 //                      Hosted mode keeps its data in the same folder.
 //   MODEL_API_KEY      the server's Meta key, used when the user set none.
 //                      In hosted mode, the key usage credits pay for.
+//   APP_SERVER_MODEL, DEEPSEEK_API_KEY
+//                      deepseek sends calls on the server key to DeepSeek
+//                      (0024). Unset is Meta.
 //   APP_LOG_REJECTED   set to 1 to write each answer the checks refused,
 //                      with its problems, to stderr. Only `pnpm demo:check`
 //                      sets it, for its temporary app. Model output about
@@ -41,8 +44,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { pathToFileURL } from "node:url";
 import { clientFromEnv } from "../src/google/connection.ts";
 import { AuthFileError, readAuthConfig, type AuthConfig } from "../src/hosted/auth.ts";
-import { ConfigError, readHostedConfig } from "../src/hosted/config.ts";
+import { ConfigError, readHostedConfig, readServerFallback, type ServerFallback } from "../src/hosted/config.ts";
 import { AccountsFileError } from "../src/hosted/store.ts";
+import { fallbackStartLine } from "../src/model/providers/messages.ts";
 import { appSecretsPath } from "../src/model/providers/secrets.ts";
 import { appDbPath, fromPackage } from "../src/paths.ts";
 import { CALLBACK_PATH } from "./auth.ts";
@@ -61,10 +65,12 @@ const serveBuild = process.argv.includes("--static");
 
 let extraHosts: string[];
 let config: ReturnType<typeof readHostedConfig>;
+let serverFallback: ServerFallback | null;
 let authConfig: AuthConfig | null = null;
 try {
   extraHosts = parseAllowedHosts(process.env.APP_ALLOWED_HOSTS);
   config = readHostedConfig();
+  serverFallback = readServerFallback();
   if (config.mode === "hosted") {
     authConfig = readAuthConfig();
     // The public origin's host, with its port when it has one (0020, B11).
@@ -139,7 +145,7 @@ let started: () => void;
 if (config.mode === "hosted") {
   let hosted: Awaited<ReturnType<typeof createHostedApp>>;
   try {
-    hosted = await createHostedApp({ config, auth: authConfig!, port: PORT, extraHosts, googleClient, serverMetaKey, ui, logRejected: process.env.APP_LOG_REJECTED === "1" });
+    hosted = await createHostedApp({ config, auth: authConfig!, port: PORT, extraHosts, googleClient, serverMetaKey, serverFallback, ui, logRejected: process.env.APP_LOG_REJECTED === "1" });
   } catch (err) {
     if (!(err instanceof AuthFileError) && !(err instanceof AccountsFileError)) throw err;
     console.error(err.message);
@@ -152,7 +158,8 @@ if (config.mode === "hosted") {
     for (const line of hosted.startLines()) console.log(line);
   };
 } else {
-  const ws = createWorkspace({ dbPath: appDbPath(), secretsPath: appSecretsPath(), port: PORT, extraHosts, googleClient, serverMetaKey, logRejected: process.env.APP_LOG_REJECTED === "1" });
+  if (serverFallback) console.log(fallbackStartLine(serverFallback.key));
+  const ws = createWorkspace({ dbPath: appDbPath(), secretsPath: appSecretsPath(), port: PORT, extraHosts, googleClient, serverMetaKey, serverFallback, logRejected: process.env.APP_LOG_REJECTED === "1" });
   renderWorkspace = ws;
   closeApp = ws.close;
   server.on("request", async (req, res) => {

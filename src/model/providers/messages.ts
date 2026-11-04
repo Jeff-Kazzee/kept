@@ -25,6 +25,17 @@ export const CHATGPT_UNAVAILABLE_TEXT = "ChatGPT could not answer just now. Noth
 export const CHATGPT_REQUEST_REFUSED_TEXT =
   "ChatGPT refused this request from the app. Switch to Meta in settings, or try again later. Nothing in your case changed.";
 
+// The operator's fallback (0024). The notice is shown word for word while
+// DeepSeek answers on the server key, and never otherwise.
+export const FALLBACK_NOTICE_TEXT =
+  "Running on the fallback model. Kept normally runs on Meta's Muse Spark. Our Meta API billing has a problem right now, and that's our issue, not Meta's, so DeepSeek is answering until we fix it.";
+export const DEEPSEEK_KEY_MISSING_TEXT = "This app is set to use DeepSeek on its server key, but no DeepSeek key is set, so no model was called. Nothing in your case changed.";
+
+export const fallbackStartLine = (key: string | null) =>
+  key
+    ? "APP_SERVER_MODEL is deepseek: calls on the server key go to DeepSeek, not Meta, and the app shows the fallback notice."
+    : "APP_SERVER_MODEL is deepseek, but DEEPSEEK_API_KEY is not set, so every call on the server key is refused with a plain message.";
+
 export const SETTINGS_FILE_TEXT =
   "The app could not read its settings file, so no model was called. The app's terminal says why. Nothing in your case changed.";
 

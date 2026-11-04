@@ -168,6 +168,7 @@ function RootView({
         dashboard={session.dashboard ?? false}
         publicSignup={session.publicSignup ?? false}
         waitlistUrl={session.waitlistUrl ?? null}
+        fallbackNotice={session.fallbackNotice ?? null}
         notice={notice}
         onSignedIn={(s, problem) => {
           setNotice(problem ?? null);
@@ -803,6 +804,11 @@ function Shell({
         />
         <button type="button" className="drawer-scrim" aria-label="Close the menu" tabIndex={-1} onClick={closeDrawer} />
         <div className="banners">
+          {(settings ? settings.fallbackNotice : hosted?.fallbackNotice) && (
+            <p className="offline" role="status">
+              <Icon name="info" size="sm" /> {settings ? settings.fallbackNotice : hosted?.fallbackNotice}
+            </p>
+          )}
           {!online && (
             <p className="offline" role="status">
               <Icon name="wifiOff" size="sm" /> You are offline. Nothing can be saved until the connection is back.

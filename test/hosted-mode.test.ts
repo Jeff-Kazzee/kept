@@ -125,4 +125,12 @@ describe("0020, B10: the hosted instance's start script", () => {
     expect(short.stderr).toContain("shorter than 32 bytes");
     expect(`${short.stdout}${short.stderr}`).not.toMatch(/not-printed/);
   });
+
+  it("0024: the fallback does not need the Meta key, and anything else still does", () => {
+    const base = { ...AUTH, BETTER_AUTH_SECRET: "short", BETTER_AUTH_URL: "https://name.example:10000", APP_DAILY_COST_CAP_USD: "5", APP_JUDGE_TOTAL_CAP_USD: "5" };
+    // Past the required list, to the secret's length check.
+    expect(run({ ...base, APP_SERVER_MODEL: "deepseek" }).stderr).toContain("shorter than 32 bytes");
+    expect(run({ ...base, APP_SERVER_MODEL: "meta" }).stderr).toContain("MODEL_API_KEY not set");
+    expect(run(base).stderr).toContain("MODEL_API_KEY not set");
+  });
 });

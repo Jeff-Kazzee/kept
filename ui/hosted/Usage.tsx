@@ -13,6 +13,9 @@ import { forgetJudgeSigninKey, hostedApi, usageTime, type UsageView } from "./se
 export function HostedProviderSetting() {
   const { settings } = useAgent();
   const chosen = settings.models.find((m) => m.id === settings.model);
+  // 0024: while the operator's fallback is on, DeepSeek is who answers and
+  // who receives the case text.
+  const fallback = settings.provider === "deepseek";
   return (
     <div className="providers" role="radiogroup" aria-label="Provider the assistant uses">
       <section className="provider is-current is-main" aria-labelledby="hp-credits">
@@ -20,13 +23,15 @@ export function HostedProviderSetting() {
           <label className="check" htmlFor="hp-credits-radio">
             <input id="hp-credits-radio" type="radio" name="provider" value="meta" checked readOnly />
             <span id="hp-credits" className="provider-title">
-              <span className="nowrap">Usage credits (Meta models)</span>
+              <span className="nowrap">{fallback ? "Usage credits (DeepSeek, the fallback)" : "Usage credits (Meta models)"}</span>
             </span>
           </label>
           <span className="pill pill-accepted">In use</span>
         </div>
         <p className="small muted">
-          The assistant uses Meta's Muse models on this site's key, paid from your usage credit. Meta receives what the assistant reads to answer you: the messages you paste, your schedule and your notes.
+          {fallback
+            ? "The assistant uses DeepSeek on this site's key for now, paid from your usage credit. DeepSeek receives what the assistant reads to answer you: the messages you paste, your schedule and your notes."
+            : "The assistant uses Meta's Muse models on this site's key, paid from your usage credit. Meta receives what the assistant reads to answer you: the messages you paste, your schedule and your notes."}
           {chosen?.turnCost ? ` ${chosen.label} costs ${chosen.turnCost} at your price.` : ""}
         </p>
       </section>
@@ -46,7 +51,7 @@ export function HostedProviderSetting() {
 }
 
 export function UsageSection({ run }: { run: Run }) {
-  const { reload, report, notify } = useAgent();
+  const { settings, reload, report, notify } = useAgent();
   const uid = useId();
   const [usage, setUsage] = useState<UsageView | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -95,7 +100,7 @@ export function UsageSection({ run }: { run: Run }) {
             <span className="small muted">Balance</span>
             <strong>{usage.balance}</strong>
           </p>
-          <p className="small muted">Each model call on this site is charged at {usage.markup} times the model's token cost, from what Meta reports it used. The assistant holds the most a step can cost before it runs, and gives back what it did not use.</p>
+          <p className="small muted">Each model call on this site is charged at {usage.markup} times the model's token cost, from what {settings.provider === "deepseek" ? "DeepSeek" : "Meta"} reports it used. The assistant holds the most a step can cost before it runs, and gives back what it did not use.</p>
           <h3 className="field-label">Recent charges</h3>
           {usage.charges.length === 0 ? (
             <p className="small muted">No charges yet.</p>

@@ -10,13 +10,20 @@
 // later kind, such as hosted credit on the app's own key with per-user
 // metering, is a new entry and a new ProviderKind value. Callers do not
 // change.
+//
+// 0024: the operator's fallback is such an entry. APP_SERVER_MODEL=deepseek
+// moves the server key's calls to DeepSeek as a setting, read at start. An
+// error never does, in either direction.
 import { MetaResponsesClient, ModelCallError, type ModelCall, type ModelClient, type ModelReply } from "../client.ts";
+import type { ServerFallback } from "../../hosted/config.ts";
 import type { ToolCall, ToolModelClient, ToolReply } from "../responses.ts";
 import { ChatGptAuth } from "./chatgpt-auth.ts";
 import { ChatGptResponsesClient } from "./chatgpt-client.ts";
+import { DeepSeekResponsesClient } from "./deepseek-client.ts";
 import {
   CHATGPT_SESSION_ENDED_TEXT,
   CHATGPT_SIGNED_OUT_TEXT,
+  DEEPSEEK_KEY_MISSING_TEXT,
   META_KEY_MISSING_TEXT,
   NO_PROVIDER_TEXT,
   PLAN_USAGE_OFF_TEXT,
@@ -31,7 +38,7 @@ import { SecretsBusyError, SecretsFileError, type ProviderKind, type SecretsStor
 export type LiveClient = ModelClient & ToolModelClient;
 
 
-export type ProviderContext = { settings: StoredSettings; serverMetaKey: string | null };
+export type ProviderContext = { settings: StoredSettings; serverMetaKey: string | null; serverFallback?: ServerFallback | null };
 
 export type ProviderDefinition = {
   readonly kind: ProviderKind;
@@ -48,8 +55,11 @@ export function metaKey(ctx: ProviderContext): { key: string; source: "you" | "s
 }
 
 // The provider calls go to: the user's choice, else Meta when a Meta key is
-// set, else none. Meta is the default because it needs no sign-in.
+// set, else none. Meta is the default because it needs no sign-in. 0024:
+// with the operator's fallback on, what would use the server's Meta key
+// uses DeepSeek. A person's own key or ChatGPT sign-in is theirs and stays.
 export function activeProvider(ctx: ProviderContext): ProviderKind | null {
+  if (ctx.serverFallback && !ctx.settings.meta && (ctx.settings.provider ?? "meta") === "meta") return "deepseek";
   if (ctx.settings.provider) return ctx.settings.provider;
   return metaKey(ctx) ? "meta" : null;
 }
@@ -78,6 +88,21 @@ export function metaProvider(options: { url?: string } = {}): ProviderDefinition
   };
 }
 
+// Reached only through activeProvider, so only with the operator's fallback
+// on.
+export function deepSeekProvider(options: { url?: string } = {}): ProviderDefinition {
+  let cached: { key: string; client: DeepSeekResponsesClient } | null = null;
+  return {
+    kind: "deepseek",
+    unavailable: (ctx) => (ctx.serverFallback?.key ? null : DEEPSEEK_KEY_MISSING_TEXT),
+    client(ctx) {
+      const key = ctx.serverFallback!.key!;
+      if (cached?.key !== key) cached = { key, client: new DeepSeekResponsesClient({ apiKey: key, url: options.url }) };
+      return cached.client;
+    },
+  };
+}
+
 export function chatGptProvider(options: { auth: ChatGptAuth; store: SecretsStore; url?: string; fetch?: FetchLike }): ProviderDefinition {
   const client = new ChatGptResponsesClient({
     auth: options.auth,
@@ -102,16 +127,18 @@ export function chatGptProvider(options: { auth: ChatGptAuth; store: SecretsStor
 export class ProviderModelClient implements LiveClient {
   readonly #store: SecretsStore;
   readonly #serverMetaKey: string | null;
+  readonly #serverFallback: ServerFallback | null;
   readonly #providers: ReadonlyMap<ProviderKind, ProviderDefinition>;
 
-  constructor(options: { store: SecretsStore; serverMetaKey: string | null; providers: ProviderDefinition[] }) {
+  constructor(options: { store: SecretsStore; serverMetaKey: string | null; serverFallback?: ServerFallback | null; providers: ProviderDefinition[] }) {
     this.#store = options.store;
     this.#serverMetaKey = options.serverMetaKey || null;
+    this.#serverFallback = options.serverFallback ?? null;
     this.#providers = new Map(options.providers.map((p) => [p.kind, p]));
   }
 
   context(): ProviderContext {
-    return { settings: this.#store.read(), serverMetaKey: this.#serverMetaKey };
+    return { settings: this.#store.read(), serverMetaKey: this.#serverMetaKey, serverFallback: this.#serverFallback };
   }
 
   get label(): string {
@@ -178,7 +205,9 @@ export class ProviderModelClient implements LiveClient {
       }
       const label = modelOptions(settings, kind).find((m) => m.id === model)?.label ?? model;
       const text = modelProblemText(problem, label);
-      throw providerError(text, { status: err.status, latencyMs: err.latencyMs, type: err.errorType, code: err.errorCode, param: err.errorParam });
+      const named = providerError(text, { status: err.status, latencyMs: err.latencyMs, type: err.errorType, code: err.errorCode, param: err.errorParam });
+      named.model = err.model;
+      throw named;
     }
   }
 
@@ -191,18 +220,26 @@ export class ProviderModelClient implements LiveClient {
   }
 }
 
-// The live providers for the app and the eval: Meta and ChatGPT.
+// The live providers for the app and the eval: Meta, ChatGPT and the
+// operator's fallback.
 export function createProviderClient(options: {
   store: SecretsStore;
   auth: ChatGptAuth;
   serverMetaKey: string | null;
+  serverFallback?: ServerFallback | null;
   metaUrl?: string;
   chatGptUrl?: string;
+  deepSeekUrl?: string;
   fetch?: FetchLike;
 }): ProviderModelClient {
   return new ProviderModelClient({
     store: options.store,
     serverMetaKey: options.serverMetaKey,
-    providers: [metaProvider({ url: options.metaUrl }), chatGptProvider({ auth: options.auth, store: options.store, url: options.chatGptUrl, fetch: options.fetch })],
+    serverFallback: options.serverFallback ?? null,
+    providers: [
+      metaProvider({ url: options.metaUrl }),
+      chatGptProvider({ auth: options.auth, store: options.store, url: options.chatGptUrl, fetch: options.fetch }),
+      deepSeekProvider({ url: options.deepSeekUrl }),
+    ],
   });
 }

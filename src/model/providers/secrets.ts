@@ -40,7 +40,9 @@ export function appSecretsPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(path.dirname(appDbPath(env)), SECRETS_FILE_NAME);
 }
 
-export const ProviderKind = z.enum(["meta", "chatgpt"]);
+// deepseek is the operator's fallback on the server key (0024). Nobody
+// picks it, so no route takes it, and settings hold it only in modelProblem.
+export const ProviderKind = z.enum(["meta", "chatgpt", "deepseek"]);
 export type ProviderKind = z.infer<typeof ProviderKind>;
 
 const ChatGptSession = z
