@@ -340,7 +340,7 @@ export class CaseService {
             outcome: explanation.outcome,
             text: explanation.text,
             citedEvidenceIds: explanation.citedEvidenceIds,
-            model: explanation.attempts[0]?.model ?? this.#model,
+            model: explanation.attempts.at(-1)?.model ?? this.#model,
             effort: explanation.attempts[0]?.effort ?? "low",
             attempts: explanation.attempts.map(summary),
             recordedAt: explanation.recordedAt,
