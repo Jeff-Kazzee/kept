@@ -26,6 +26,7 @@ import type { OAuthClient } from "../src/google/oauth.ts";
 import type { GoogleServices } from "../src/google/tools.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { ChatGptAuth } from "../src/model/providers/chatgpt-auth.ts";
+import type { ServerFallback } from "../src/hosted/config.ts";
 import { ProviderModelClient, createProviderClient, type LiveClient, type ProviderDefinition } from "../src/model/providers/factory.ts";
 import { providerError } from "../src/model/providers/messages.ts";
 import { SecretsStore } from "../src/model/providers/secrets.ts";
@@ -58,6 +59,10 @@ export const HOSTED_CREDITS_MARKER = "hosted-credits";
 export const CHATGPT_HOSTED_TEXT =
   "Sign in with ChatGPT is not available on the hosted site yet. Use usage credits for Meta models, or run the app on your own computer to use ChatGPT. Nothing in your case changed.";
 
+// 0024: the same answer while the operator's fallback is on.
+export const CHATGPT_HOSTED_FALLBACK_TEXT =
+  "Sign in with ChatGPT is not available on the hosted site yet. Use usage credits, or run the app on your own computer to use ChatGPT. Nothing in your case changed.";
+
 export type WorkspaceOptions = {
   dbPath: string;
   secretsPath: string;
@@ -68,6 +73,9 @@ export type WorkspaceOptions = {
   // Local mode: the server's MODEL_API_KEY, used when the person set no
   // key. Hosted mode passes `hosted` instead.
   serverMetaKey: string | null;
+  // APP_SERVER_MODEL=deepseek (0024). Hosted mode's key is null while the
+  // server key is off, so the notice says nothing untrue.
+  serverFallback?: ServerFallback | null;
   hosted?: HostedProvider;
   // Hosted mode with APP_DEMO_GOOGLE (0021): the shared demo connection,
   // this account's id, and whether the account may connect its own Google
@@ -89,24 +97,28 @@ export function createWorkspace(o: WorkspaceOptions) {
   const secrets = new SecretsStore(o.secretsPath);
   const chatgptAuth = new ChatGptAuth({ store: secrets, port: o.port });
   const serverMetaKey = o.hosted ? HOSTED_CREDITS_MARKER : o.serverMetaKey || null;
+  const serverFallback = o.serverFallback ?? null;
 
   // Every model call goes to the provider chosen in settings, and only to
   // it. In hosted mode Meta is the metered server key, and ChatGPT is not
-  // offered (J14).
+  // offered (J14). The operator's fallback (0024) is the same metered key,
+  // and the metered client says why it refuses.
   let client: ProviderModelClient;
   if (o.hosted) {
     const metered = o.hosted.metered(secrets);
     const credits: ProviderDefinition = { kind: "meta", unavailable: () => null, client: () => metered };
+    const fallback: ProviderDefinition = { kind: "deepseek", unavailable: () => null, client: () => metered };
+    const chatgptText = serverFallback ? CHATGPT_HOSTED_FALLBACK_TEXT : CHATGPT_HOSTED_TEXT;
     const chatgpt: ProviderDefinition = {
       kind: "chatgpt",
-      unavailable: () => CHATGPT_HOSTED_TEXT,
+      unavailable: () => chatgptText,
       client: () => {
-        throw providerError(CHATGPT_HOSTED_TEXT, { type: "provider", code: "chatgpt_unavailable" });
+        throw providerError(chatgptText, { type: "provider", code: "chatgpt_unavailable" });
       },
     };
-    client = new ProviderModelClient({ store: secrets, serverMetaKey, providers: [credits, chatgpt] });
+    client = new ProviderModelClient({ store: secrets, serverMetaKey, serverFallback, providers: [credits, chatgpt, fallback] });
   } else {
-    client = createProviderClient({ store: secrets, auth: chatgptAuth, serverMetaKey });
+    client = createProviderClient({ store: secrets, auth: chatgptAuth, serverMetaKey, serverFallback });
   }
   const ready = () => client.ready();
 
@@ -125,6 +137,7 @@ export function createWorkspace(o: WorkspaceOptions) {
     store: secrets,
     auth: chatgptAuth,
     serverMetaKey,
+    serverFallback,
     timezone: () => {
       const tz = timezoneSettings(store);
       return { timezone: tz.timezone, timezoneSource: tz.timezoneSource, version: tz.settingsVersion };

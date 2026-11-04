@@ -23,8 +23,8 @@
 // reachable only from them is not read.
 //
 // What it finds, on one line, in each of those:
-// - an assignment of MODEL_API_KEY, BETTER_AUTH_SECRET or
-//   BETTER_AUTH_API_KEY (0020) with a value: `MODEL_API_KEY=value`,
+// - an assignment of MODEL_API_KEY, DEEPSEEK_API_KEY (0024),
+//   BETTER_AUTH_SECRET or BETTER_AUTH_API_KEY (0020) with a value: `MODEL_API_KEY=value`,
 //   with optional spaces, `export` and quotes, as in an env file or a shell
 //   line. The value is at least 12 characters and ends at a space, a quote
 //   or a backslash, so an escaped newline in a JSON log ends it. A value
@@ -98,7 +98,7 @@ type Range = [number, number];
 
 // The value of a MODEL_API_KEY assignment, and a bearer token. Read on the
 // line's bytes as latin1, so string offsets are byte offsets.
-const ASSIGNMENT = /(?<![A-Za-z0-9_])(?:MODEL_API_KEY|BETTER_AUTH_SECRET|BETTER_AUTH_API_KEY)[ \t]*=[ \t]*["']?([^\s"'`$<>\\]{12,})/g;
+const ASSIGNMENT = /(?<![A-Za-z0-9_])(?:MODEL_API_KEY|DEEPSEEK_API_KEY|BETTER_AUTH_SECRET|BETTER_AUTH_API_KEY)[ \t]*=[ \t]*["']?([^\s"'`$<>\\]{12,})/g;
 // A redaction a log tool already made is not a key.
 const PLACEHOLDER = /^redacted/i;
 const BEARER = /(?<![A-Za-z0-9_])Bearer[ \t]+([A-Za-z0-9._~+/=|-]{24,})/g;

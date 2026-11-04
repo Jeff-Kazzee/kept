@@ -13,7 +13,9 @@ import type { ChatEvent, ChatMessage } from "../src/agent/types.ts";
 export type { ActivityActor, ActivityEntry, ActivityTarget, ChatEvent, ChatMessage };
 export type ActivityLog = ActivityView;
 
-export type Provider = "meta" | "chatgpt";
+// deepseek is the operator's fallback on the server key (0024). Only the
+// server sets it, so the provider choice never offers it.
+export type Provider = "meta" | "chatgpt" | "deepseek";
 
 // `turnCost`: on the hosted site, a rough cost of one chat turn at the
 // person's price, such as "about $0.08 a turn" (0014).
@@ -31,6 +33,8 @@ export type Settings = {
   // Set when the chosen model failed something the app needs. Shown under
   // the model choice.
   modelNotice: string | null;
+  // The fallback notice, word for word, only while DeepSeek answers (0024).
+  fallbackNotice?: string;
   timezone: string;
   timezoneSource: "you" | "agent" | "browser" | "default";
   provider: Provider | null;

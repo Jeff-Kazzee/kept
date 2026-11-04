@@ -218,14 +218,16 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
     try {
       for await (const event of readSse(res.body)) {
         firstByteMs ??= elapsed(started);
-        if (event.event === "response.completed") {
+        // An event with no event line is named by its data's type (0024).
+        const name = event.event !== "message" ? event.event : String((parseJson(event.data) as { type?: unknown } | null)?.type ?? "message");
+        if (name === "response.completed") {
           const data = JSON.parse(event.data) as { response?: unknown };
           return { ...readCompletedBody(data.response), latencyMs: elapsed(started), firstByteMs };
         }
-        if (event.event === "response.failed" || event.event === "response.incomplete" || event.event === "error") {
+        if (name === "response.failed" || name === "response.incomplete" || name === "error") {
           const data = parseJson(event.data);
           const err = apiError(data);
-          const failed = new ModelCallError(`Model stream ended with ${event.event}.`, res.status, elapsed(started), { type: err.type ?? event.event, code: err.code });
+          const failed = new ModelCallError(`Model stream ended with ${name}.`, res.status, elapsed(started), { type: err.type ?? name, code: err.code });
           failed.usage = reportedUsage(data);
           throw failed;
         }

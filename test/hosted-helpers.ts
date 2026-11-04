@@ -10,7 +10,7 @@ import path from "node:path";
 import { vi } from "vitest";
 import type { FetchLike } from "../src/google/http.ts";
 import { readAuthConfig } from "../src/hosted/auth.ts";
-import { readHostedConfig, type HostedConfig } from "../src/hosted/config.ts";
+import { readHostedConfig, type HostedConfig, type ServerFallback } from "../src/hosted/config.ts";
 import { createHostedApp } from "../server/hosted.ts";
 import { FAKE_CLIENT, FakeGoogle } from "./google-fake.ts";
 import { META_URL, completed, jwt, message, signingKey } from "./provider-fakes.ts";
@@ -89,6 +89,7 @@ export async function startHosted(
     authEnv?: Record<string, string>;
     config?: Partial<HostedConfig>;
     serverKey?: string | null;
+    serverFallback?: ServerFallback | null;
     google?: boolean;
     now?: () => number;
     maxWorkspaces?: number;
@@ -117,6 +118,7 @@ export async function startHosted(
     extraHosts: [],
     googleClient: google ? FAKE_CLIENT : null,
     serverMetaKey: options.serverKey === undefined ? "server-meta-key-for-tests" : options.serverKey,
+    ...(options.serverFallback ? { serverFallback: options.serverFallback } : {}),
     ui: (_req, res) => {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end("<!doctype html><title>ui</title>");

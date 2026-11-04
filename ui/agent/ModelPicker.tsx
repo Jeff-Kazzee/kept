@@ -8,7 +8,7 @@ import { useMenu } from "../components/Menu.tsx";
 import type { ModelOption, Provider, Settings } from "../contract.ts";
 import { useAgent } from "./AgentContext.tsx";
 
-export const PROVIDER_SHORT: Record<Provider, string> = { meta: "Meta", chatgpt: "ChatGPT" };
+export const PROVIDER_SHORT: Record<Provider, string> = { meta: "Meta", chatgpt: "ChatGPT", deepseek: "Fallback" };
 
 const COST_WORDS: Record<NonNullable<ModelOption["costHint"]>, string> = { lower: "Lower cost", higher: "Higher cost" };
 
@@ -21,12 +21,14 @@ export function modelLabel(s: Settings): string | null {
   return model ? `${PROVIDER_SHORT[s.provider]} · ${model.label}` : PROVIDER_SHORT[s.provider];
 }
 
-// The short form a phone shows: "Meta · Spark 1.3".
-export const shortModelLabel = (label: string) => label.replace(/\bMuse /, "").replace(/ \(scripted\)$/, "");
+// The short form a phone shows: "Meta · Spark 1.3", or "DeepSeek Flash",
+// which must keep its name (0024).
+export const shortModelLabel = (label: string) => label.replace(/\bMuse /, "").replace(/^Fallback · /, "").replace(/ \(scripted\)$/, "");
 
 // True when the provider is set but has lost what it needs: a key, or the
-// ChatGPT sign-in. The server never switches provider by itself (0010).
-export const providerNeedsSetup = (s: Settings) => (s.provider === "meta" && !s.meta.keySet) || (s.provider === "chatgpt" && !s.chatgpt.signedIn);
+// ChatGPT sign-in. The server never switches provider by itself (0010). The
+// fallback without its notice cannot answer (0024).
+export const providerNeedsSetup = (s: Settings) => (s.provider === "meta" && !s.meta.keySet) || (s.provider === "chatgpt" && !s.chatgpt.signedIn) || (s.provider === "deepseek" && !s.fallbackNotice);
 
 // `fallback` names what the composer says when the settings cannot be read
 // or no provider is set, such as "No model set".

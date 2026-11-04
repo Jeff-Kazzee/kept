@@ -207,6 +207,18 @@ export function ProviderSetting({ settings, run }: { settings: Settings; run: Ru
     });
   return (
     <div className="providers" role="radiogroup" aria-label="Provider the assistant uses">
+      {/* 0024: the operator's fallback, on the server key. Not a choice. */}
+      {current === "deepseek" && (
+        <section className="provider is-current" aria-labelledby={`${uid}-fallback-title`}>
+          <div className="provider-head">
+            <span id={`${uid}-fallback-title`} className="provider-title">
+              <span className="nowrap">DeepSeek, the fallback</span>
+            </span>
+            {settings.fallbackNotice ? <span className="pill pill-accepted">In use</span> : <span className="pill pill-pending">Needs setup</span>}
+          </div>
+          <p className="small muted">DeepSeek receives what the assistant reads to answer you: the messages you paste, your schedule and your notes. The server's key stays on the server.</p>
+        </section>
+      )}
       {PROVIDERS.map((p, i) => {
         const ready = p.ready(settings);
         const id = `${uid}-${p.id}`;

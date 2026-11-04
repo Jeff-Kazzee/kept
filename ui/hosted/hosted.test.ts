@@ -8,9 +8,9 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PARTIAL_TEXT } from "../../src/agent/types.ts";
-import { USAGE_TEXT, usageStopText } from "../../src/model/usage-text.ts";
+import { FALLBACK_USAGE_TEXT, USAGE_TEXT, usageStopText } from "../../src/model/usage-text.ts";
 import { AgentContext, DEFAULT_AGENT, type AgentState } from "../agent/AgentContext.tsx";
-import { ModelSelect } from "../agent/ModelPicker.tsx";
+import { ModelSelect, modelLabel, providerNeedsSetup, shortModelLabel } from "../agent/ModelPicker.tsx";
 import { turnErrorText } from "../chat/ChatView.tsx";
 import { DEFAULT_SETTINGS, type Settings } from "../contract.ts";
 import { errorSentence } from "../format.ts";
@@ -125,6 +125,41 @@ describe("the hosted site", () => {
     expect(html(createElement(SettingsPage, { version: 1, erasePending: false, run }), localAgent)).not.toContain("Delete account");
   });
 
+  it("0024: the fallback notice shows on the sign-in screen only when the server sends it, and the Meta words go with it", () => {
+    const notice = "Running on the fallback model.";
+    const on = html(createElement(SignIn, { passwordMin: 10, fallbackNotice: notice, notice: null, onSignedIn: () => {} }));
+    expect(on).toContain(notice);
+    expect(on).toContain("with usage credit for the assistant.");
+    expect(on).not.toContain("the Meta models");
+    const off = html(createElement(SignIn, { passwordMin: 10, notice: null, onSignedIn: () => {} }));
+    expect(off).not.toContain(notice);
+    expect(off).toContain("with usage credit for the Meta models.");
+  });
+
+  it("0024: while DeepSeek answers, Connections and the model label name it, and say it receives the case text", () => {
+    const fallback: Settings = {
+      ...hostedSettings,
+      provider: "deepseek",
+      model: "deepseek-flash",
+      models: [{ id: "deepseek-flash", label: "DeepSeek Flash", costHint: null, turnCost: "about $0.02 a turn" }],
+      fallbackNotice: "Running on the fallback model.",
+    };
+    const page = html(createElement(ConnectionsPage, { modelClient: "deepseek-responses", run }), { settings: fallback, settingsAvailable: true, hosted: session });
+    expect(page).toContain("Usage credits (DeepSeek, the fallback)");
+    expect(page).toContain("DeepSeek receives what the assistant reads to answer you");
+    expect(page).not.toContain("Muse");
+    expect(page).not.toContain("Meta receives");
+    expect(modelLabel(fallback)).toBe("Fallback · DeepSeek Flash");
+    expect(shortModelLabel(modelLabel(fallback)!)).toBe("DeepSeek Flash");
+    expect(providerNeedsSetup(fallback)).toBe(false);
+    expect(providerNeedsSetup({ ...fallback, fallbackNotice: undefined })).toBe(true);
+    // The local page: the fallback is shown, and it is not a choice.
+    const local = html(createElement(ConnectionsPage, { modelClient: "deepseek-responses", run }), { settings: { ...fallback, hosted: undefined, meta: { keySet: false, source: null } }, settingsAvailable: true });
+    expect(local).toContain("DeepSeek, the fallback");
+    expect(local).toContain("In use");
+    expect(local).not.toContain('value="deepseek"');
+  });
+
   it("the model choice shows each model's cost per turn", () => {
     const page = html(createElement(ModelSelect), { settings: hostedSettings, settingsAvailable: true, hosted: session });
     expect(page).toContain("Muse Spark 1.3 (about $0.09 a turn)");
@@ -135,6 +170,8 @@ describe("the hosted site", () => {
     expect(usageStopText(USAGE_TEXT.credits_exhausted.text, PARTIAL_TEXT)).toBe("credits_exhausted");
     expect(usageStopText(`${PARTIAL_TEXT} ${USAGE_TEXT.daily_cap.reason}`, PARTIAL_TEXT)).toBe("daily_cap");
     expect(usageStopText("Your schedule is empty.", PARTIAL_TEXT)).toBeNull();
+    expect(usageStopText(FALLBACK_USAGE_TEXT.daily_cap.text, PARTIAL_TEXT)).toBe("daily_cap");
+    expect(usageStopText(`${PARTIAL_TEXT} ${FALLBACK_USAGE_TEXT.server_key_off.reason}`, PARTIAL_TEXT)).toBe("server_key_off");
     expect(turnErrorText({ code: "credits_exhausted", message: USAGE_TEXT.credits_exhausted.text })).toBe(USAGE_TEXT.credits_exhausted.text);
     expect(errorSentence(new ApiError(402, { error: "credits_exhausted", message: USAGE_TEXT.credits_exhausted.text }))).toBe(USAGE_TEXT.credits_exhausted.text);
     expect(errorSentence(new ApiError(409, { error: "judge_used", message: "That judge code was already used. Each code works once." }))).toBe("That judge code was already used. Each code works once.");
@@ -145,7 +182,7 @@ describe("the hosted site", () => {
   });
 
   it("the UI text has no em dashes and no semicolons in prose", () => {
-    for (const text of [...Object.values(USAGE_TEXT).flatMap((v) => [v.text, v.reason])]) {
+    for (const text of [...Object.values(USAGE_TEXT), ...Object.values(FALLBACK_USAGE_TEXT)].flatMap((v) => [v.text, v.reason])) {
       expect(text).not.toMatch(/—|;/);
     }
   });
