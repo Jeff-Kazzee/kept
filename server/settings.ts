@@ -23,7 +23,7 @@ import { StaleEditError, type EventStore } from "../src/store/event-log.ts";
 
 // Owned by sprint 10.
 export type ProviderSettings = {
-  provider: "meta" | "chatgpt" | null;
+  provider: "meta" | "chatgpt" | "deepseek" | null;
   meta: { keySet: boolean; source: "you" | "server" | null };
   chatgpt: { signedIn: boolean; name: string | null; email: string | null; planUsage: boolean };
 };

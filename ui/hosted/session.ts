@@ -19,8 +19,8 @@ export type HostedAccount = { kind: "user" | "judge" | "google"; email: string |
 
 export type SessionInfo =
   | { mode: "local" }
-  | { mode: "hosted"; signedIn: false; passwordMin: number; dashboard?: boolean; publicSignup?: boolean; waitlistUrl?: string | null }
-  | { mode: "hosted"; signedIn: true; account: HostedAccount; balanceMicros: number; balance: string; expiresAt: number; passwordMin: number; dashboard?: boolean; publicSignup?: boolean; waitlistUrl?: string | null };
+  | { mode: "hosted"; signedIn: false; passwordMin: number; dashboard?: boolean; publicSignup?: boolean; waitlistUrl?: string | null; fallbackNotice?: string }
+  | { mode: "hosted"; signedIn: true; account: HostedAccount; balanceMicros: number; balance: string; expiresAt: number; passwordMin: number; dashboard?: boolean; publicSignup?: boolean; waitlistUrl?: string | null; fallbackNotice?: string };
 
 export type SignedInSession = Extract<SessionInfo, { signedIn: true }>;
 

@@ -14,6 +14,7 @@
 // stderr. stdout carries only MCP messages.
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { CaseService } from "../src/case/service.ts";
+import { ConfigError, readServerFallback, type ServerFallback } from "../src/hosted/config.ts";
 import { IntakeService } from "../src/intake/service.ts";
 import { ChatGptAuth } from "../src/model/providers/chatgpt-auth.ts";
 import { createProviderClient } from "../src/model/providers/factory.ts";
@@ -38,13 +39,23 @@ if ((process.env.APP_MODE ?? "").trim().toLowerCase() === "hosted") {
   process.exit(2);
 }
 
+let serverFallback: ServerFallback | null;
+try {
+  serverFallback = readServerFallback();
+} catch (err) {
+  if (!(err instanceof ConfigError)) throw err;
+  console.error(err.message);
+  process.exit(2);
+}
+
 const secrets = new SecretsStore(appSecretsPath());
 // The same provider factory as the app. The ChatGPT redirect port only
 // matters for a sign-in, which happens in the app, not here.
 const auth = new ChatGptAuth({ store: secrets, port: Number(process.env.APP_PORT ?? 5180) });
-const client = createProviderClient({ store: secrets, auth, serverMetaKey: process.env.MODEL_API_KEY || null });
-// Nothing this process starts inherits the key.
+const client = createProviderClient({ store: secrets, auth, serverMetaKey: process.env.MODEL_API_KEY || null, serverFallback });
+// Nothing this process starts inherits the keys.
 delete process.env.MODEL_API_KEY;
+delete process.env.DEEPSEEK_API_KEY;
 
 const store = new EventStore(appDbPath());
 // Finish a Delete case that stopped before it cleared the file, before

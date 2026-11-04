@@ -20,6 +20,10 @@ export type ModelReply = {
   outputText: string;
   usage: TokenUsage;
   latencyMs: number;
+  // The model that answered, when a client sent the call to another model
+  // than the request names (0024). Attempt records take it. Unset means the
+  // request's model.
+  model?: string;
 };
 
 export interface ModelClient {
@@ -45,6 +49,9 @@ export class ModelCallError extends Error {
   // such as a stream that ended with response.incomplete. Null when it
   // reported none. Hosted mode charges it (0014).
   usage: TokenUsage | null = null;
+  // As ModelReply.model, for a call that failed. Null means the request's
+  // model.
+  model: string | null = null;
 
   constructor(
     message: string,
@@ -218,14 +225,16 @@ export class MetaResponsesClient implements ModelClient, ToolModelClient {
     try {
       for await (const event of readSse(res.body)) {
         firstByteMs ??= elapsed(started);
-        if (event.event === "response.completed") {
+        // An event with no event line is named by its data's type (0024).
+        const name = event.event !== "message" ? event.event : String((parseJson(event.data) as { type?: unknown } | null)?.type ?? "message");
+        if (name === "response.completed") {
           const data = JSON.parse(event.data) as { response?: unknown };
           return { ...readCompletedBody(data.response), latencyMs: elapsed(started), firstByteMs };
         }
-        if (event.event === "response.failed" || event.event === "response.incomplete" || event.event === "error") {
+        if (name === "response.failed" || name === "response.incomplete" || name === "error") {
           const data = parseJson(event.data);
           const err = apiError(data);
-          const failed = new ModelCallError(`Model stream ended with ${event.event}.`, res.status, elapsed(started), { type: err.type ?? event.event, code: err.code });
+          const failed = new ModelCallError(`Model stream ended with ${name}.`, res.status, elapsed(started), { type: err.type ?? name, code: err.code });
           failed.usage = reportedUsage(data);
           throw failed;
         }

@@ -16,6 +16,11 @@ export const META_MODELS: readonly ModelOption[] = [
 ];
 export const DEFAULT_META_MODEL = "muse-spark-1.3";
 
+// The operator's fallback on the server key (0024): one model, so there is
+// no choice to keep, and returning to Muse leaves the person's own intact.
+export const DEEPSEEK_MODEL = "deepseek-flash";
+export const DEEPSEEK_MODELS: readonly ModelOption[] = [{ id: DEEPSEEK_MODEL, label: "DeepSeek Flash", costHint: null }];
+
 // The code default for the ChatGPT model: the model the guide's examples
 // use. The connection's own listing wins when it does not list this one.
 export const DEFAULT_CHATGPT_MODEL = "gpt-6.1-sol";
@@ -38,6 +43,7 @@ function listedChatGptModels(settings: StoredSettings): ModelOption[] {
 // The models the user may pick for a provider.
 export function modelOptions(settings: StoredSettings, provider: ProviderKind): ModelOption[] {
   if (provider === "meta") return META_MODELS.filter((m) => allowed(m.id));
+  if (provider === "deepseek") return [...DEEPSEEK_MODELS];
   const listed = listedChatGptModels(settings);
   return listed.length > 0 ? listed : [{ id: DEFAULT_CHATGPT_MODEL, label: DEFAULT_CHATGPT_MODEL, costHint: null }];
 }
@@ -62,6 +68,7 @@ export function chatGptModel(settings: StoredSettings): string {
 }
 
 export function currentModel(settings: StoredSettings, provider: ProviderKind): string {
+  if (provider === "deepseek") return DEEPSEEK_MODEL;
   return provider === "meta" ? metaModel(settings) : chatGptModel(settings);
 }
 

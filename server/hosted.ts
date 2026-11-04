@@ -2,7 +2,8 @@
 // with an email and password (and passkeys) through Better Auth, or a
 // judge code, and one workspace of their own. The server's Meta key is
 // reached only through usage credits, and Sign in with ChatGPT shows as
-// not available here yet (J14).
+// not available here yet (J14). APP_SERVER_MODEL=deepseek puts DeepSeek's
+// key in its place, with a notice on every screen (0024).
 //
 // Every request goes through the same host allowlist. /api/auth/* is
 // Better Auth's (auth.ts): it checks the request's origin against the
@@ -36,12 +37,13 @@ import { DemoGoogle, SWEEP_MS, demoGooglePath, ownerTag } from "../src/google/de
 import { GoogleError, type FetchLike } from "../src/google/http.ts";
 import { OAuthError, type OAuthClient } from "../src/google/oauth.ts";
 import { AUTH_BASE_PATH, CLIENT_ADDRESS_HEADER, PASSWORD_MIN, authPath, authRouteServed, createAuth, type AuthConfig } from "../src/hosted/auth.ts";
-import { formatBalance, formatCharge, formatUsd, type HostedConfig } from "../src/hosted/config.ts";
+import { formatBalance, formatCharge, formatUsd, type HostedConfig, type ServerFallback } from "../src/hosted/config.ts";
 import { MeteredClient } from "../src/hosted/metered.ts";
 import { PRICES, turnCostMicros } from "../src/hosted/prices.ts";
 import { AddressLimiter, clientAddress, countedAddress } from "../src/hosted/rate-limit.ts";
 import { AccountsBusyError, AccountsFileError, AccountsStore, JudgeCodeError, SESSION_TTL_MS, SIGNIN_KEY, accountsPath, workspacesRoot, type Account, type ChargeRow } from "../src/hosted/store.ts";
-import { META_MODELS, metaModel } from "../src/model/providers/models.ts";
+import { FALLBACK_NOTICE_TEXT, fallbackStartLine } from "../src/model/providers/messages.ts";
+import { DEEPSEEK_MODEL, DEEPSEEK_MODELS, META_MODELS, metaModel } from "../src/model/providers/models.ts";
 import { UsageRefusedError, withUsageScope } from "../src/model/usage.ts";
 import { CALLBACK_PATH } from "./auth.ts";
 import { GOOGLE_CALLBACK_PATH, googleRedirectUris } from "./google.ts";
@@ -49,7 +51,7 @@ import { appHosts, hostAllowed } from "./hosts.ts";
 import { apiPreamble, trustedSecure } from "./http.ts";
 import { API_SECURITY_HEADERS } from "./static.ts";
 import { LIVE_PATH, LIVE_CHECK_MS, parseSince, waitForChange, type Live } from "./live.ts";
-import { BOOT_PATH, CHATGPT_HOSTED_TEXT, MAX_BODY, bootOf, createWorkspace, liveOf, send, serveApi, type Workspace } from "./workspace.ts";
+import { BOOT_PATH, CHATGPT_HOSTED_FALLBACK_TEXT, CHATGPT_HOSTED_TEXT, MAX_BODY, bootOf, createWorkspace, liveOf, send, serveApi, type Workspace } from "./workspace.ts";
 import { AccountClosedError, WorkspaceBusyError, Workspaces, WorkspacesFullError } from "./workspaces.ts";
 
 export type HostedOptions = {
@@ -59,6 +61,8 @@ export type HostedOptions = {
   extraHosts: string[];
   googleClient: OAuthClient | null;
   serverMetaKey: string | null;
+  // APP_SERVER_MODEL=deepseek (0024).
+  serverFallback?: ServerFallback | null;
   ui: (req: IncomingMessage, res: ServerResponse) => void;
   logRejected?: boolean;
   // For tests.
@@ -68,6 +72,7 @@ export type HostedOptions = {
   googleFetch?: FetchLike;
   demoGoogleFile?: string;
   metaUrl?: string;
+  deepSeekUrl?: string;
   now?: () => number;
   // The workspace cache's size (workspaces.ts, MAX_OPEN).
   maxWorkspaces?: number;
@@ -176,7 +181,8 @@ export function usageLines(charges: ChargeRow[]): UsageLine[] {
       at: c.at,
       what: ROUTE_WORDS[c.route] ?? ROUTE_WORDS.other!,
       model: c.model,
-      modelLabel: META_MODELS.find((m) => m.id === c.model)?.label ?? c.model,
+      // Old charges keep the model that made them, after the switch too.
+      modelLabel: [...META_MODELS, ...DEEPSEEK_MODELS].find((m) => m.id === c.model)?.label ?? c.model,
       costMicros: c.amountMicros,
       cost: formatCharge(c.amountMicros),
       calls: 1,
@@ -214,7 +220,11 @@ export async function createHostedApp(o: HostedOptions) {
   };
   // 0021, round 2, finding 1: failed demo connects per address.
   const demoFailLimit = new AddressLimiter({ ...DEMO_FAIL_LIMIT, now });
-  const serverKey = config.serverKeyOn ? o.serverMetaKey : null;
+  const fallback = o.serverFallback ?? null;
+  const serverKey = config.serverKeyOn ? (fallback ? fallback.key : o.serverMetaKey) : null;
+  // 0024: the notice shows only while DeepSeek can answer, and the sign-in
+  // screen gets it too.
+  const noticeField = fallback && serverKey ? { fallbackNotice: FALLBACK_NOTICE_TEXT } : {};
   // 0021: the shared demo Gmail and Calendar, with APP_DEMO_GOOGLE=on and
   // the Google client set.
   const demo = config.demoGoogle && o.googleClient ? new DemoGoogle({ client: o.googleClient, file: o.demoGoogleFile ?? demoGooglePath(), now, ...(o.googleFetch ? { fetch: o.googleFetch } : {}) }) : null;
@@ -222,9 +232,9 @@ export async function createHostedApp(o: HostedOptions) {
   // A refusal before a turn starts, so a person with no credit has
   // nothing saved (agent.ts, admit).
   const admit = (accountId: string) => () => {
-    if (serverKey === null) throw new UsageRefusedError("server_key_off");
-    if (config.dailyCapMicros === null) throw new UsageRefusedError("server_key_off");
-    if (store.dayCost() >= config.dailyCapMicros) throw new UsageRefusedError("daily_cap");
+    if (serverKey === null) throw new UsageRefusedError("server_key_off", fallback !== null);
+    if (config.dailyCapMicros === null) throw new UsageRefusedError("server_key_off", fallback !== null);
+    if (store.dayCost() >= config.dailyCapMicros) throw new UsageRefusedError("daily_cap", fallback !== null);
     if (store.balance(accountId) <= 0) throw new UsageRefusedError("credits_exhausted");
   };
 
@@ -248,10 +258,21 @@ export async function createHostedApp(o: HostedOptions) {
         googleClient: o.googleClient,
         ...(o.googleFetch ? { googleFetch: o.googleFetch } : {}),
         serverMetaKey: null,
+        ...(fallback ? { serverFallback: { key: serverKey } } : {}),
         ...(demo ? { demoGoogle: { demo, accountId, ownConnect: store.account(accountId)?.kind !== "judge" } } : {}),
         hosted: {
           metered: (secrets) =>
-            new MeteredClient({ store, accountId, workspace: accountId, config, serverKey, model: () => metaModel(secrets.read()), ...(o.metaUrl ? { metaUrl: o.metaUrl } : {}) }),
+            new MeteredClient({
+              store,
+              accountId,
+              workspace: accountId,
+              config,
+              serverKey,
+              model: () => (fallback ? DEEPSEEK_MODEL : metaModel(secrets.read())),
+              ...(fallback ? { fallback: true } : {}),
+              ...(o.metaUrl ? { metaUrl: o.metaUrl } : {}),
+              ...(o.deepSeekUrl ? { deepSeekUrl: o.deepSeekUrl } : {}),
+            }),
           admit: admit(accountId),
         },
         logRejected: o.logRejected ?? false,
@@ -346,7 +367,7 @@ export async function createHostedApp(o: HostedOptions) {
   // `dashboard` lets the sign-in page say that sign-in events also go to
   // Better Auth's dashboard (B7).
   // `publicSignup` lets the sign-in page offer Make an account (K7).
-  const signedOutView = () => ({ mode: "hosted" as const, signedIn: false, passwordMin: PASSWORD_MIN, dashboard: auth.dashboardOn, publicSignup: o.auth.publicSignup, waitlistUrl: o.auth.publicSignup ? null : o.auth.waitlistUrl });
+  const signedOutView = () => ({ mode: "hosted" as const, signedIn: false, passwordMin: PASSWORD_MIN, dashboard: auth.dashboardOn, publicSignup: o.auth.publicSignup, waitlistUrl: o.auth.publicSignup ? null : o.auth.waitlistUrl, ...noticeField });
 
   const accountView = (account: Account, expiresAt: number) => {
     const balance = store.balance(account.id);
@@ -366,6 +387,7 @@ export async function createHostedApp(o: HostedOptions) {
       publicSignup: o.auth.publicSignup,
       // So the sign-in screen after a sign-out still shows the waitlist line.
       waitlistUrl: o.auth.publicSignup ? null : o.auth.waitlistUrl,
+      ...noticeField,
     };
   };
 
@@ -377,8 +399,8 @@ export async function createHostedApp(o: HostedOptions) {
       markup: (config.markupHundredths / 100).toString(),
       charges: usageLines(store.charges(account.id, 100)).slice(0, 30),
       plans: PLANS.map((p) => ({ ...p, available: false })),
-      models: META_MODELS.map((m) => ({ id: m.id, label: m.label, turnCost: turnCostWords(m.id, config.markupHundredths) })),
-      prices: PRICES.map((p) => ({ model: p.model, inputPerMillion: formatUsd(p.input), cachedInputPerMillion: formatUsd(p.cachedInput), outputPerMillion: formatUsd(p.output) })),
+      models: (fallback ? DEEPSEEK_MODELS : META_MODELS).map((m) => ({ id: m.id, label: m.label, turnCost: turnCostWords(m.id, config.markupHundredths) })),
+      prices: PRICES.filter((p) => (p.model === DEEPSEEK_MODEL) === (fallback !== null)).map((p) => ({ model: p.model, inputPerMillion: formatUsd(p.input), cachedInputPerMillion: formatUsd(p.cachedInput), outputPerMillion: formatUsd(p.output) })),
       canAddCode: account.kind !== "judge",
     };
   };
@@ -634,7 +656,7 @@ export async function createHostedApp(o: HostedOptions) {
     const view = body as { models: Array<{ id: string }> } & Record<string, unknown>;
     return {
       ...view,
-      hosted: { chatgptAvailable: false, chatgptText: CHATGPT_HOSTED_TEXT },
+      hosted: { chatgptAvailable: false, chatgptText: fallback ? CHATGPT_HOSTED_FALLBACK_TEXT : CHATGPT_HOSTED_TEXT },
       models: view.models.map((m) => ({ ...m, turnCost: turnCostWords(m.id, config.markupHundredths) })),
     };
   }
@@ -765,6 +787,7 @@ export async function createHostedApp(o: HostedOptions) {
         // J19: no cap has a default.
         ...config.missing.map((name) => `${name} is not set, so the server key is off. Set it to turn the server key on.`),
         serverKey ? "The server key is on, reached only through usage credits." : "The server key is off or not set, so every assistant step is refused with a plain message.",
+        ...(fallback ? [fallbackStartLine(fallback.key)] : []),
       ];
       if (extraHosts.length > 0) lines.push(`Also answers to: ${extraHosts.join(", ")}`);
       // Never the secret or the key.

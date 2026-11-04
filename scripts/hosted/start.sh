@@ -11,12 +11,15 @@
 #                             https://the-little-ai-co.tail374dd0.ts.net:10000
 #   APP_DAILY_COST_CAP_USD    the most the server key may cost in a UTC day
 #   APP_JUDGE_TOTAL_CAP_USD   the most all judge codes together may grant
-#   MODEL_API_KEY             the server's Meta key, which credits pay for
+#   MODEL_API_KEY             the server's Meta key, which credits pay for,
+#                             unless APP_SERVER_MODEL is deepseek
 # Optional: APP_WAITLIST_URL (the waitlist link, K9), APP_PUBLIC_SIGNUP
 # (default off: judges only, K7), BETTER_AUTH_API_KEY (the dashboard
 # plugin, kept unset for the hackathon, K6), APP_DEMO_GOOGLE (the shared
 # demo Gmail and Calendar, 0021, with GOOGLE_CLIENT_ID and
-# GOOGLE_CLIENT_SECRET), APP_MARKUP,
+# GOOGLE_CLIENT_SECRET), APP_SERVER_MODEL (deepseek for the fallback, 0024,
+# with DEEPSEEK_API_KEY. The app says so at start if that key is missing,
+# and refuses each step), APP_MARKUP,
 # APP_HOSTED_DATA (the data folder, default ~/.local/share/appointments-hosted),
 # APP_PORT (default 5300), NODE_BIN (default: node on PATH).
 set -euo pipefail
@@ -24,8 +27,11 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$here"
 
+required=(BETTER_AUTH_SECRET BETTER_AUTH_URL APP_DAILY_COST_CAP_USD APP_JUDGE_TOTAL_CAP_USD)
+server_model="${APP_SERVER_MODEL:-}"
+if [[ "${server_model,,}" != "deepseek" ]]; then required+=(MODEL_API_KEY); fi
 missing=()
-for name in BETTER_AUTH_SECRET BETTER_AUTH_URL APP_DAILY_COST_CAP_USD APP_JUDGE_TOTAL_CAP_USD MODEL_API_KEY; do
+for name in "${required[@]}"; do
   if [[ -z "${!name:-}" ]]; then missing+=("$name"); fi
 done
 if (( ${#missing[@]} > 0 )); then

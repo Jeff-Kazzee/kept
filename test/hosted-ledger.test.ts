@@ -57,6 +57,7 @@ describe("prices and config", () => {
     expect(PRICES.map((p) => [p.model, p.input, p.cachedInput, p.output])).toEqual([
       ["muse-spark-1.3", 1_250_000, 150_000, 4_250_000],
       ["muse-wonder-1.0", 4_000_000, 200_000, 20_000_000],
+      ["deepseek-flash", 300_000, 6_000, 1_200_000],
     ]);
     for (const p of PRICES) expect(p.source.length).toBeGreaterThan(10);
   });

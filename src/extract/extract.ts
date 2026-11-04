@@ -105,7 +105,9 @@ export function toEvidenceClaim(claim: ModelClaim, message: Message): EvidenceCl
   };
 }
 
-type AttemptOutcome = Omit<AttemptRecord, "attempt" | "effort" | "model">;
+// `model`: set when a client says another model than the request's ran it
+// (0024).
+type AttemptOutcome = Omit<AttemptRecord, "attempt" | "effort" | "model"> & { model?: string };
 
 async function runAttempt(
   message: Message,
@@ -123,19 +125,20 @@ async function runAttempt(
     // Only a failed model call counts as an invalid attempt. Other errors,
     // such as the eval spend guard, stop the run.
     if (!(err instanceof ModelCallError)) throw err;
-    return invalid("call_failed", err.message, ZERO_USAGE, err.latencyMs);
+    return { ...invalid("call_failed", err.message, ZERO_USAGE, err.latencyMs), ...(err.model ? { model: err.model } : {}) };
   }
+  const ran = reply.model ? { model: reply.model } : {};
 
   let json: unknown;
   try {
     json = JSON.parse(reply.outputText);
   } catch {
-    return invalid("not_json", null, reply.usage, reply.latencyMs);
+    return { ...invalid("not_json", null, reply.usage, reply.latencyMs), ...ran };
   }
   const parsed = ModelOutput.safeParse(json);
   if (!parsed.success) {
     const paths = parsed.error.issues.map((i) => i.path.join(".") || "(root)");
-    return invalid("schema_mismatch", [...new Set(paths)].slice(0, 5).join(", "), reply.usage, reply.latencyMs);
+    return { ...invalid("schema_mismatch", [...new Set(paths)].slice(0, 5).join(", "), reply.usage, reply.latencyMs), ...ran };
   }
 
   const claims = parsed.data.claims.map((claim) => ({ claim, problems: checkClaim(claim, message) }));
@@ -147,6 +150,7 @@ async function runAttempt(
     problem: failed ? "claim_checks_failed" : null,
     detail: null,
     claims,
+    ...ran,
   };
 }
 

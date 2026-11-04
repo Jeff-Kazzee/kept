@@ -4,7 +4,7 @@
 // do not record a failed attempt, and nothing else is written. The route
 // answers it, and the chat ends the turn with its sentence.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { USAGE_TEXT, type UsageRefusal } from "./usage-text.ts";
+import { FALLBACK_USAGE_TEXT, USAGE_TEXT, type UsageRefusal } from "./usage-text.ts";
 
 export { USAGE_TEXT, type UsageRefusal };
 
@@ -13,11 +13,14 @@ export class UsageRefusedError extends Error {
   readonly code: UsageRefusal;
   readonly userText: string;
   readonly reason: string;
-  constructor(code: UsageRefusal) {
-    super(USAGE_TEXT[code].text);
+  // `fallback`: the operator's fallback is on (0024), so a sentence that
+  // names Meta would be untrue.
+  constructor(code: UsageRefusal, fallback = false) {
+    const words = fallback && code !== "credits_exhausted" ? FALLBACK_USAGE_TEXT[code] : USAGE_TEXT[code];
+    super(words.text);
     this.code = code;
-    this.userText = USAGE_TEXT[code].text;
-    this.reason = USAGE_TEXT[code].reason;
+    this.userText = words.text;
+    this.reason = words.reason;
   }
 }
 

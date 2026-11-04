@@ -34,6 +34,7 @@ export function SignIn({
   dashboard = false,
   publicSignup = false,
   waitlistUrl = null,
+  fallbackNotice = null,
   notice,
   onSignedIn,
 }: {
@@ -41,6 +42,8 @@ export function SignIn({
   dashboard?: boolean;
   publicSignup?: boolean;
   waitlistUrl?: string | null;
+  // The operator's fallback is on (0024): the notice, word for word.
+  fallbackNotice?: string | null;
   notice: string | null;
   onSignedIn: (s: SessionInfo, problem?: string | null) => void;
 }) {
@@ -165,6 +168,11 @@ export function SignIn({
         </span>
         <h1 className="signin-title">Kept</h1>
         <p className="muted">Keep track of changes to your appointments. Paste a message from the office, and the assistant reads it, checks it and keeps your schedule.</p>
+        {fallbackNotice && (
+          <p className="warn-box" role="status">
+            {fallbackNotice}
+          </p>
+        )}
         {error && (
           <p className="warn-box" role="alert">
             {error}
@@ -249,7 +257,7 @@ export function SignIn({
             <form className="stack-sm" onSubmit={(e) => void submitCode(e)} aria-label="Sign in with a judge code">
               {codeField(false)}
               <p id={`${uid}-code-hint`} className="small muted">
-                The code you were given starts with judge_. It signs you in to an account of your own, with usage credit for the Meta models.
+                The code you were given starts with judge_. It signs you in to an account of your own, with usage credit for {fallbackNotice ? "the assistant" : "the Meta models"}.
               </p>
               <p className="small muted">
                 If the code was shared with several judges, your workspace stays on this browser while you are signed in. Signing out, or signing in on another browser, starts a fresh one.

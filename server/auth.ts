@@ -30,7 +30,9 @@
 import { z } from "zod";
 import { DEFAULT_TIME_ZONE } from "../src/domain/zone.ts";
 import { CALLBACK_PATH, ChatGptAuth, type CallbackCode } from "../src/model/providers/chatgpt-auth.ts";
+import type { ServerFallback } from "../src/hosted/config.ts";
 import { activeProvider, metaKey } from "../src/model/providers/factory.ts";
+import { FALLBACK_NOTICE_TEXT } from "../src/model/providers/messages.ts";
 import { currentModel, modelOptions, modelProblemText, type ModelOption } from "../src/model/providers/models.ts";
 import { IdentityError } from "../src/model/providers/oidc.ts";
 import { ProviderKind, SecretsBusyError, SecretsFileError, type SecretsStore, type StoredSettings } from "../src/model/providers/secrets.ts";
@@ -57,11 +59,14 @@ export type SettingsView = {
   models: ModelOption[];
   // Set when the chosen model failed a capability the app needs.
   modelNotice: string | null;
+  // Only while DeepSeek answers on the server key (0024).
+  fallbackNotice?: string;
 };
 
 export type AuthRequest = { method: string; path: string; body: unknown };
 
-const ProviderBody = z.object({ provider: ProviderKind, expectedVersion: z.number().int().nonnegative() }).strict();
+// The fallback is the operator's setting, so a person cannot choose it.
+const ProviderBody = z.object({ provider: z.enum(["meta", "chatgpt"]), expectedVersion: z.number().int().nonnegative() }).strict();
 const ModelBody = z.object({ model: z.string().min(1).max(200), expectedVersion: z.number().int().nonnegative() }).strict();
 
 export const KEY_FORMAT_TEXT = "That does not look like a Meta Model API key. Paste the key on its own, with no spaces. Nothing was saved.";
@@ -71,7 +76,7 @@ export const SIGNED_OUT_UNCONFIRMED_TEXT =
   "You are signed out of ChatGPT in this app. ChatGPT did not confirm the sign-out on its side. You can also disconnect the app in ChatGPT settings.";
 export const NO_PROVIDER_MODEL_TEXT = "Choose a provider first: add a Meta key or sign in with ChatGPT. Nothing was changed.";
 export const UNKNOWN_MODEL_TEXT = "That model is not in the list for the current provider. Pick one from the list. Nothing was changed.";
-export const NOT_READY_TEXT: Record<ProviderKind, string> = {
+export const NOT_READY_TEXT: Record<"meta" | "chatgpt", string> = {
   meta: "Add a Meta Model API key first, then choose Meta. Nothing was changed.",
   chatgpt: "Sign in with ChatGPT first, then choose ChatGPT. Nothing was changed.",
 };
@@ -104,6 +109,7 @@ export function createAuth(options: {
   store: SecretsStore;
   auth: ChatGptAuth;
   serverMetaKey: string | null;
+  serverFallback?: ServerFallback | null;
   timezone?: () => TimezoneSettings;
 }) {
   const { store, auth } = options;
@@ -112,7 +118,7 @@ export function createAuth(options: {
 
   // The provider part of the view, without a version.
   const providerPart = (settings: StoredSettings) => {
-    const ctx = { settings, serverMetaKey };
+    const ctx = { settings, serverMetaKey, serverFallback: options.serverFallback ?? null };
     const key = metaKey(ctx);
     const provider = activeProvider(ctx);
     const models = provider ? modelOptions(settings, provider) : [];
@@ -129,6 +135,7 @@ export function createAuth(options: {
       model,
       models,
       modelNotice,
+      ...(provider === "deepseek" && ctx.serverFallback?.key ? { fallbackNotice: FALLBACK_NOTICE_TEXT } : {}),
     };
   };
 
@@ -206,6 +213,8 @@ export function createAuth(options: {
           if (!current.provider) return { answer: { status: 422, body: { error: "provider_not_ready", message: NO_PROVIDER_MODEL_TEXT } } };
           // Only a listed model. The lists never hold a contributor model.
           if (!current.models.some((m) => m.id === model)) return { answer: { status: 422, body: { error: "unknown_model", message: UNKNOWN_MODEL_TEXT } } };
+          // The fallback has one model, so nothing is kept for it.
+          if (current.provider === "deepseek") return { answer: ok(current) };
           const choice = current.provider === "meta" ? { metaModel: model } : { chatgpt: { ...settings.chatgpt, model } };
           return { write: { ...settings, ...choice, modelProblem: null } };
         });

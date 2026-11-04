@@ -23,6 +23,12 @@
 //                            Calendar with every account that has no Google
 //                            connection of its own (0021). Default off.
 //
+// One more setting applies in both modes, read by readServerFallback:
+//
+//   APP_SERVER_MODEL         deepseek sends calls on the server key to
+//                            DeepSeek, with DEEPSEEK_API_KEY (0024). Unset
+//                            or meta is Meta, as always.
+//
 // J19: while either cap is unset the server key is off, and `missing`
 // names what to set. Money is kept in micro-dollars (millionths of a
 // dollar), as integers.
@@ -43,6 +49,10 @@ export type HostedConfig = {
   // The required settings that are not set.
   missing: string[];
 };
+
+// The operator's fallback on the server key (0024): on, with its key, or
+// on with none, which refuses calls and never goes back to Meta by itself.
+export type ServerFallback = { key: string | null };
 
 export class ConfigError extends Error {
   override name = "ConfigError";
@@ -107,6 +117,12 @@ export function readHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedCo
     demoGoogle: demoRaw === "on",
     missing,
   };
+}
+
+export function readServerFallback(env: NodeJS.ProcessEnv = process.env): ServerFallback | null {
+  const raw = (env.APP_SERVER_MODEL ?? "").trim().toLowerCase();
+  if (raw !== "" && raw !== "meta" && raw !== "deepseek") throw new ConfigError(`APP_SERVER_MODEL must be meta or deepseek. It is "${env.APP_SERVER_MODEL}".`);
+  return raw === "deepseek" ? { key: env.DEEPSEEK_API_KEY?.trim() || null } : null;
 }
 
 // "$1.25", "$0.0042": dollars with at least two decimals and no trailing

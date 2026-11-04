@@ -20,12 +20,27 @@ export const USAGE_TEXT: Record<UsageRefusal, { reason: string; text: string }> 
   },
 };
 
+// 0024: the same two refusals while the operator's fallback is on, when
+// Meta is not what stopped.
+export const FALLBACK_USAGE_TEXT: Record<Exclude<UsageRefusal, "credits_exhausted">, { reason: string; text: string }> = {
+  daily_cap: {
+    reason: "This site reached its daily limit for model usage, so the assistant did not run this step. Try again tomorrow. Your credit was not charged.",
+    text: "This site reached its daily limit for model usage, so the assistant did not run this step. Try again tomorrow. Your credit was not charged. Nothing in your case changed.",
+  },
+  server_key_off: {
+    reason: "Model usage is paused on this site just now, so the assistant did not run this step. Your credit was not charged.",
+    text: "Model usage is paused on this site just now, so the assistant did not run this step. Your credit was not charged. Nothing in your case changed.",
+  },
+};
+
 // The text a stopped turn stores in hosted mode: a refusal's whole
 // sentence, or, after a tool wrote, the partial sentence and the reason.
 export function usageStopText(text: string, partial: string): UsageRefusal | null {
   const t = text.trim();
-  for (const [code, v] of Object.entries(USAGE_TEXT) as Array<[UsageRefusal, (typeof USAGE_TEXT)[UsageRefusal]]>) {
-    if (t === v.text || t === `${partial} ${v.reason}`) return code;
+  for (const table of [USAGE_TEXT, FALLBACK_USAGE_TEXT]) {
+    for (const [code, v] of Object.entries(table) as Array<[UsageRefusal, (typeof USAGE_TEXT)[UsageRefusal]]>) {
+      if (t === v.text || t === `${partial} ${v.reason}`) return code;
+    }
   }
   return null;
 }
