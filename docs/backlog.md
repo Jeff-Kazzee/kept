@@ -786,13 +786,14 @@ the Meta key answers 402 `billing_not_configured`. Decision 0024, guide
 - [x] SP22.4 The notice on the app screen and the sign-in screen, truthful
   labels, and the Connections, Usage and refusal wording.
 - [x] SP22.5 Tests, the guide, the schema, and the secret scan's new name.
+- [x] Fix round 1: attempt records and API answers carry the model that
+  really answered, and a missing key is refused before any write (0024,
+  "Fix round 1").
 - [ ] Review of `dev..sprint/22-deepseek-fallback` (coordinator).
 - [ ] Jeff gets a DeepSeek key and sets the two lines (coordinator and
   Jeff). The first live chat and extraction test D6 and D7 of 0024.
 - [ ] Confirm or change the choices marked proposed in 0024.
 - [ ] Turn the fallback off once the Meta billing is fixed.
-- [ ] After the stopgap, carry the live model into the attempt records
-  (0024, known limits).
 
 ## Sprint 16: submission build
 

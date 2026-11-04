@@ -38,11 +38,13 @@ restart.
 - D3 Nobody can choose it. `PUT /api/settings/provider` refuses `deepseek`,
   and nothing stores it as the provider, so a person's Muse choice is intact
   on return. The kind is in `ProviderKind` only for a `modelProblem` row.
-- D4 Key absent: the app still starts, with a plain start line. A local call
-  fails with `DEEPSEEK_KEY_MISSING_TEXT`, and a hosted one with "Model usage
-  is paused". It never goes back to Meta. No notice shows, because the
-  notice says DeepSeek is answering, which would be false. The same goes for
-  `APP_SERVER_KEY=off`. (proposed)
+- D4 Key absent: the app still starts, with a plain start line. Local mode
+  is not ready, so J12's guard refuses each model route and chat turn before
+  anything is written, with J12's sentence: adding a Meta key or signing in
+  with ChatGPT does work there, by D2. A hosted step is refused with "Model
+  usage is paused", also before any write. It never goes back to Meta. No
+  notice shows, because the notice says DeepSeek is answering, which would
+  be false. The same goes for `APP_SERVER_KEY=off`. (proposed)
 
 ## The API
 
@@ -100,6 +102,27 @@ ignored there, as its docs say unsupported fields are.
   Usage page says DeepSeek reports the usage. The refusals that name Meta
   have neutral twins while the setting is on (`FALLBACK_USAGE_TEXT`), with
   the same codes.
+- D16 Every attempt record says which model ran it. The request still names
+  the code's default, and the DeepSeek client's `call` reports its model on
+  the reply, or on the `ModelCallError`, so extraction, explanation, question
+  and suggestion attempts store `deepseek-flash`, and `explanation.model` and
+  `suggestion.model` answer it. A client that reports nothing leaves today's
+  value, so off-mode records do not change, and rows already stored keep
+  what they say. A person's own Meta key on a server with the fallback on
+  records Muse, as Muse answered.
+
+## Fix round 1
+
+The independent review of `2798eeb` left two findings, both confirmed.
+
+1. DeepSeek answers kept Meta attribution: attempts recorded the request's
+   model, so `explanation.model` and `suggestion.model` said
+   `muse-spark-1.3`. Now D16.
+2. A missing key passed J12's guard in local mode: `ready()` answered true so
+   the call could fail with its own sentence, but the failure was written,
+   as failed attempts on the model routes, and as the message and the refusal
+   in chat. `ready()` now answers false, so the refusal comes first. Now D4.
+   `DEEPSEEK_KEY_MISSING_TEXT` remains for a direct call past the guard.
 
 ## Live check
 
@@ -126,9 +149,4 @@ format on 5341. Nothing reached DeepSeek or Meta.
 - No call has reached DeepSeek: there was no key. Everything here ran
   against fakes built from its docs. The first live chat and the first
   extraction are the real test of D6 and D7.
-- An extraction, explanation or suggestion attempt in the event log still
-  records the code's default model id, `muse-spark-1.3`, as it already does
-  on the ChatGPT path. The page does not show it. `suggestion.model` and an
-  explanation's `model` do appear in API answers. Fixing it means carrying
-  the live model through four services, which waits for after the stopgap.
 - DeepSeek's prices can change, and the table does not follow them.
