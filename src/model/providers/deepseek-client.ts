@@ -16,8 +16,11 @@
 //   The hold is taken before this, and a usage count beyond the hold is
 //   charged the hold, so a charge still never exceeds it.
 //
+// What it changes on the way back: `call` names the model that answered, or
+// failed, so attempt records do not credit the model the request names.
+//
 // The key stays in the inner client. It never moves a call anywhere else.
-import { MetaResponsesClient, type ModelCall, type ModelReply } from "../client.ts";
+import { MetaResponsesClient, ModelCallError, type ModelCall, type ModelReply } from "../client.ts";
 import type { ToolCall, ToolReply } from "../responses.ts";
 import type { LiveClient } from "./factory.ts";
 import { DEEPSEEK_MODEL } from "./models.ts";
@@ -46,8 +49,13 @@ export class DeepSeekResponsesClient implements LiveClient {
     this.#inner = new MetaResponsesClient({ apiKey: options.apiKey, url: options.url ?? DEEPSEEK_RESPONSES_URL, timeoutMs: options.timeoutMs ?? 120_000 });
   }
 
-  call(request: ModelCall): Promise<ModelReply> {
-    return this.#inner.call({ ...request, body: deepSeekBody(request.body) });
+  async call(request: ModelCall): Promise<ModelReply> {
+    try {
+      return { ...(await this.#inner.call({ ...request, body: deepSeekBody(request.body) })), model: DEEPSEEK_MODEL };
+    } catch (err) {
+      if (err instanceof ModelCallError) err.model = DEEPSEEK_MODEL;
+      throw err;
+    }
   }
 
   respond(request: ToolCall): Promise<ToolReply> {

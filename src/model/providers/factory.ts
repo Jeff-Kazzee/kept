@@ -153,8 +153,7 @@ export class ProviderModelClient implements LiveClient {
   // J12: true when the chosen provider can take a call: a Meta key from
   // the person or the server, or a ChatGPT sign-in that may use the plan.
   // A settings file that cannot be read counts as ready, so the call fails
-  // with the sentence that says so, and so does a fallback with no key, whose
-  // sentence is not J12's.
+  // with the sentence that says so.
   ready(): boolean {
     let ctx: ProviderContext;
     try {
@@ -164,7 +163,6 @@ export class ProviderModelClient implements LiveClient {
       throw err;
     }
     const kind = activeProvider(ctx);
-    if (kind === "deepseek") return true;
     const provider = kind ? this.#providers.get(kind) : undefined;
     return provider !== undefined && provider.unavailable(ctx) === null;
   }
@@ -207,7 +205,9 @@ export class ProviderModelClient implements LiveClient {
       }
       const label = modelOptions(settings, kind).find((m) => m.id === model)?.label ?? model;
       const text = modelProblemText(problem, label);
-      throw providerError(text, { status: err.status, latencyMs: err.latencyMs, type: err.errorType, code: err.errorCode, param: err.errorParam });
+      const named = providerError(text, { status: err.status, latencyMs: err.latencyMs, type: err.errorType, code: err.errorCode, param: err.errorParam });
+      named.model = err.model;
+      throw named;
     }
   }
 

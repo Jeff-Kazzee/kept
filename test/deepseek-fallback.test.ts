@@ -3,20 +3,30 @@
 // shapes, holds and caps, the app says so, and no error moves a call.
 // Nothing reaches the network.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MODEL_UNAVAILABLE_TEXT } from "../src/agent/types.ts";
+import { createApi } from "../server/api.ts";
+import { createChat } from "../server/chat.ts";
+import { CaseAgent } from "../src/agent/agent.ts";
+import { MODEL_UNAVAILABLE_TEXT, type ChatEvent } from "../src/agent/types.ts";
+import { CaseService } from "../src/case/service.ts";
+import { extractClaims } from "../src/extract/extract.ts";
 import { ConfigError, readServerFallback } from "../src/hosted/config.ts";
 import { MAX_OUTPUT_TOKENS, chargeMicros, modelCostMicros, priceOf, turnCostMicros } from "../src/hosted/prices.ts";
-import { ModelCallError } from "../src/model/client.ts";
+import { IntakeService } from "../src/intake/service.ts";
+import { ModelCallError, type ModelClient } from "../src/model/client.ts";
 import { ChatGptAuth } from "../src/model/providers/chatgpt-auth.ts";
 import { DEEPSEEK_RESPONSES_URL, DeepSeekResponsesClient, deepSeekBody } from "../src/model/providers/deepseek-client.ts";
 import { activeProvider, createProviderClient } from "../src/model/providers/factory.ts";
-import { DEEPSEEK_KEY_MISSING_TEXT, FALLBACK_NOTICE_TEXT, fallbackStartLine } from "../src/model/providers/messages.ts";
+import { DEEPSEEK_KEY_MISSING_TEXT, FALLBACK_NOTICE_TEXT, NO_PROVIDER_TEXT, fallbackStartLine } from "../src/model/providers/messages.ts";
 import { DEEPSEEK_MODEL, currentModel, modelOptions } from "../src/model/providers/models.ts";
+import { RecordedModelClient } from "../src/model/recorded.ts";
 import { MODEL, buildJsonRequest } from "../src/model/request.ts";
 import { buildToolRequest, functionCalls, outputText } from "../src/model/responses.ts";
 import { FALLBACK_USAGE_TEXT } from "../src/model/usage-text.ts";
 import { USAGE_TEXT } from "../src/model/usage.ts";
-import { fixtureMessage } from "./helpers.ts";
+import { RecordsService } from "../src/records/service.ts";
+import { ReplyService } from "../src/reply/service.ts";
+import { EventStore } from "../src/store/event-log.ts";
+import { acceptMessages, fixtureMessage, intake as helperIntake } from "./helpers.ts";
 import { sseEvents, startHosted, type Browser, type Hosted } from "./hosted-helpers.ts";
 import { FakeOpenAi, META_URL, PORT, completed, message, tempStore } from "./provider-fakes.ts";
 
@@ -121,6 +131,13 @@ describe("the DeepSeek client", () => {
     expect(outputText(reply.output)).toBe("hello");
   });
 
+  it("a call names the model that answered, or that failed", async () => {
+    const fake = fakeApis();
+    expect((await new DeepSeekResponsesClient({ apiKey: KEY }).call(jsonCall())).model).toBe(DEEPSEEK_MODEL);
+    fake.script.push(() => refused(402, "insufficient_balance"));
+    expect((await new DeepSeekResponsesClient({ apiKey: KEY }).call(jsonCall()).catch((e) => e)).model).toBe(DEEPSEEK_MODEL);
+  });
+
   it("a truncated stream fails with its usage, so the charge is what ran", async () => {
     const event = `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { output: [], usage: USAGE } })}\n\n`;
     fakeApis().script.push(() => new Response(event, { headers: { "content-type": "text/event-stream" } }));
@@ -199,16 +216,21 @@ describe("the provider factory", () => {
     expect(fake.calls.every((c) => c.url === DEEPSEEK_RESPONSES_URL)).toBe(true);
   });
 
-  it("key absent: a fixed refusal, no call to either API, and never back to Meta", async () => {
+  it("key absent: not ready, and a direct call gets a fixed refusal, with no call to either API and never back to Meta", async () => {
     const fake = fakeApis();
     const { client } = local({ fallback: { key: null } });
-    // Ready, so the call fails with its own sentence, not J12's.
-    expect(client.ready()).toBe(true);
+    expect(client.ready()).toBe(false);
     const err = await client.call(jsonCall()).catch((e) => e);
     expect(err).toBeInstanceOf(ModelCallError);
     expect(err.userText).toBe(DEEPSEEK_KEY_MISSING_TEXT);
     await expect(client.respond(toolCall())).rejects.toThrow(DEEPSEEK_KEY_MISSING_TEXT);
     expect(fake.calls).toEqual([]);
+  });
+
+  it("key absent: a person's own Meta key is still ready", () => {
+    const { client, store } = local({ fallback: { key: null } });
+    store.update((s) => ({ ...s, provider: "meta", meta: { key: "the-persons-own-key" } }), { bump: true });
+    expect(client.ready()).toBe(true);
   });
 
   it("the model list and the current model are DeepSeek's", () => {
@@ -292,6 +314,8 @@ describe("the hosted site with the fallback on", () => {
     expect(fake.calls[0]).toMatchObject({ url: DEEPSEEK_RESPONSES_URL, body: { model: DEEPSEEK_MODEL, max_output_tokens: MAX_OUTPUT_TOKENS.json, reasoning: { effort: "none" } } });
     expect(fake.calls[0]!.body.instructions).toContain("JSON schema");
     expect(h!.app.store.charges(id).map((c) => c.model)).toEqual([DEEPSEEK_MODEL]);
+    const after = (await b.call("GET", "/api/state")).body;
+    expect(after.messages.at(-1).attempts.map((a: { model: string }) => a.model)).toEqual([DEEPSEEK_MODEL]);
   });
 
   it("the notice is on the session, signed in and out, and in the settings, with DeepSeek as the model", async () => {
@@ -358,6 +382,17 @@ describe("the hosted site with the fallback on", () => {
     expect(settings.provider).toBe("deepseek");
     expect(settings.fallbackNotice).toBeUndefined();
     expect((await b.call("GET", "/api/session")).body.fallbackNotice).toBeUndefined();
+
+    // A model route is refused too, and records no attempt.
+    const s = (await b.call("GET", "/api/state")).body;
+    await b.call("POST", "/api/messages", fixtureMessage("m2"), gen(s));
+    const s2 = (await b.call("GET", "/api/state")).body;
+    const m = s2.messages.at(-1);
+    const r = await b.call("POST", `/api/messages/${m.id}/extract`, { expectedVersion: m.version }, gen(s2));
+    expect(r.status).toBe(503);
+    expect(r.body).toEqual({ error: "server_key_off", message: FALLBACK_USAGE_TEXT.server_key_off.text });
+    const after = (await b.call("GET", "/api/state")).body;
+    expect(after.messages.at(-1)).toMatchObject({ attempts: [], version: m.version });
   });
 });
 
@@ -397,5 +432,168 @@ describe("the hosted site with the fallback off", () => {
     if (held.ok) h!.app.store.settle(held.holdId, { usage: { input: 10, cachedInput: 0, output: 5, reasoning: 0 }, amountMicros: 100, costMicros: 10 });
     const usage = (await b.call("GET", "/api/usage")).body;
     expect(usage.charges[0]).toMatchObject({ model: DEEPSEEK_MODEL, modelLabel: "DeepSeek Flash" });
+  });
+});
+
+// The app as server/main.ts wires it in local mode, on the provider factory.
+function localApp(options: { fallback: { key: string | null } }) {
+  const t = local(options);
+  const store = new EventStore(":memory:");
+  const intake = new IntakeService(store, t.client);
+  const kase = new CaseService(store, intake, t.client, { userName: "Dana Reyes" });
+  const reply = new ReplyService(store, kase, t.client);
+  const records = new RecordsService(store, intake, kase);
+  const ready = () => t.client.ready();
+  const api = createApi(intake, kase, { ready }, reply, { store, records });
+  const chat = createChat(new CaseAgent(store, { intake, kase, reply, records }, t.client, { ready }));
+  const call = (method: string, p: string, body?: unknown) => api({ method, path: p, body, generation: kase.generation() });
+  const say = async (text: string) => {
+    const events: ChatEvent[] = [];
+    const chatVersion = (await new Promise<{ chatVersion: number }>((resolve) => chat.serve({ method: "GET", body: undefined }, { json: (_s, b) => resolve(b as { chatVersion: number }), event: () => {}, end: () => {} }))).chatVersion;
+    await chat.serve({ method: "POST", body: { text, expectedVersion: chatVersion }, generation: kase.generation() }, { json: () => {}, event: (e) => events.push(e), end: () => {} });
+    return events;
+  };
+  return { client: t.client, store, call, say };
+}
+
+describe("J12 with the fallback on and no key, in local mode", () => {
+  it("a chat turn is refused before it starts, and nothing is saved", async () => {
+    const fake = fakeApis();
+    const a = localApp({ fallback: { key: null } });
+    const before = a.store.readAll().length;
+    const events = await a.say("What is confirmed?");
+    expect(events.map((e) => e.event)).toEqual(["turn.error"]);
+    expect(events[0]!.data).toMatchObject({ code: "provider_not_ready", message: NO_PROVIDER_TEXT });
+    expect(a.store.readAll()).toHaveLength(before);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("every model route answers 422 provider_not_ready and records no attempt", async () => {
+    const fake = fakeApis();
+    const a = localApp({ fallback: { key: null } });
+    const imported = await a.call("POST", "/api/messages", fixtureMessage("m1"));
+    expect(imported.status).toBe(200);
+    const count = a.store.readAll().length;
+    const refused = [
+      await a.call("POST", "/api/messages/m1/extract", { effort: "minimal", expectedVersion: (imported.body as { version: number }).version }),
+      await a.call("POST", "/api/conflicts/c-1/explain", { expectedVersion: 0 }),
+      await a.call("POST", "/api/questions/next", { expectedVersion: 0 }),
+      await a.call("POST", "/api/reply/suggest", { expectedVersion: 0, intent: "MON" }),
+    ];
+    for (const r of refused) expect(r).toEqual({ status: 422, body: { error: "provider_not_ready", message: NO_PROVIDER_TEXT } });
+    expect(a.store.readAll()).toHaveLength(count);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("with the key the same routes run, on DeepSeek", async () => {
+    const fake = fakeApis();
+    const a = localApp({ fallback: { key: KEY } });
+    const imported = await a.call("POST", "/api/messages", fixtureMessage("m1"));
+    const r = await a.call("POST", "/api/messages/m1/extract", { effort: "minimal", expectedVersion: (imported.body as { version: number }).version });
+    expect(r.status).toBe(200);
+    expect(fake.calls.map((c) => c.url)).toEqual([DEEPSEEK_RESPONSES_URL]);
+  });
+});
+
+// Recorded model answers, carried through the real DeepSeek client, so the
+// services see valid outputs on the path a DeepSeek answer takes.
+function throughDeepSeek(fake: ReturnType<typeof fakeApis>): ModelClient {
+  const recorded = RecordedModelClient.fromDirectory();
+  const deepseek = new DeepSeekResponsesClient({ apiKey: KEY });
+  return {
+    label: deepseek.label,
+    call: async (request) => {
+      const { outputText: text } = await recorded.call(request);
+      fake.script.push(() => Response.json({ output: [message(text)], usage: USAGE }));
+      return deepseek.call(request);
+    },
+  };
+}
+
+async function story(client: ModelClient) {
+  const store = new EventStore();
+  // The first messages were read before the switch, by the recorded model.
+  const earlier = helperIntake(store);
+  await acceptMessages(earlier, ["m1", "m2", "m3"]);
+  const kase = new CaseService(store, earlier, client, { now: () => "2026-11-06T10:00:00.000Z", userName: "Dana Reyes" });
+  const reply = new ReplyService(store, kase, client, { now: () => "2026-11-06T10:00:00.000Z" });
+  return { store, intake: earlier, kase, reply };
+}
+
+const extractionModels = (store: EventStore) => store.readAll().filter((e) => e.type === "extraction_attempted").map((e) => (e.data as { model: string }).model);
+
+describe("the model that really answered", () => {
+  it("an explanation and a question on DeepSeek say DeepSeek, in the records and the API answer, and old rows keep what they say", async () => {
+    const fake = fakeApis();
+    const { store, kase } = await story(throughDeepSeek(fake));
+    const conflict = kase.view().conflicts[0]!;
+
+    const explained = await kase.explain(conflict.id, conflict.version);
+    expect(explained.explanation).toMatchObject({ outcome: "valid", model: DEEPSEEK_MODEL });
+    expect(explained.explanation!.attempts).toHaveLength(1);
+
+    await kase.askNext(0);
+    const stored = JSON.stringify(store.readAll().filter((e) => e.type !== "extraction_attempted"));
+    expect(stored.split(`"model":"${DEEPSEEK_MODEL}"`).length - 1).toBe(fake.calls.length);
+    expect(stored).not.toContain(`"model":"${MODEL}"`);
+    expect(fake.calls).toHaveLength(2);
+
+    // The extractions were before the switch, and stay as they were.
+    expect(extractionModels(store)).toEqual([MODEL, MODEL, MODEL]);
+  });
+
+  it("a suggestion on DeepSeek says DeepSeek", async () => {
+    const fake = fakeApis();
+    const { reply } = await story(throughDeepSeek(fake));
+    const view = await reply.suggest("I want Monday.", 0);
+    expect(view.reply.suggestion).toMatchObject({ outcome: "valid", model: DEEPSEEK_MODEL });
+  });
+
+  it("an extraction on DeepSeek says DeepSeek, and so does each attempt of one that failed", async () => {
+    const fake = fakeApis();
+    const client = new DeepSeekResponsesClient({ apiKey: KEY });
+    const m = fixtureMessage("m1");
+    const valid = await extractClaims(m, client, { effort: "minimal" });
+    expect(valid.attempts.map((a) => a.model)).toEqual([DEEPSEEK_MODEL]);
+    fake.script.push(
+      () => Response.json({ output: [message("not json")], usage: USAGE }),
+      () => refused(402, "insufficient_balance"),
+    );
+    const failed = await extractClaims(m, client, { effort: "minimal" });
+    expect(failed.attempts.map((a) => [a.problem, a.model])).toEqual([
+      ["not_json", DEEPSEEK_MODEL],
+      ["call_failed", DEEPSEEK_MODEL],
+    ]);
+  });
+
+  it("a failed explanation says DeepSeek too", async () => {
+    const fake = fakeApis();
+    const { kase } = await story(new DeepSeekResponsesClient({ apiKey: KEY }));
+    const conflict = kase.view().conflicts[0]!;
+    fake.script.push(() => refused(500, "failed"), () => refused(500, "failed"));
+    const explained = await kase.explain(conflict.id, conflict.version);
+    expect(explained.explanation!.outcome).not.toBe("valid");
+    expect(explained.explanation!.model).toBe(DEEPSEEK_MODEL);
+  });
+
+  it("a refusal named as a missing capability keeps the model", async () => {
+    const fake = fakeApis();
+    fake.script.push(() => refused(400, "unsupported_parameter"), () => refused(400, "unsupported_parameter"));
+    const { client } = local({ fallback: { key: KEY } });
+    const r = await extractClaims(fixtureMessage("m1"), client, { effort: "minimal" });
+    expect(r.attempts.map((a) => a.model)).toEqual([DEEPSEEK_MODEL, DEEPSEEK_MODEL]);
+  });
+
+  it("off, and on a person's own Meta key with the setting on, records stay as they were, with no new field on a reply", async () => {
+    const fake = fakeApis();
+    const off = local();
+    expect(await off.client.call(jsonCall())).not.toHaveProperty("model");
+    expect((await extractClaims(fixtureMessage("m1"), off.client, { effort: "minimal" })).attempts.map((a) => a.model)).toEqual([MODEL]);
+    const own = local({ fallback: { key: KEY } });
+    own.store.update((s) => ({ ...s, provider: "meta", meta: { key: "the-persons-own-key" } }), { bump: true });
+    expect((await extractClaims(fixtureMessage("m1"), own.client, { effort: "minimal" })).attempts.map((a) => a.model)).toEqual([MODEL]);
+    expect(fake.calls.map((c) => c.url)).toEqual([META_URL, META_URL, META_URL]);
+    fake.script.push(() => refused(402, "billing_not_configured"), () => refused(402, "billing_not_configured"));
+    expect((await extractClaims(fixtureMessage("m1"), off.client, { effort: "minimal" })).attempts.map((a) => a.model)).toEqual([MODEL, MODEL]);
   });
 });

@@ -20,6 +20,10 @@ export type ModelReply = {
   outputText: string;
   usage: TokenUsage;
   latencyMs: number;
+  // The model that answered, when a client sent the call to another model
+  // than the request names (0024). Attempt records take it. Unset means the
+  // request's model.
+  model?: string;
 };
 
 export interface ModelClient {
@@ -45,6 +49,9 @@ export class ModelCallError extends Error {
   // such as a stream that ended with response.incomplete. Null when it
   // reported none. Hosted mode charges it (0014).
   usage: TokenUsage | null = null;
+  // As ModelReply.model, for a call that failed. Null means the request's
+  // model.
+  model: string | null = null;
 
   constructor(
     message: string,

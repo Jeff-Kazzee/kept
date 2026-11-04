@@ -59,12 +59,13 @@ export async function callWithRetry<T>(spec: CallSpec<T>): Promise<CallAttempt<T
     let result: CallAttempt<T>;
     try {
       const reply = await spec.client.call({ key: spec.key, attempt, effort: spec.effort, body });
-      result = { ...base, ...judge(reply.outputText, spec), latencyMs: reply.latencyMs, usage: reply.usage };
+      // The model that ran it, when the client names another one (0024).
+      result = { ...base, model: reply.model ?? spec.model, ...judge(reply.outputText, spec), latencyMs: reply.latencyMs, usage: reply.usage };
     } catch (err) {
       // Only a failed model call counts as an invalid attempt. Other errors,
       // such as the eval spend guard, stop the run.
       if (!(err instanceof ModelCallError)) throw err;
-      result = { ...base, latencyMs: err.latencyMs, usage: ZERO_USAGE, outcome: "invalid", problems: ["call_failed"], detail: err.message, output: null };
+      result = { ...base, model: err.model ?? spec.model, latencyMs: err.latencyMs, usage: ZERO_USAGE, outcome: "invalid", problems: ["call_failed"], detail: err.message, output: null };
     }
     attempts.push(result);
     if (result.outcome === "valid") break;
