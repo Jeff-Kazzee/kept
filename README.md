@@ -1,514 +1,194 @@
-# Kept
+<h1 align="center">Kept</h1>
+
+<p align="center">
+  An agent that sorts out appointment changes and drafts replies.
+</p>
+
+<p align="center">
+  <a href="https://mystic-marvel-866w.here.now/"><strong>Website and demo video</strong></a> &nbsp;·&nbsp;
+  <a href="#run-it">Run it</a> &nbsp;·&nbsp;
+  <a href="#what-the-model-does-and-what-code-checks">How code checks the model</a>
+</p>
+
+<p align="center">
+  <img src="assets/kept-demo.gif" alt="Kept in use. The user asks whether either new time clashes with the calendar. The agent answers that Friday 9:15 AM clashes and Monday 1:00 PM does not. The reply panel then shows each field to read back before approval." width="880">
+</p>
+
+<p align="center"><sub>From the public demo video. Live model, made-up clinic, made-up messages and a made-up calendar. Cut for length.</sub></p>
 
 The clinic confirmed Thursday. Then it emailed to move you. Then it texted two
-new options. Kept is an agent that reads those messages, works out which time
-is actually booked, checks new times against your calendar, and drafts the
-reply for you to read back and approve. It never sends anything on its own,
-and every step it takes has Undo.
+new options. Kept reads those messages and works out which time is booked. It
+checks new times against your calendar and drafts the reply. You read the reply
+back and approve it. Kept sends nothing on its own, and each step has Undo.
 
-Built for the Meta Global AI Developer Hackathon (fall 2026), indie track.
+## What it does
 
-## For judges
+- Reads a pasted message, or Gmail with your permission.
+- Keeps a schedule of each appointment, with the message each fact came from.
+- Checks new times against a calendar file or Google Calendar.
+- Asks you one question at a time when messages disagree.
+- Fills a reply template from the case. You tick each field before you can approve.
+- Logs each action in an Activity tab, with Undo.
 
-- **Try it live:** https://the-little-ai-co.tail374dd0.ts.net:10000/ . Choose
-  "I have a judge code" and enter a code from the submission notes. No Google
-  account is needed. The model runs on our Meta key, up to your code's limit.
-  A code shared by several judges gives each browser its own account, so your
-  workspace stays on the browser you signed in with.
-- **Judges' page and video:** https://mystic-marvel-866w.here.now/judges/
-- **Things to try:** "Try the demo" loads four made-up messages from Lantern
-  Hill Clinic. Or ask "Check my Gmail for messages from Lantern Hill Clinic
-  and update my schedule": your agent reads a shared made-up inbox and
-  calendar live. Then ask whether the new times clash with your calendar,
-  pick one, have it draft the reply, read back each field, and approve
-  (sending is simulated). Undo anything from the Activity tab.
-- **Good to know:** the inbox and calendar belong to a made-up person and are
-  shared by all judges, so add nothing private. Nothing is ever sent. It
-  handles scheduling only, not medical questions.
+<table>
+  <tr>
+    <td width="33%"><img src="assets/kept-schedule-clash.png" alt="Kept's chat beside the schedule. The agent reports that Friday 9:15 AM clashes with a team standup, and the schedule marks both entries with Clash."></td>
+    <td width="33%"><img src="assets/kept-reply-readback.png" alt="The reply panel with the heading Read back every field before you approve. Three of five fields are checked. The place field reads Not in any accepted evidence."></td>
+    <td width="33%"><img src="assets/kept-activity-undo.png" alt="The Activity tab. It lists each action with its actor. One entry reads Removed the Google Calendar event the app added."></td>
+  </tr>
+  <tr>
+    <td>The schedule shows a clash with your calendar.</td>
+    <td>A field with no accepted evidence stays out of the reply.</td>
+    <td>Undo removes the calendar event at Google too.</td>
+  </tr>
+</table>
 
-### How it uses Meta's models
+## What the model does and what code checks
 
-- **Muse Spark 1.3** is the agent: a tool-calling loop that imports messages,
-  accepts or rejects the facts it finds, answers the office's open question,
-  checks clashes against the live calendar and starts the reply draft.
-  Muse Wonder 1.0 can be picked in the app.
-- **Code checks every step.** A quote must appear word for word in the
-  message, appointment states follow fixed rules, every date and time in an
-  answer must come from the turn's tool results, and the reply's fields come
-  from the case, not the model. See "What the model does and what code
-  checks" below.
-- **An MCP server** gives the same tools and rules to agents you already use
-  (Claude Code, OpenCode, Grok Build). An outside agent can't approve a reply,
-  delete the case or set an appointment's state.
-- **Muse Code on Muse Wonder** reviewed every change before it merged. Its
-  findings and the fixes are recorded in `docs/decisions/`.
+The model only proposes. Code checks each proposal, and you review what is left.
 
-### Run it yourself
+```mermaid
+flowchart LR
+  M[Office message] --> X[Model extracts claims]
+  X --> Q{Code: is each quote<br/>word for word<br/>in the message?}
+  Q -- no --> R[Rejected and shown]
+  Q -- yes --> Y[You accept or reject]
+  Y --> S[Code: fixed slot rules]
+  S --> T[Schedule]
+  T --> D[Code fills the reply template]
+  D --> A[You read back and approve]
+```
 
-Node 24 and pnpm 10. Then:
+| The model | Code | You |
+| --- | --- | --- |
+| Extracts claims from a message | Rejects a claim whose quote is not in the message word for word | Accept or reject each claim |
+| Explains a conflict | Requires each cited evidence id to exist and belong to the conflict | Read the sources beside it |
+| Picks a reply template and a slot | Fills each field from the case. Rejects a pick that does not match a date or time in your note | Read back each field and approve |
+| Answers in the chat and acts on the case | Requires each date, weekday and time in an answer to come from that turn's tool results | Undo any action |
+
+A slot's state comes only from accepted evidence, through a fixed table of rules.
+No model output changes a slot. When the order of two claims is unknown, the app
+raises a conflict.
+
+The rules exist for real failures. In a live evaluation the model answered
+"Please accept Wednesday" with "decline Tuesday". The answer was valid against
+the schema and wrong in meaning. Code now rejects a pick that does not match the
+dates in your note.
+
+<details>
+<summary>Slot states</summary>
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Offered: office offers
+  [*] --> Confirmed: office confirms or you report it
+  Offered --> Requested: you approve an accept reply
+  Offered --> Declined: you approve a decline reply
+  Offered --> Confirmed: office confirms
+  Requested --> Confirmed: office confirms
+  state Confirmed {
+    [*] --> Held
+    Held --> ChangeProposed: office moves it or offers another slot
+    ChangeProposed --> Held: you keep it, or office confirms again
+  }
+  Confirmed --> Canceled: office cancels or you report it
+  Offered --> Canceled: cancel claim
+  Requested --> Canceled: cancel claim
+  Canceled --> Offered: office offers again
+  Declined --> Offered: office offers again
+```
+
+Each arrow fires only after you accept the claim in review. The rules are in
+[decision 0002](docs/decisions/0002-slot-states.md).
+
+</details>
+
+Other design choices, each with a record in [docs/decisions](docs/decisions):
+
+- **Event log.** The case is an append-only log on `node:sqlite`. Closing and reopening the app restores the case. Readback ticks are not saved, so you read each field again.
+- **Delete case.** It runs only from the app, after you type DELETE. It erases the case, then rewrites the database file and empties its WAL.
+- **Sending is simulated.** Approval writes a local event, and the UI says "Simulated. Nothing was sent." No network call is made.
+- **No fake model in production.** The recorded model clients are test doubles. `test/no-recorded.test.ts` checks that no production path imports them.
+
+## Connect your own agent
+
+An MCP server gives an agent you already use the same tools and rules as the
+in-app assistant. It runs over stdio and opens no port.
+[docs/connect-agent.md](docs/connect-agent.md) has the command for Grok Build,
+OpenCode and Claude Code.
+
+An agent can never approve or send a reply, edit a reply's text, enter a fact by
+hand, delete the case, or set a slot's state from its own words. Each action is
+in the Activity log as "an external agent", with Undo.
+
+Text from imported messages reaches the agent only in fields named
+`untrusted_quote` and `untrusted_text`. That lowers the risk of a message steering
+the agent. It cannot remove the risk. The server's own checks do not depend on the
+agent following those labels.
+
+An agent with a shell or file tools on the same host is not limited by the MCP
+tools. Give agents only the MCP tools.
+
+## Run it
+
+Needs Node 24 and pnpm 10.
 
 ```sh
 pnpm install
 pnpm build
-pnpm start   # http://127.0.0.1:5180, local mode, one case
+pnpm start
 ```
 
-Add a Meta Model API key in Connections (or `MODEL_API_KEY` in `.env.local`,
-see `.env.schema`). Gmail and Google Calendar are optional and need your own
-Google OAuth client (`docs/google.md`). The hosted, multi-account mode is in
-`docs/hosted.md`. `pnpm test` runs the full offline suite with no network and
-no key.
+<!-- tested: 2026-11-06, clean clone on Ubuntu, Node 24.22.1, pnpm 10.33.2 -->
 
-### Where to look
+Open `http://127.0.0.1:5180`.
 
-- `src/agent/`: the agent loop, its tools and the answer checks
-- `src/domain/`, `src/case/`: evidence, quotes and the slot state rules
-- `src/reply/`: reply templates and the read-back
-- `src/google/`: Gmail and Calendar, the shared demo account for judges
-- `mcp/`: the MCP server
-- `ui/`: the React app (server-rendered first screen, the "Steel" look)
-- `docs/decisions/`: every design decision and review round, 0001 to 0021
+Add a Meta Model API key in Connections, or sign in with ChatGPT. Then select
+**Try the demo**. It loads four made-up messages and a made-up calendar. See
+[docs/sign-in.md](docs/sign-in.md). Gmail and Google Calendar are optional and
+need your own Google OAuth client ([docs/google.md](docs/google.md)).
+
+```sh
+pnpm test
+pnpm typecheck
+```
+
+<!-- tested: 2026-11-06, clean clone on Ubuntu, Node 24.22.1, pnpm 10.33.2 -->
+
+`pnpm test` needs no network and no key. On the 2026-11-06 clean run, 1,431 of
+1,432 tests passed. The ChatGPT live-eval test failed, and `pnpm typecheck` passed.
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `MODEL_API_KEY` | Meta Model API key, declared in `.env.schema` | None. You can add the key in the app. |
+| `APP_ALLOWED_HOSTS` | Host names for a private proxy on the same computer | None. The app binds 127.0.0.1. |
+| `APP_MODE` | `hosted` runs the multi-account site ([docs/hosted.md](docs/hosted.md)) | Local mode, one case |
+
+## Stack
+
+TypeScript on Node 24, React 19, Vite, Vitest, `node:sqlite`, Better Auth for
+hosted mode, and the MCP SDK.
+
+## Status
+
+In private testing. The [public site](https://mystic-marvel-866w.here.now/) says
+`Coming soon` and takes waitlist sign-ups. There is no public hosted instance and
+no tagged release.
+
+- Works, per the repo's records: local mode, the chat agent, Gmail and Google Calendar connections, the MCP server and the demo flow in the video.
+- Scope: administrative scheduling. It declines medical questions with a fixed reply that reaches no model.
+- Not built: real sending. Send is simulated.
+- Tests: the repo holds 123 test files. No GitHub workflow runs them yet, so there is no public green check.
+
+<!-- source: git tree of the prod branch, read 2026-11-06 -->
 
 All people, clinics and messages in this repo are made up.
 
-## How it was built
+Kept began as an entry in the Meta Global AI Developer Hackathon (fall 2026),
+indie track.
 
-The sections below follow the build from the first deliverable (D1) on.
+## License
 
-## D1: evidence intake
-
-- `fixtures/` holds the synthetic scenarios S1 to S12, the demo calendar
-  `calendar/dana.ics`, and hand-written model responses under `recordings/`.
-- `src/domain/` holds claim types, the verbatim quote check, date and time
-  checks, and the `.ics` reader.
-- `src/store/` is the append-only event log on `node:sqlite`.
-- `src/model/` is the model client interface, the Meta Responses client and
-  the recorded client.
-- `src/extract/` runs one extraction with at most one retry.
-- `src/intake/` records extraction results and review decisions as events.
-- `src/eval/` and `scripts/eval-live.ts` run the live evaluation.
-- `server/` and `ui/` are the local server and the web app: the chat
-  beside the schedule (sprint 7B, `docs/decisions/0008-web-app.md`).
-
-## D2: slot states and conflict resolution
-
-- `src/slots/` turns accepted evidence into slot states by a fixed
-  transition table, raises conflicts and checks calendar clashes. It reads
-  only accepted evidence, so model output never changes a slot.
-- `src/conflicts/` holds the two model calls, explain a conflict and
-  propose the next question, with the code checks on citations and dates.
-- `src/case/` loads the calendar into the case, keeps one open question at a
-  time and records each answer as user-reported evidence.
-- Each scenario in `fixtures/scenarios/` states its D2 checkpoints, and
-  `test/scenarios.test.ts` runs them.
-
-## D3: reviewed reply
-
-- `src/reply/` holds the four reply templates, the code that checks each
-  template against the slot's state and fills every field from the case,
-  the model call that picks a template and a slot, and the reply commands.
-- The user replies only through a template. Code fills the fields, the UI
-  reads each one back with its source, and approval needs every field
-  ticked. Edited text shows "Edited by you. Not checked."
-- Approval records what the template asserts as user-reported evidence.
-  An accepted slot becomes "Requested · reported by you". Sending is
-  simulated: it writes a local event and the UI shows "Simulated. Nothing
-  was sent." No network call is made.
-- The model picks a template and a slot from the user's note, or answers
-  that no template fits. Code rejects a pick whose slot is not a date or
-  time the note states.
-- A health question the user types gets a fixed decline that states the
-  app's administrative scope. Nothing is recorded and no model is called.
-- Each scenario in `fixtures/scenarios/` states its D3 checkpoints, and
-  `test/scenarios.test.ts` runs them.
-
-## D4: saved outcome, checklist and Delete case
-
-- The case lives in the event log, so closing and reopening the app
-  restores it exactly: slot states, conflicts and the open question,
-  explanations, the open reply draft with any edit, and the checklist.
-  Readback ticks are not saved. After a reopen you read each field again.
-- A late reply from the office goes through extraction and review like
-  any other message. Its claims change nothing until you accept them. A
-  reply draft it overtakes says "The office replied. This draft no longer
-  fits." and cannot be approved.
-- The checklist lists what the office asked you to bring or do. It is
-  built by code from the office requests you accepted, and each item shows
-  its quote and its source: "office message", "reported by you" or "added
-  by the assistant". Requests in the same words are one item with every
-  source.
-- The case history lists every event of the case in order, including undo,
-  with labels built by code.
-- Delete case is the only permanent deletion. It runs only from the app,
-  after you type DELETE. It erases every message, claim, review, slot,
-  question, explanation, reply, note and tag of the case, the activity log
-  and the log of agent calls. It then rewrites the database file and
-  empties its WAL, so the removed text is gone from disk, not only hidden.
-  Settings, such as the time zone, stay. An MCP server that has the file
-  open keeps running and finds no case. No agent or MCP tool can delete a
-  case. A command that started
-  before the delete, such as a model call, a page opened earlier or an
-  agent's call, saves nothing afterwards. If the app stops before the file
-  is cleared, the app or the MCP server finishes clearing it at the next
-  start.
-
-## D5: records and the MCP server
-
-- `src/records/` is the one domain service for appointment records: notes,
-  tags, archive and undo.
-- `src/actions/` is where every action on the case is defined, for you in
-  the app, the assistant and an external agent over MCP. Each one runs the
-  domain command with its checks and expected versions and writes an
-  activity entry you can undo (`docs/decisions/0009-agent-first.md`).
-- `mcp/` is the MCP server. It runs over stdio, opens no network port and
-  offers the same tools as the assistant, with the same rules.
-  `scripts/mcp-stdio.sh` starts it with `APP_DB`. There is no token or
-  grant: whoever can start it can already open the database file.
-- The open app checks every 2 seconds for changes by the MCP server or
-  another tab and reloads the case view, so an agent's note shows without
-  a restart.
-- Archive hides an appointment from the slot list, the question queue and
-  the reply panel. Undo brings it back.
-- `pnpm scan:secrets` checks the repository for the model API key. See
-  "What the secret scan finds" below for exactly what it covers.
-- The app has no pairing code. It answers only to its own host names and
-  takes a change only from its own page, and it is reachable only from this
-  computer and, through a private proxy, your own devices.
-
-## The case agent (chat)
-
-- `src/agent/` is the agent: a tool loop on Muse Spark that works the case
-  for you. It imports messages you paste and accepts or rejects their
-  facts, answers the open question, archives, notes, tags, sets the time
-  zone, and starts or discards a reply draft. Each action shows in the
-  chat as it happens and in the activity log with Undo. Only you approve a
-  reply (the simulated send) and only you delete the case.
-- Code still enforces every rule: the quote and extraction checks, the
-  slot rules (a slot's state comes only from an office message or your own
-  report), expected versions, and the checks on every answer: each date,
-  weekday and time must come from the turn's tool results, the text must
-  stay administrative, and it may say the agent did something only when
-  the activity log shows it did. After one retry, code replaces an answer
-  that fails.
-- A message that may hold a paste (a line break, more than 280
-  characters, or a line that starts like `Name:` or with a quote mark) only
-  adds messages and reviews their facts. Anything else waits until you ask
-  in a short message of your own. When text may be your own report, the
-  chat asks "Record this as your own report?", and its facts wait for your
-  answer. A report an agent makes changes nothing until an office message
-  or your own report agrees.
-- `POST /api/chat` answers with server-sent events and `GET /api/chat`
-  returns the chat.
-- Every time is in the case's time zone, which you or the assistant set.
-  Loading the demo sets America/Denver, the demo clinic's zone, as an
-  action you can undo.
-- The chat is saved with the case. Delete case erases it.
-
-## Gmail and Google Calendar
-
-- `src/google/` connects one Google account with OAuth (PKCE, a
-  single-use state, ID token checks), only for the permissions you turn
-  on: Gmail read only, Google Calendar, or both.
-- Gmail emails become imports like a paste, with the sender and sent time
-  from their headers, and go through the same checks and your review.
-- The app keeps one calendar event per appointment, tentative until the
-  office confirms, edits only events it created, and every change has Undo.
-- `GET /api/google`, `POST /api/google/connect` and
-  `POST /api/google/disconnect`, with the callback at
-  `/auth/google/callback`. The refresh token is a row of the secrets
-  database (`data/app-secrets.sqlite`), outside the event log.
-- The assistant and the MCP server share the Google tools. Each change is
-  in the activity log with Undo, and Google Calendar events join the
-  clash checks.
-- Setup, testing-mode limits and the agent's own connectors:
-  `docs/google.md`. Design: `docs/decisions/0012-google.md`.
-
-## The hosted site
-
-`APP_MODE=hosted` runs the public site: accounts that sign in with an
-email and password, a passkey or a judge code, through Better Auth, one
-private workspace each, and Meta usage on the
-server's key, paid from usage credit at 3 times the model's token cost.
-Judges get capped codes from `pnpm admin judges create`, or one shared
-pass from `pnpm admin judges create-pool` that gives each browser its own
-account and a share of one capped pool (0023). The daily cost
-cap and the judge total cap have no defaults: until both are set, the
-server key stays off. Local mode, the default, is unchanged. How to run it, the caps, the off switch and how
-credits are priced: `docs/hosted.md`. Design:
-`docs/decisions/0014-accounts-and-credits.md` and
-`docs/decisions/0020-better-auth.md`.
-
-See `docs/decisions/0001-stack.md` for the stack and dependency checks,
-`docs/decisions/0002-slot-states.md` for the slot rules,
-`docs/decisions/0003-reply-templates.md` for the reply rules, and
-`docs/decisions/0004-mcp-core.md` for records and the MCP server,
-`docs/decisions/0005-saved-outcome.md` for the saved case, the
-checklist and Delete case, `docs/decisions/0006-mcp-app.md` for agent
-access in the app, `docs/decisions/0007-case-agent.md` for the case
-agent and the chat contract, `docs/decisions/0008-web-app.md` for the
-web app, `docs/decisions/0009-agent-first.md` for the agent that acts,
-the activity log and the case time zone,
-`docs/decisions/0010-providers.md` for the model providers and sign-in,
-and `docs/decisions/0011-ui-polish.md` for the agent UI, with
-`docs/decisions/0015-shell-layout.md` for its sidebar shell and
-`docs/decisions/0019-polish.md` for its design system and performance.
-`docs/diagrams.md` shows the slot states and the agent change
-flow.
-
-## Commands
-
-Node 24 and pnpm 10.33.2.
-
-```sh
-pnpm install
-pnpm test        # offline, no key needed
-pnpm typecheck
-pnpm dev         # http://127.0.0.1:5180, the UI through Vite
-pnpm build       # production bundle in dist/ui, precompressed, budget checked
-pnpm start       # serves the production build on http://127.0.0.1:5180
-pnpm scan:secrets  # tokens and keys in the repository, see "What the secret scan finds"
-pnpm admin judges list  # hosted mode's judge codes, see docs/hosted.md
-pnpm demo:check  # the demo path end to end on the live app (needs MODEL_API_KEY)
-pnpm demo:check --recorded  # the same path offline on test doubles, not a product run
-```
-
-The app has no recorded mode. Every model step, the chat included, runs
-on the provider the person chose. Until a Meta key is added or ChatGPT is
-signed in, the chat and every step that needs the model answer one fixed
-sentence that links to Connections, and nothing in the case changes. The
-schedule, Activity, Undo, Settings and Delete case work without a model.
-"Try the demo" loads four made-up Lantern Hill Clinic messages and a
-made-up calendar, and the assistant reads them live. The recorded model
-clients are test doubles for the tests and the eval's `--recorded` flag,
-and no production code path imports them (`test/no-recorded.test.ts`).
-
-`pnpm demo:check` starts the app on a free port with a temporary
-database, runs the demo path through the HTTP routes as the page does,
-checks each step and the end state, and stops the app.
-
-With `pnpm dev`, add `?mockchat=1` to the page address for the scripted
-chat, which plays the demo through the existing routes with no model. Its
-replies are labeled "Scripted demo reply, not a model". The development
-build fakes no route: the time zone, activity, undo, the model provider,
-the model, sign-in, Gmail and Google Calendar are the server's in every
-build (`docs/decisions/0011-ui-polish.md`, U51). The scripted chat does not
-search Gmail or write to Google Calendar. Asked about email, it says where
-the Google connection stands. The production build (`pnpm build`,
-`pnpm start`) leaves the scripted chat out and ignores the parameter.
-`APP_UI_FAKES=1 pnpm build` makes a check build with it, for a browser
-check of the minified bundle. Never ship that build.
-
-To reach the app through a private proxy on the same computer, such as
-Tailscale serve, list its host names in `APP_ALLOWED_HOSTS`
-(comma-separated). The app still binds 127.0.0.1. See
-`docs/decisions/0008-web-app.md`.
-
-The model: the assistant runs on the provider and model chosen in the
-app's settings, and only on that one:
-your own Meta Model API key (the default, entered in the app or as
-`MODEL_API_KEY` through varlock), or Sign in with ChatGPT, which uses your
-ChatGPT plan. The provider in use receives the case data the assistant
-reads, with `store: false` on every request. Meta's models are Muse Spark
-1.3 (default) and Muse Wonder 1.0. ChatGPT's are the ones your account
-lists. See `docs/sign-in.md` for both options, and
-`docs/decisions/0010-providers.md` for the design. The ChatGPT sign-in
-finishes only in a browser on the computer that runs the app, or through
-an SSH tunnel to its port.
-
-Live evaluation (needs `MODEL_API_KEY`):
-
-```sh
-pnpm eval:live --max-usd 5 --out eval-results/run.json
-```
-
-It runs every fixture message three times at reasoning effort `minimal`
-and three times at `low`, and writes a JSON report. The app extracts at
-`minimal` by default. `low` stays available in the UI and the API.
-
-Add `--d2` to also run the explanation and question calls over the conflict
-states in the D2 fixtures, three runs at effort `low` (`--d2-effort` sets
-it). `--d2-only` runs only those calls. The conflict states are built with
-recorded extraction, so `--d2-only` spends nothing on extraction. The report
-gives the valid-citation rate, rejections by reason, fallbacks, latency p50
-and p95, tokens and estimated cost. The spend limit covers the whole
-command.
-
-Add `--d3` to also run the reply template call over the suggest steps in
-the D3 fixtures, three runs at effort `low` (`--d3-effort` sets it).
-`--d3-only` runs only that call, and with `--d2-only` it runs the D2 and D3
-calls with no extraction. The case states are built with recorded
-extraction. The report gives the valid-template rate, the rate at which the
-model's own final pick matches the expected one, the rate at which the
-system outcome does, how often the model answered that no template fits
-and how often it proposed a pick where none fits, rejections by reason, fallbacks to manual entry, latency p50 and p95,
-tokens and estimated cost.
-
-The pass criterion for each effort level is pooled accuracy across its three
-runs of at least 95%, because the criterion is stated over three runs. The
-report also gives the lowest single-run accuracy and flags any run below 95%,
-so one weak run is not hidden by the pool. Accuracy is matched / (matched +
-missed + extra). A claim matches when claim type, date and time match, and
-location and sender kind match where the fixture states them.
-
-`--chat` runs only the chat eval: the scripted conversations in
-`fixtures/chat/`, three runs each (`--chat-runs`, `--chat-script`,
-`--chat-effort`). The report gives, per script, tools, actions and cards
-against expected, grounding failures, declines, injection outcomes,
-actions that cannot be undone, replies sent without you and slots whose
-state no office message or report of yours supports (it exits 1 if either
-of the last two happens), latency, tokens and cost.
-It also exits 1 when an answer the person saw has clinical content.
-A step can name the slot states it expects after the turn, for the
-meaning-flip probes.
-`--record-chat` writes each answer as a test double in
-`fixtures/recordings/chat/`, with only the agent's calls on the model.
-The app never reads these files. `pnpm recording:key <request.json>`
-prints the key a request is recorded under.
-
-`--all` runs the full fixture suite S1 to S19 in one command: extraction
-of every fixture message, the D2 and D3 calls and every chat script, one
-after another under the one `--max-usd` limit, in one report.
-
-`--provider meta|chatgpt` picks the provider (default `meta`, which needs
-`MODEL_API_KEY`). `chatgpt` uses the ChatGPT connection the app saved:
-sign in in the app first. `--model <id>` picks the model on that provider.
-The spend limit prices tokens at the Meta rates on both.
-
-A relative `--out` path resolves from the package root. `--recorded` replays
-the recorded test doubles instead, for a smoke test of the eval with no key.
-
-Stored case data stays on the host in `data/` (ignored by git). There are no
-analytics.
-
-## Use your appointments from an agent (MCP)
-
-The MCP server lets an agent you already use work your case with the same
-tools and rules as the in-app assistant. `docs/connect-agent.md` gives the
-one command for Grok Build, OpenCode and Claude Code.
-
-Run the agent with only the tools it needs. An agent that runs as your OS
-user and has a shell or file tools can read and change the app's files,
-its database included. The agent client's own tool permissions are the
-real control.
-
-What an agent can never do: approve or send a reply, edit a reply's text,
-enter a fact by hand, delete the case, or set a slot's state from its own
-words. A slot's state comes only from an office message or your own
-report. Notes and tags hold administrative content only. A clinical one is
-refused with the tool error `out_of_scope` and nothing is written. Every
-action is in the activity log as "an external agent", with Undo, and every
-call is in the case history.
-
-Your agent's model provider may receive the case data the agent reads.
-Appointment times, places, notes and quotes from your messages go to that
-provider under its own terms, not this app's.
-
-Text from imported messages is returned to the agent only inside fields
-named `untrusted_quote` or `untrusted_text`, and the tool descriptions tell
-the agent to treat it as data. That lowers the risk of a message steering
-the agent, but it cannot remove it. The server's own checks do not depend
-on the agent following those labels.
-
-## What the model does and what code checks
-
-The app uses a language model for five jobs. Each one only proposes. Code
-checks the output, and you review what is left.
-
-| The model | Code checks | You |
-|---|---|---|
-| Extracts claims from a pasted message | Each quote must appear verbatim in the message, and dates and times must have a valid format. A claim that fails is rejected and shown as rejected. | Accept or reject each claim. Only accepted claims count. |
-| Explains a conflict | Every cited evidence id must exist and belong to the conflict. After two failures the conflict shows with its quotes and no explanation. | Read the sources beside it. |
-| Proposes the next question | The question must name an open conflict and no invented date. After two failures code uses a fixed wording. Code builds the answer choices. | Tap a choice. |
-| Picks a reply template and a slot | The template must fit the slot's state, and every field comes from the case, not the model. C1: when your note states a date or time, the picked slot must match it. The model may also answer that no template fits (`time_not_offered` or `template_not_allowed`), and you pick by hand. | Read back every field and approve. |
-| Answers in the chat and acts on the case | Every action runs the app's own checks: imported text must be whole lines of your message, a claim it accepts must pass the quote and extraction checks again, an answer it gives may not set a slot's state, and every write states its expected version. Every date, weekday and time in the answer must come from the turn's tool results, the answer must stay administrative and may claim only the actions the activity log shows. After one retry code replaces the answer. | Undo any action from the activity log. Read back and approve a reply. |
-
-Slot states come only from accepted evidence by a fixed table of rules. No
-model output changes a slot. A schema-valid answer can still change the
-meaning, which is why the C1 guard exists: in the live evaluation the model
-once answered "Please accept Wednesday" with "decline Tuesday", and code
-now rejects a pick that does not match the dates in your note. Times you
-did not state, or whose order is unknown, are never treated as known. The
-app raises a conflict instead. Health questions get a fixed decline and
-never reach a model.
-
-Agents act through the same actions as you, and the same split applies.
-Code names the agent (the assistant, or an external agent over MCP), never
-the client. An agent's answer to a question that would set a slot's state
-is refused, and you answer it. Every write states the version it expects,
-and a stale one writes nothing.
-
-## What the server cannot control
-
-Once the MCP server returns data to an agent's client, it is out of the
-app's hands:
-
-- The client's model provider receives what the agent reads, under that
-  provider's terms. The app cannot recall it or limit how long it is kept.
-- The agent may repeat, summarize or misread what it read. The labels
-  `untrusted_quote` and `untrusted_text` tell it that message text is data,
-  but a model can still follow an instruction hidden in a message. The
-  server's own checks do not depend on the agent obeying the labels, so a
-  steered agent still cannot send a reply, delete the case or set a slot's
-  state from its own words. It can accept or reject facts, archive or
-  note, and each of those is in the activity log for you to undo.
-- An agent with a shell or file tools on the app's host, or one that can
-  `ssh` to it, is not limited by the MCP tools. It can open the database
-  file and change the app's other files. Give agents only the MCP tools.
-- The rate limit (60 calls a minute in each server process) and the
-  access log in the case history show what an agent did. They do not stop
-  an agent that stays under the limit.
-
-`docs/diagrams.md` shows the agent change flow.
-
-## What the secret scan finds
-
-`pnpm scan:secrets` guards what can be published. It reads every tracked
-file on disk and every tracked path, every blob staged in the index, every
-object reachable from a branch, a tag, a remote-tracking ref or HEAD (the
-bytes of every blob, binary ones included, the text of every commit and
-tag, and every file and folder name in every tree), and the name of every
-branch, tag and remote-tracking ref. That covers old versions, merge
-results and other branches.
-
-It skips every other ref, such as the local checkpoint refs that Entire
-(`refs/entire/*`) and T3 (`refs/t3/*`) keep, and `refs/stash`. These are
-never pushed. Its summary line names each skipped prefix and how many refs
-it holds, for example "Skipped local refs: refs/entire (138), refs/t3
-(156).". An object reachable only from a skipped ref is not read, so those
-refs must never be published.
-
-In each of those it finds, on one line:
-
-- An assignment of `MODEL_API_KEY` with a value of at least 12
-  characters, as in an env file or a shell line. `MODEL_API_KEY=` with
-  nothing after it, as in `.env.schema`, a reference such as
-  `$MODEL_API_KEY` and a placeholder such as `<your key>` or a log tool's
-  `REDACTED` do not count. The value ends at a space, a quote or a
-  backslash.
-- A bearer token: `Bearer ` and at least 24 token characters with an
-  upper-case letter, a lower-case letter and a digit.
-- A provider secret in the shape the app's settings file stores it: an
-  `accessToken`, `refreshToken`, `access_token`, `refresh_token` or
-  `id_token` field with a token value, or a `"meta": { "key": ... }` field,
-  on one line or with `"key"` on the line after `"meta": {`. Every `.json`
-  file up to 8 MB is also read as JSON for those fields, and every file up
-  to 8 MB that is a SQLite database has its settings rows read, so a
-  renamed copy of the settings database or an export of it is found.
-- A judge access code of the hosted site: `judge_` and 43 base64url
-  characters.
-- A SQLite file of any name that is the hosted site's accounts database,
-  one with a `judge_codes` or `sessions` table.
-- A file or folder named like the settings database (`app-secrets.sqlite`
-  and its `-wal`, `-shm` and `-journal` files), the hosted accounts
-  database (`accounts.sqlite` and the same three), or a
-  local env file (`.env.local`, `.env.<name>.local`), in the tree or in
-  history.
-
-The key's own shape is not known to the scan, so it does not find a bare
-key written without its name or `Bearer`, a provider key or token outside
-those field shapes, a key in another encoding (base64, URL encoding,
-UTF-16, compression or encryption) or split across lines, objects
-reachable only from skipped refs, or anything outside this repository:
-other clones, `.env.local`, the database file, logs and screenshots
-elsewhere. It prints where a hit is, never the matched text, and exits 1
-on any hit.
+No license file yet. See the repo's LICENSE file when one is added. Until then,
+all rights are reserved.
