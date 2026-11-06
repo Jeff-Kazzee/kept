@@ -19,7 +19,7 @@
 The clinic confirmed Thursday. Then it emailed to move you. Then it texted two
 new options. Kept reads those messages and works out which time is booked. It
 checks new times against your calendar and drafts the reply. You read the reply
-back and approve it. Kept sends nothing on its own, and each step has Undo.
+back and approve it. Kept sends nothing on its own, and most steps have Undo. Approval is final.
 
 ## What it does
 
@@ -28,7 +28,7 @@ back and approve it. Kept sends nothing on its own, and each step has Undo.
 - Checks new times against a calendar file or Google Calendar.
 - Asks you one question at a time when messages disagree.
 - Fills a reply template from the case. You tick each field before you can approve.
-- Logs each action in an Activity tab, with Undo.
+- Logs each action in an Activity tab. Each agent action has Undo.
 
 <table>
   <tr>
@@ -173,8 +173,8 @@ hosted mode, and the MCP SDK.
 ## Status
 
 In private testing. The [public site](https://mystic-marvel-866w.here.now/) says
-`Coming soon` and takes waitlist sign-ups. There is no public hosted instance and
-no tagged release.
+`Coming soon` and takes waitlist sign-ups. A sign-in-only hosted instance runs for
+hackathon judges, with public sign-up off. There is no tagged release.
 
 - Works, per the repo's records: local mode, the chat agent, Gmail and Google Calendar connections, the MCP server and the demo flow in the video.
 - Scope: administrative scheduling. It declines medical questions with a fixed reply that reaches no model.
